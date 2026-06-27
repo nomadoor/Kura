@@ -6,6 +6,8 @@ Kura is a file-first experiment workspace for working with AI agents on LoRA tra
 
 You can use it manually from the CLI, but the intended workflow is to prepare a dataset, specify the training parameters, and let an AI agent create, check, run, monitor, and compare the runs.
 
+<img width="1920" height="1080" alt="Kura" src="https://github.com/user-attachments/assets/a23f92f8-460c-40d8-be8f-e42a5ef06f72" />
+
 ## What Kura does
 
 Kura is not a trainer by itself. It is a thin experiment-management layer around backends such as AI-Toolkit and Musubi Tuner, designed to make those tools safer, more reproducible, and easier for agents to operate.
