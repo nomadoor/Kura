@@ -1,0 +1,36 @@
+schema_version: 1
+name: kura
+docker:
+  images:
+    ai-toolkit:
+      local: kura/ai-toolkit:dev
+      remote: nomadoor/kura-ai-toolkit:dev
+      dockerfile: docker/ai-toolkit/Dockerfile
+      context: .
+    musubi-tuner:
+      local: kura/musubi-tuner:dev
+      remote: nomadoor/kura-musubi-tuner:dev
+      dockerfile: docker/musubi-tuner/Dockerfile
+      context: .
+  workspace_target: /workspace
+  gpu: true
+  mounts:
+    # Choose a large local filesystem. On WSL this can be /mnt/d or /mnt/f.
+    - source: /mnt/d/kura-cache/huggingface
+      target: /root/.cache/huggingface
+      mode: rw
+runpod:
+  # Default uses only disposable container disk and runpodctl upload/download.
+  storage_mode: upload
+  gpu_type_ids: [NVIDIA A40]
+  gpu_count: 1
+  container_disk_gb: 50
+  workspace_path: /workspace
+  cloud_type: SECURE
+  interruptible: false
+  default_image:
+    # AI-Toolkit uses the official Ostris RunPod template/image by default.
+    ai-toolkit: ostris/aitoolkit:latest
+    # Musubi defaults to this public Kura runtime image; replace if needed.
+    musubi-tuner: nomadoor/kura-musubi-tuner:dev
+  api_key_env: RUNPOD_API_KEY

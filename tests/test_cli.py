@@ -1,0 +1,1483 @@
+"""Small regression tests for workspace initialization."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import struct
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import yaml
+
+from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, cmd_doctor_runpod, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote
+from kura.executors import docker_command, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.tui import KuraMonitorApp, _compact_path
+
+
+class InitCommandTests(unittest.TestCase):
+    def test_init_creates_required_files_and_is_idempotent(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                root = Path(directory)
+                for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "docker/ai-toolkit/Dockerfile"):
+                    self.assertTrue((root / relative).exists(), relative)
+                self.assertTrue((root / "docker/musubi-tuner/Dockerfile").exists())
+            finally:
+                os.chdir(previous)
+
+
+class MonitorCommandTests(unittest.TestCase):
+    def test_monitor_passes_limit_to_textual_app(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.run_textual_monitor", return_value=0) as monitor:
+                    code = cmd_monitor(argparse.Namespace(interval=1.5, stale_after=12.0, limit=7))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            monitor.assert_called_once_with(root, interval=1.5, stale_after=12.0, limit=7)
+
+
+class TuiPathDisplayTests(unittest.TestCase):
+    def test_compact_path_keeps_tail_at_narrow_widths(self) -> None:
+        path = Path("/home/nomax/working-linux/Development/Kura/runs/example/outputs")
+        self.assertEqual(_compact_path(path, max_len=1), "…")
+        self.assertEqual(len(_compact_path(path, max_len=12)), 12)
+        self.assertTrue(_compact_path(path, max_len=12).endswith("outputs"))
+
+    def test_monitor_app_reuses_completed_summary_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "realizations").mkdir()
+            (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 1, "total_steps": 1}), encoding="utf-8")
+            app = KuraMonitorApp(root)
+            first = app.collect_summaries_cached()
+            second = app.collect_summaries_cached()
+            self.assertIs(first[0], second[0])
+
+    def test_textual_monitor_smoke_handles_empty_active_and_tab_switch(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = root / "runs" / "example"
+                (run_dir / "resolved").mkdir(parents=True)
+                (run_dir / "logs").mkdir()
+                (run_dir / "realizations").mkdir()
+                (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
+                (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 1, "total_steps": 1}), encoding="utf-8")
+                app = KuraMonitorApp(root, interval=999)
+                async with app.run_test(size=(100, 30)) as pilot:
+                    await pilot.pause(0.1)
+                    await pilot.press("d")
+                    await pilot.pause(0.1)
+                    await pilot.press("r")
+                    await pilot.pause(0.1)
+                    await pilot.press("down")
+                    await pilot.pause(0.1)
+
+        asyncio.run(run_case())
+
+
+class EnvLocalTests(unittest.TestCase):
+    def test_env_local_loads_values_without_overriding_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env.local"
+            env_path.write_text(
+                "\n".join([
+                    "# local secrets",
+                    "KURA_NOTIFY=desktop,ntfy",
+                    "export KURA_NTFY_TOPIC=kura-test-topic",
+                    "KURA_NTFY_SERVER='https://ntfy.example.com'",
+                    'KURA_NTFY_TOKEN="token-example"',
+                    "EXISTING=value-from-file",
+                ]),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"EXISTING": "value-from-env"}, clear=False):
+                for key in ("KURA_NOTIFY", "KURA_NTFY_TOPIC", "KURA_NTFY_SERVER", "KURA_NTFY_TOKEN"):
+                    os.environ.pop(key, None)
+                _load_env_local(env_path)
+                self.assertEqual(os.environ["KURA_NOTIFY"], "desktop,ntfy")
+                self.assertEqual(os.environ["KURA_NTFY_TOPIC"], "kura-test-topic")
+                self.assertEqual(os.environ["KURA_NTFY_SERVER"], "https://ntfy.example.com")
+                self.assertEqual(os.environ["KURA_NTFY_TOKEN"], "token-example")
+                self.assertEqual(os.environ["EXISTING"], "value-from-env")
+
+
+class NotificationTests(unittest.TestCase):
+    def test_notification_channels_auto_detect_ntfy_topic(self) -> None:
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.cli.shutil.which", return_value=None):
+            self.assertEqual(_notification_channels(None), ["ntfy"])
+
+    def test_notification_channels_auto_detect_desktop(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch("kura.cli.shutil.which", return_value="/usr/bin/notify-send"):
+            self.assertEqual(_notification_channels(None), ["desktop"])
+
+    def test_notification_channels_explicit_none_disables_auto_detection(self) -> None:
+        with patch.dict(os.environ, {"KURA_NOTIFY": "none", "KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.cli.shutil.which", return_value="/usr/bin/notify-send"):
+            self.assertEqual(_notification_channels(None), [])
+
+    def test_ntfy_notification_posts_to_topic(self) -> None:
+        class Response:
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b""
+
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request: object, timeout: int) -> Response:
+            captured["url"] = request.full_url  # type: ignore[attr-defined]
+            captured["data"] = request.data  # type: ignore[attr-defined]
+            captured["title"] = request.headers.get("Title")  # type: ignore[attr-defined]
+            captured["priority"] = request.headers.get("Priority")  # type: ignore[attr-defined]
+            captured["timeout"] = timeout
+            return Response()
+
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=False), patch("kura.cli.urllib.request.urlopen", fake_urlopen):
+            _notify("ntfy", subject="finished", body="run done")
+
+        self.assertEqual(captured["url"], "https://ntfy.sh/kura-test-topic")
+        self.assertEqual(captured["data"], b"run done")
+        self.assertEqual(captured["title"], "finished")
+        self.assertEqual(captured["priority"], "4")
+        self.assertEqual(captured["timeout"], 20)
+
+    def test_runpod_remote_notify_secrets_are_temp_env_only(self) -> None:
+        env = {
+            "KURA_NTFY_TOPIC": "kura-topic",
+            "KURA_NTFY_SERVER": "https://ntfy.example.com",
+            "KURA_NTFY_TOKEN": "ntfy-secret",
+            "KURA_NTFY_PRIORITY": "4",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            payload = _runpod_secret_env_payload(remote_notify=True)
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIn("KURA_REMOTE_NOTIFY_NTFY=1", payload)
+        self.assertIn("KURA_NTFY_TOPIC=kura-topic", payload)
+        self.assertIn("KURA_NTFY_TOKEN=ntfy-secret", payload)
+
+
+class RenderNotificationTests(unittest.TestCase):
+    def test_render_launch_notifies_on_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.launch_render", return_value=0) as launch, patch("kura.cli._notify") as notify:
+                    code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="local", dry_run=False, notify="ntfy"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            launch.assert_called_once()
+            notify.assert_called_once()
+            self.assertIn("completed", notify.call_args.kwargs["subject"])
+
+
+class RunPodLiveSyncTests(unittest.TestCase):
+    def test_sync_remote_stdout_appends_progress_and_materializes_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "remote-run"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "last_step": 0}),
+                encoding="utf-8",
+            )
+            stdout = (
+                b"steps:  23%|##        | 7/30 [00:14<00:46,  2.00s/it, avr_loss=0.123]\n"
+                b"\n__KURA_LOG_SIZE__:77\n"
+            )
+            result = subprocess.CompletedProcess([], 0, stdout, b"")
+
+            with patch("kura.cli.subprocess.run", return_value=result):
+                synced = _sync_runpod_remote_stdout(
+                    run_dir,
+                    {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"},
+                    workspace="/workspace",
+                    run_id="remote-run",
+                )
+
+            self.assertTrue(synced)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["last_step"], 7)
+            self.assertEqual(status["total_steps"], 30)
+            self.assertEqual(status["remote_log_bytes"], 77)
+            self.assertIn("avr_loss=0.123", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+
+
+class RunPodPullSelectionTests(unittest.TestCase):
+    def test_duration_parser_accepts_common_suffixes(self) -> None:
+        self.assertEqual(_parse_duration_seconds("30m"), 1800)
+        self.assertEqual(_parse_duration_seconds("2h"), 7200)
+        self.assertEqual(_parse_duration_seconds("45"), 45)
+        self.assertEqual(_parse_duration_seconds(None), 0)
+
+    def test_select_remote_outputs_defaults_to_latest_step(self) -> None:
+        items = [
+            {"name": "model-step00000100.safetensors", "path": "/workspace/a", "size": 1},
+            {"name": "model-step00001000.safetensors", "path": "/workspace/b", "size": 2},
+            {"name": "model-step00000500.safetensors", "path": "/workspace/c", "size": 3},
+        ]
+        selected = _select_remote_outputs(items)
+        self.assertEqual([item["name"] for item in selected], ["model-step00001000.safetensors"])
+
+    def test_select_remote_outputs_can_filter_since_step(self) -> None:
+        items = [
+            {"name": "model-step00000100.safetensors", "path": "/workspace/a", "size": 1},
+            {"name": "model-step00001000.safetensors", "path": "/workspace/b", "size": 2},
+            {"name": "model-step00001500.safetensors", "path": "/workspace/c", "size": 3},
+        ]
+        selected = _select_remote_outputs(items, since_step=1000)
+        self.assertEqual([item["name"] for item in selected], ["model-step00001000.safetensors", "model-step00001500.safetensors"])
+
+
+class MusubiBackendTests(unittest.TestCase):
+    def _run(self) -> dict[str, object]:
+        return {
+            "id": "musubi-example",
+            "type": "train",
+            "backend": {"name": "musubi-tuner", "adapter_version": 1},
+            "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
+            "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
+            "params": {"rank": 4, "alpha": 4, "lr": 1.0e-4, "steps": 30, "batch_size": 1, "resolution": [512, 512], "seed": 42},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "model_version": "klein-base-4b",
+                    "model_paths": {
+                        "dit": "/models/flux2-klein-base-4b.safetensors",
+                        "vae": "/models/flux2-vae.safetensors",
+                        "text_encoder": "/models/qwen_3_4b.safetensors",
+                    },
+                }
+            },
+        }
+
+    def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+            compile_musubi_tuner(self._run(), destination)
+            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
+            command = json.loads((destination / "command.json").read_text(encoding="utf-8"))
+            bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
+        self.assertIn("image_directory = \"/workspace/datasets/tiny/images\"", dataset_toml)
+        self.assertIn("cache_directory = \"/workspace/runs/musubi-example/cache/musubi/tiny\"", dataset_toml)
+        self.assertEqual(command["cwd"], "/opt/musubi-tuner")
+        self.assertEqual(command["argv"][:2], ["bash", "-lc"])
+        self.assertIn('export PATH="/opt/conda/bin:/usr/local/bin:$PATH"', command["argv"][2])
+        self.assertIn("src/musubi_tuner/flux_2_cache_latents.py", command["argv"][2])
+        self.assertIn("src/musubi_tuner/flux_2_cache_text_encoder_outputs.py", command["argv"][2])
+        self.assertIn("src/musubi_tuner/flux_2_train_network.py", command["argv"][2])
+        self.assertIn("--max_train_steps 30", command["argv"][2])
+        self.assertIn("--save_precision bf16", command["argv"][2])
+        self.assertNotIn("--gradient_checkpointing", command["argv"][2])
+        self.assertNotIn("--blocks_to_swap", command["argv"][2])
+        self.assertNotIn("--fp8_base", command["argv"][2])
+        self.assertNotIn("hf_hub_download", command["argv"][2])
+        self.assertEqual(bundle["architecture"], "flux2")
+        sources = {item["role"]: item.get("source") for item in bundle["models"]}
+        self.assertEqual(sources["dit"], "model_paths")
+        self.assertEqual(sources["vae"], "model_paths")
+        self.assertEqual(sources["text_encoder"], "model_paths")
+        expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
+        self.assertEqual(expected["dit"], "flux2_dit")
+        self.assertEqual(expected["vae"], "flux2_vae")
+        self.assertEqual(expected["text_encoder"], "qwen3_4b_text_encoder")
+        self.assertEqual(bundle["output"]["lora_format"], "comfyui")
+
+    def test_command_musubi_only_adds_memory_saving_flags_when_explicit(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["gradient_checkpointing"] = True
+        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--fp8_base", "--fp8_scaled", "--blocks_to_swap", "4"]
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--gradient_checkpointing", script)
+        self.assertIn("--fp8_base", script)
+        self.assertIn("--fp8_scaled", script)
+        self.assertIn("--blocks_to_swap 4", script)
+
+    def test_command_musubi_save_precision_defaults_to_bf16_but_can_be_overridden(self) -> None:
+        run = self._run()
+        script = command_musubi_tuner(run)["argv"][2]
+        self.assertIn("--save_precision bf16", script)
+
+        run["backend_overrides"]["musubi-tuner"]["save_precision"] = "fp16"
+        script = command_musubi_tuner(run)["argv"][2]
+        self.assertIn("--save_precision fp16", script)
+
+    def test_command_musubi_rejects_invalid_save_precision(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["save_precision"] = "int8"
+
+        with self.assertRaisesRegex(ValueError, "save_precision"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_rejects_h2d_block_swap_without_gradient_checkpointing(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--blocks_to_swap", "4", "--block_swap_h2d_only"]
+
+        with self.assertRaisesRegex(ValueError, "H2D-only block swap requires explicit gradient_checkpointing"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_rejects_a40_flux2_9b_large_micro_batch(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
+        run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
+        run["params"]["batch_size"] = 4
+        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-9b"}}
+
+        with self.assertRaisesRegex(ValueError, "batch_size=4 has been observed to OOM"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_allows_a40_flux2_9b_accumulated_effective_batch(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
+        run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
+        run["params"]["batch_size"] = 1
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "flux2",
+                "model_version": "klein-base-9b",
+                "gradient_checkpointing": True,
+                "extra_args": ["--gradient_accumulation_steps", "4"],
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--gradient_checkpointing", script)
+        self.assertIn("--gradient_accumulation_steps 4", script)
+
+    def test_command_musubi_rejects_a40_flux2_9b_1024_without_checkpointing(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
+        run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
+        run["params"].update({"rank": 32, "batch_size": 1, "resolution": [1024, 1024]})
+        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-9b"}}
+
+        with self.assertRaisesRegex(ValueError, "observed to OOM even with batch_size=1"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_rejects_secret_explicit_env(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["command"] = {"cwd": "/opt/musubi-tuner", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "secret"}}
+
+        with self.assertRaisesRegex(ValueError, "env must not contain secrets"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_allows_non_secret_generated_env(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+
+        command = command_musubi_tuner(run)
+
+        self.assertEqual(command["env"], {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+
+    def test_command_musubi_rejects_secret_generated_env(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["env"] = {"HF_TOKEN": "secret"}
+
+        with self.assertRaisesRegex(ValueError, "env must not contain secrets"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_rejects_invalid_extra_args_shape(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["extra_args"] = "--fp8_base"
+
+        with self.assertRaisesRegex(ValueError, "extra_args must be a list of strings"):
+            command_musubi_tuner(run)
+
+    def test_compile_musubi_can_write_paired_control_jsonl_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "paired"
+            (dataset / "paired" / "target").mkdir(parents=True)
+            (dataset / "paired" / "cond").mkdir()
+            (dataset / "paired" / "caption").mkdir()
+            (dataset / "paired" / "target" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            (dataset / "paired" / "cond" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            (dataset / "paired" / "caption" / "item1.txt").write_text("control caption\n", encoding="utf-8")
+            run = self._run()
+            run["id"] = "paired-run"
+            run["datasets"] = [{"id": "paired", "digest": "sha256:abc"}]
+            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+                "general": {"resolution": [1024, 1024], "batch_size": 4},
+                "datasets": [
+                    {
+                        "paired_jsonl": {
+                            "filename": "paired_1024.jsonl",
+                            "target_dir": "paired/target",
+                            "control_dir": "paired/cond",
+                            "caption_dir": "paired/caption",
+                        },
+                        "resolution": [1024, 1024],
+                        "control_resolution": [1024, 1024],
+                    }
+                ],
+            }
+            destination = root / "runs" / "paired-run" / "resolved" / "musubi"
+
+            compile_musubi_tuner(run, destination)
+
+            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
+            rows = (destination / "paired_1024.jsonl").read_text(encoding="utf-8").splitlines()
+            payload = json.loads(rows[0])
+        self.assertIn('image_jsonl_file = "/workspace/runs/paired-run/resolved/musubi/paired_1024.jsonl"', dataset_toml)
+        self.assertNotIn("image_directory", dataset_toml)
+        self.assertIn("control_resolution = [1024, 1024]", dataset_toml)
+        self.assertEqual(payload["image_path"], "/workspace/datasets/paired/paired/target/item1.png")
+        self.assertEqual(payload["control_path"], "/workspace/datasets/paired/paired/cond/item1.png")
+        self.assertEqual(payload["caption"], "control caption")
+
+    def test_compile_musubi_rejects_duplicate_resolution_sections_for_same_paired_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "paired"
+            (dataset / "paired" / "target").mkdir(parents=True)
+            (dataset / "paired" / "cond").mkdir()
+            (dataset / "paired" / "caption").mkdir()
+            for name in ("item1", "item2"):
+                (dataset / "paired" / "target" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "paired" / "cond" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "paired" / "caption" / f"{name}.txt").write_text("control caption\n", encoding="utf-8")
+            run = self._run()
+            run["id"] = "paired-buckets"
+            run["datasets"] = [{"id": "paired", "role": "paired-768"}, {"id": "paired", "role": "paired-1024"}]
+            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+                "general": {"resolution": [1024, 1024], "batch_size": 4, "enable_bucket": True},
+                "datasets": [
+                    {
+                        "paired_jsonl": {"filename": "paired_768.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"},
+                        "resolution": [768, 768],
+                        "control_resolution": [768, 768],
+                        "batch_size": 4,
+                    },
+                    {
+                        "paired_jsonl": {"filename": "paired_1024.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"},
+                        "resolution": [1024, 1024],
+                        "control_resolution": [1024, 1024],
+                        "batch_size": 4,
+                    },
+                ],
+            }
+            destination = root / "runs" / "paired-buckets" / "resolved" / "musubi"
+
+            with self.assertRaisesRegex(ValueError, "ambiguous Musubi duplicate dataset blocks"):
+                compile_musubi_tuner(run, destination)
+
+    def test_compile_musubi_allows_disjoint_resolution_sections_for_same_paired_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "paired"
+            (dataset / "paired" / "target").mkdir(parents=True)
+            (dataset / "paired" / "cond").mkdir()
+            (dataset / "paired" / "caption").mkdir()
+            for name in ("item1", "item2", "item3", "item4"):
+                (dataset / "paired" / "target" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "paired" / "cond" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "paired" / "caption" / f"{name}.txt").write_text("control caption\n", encoding="utf-8")
+            run = self._run()
+            run["id"] = "paired-buckets"
+            run["datasets"] = [{"id": "paired", "role": "paired-768"}, {"id": "paired", "role": "paired-1024"}]
+            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+                "general": {"resolution": [1024, 1024], "batch_size": 4, "enable_bucket": True},
+                "datasets": [
+                    {
+                        "paired_jsonl": {
+                            "filename": "paired_768.jsonl",
+                            "target_dir": "paired/target",
+                            "control_dir": "paired/cond",
+                            "caption_dir": "paired/caption",
+                            "select": {"modulo": 2, "remainder": 0},
+                        },
+                        "resolution": [768, 768],
+                        "control_resolution": [768, 768],
+                        "batch_size": 4,
+                    },
+                    {
+                        "paired_jsonl": {
+                            "filename": "paired_1024.jsonl",
+                            "target_dir": "paired/target",
+                            "control_dir": "paired/cond",
+                            "caption_dir": "paired/caption",
+                            "select": {"modulo": 2, "remainder": 1},
+                        },
+                        "resolution": [1024, 1024],
+                        "control_resolution": [1024, 1024],
+                        "batch_size": 4,
+                    },
+                ],
+            }
+            destination = root / "runs" / "paired-buckets" / "resolved" / "musubi"
+
+            compile_musubi_tuner(run, destination)
+
+            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
+            jsonl_files = sorted(path.name for path in destination.glob("*.jsonl"))
+            rows_768 = (destination / "paired_768.jsonl").read_text(encoding="utf-8").splitlines()
+            rows_1024 = (destination / "paired_1024.jsonl").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(dataset_toml.count("[[datasets]]"), 2)
+        self.assertIn("resolution = [768, 768]", dataset_toml)
+        self.assertIn("resolution = [1024, 1024]", dataset_toml)
+        self.assertIn("control_resolution = [768, 768]", dataset_toml)
+        self.assertIn("control_resolution = [1024, 1024]", dataset_toml)
+        self.assertEqual(jsonl_files, ["paired_1024.jsonl", "paired_768.jsonl"])
+        self.assertEqual(len(rows_768), 2)
+        self.assertEqual(len(rows_1024), 2)
+
+    def test_command_musubi_requires_explicit_model_paths(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {"musubi-tuner": {"architecture": "wan"}}
+        with self.assertRaisesRegex(ValueError, "model_paths, model_downloads, or a known model.base bundle"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_can_download_models_from_huggingface(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "flux2",
+                "model_version": "klein-base-4b",
+                "model_downloads": {
+                    "dit": {"repo": "black-forest-labs/FLUX.2-klein-base-4B", "filename": "flux2-klein-base-4b.safetensors"},
+                    "vae": {"repo": "black-forest-labs/FLUX.2-dev", "filename": "flux2-vae.safetensors"},
+                    "text_encoder": {"repo": "black-forest-labs/FLUX.2-klein-4B", "filename": "text_encoder/qwen_3_4b.safetensors"},
+                },
+            }
+        }
+        command = command_musubi_tuner(run)
+        script = command["argv"][2]
+        self.assertIn("hf_hub_download", script)
+        self.assertIn("HF_HUB_DISABLE_XET", script)
+        self.assertIn("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", script)
+        self.assertIn("removed {removed} incomplete", script)
+        self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
+        self.assertIn("/workspace/runs/musubi-example/cache/hf-models/dit/flux2-klein-base-4b.safetensors", script)
+        self.assertIn("--dit /workspace/runs/musubi-example/cache/hf-models/dit/flux2-klein-base-4b.safetensors", script)
+        self.assertIn("flux2_vae", script)
+        self.assertIn("qwen3_4b_text_encoder", script)
+        self.assertIn("lora_unet_*", script)
+        self.assertLess(script.index("hf_hub_download"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
+        self.assertLess(script.index("expected_format"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
+        self.assertLess(script.index("src/musubi_tuner/flux_2_train_network.py"), script.rindex("lora_unet_*"))
+
+    def test_command_musubi_resolves_known_flux2_klein_bundle(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-4b"}}
+        command = command_musubi_tuner(run)
+        script = command["argv"][2]
+        self.assertIn("Comfy-Org/vae-text-encorder-for-flux-klein-4b", script)
+        self.assertIn("split_files/diffusion_models/flux-2-klein-base-4b.safetensors", script)
+        self.assertIn("split_files/vae/flux2-vae.safetensors", script)
+        self.assertIn("split_files/text_encoders/qwen_3_4b.safetensors", script)
+        self.assertIn("--vae /workspace/runs/musubi-example/cache/hf-models/vae/split_files/vae/flux2-vae.safetensors", script)
+
+    def test_command_musubi_resolves_known_flux2_klein_base_9b_bundle(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
+        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-9b"}}
+        command = command_musubi_tuner(run)
+        script = command["argv"][2]
+
+        self.assertIn("black-forest-labs/FLUX.2-klein-base-9B", script)
+        self.assertIn("flux-2-klein-base-9b.safetensors", script)
+        self.assertIn("vae/diffusion_pytorch_model.safetensors", script)
+        self.assertIn("text_encoder/model-00001-of-00004.safetensors", script)
+        self.assertIn("text_encoder/model-00004-of-00004.safetensors", script)
+        self.assertIn("text_encoder/model.safetensors.index.json", script)
+        self.assertIn("--model_version klein-base-9b", script)
+        self.assertIn("--vae /workspace/runs/musubi-example/cache/hf-models/vae/vae/diffusion_pytorch_model.safetensors", script)
+        self.assertIn("--text_encoder /workspace/runs/musubi-example/cache/hf-models/text_encoder/text_encoder/model-00001-of-00004.safetensors", script)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+            compile_musubi_tuner(run, destination)
+            bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
+        expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
+        self.assertEqual(expected["vae"], "flux2_vae")
+        self.assertEqual(expected["text_encoder"], "qwen3_8b_text_encoder")
+
+    def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "krea/Krea-2-Raw"}
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "krea2",
+                "gradient_checkpointing": True,
+                "fp8_base": True,
+            }
+        }
+        command = command_musubi_tuner(run)
+        script = command["argv"][2]
+
+        self.assertIn("krea/Krea-2-Raw", script)
+        self.assertIn("raw.safetensors", script)
+        self.assertIn("Comfy-Org/Qwen-Image_ComfyUI", script)
+        self.assertIn("split_files/vae/qwen_image_vae.safetensors", script)
+        self.assertIn("Comfy-Org/Qwen3-VL", script)
+        self.assertIn("text_encoders/qwen3vl_4b_bf16.safetensors", script)
+        self.assertIn("src/musubi_tuner/krea2_cache_latents.py", script)
+        self.assertIn("src/musubi_tuner/krea2_cache_text_encoder_outputs.py", script)
+        self.assertIn("src/musubi_tuner/krea2_train_network.py", script)
+        self.assertIn("--network_module networks.lora_krea2", script)
+        self.assertIn("--timestep_sampling krea2_shift", script)
+        self.assertIn("--fp8_base --fp8_scaled", script)
+        self.assertIn("--gradient_checkpointing", script)
+        self.assertIn("--save_precision bf16", script)
+        self.assertNotIn("--text_encoder /workspace/runs/musubi-example/cache/hf-models/text_encoder", script.split("src/musubi_tuner/krea2_train_network.py", 1)[1])
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+            compile_musubi_tuner(run, destination)
+            bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(bundle["architecture"], "krea2")
+        expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
+        self.assertEqual(expected["dit"], "safetensors")
+        self.assertEqual(expected["vae"], "safetensors")
+        self.assertEqual(expected["text_encoder"], "safetensors")
+
+    def test_command_musubi_krea2_can_include_turbo_for_samples(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "krea2",
+                "include_turbo_dit": True,
+                "extra_args": ["--sample_prompts", "/workspace/prompts.txt", "--sample_every_n_steps", "100"],
+            }
+        }
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("krea/Krea-2-Turbo", script)
+        self.assertIn("turbo.safetensors", script)
+        self.assertIn("--text_encoder /workspace/runs/musubi-example/cache/hf-models/text_encoder/text_encoders/qwen3vl_4b_bf16.safetensors", script)
+        self.assertIn("--turbo_dit /workspace/runs/musubi-example/cache/hf-models/turbo_dit/turbo.safetensors", script)
+
+    def test_command_musubi_krea2_rejects_paired_control_dataset(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "krea2",
+                "dataset_config": {
+                    "datasets": [
+                        {
+                            "id": "tiny",
+                            "paired_jsonl": [{"image": "a.png", "conditioning_image": "b.png", "caption": "caption"}],
+                        }
+                    ]
+                },
+            }
+        }
+
+        with self.assertRaisesRegex(ValueError, "plain image/caption datasets only"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_infers_flux2_model_version_from_model_base(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
+        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2"}}
+        command = command_musubi_tuner(run)
+
+        self.assertIn("--model_version klein-base-9b", command["argv"][2])
+        self.assertNotIn("klein-base-4b", command["argv"][2])
+
+    def test_command_musubi_refuses_unknown_flux2_model_version_default(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "custom/flux2-checkpoint"}
+        run["backend_overrides"]["musubi-tuner"].pop("model_version", None)
+
+        with self.assertRaisesRegex(ValueError, "refusing to default to 4B"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_can_prune_early_step_checkpoints(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"]["save_every_n_steps"] = 100
+        run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
+        command = command_musubi_tuner(run)
+        script = command["argv"][2]
+
+        self.assertIn("--save_every_n_steps 100", script)
+        self.assertIn("[kura] pruned", script)
+        self.assertIn("threshold", script)
+        self.assertIn("musubi-example 1000", script)
+        self.assertLess(script.index("flux_2_train_network.py"), script.index("[kura] pruned"))
+        self.assertLess(script.index("[kura] pruned"), script.rindex("lora_unet_*"))
+
+    def test_safetensors_preflight_rejects_ambiguous_flux1_ae_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ae.safetensors"
+            _write_fake_safetensors(path, ["encoder.down.0.block.0.weight", "decoder.up.0.block.0.weight", "quant_conv.weight"])
+            spec = {"models": [{"role": "vae", "path": str(path), "expected_format": "flux2_vae"}]}
+            result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ae.safetensors", result.stderr)
+
+    def test_safetensors_preflight_accepts_flux2_native_vae_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "flux2-vae.safetensors"
+            _write_fake_safetensors(
+                path,
+                [
+                    "encoder.down.0.block.0.conv1.weight",
+                    "decoder.up.0.block.0.conv1.weight",
+                    "decoder.post_quant_conv.weight",
+                ],
+            )
+            spec = {"models": [{"role": "vae", "path": str(path), "expected_format": "flux2_vae"}]}
+            result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_safetensors_postflight_accepts_musubi_flux2_lora(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "example.safetensors"
+            _write_fake_safetensors(
+                path,
+                [
+                    "lora_unet_double_blocks_0_img_attn_proj.lora_down.weight",
+                    "lora_unet_double_blocks_0_img_attn_proj.lora_up.weight",
+                    "lora_unet_double_blocks_0_img_attn_proj.alpha",
+                ],
+                {"ss_network_module": "networks.lora_flux_2", "modelspec.architecture": "Flux.2-klein-4b/lora"},
+            )
+            spec = {"architecture": "flux2", "lora": {"pattern": str(path), "compatibility": "comfyui"}}
+            result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+def _write_fake_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | None = None) -> None:
+    header = {key: {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]} for key in keys}
+    if metadata:
+        header["__metadata__"] = metadata
+    raw = json.dumps(header).encode("utf-8")
+    path.write_bytes(struct.pack("<Q", len(raw)) + raw + b"\0\0\0\0")
+
+
+class DockerLifecycleTests(unittest.TestCase):
+    def _run_dir(self, root: Path) -> Path:
+        run_dir = root / "runs" / "example"
+        (run_dir / "realizations").mkdir(parents=True)
+        (run_dir / "logs").mkdir()
+        (run_dir / "logs" / "events.jsonl").touch()
+        (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json", "container_id": "container-1"}), encoding="utf-8")
+        (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "container": {"id": "container-1", "name": "kura-example-r1"}}), encoding="utf-8")
+        return run_dir
+
+    def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            command, _, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
+        self.assertIn("-d", command)
+        self.assertIn("--init", command)
+        self.assertIn("--stop-timeout", command)
+        self.assertNotIn("--rm", command)
+        self.assertIn("io.kura.realization_id=r1", command)
+        self.assertIn("PYTHONUNBUFFERED=1", command)
+        self.assertIn('exec "$@" >> "$KURA_LOG_PATH" 2>&1', command)
+
+    def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            with patch.dict(os.environ, {"HF_TOKEN": "hf-secret"}, clear=False):
+                command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
+        self.assertEqual(runtime_env["HF_TOKEN"], "hf-secret")
+        self.assertIn("HF_TOKEN", command)
+        self.assertNotIn("HF_TOKEN=hf-secret", command)
+        self.assertNotIn("hf-secret", " ".join(command))
+
+    def test_reconcile_known_exit_code_sets_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')
+            with patch("kura.executors.subprocess.run", return_value=result):
+                status = reconcile_docker(run_dir)
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["exit_code"], 0)
+            self.assertTrue(list((run_dir / "realizations").glob("r1.observed-*.json")))
+
+    def test_reconcile_materializes_ai_toolkit_stdout_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "logs" / "stdout.log").write_text(
+                "\rexample:  99%|█████████▉| 99/100 [04:07<00:02, 2.49s/it, lr: 1.0e-04 loss: 3.478e-01]\n",
+                encoding="utf-8",
+            )
+            result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')
+            with patch("kura.executors.subprocess.run", return_value=result):
+                status = reconcile_docker(run_dir)
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["last_step"], 100)
+            self.assertEqual(status["total_steps"], 100)
+
+    def test_reconcile_materializes_musubi_stdout_progress_and_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "outputs").mkdir()
+            (run_dir / "outputs" / "example.safetensors").write_text("artifact", encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "\rsteps: 100%|██████████| 5/5 [00:10<00:00,  2.10s/it, avr_loss=0.383]\n",
+                encoding="utf-8",
+            )
+            result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')
+            with patch("kura.executors.subprocess.run", return_value=result):
+                status = reconcile_docker(run_dir)
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["last_step"], 5)
+            self.assertEqual(status["total_steps"], 5)
+            self.assertEqual(status["outputs"], ["outputs/example.safetensors"])
+
+    def test_reconcile_missing_container_is_interrupted_not_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            result = __import__("subprocess").CompletedProcess([], 1, "", "Error: No such container")
+            with patch("kura.executors.subprocess.run", return_value=result):
+                status = reconcile_docker(run_dir)
+            self.assertEqual(status["state"], "interrupted")
+            self.assertIsNone(status["exit_code"])
+
+
+class RunPruneTests(unittest.TestCase):
+    def _make_run(self, root: Path, run_id: str, *, state: str, created: str) -> Path:
+        run_dir = root / "runs" / run_id
+        (run_dir / "outputs").mkdir(parents=True)
+        (run_dir / "downloads").mkdir()
+        (run_dir / "outputs" / "artifact.bin").write_text("artifact", encoding="utf-8")
+        (run_dir / "downloads" / "remote.bin").write_text("download", encoding="utf-8")
+        (run_dir / "run.yaml").write_text(f"id: {run_id}\ncreated: {created}\n", encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({"state": state, "ended": created}), encoding="utf-8")
+        return run_dir
+
+    def test_run_prune_defaults_to_dry_run(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs").mkdir()
+            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
+            os.chdir(root)
+            try:
+                status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, yes=False))
+                self.assertTrue(old.exists())
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 0)
+
+    def test_run_prune_outputs_only_with_yes_preserves_run(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs").mkdir()
+            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
+            os.chdir(root)
+            try:
+                status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=True, yes=True))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(status, 0)
+            self.assertTrue(old.exists())
+            self.assertTrue((old / "run.yaml").exists())
+            self.assertFalse((old / "outputs").exists())
+            self.assertFalse((old / "downloads").exists())
+
+
+class RunPodLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _config() -> dict[str, object]:
+        return {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}
+
+    @staticmethod
+    def _container_disk_config() -> dict[str, object]:
+        return {"storage_mode": "container_disk", "gpu_type_ids": ["NVIDIA A40"]}
+
+    @staticmethod
+    def _object_config() -> dict[str, object]:
+        return {
+            "storage_mode": "object_staging",
+            "gpu_type_ids": ["NVIDIA A40"],
+            "object_store": {
+                "endpoint_url": "https://example.r2.cloudflarestorage.com",
+                "bucket": "kura",
+                "region": "auto",
+                "prefix": "tests",
+                "access_key_env": "R2_ACCESS_KEY_ID",
+                "secret_key_env": "R2_SECRET_ACCESS_KEY",
+            },
+        }
+
+    def _run_dir(self, root: Path) -> Path:
+        run_dir = root / "runs" / "example"
+        (run_dir / "realizations").mkdir(parents=True)
+        (run_dir / "logs").mkdir()
+        (run_dir / "logs" / "events.jsonl").touch()
+        (run_dir / "status.json").write_text(json.dumps({"state": "compiled", "started": None, "ended": None, "exit_code": None}), encoding="utf-8")
+        return run_dir
+
+    def _stage_upload(self, root: Path, run_dir: Path) -> None:
+        (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
+        (run_dir / "resolved").mkdir(exist_ok=True)
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text("locked: true\n", encoding="utf-8")
+        dataset = root / "datasets" / "tiny" / "images"
+        dataset.mkdir(parents=True)
+        (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
+        stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._config())
+
+    def test_launch_runpod_records_pod_without_secret_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret", "HF_TOKEN": "hf-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                    realization_id = launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config())
+            self.assertIsNotNone(realization_id)
+            payload = request.call_args.args[3]
+            self.assertNotIn("networkVolumeId", payload)
+            self.assertNotIn("volumeMountPath", payload)
+            self.assertEqual(payload["volumeInGb"], 0)
+            self.assertEqual(payload["dockerStartCmd"][:2], ["sh", "-lc"])
+            self.assertNotIn("runpodctl receive", payload["dockerStartCmd"][2])
+            self.assertIn("/usr/sbin/sshd", payload["dockerStartCmd"][2])
+            self.assertIn("sleep infinity", payload["dockerStartCmd"][2])
+            self.assertIn("KURA_UPLOAD_CODE", payload["env"])
+            self.assertIn("KURA_DOWNLOAD_CODE", payload["env"])
+            self.assertNotIn("HF_TOKEN", payload["env"])
+            self.assertEqual(payload["cloudType"], "COMMUNITY")
+            record = (run_dir / "realizations" / f"{realization_id}.json").read_text(encoding="utf-8")
+            self.assertNotIn("api-secret", record)
+            self.assertNotIn("hf-secret", record)
+            self.assertIn('"cloudTypeCandidates": [', record)
+            self.assertIn('"upload_code":', record)
+            self.assertIn('"pod_id": "pod-1"', (run_dir / "status.json").read_text(encoding="utf-8"))
+
+    def test_launch_runpod_can_use_template_and_ports(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {
+                "storage_mode": "upload",
+                "gpu_type_ids": ["NVIDIA A40"],
+                "template_id": "0fqzfjy6f3",
+                "ports": ["8675/http", "22/tcp"],
+            }
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config)
+            payload = request.call_args.args[3]
+            self.assertEqual(payload["templateId"], "0fqzfjy6f3")
+            self.assertEqual(payload["ports"], ["8675/http", "22/tcp"])
+            self.assertEqual(payload["volumeInGb"], 0)
+            self.assertNotIn("imageName", payload)
+            self.assertNotIn("dockerStartCmd", payload)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            record = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+            self.assertEqual(record["container_cwd"], "/app/ai-toolkit")
+
+    def test_launch_runpod_can_pin_availability_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {
+                "storage_mode": "upload",
+                "gpu_type_ids": ["NVIDIA A40"],
+                "data_center_ids": ["US-GA-1"],
+                "data_center_priority": "availability",
+                "gpu_type_priority": "availability",
+                "country_codes": ["US"],
+            }
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config)
+            payload = request.call_args.args[3]
+            self.assertEqual(payload["dataCenterIds"], ["US-GA-1"])
+            self.assertEqual(payload["dataCenterPriority"], "availability")
+            self.assertEqual(payload["gpuTypePriority"], "availability")
+            self.assertEqual(payload["countryCodes"], ["US"])
+
+    def test_launch_runpod_falls_back_across_cloud_types(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", side_effect=[ValueError("no community capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config())
+            first = request.call_args_list[0].args[3]
+            second = request.call_args_list[1].args[3]
+            self.assertEqual(first["cloudType"], "COMMUNITY")
+            self.assertEqual(second["cloudType"], "SECURE")
+            self.assertNotIn("dataCenterIds", first)
+            self.assertNotIn("countryCodes", first)
+
+    def test_launch_runpod_rejects_unsupported_udp_ports(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {
+                "storage_mode": "upload",
+                "gpu_type_ids": ["NVIDIA A40"],
+                "template_id": "0fqzfjy6f3",
+                "ports": ["8675/http", "22/tcp", "22/udp"],
+            }
+            with self.assertRaisesRegex(ValueError, "only supports /http and /tcp"):
+                launch_runpod(run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, dry_run=True)
+
+    def test_launch_runpod_object_staging_is_disabled_until_secret_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            env = {"RUNPOD_API_KEY": "api-secret", "R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}
+            with patch.dict(os.environ, env, clear=False):
+                with self.assertRaisesRegex(ValueError, "disabled until object-store credentials"):
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._object_config())
+
+    def test_launch_runpod_records_failed_attempt_without_stale_pod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "interrupted", "pod_id": "stale-pod", "last_observation": "realizations/old.observed.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret", "HF_TOKEN": "hf-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", side_effect=ValueError("RunPod API POST /pods failed (500): echoed api-secret hf-secret")):
+                    with self.assertRaisesRegex(ValueError, r"\\*\\*\\*"):
+                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._container_disk_config())
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "launch_failed")
+            self.assertNotIn("pod_id", status)
+            self.assertNotIn("last_observation", status)
+            self.assertIn("last_realization", status)
+            record = (run_dir / status["last_realization"]).read_text(encoding="utf-8")
+            self.assertIn('"state": "launch_failed"', record)
+            self.assertIn('"gpuTypeIds": [', record)
+            self.assertIn('"NVIDIA A40"', record)
+            self.assertNotIn("api-secret", record)
+            self.assertNotIn("hf-secret", record)
+
+    def test_launch_runpod_rejects_secret_pod_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            with self.assertRaisesRegex(ValueError, "pod env must not contain secrets"):
+                launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "should-not-enter-pod-env"}}, image="registry/image:tag", config=self._container_disk_config())
+
+    def test_runpod_ssh_secret_injection_keeps_token_out_of_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            stage_path = run_dir / "realizations" / "stage.json"
+            stage_path.write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            realization_path = run_dir / "realizations" / "r1.json"
+            realization_path.write_text(json.dumps({"executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+            def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append((args, kwargs))
+                command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
+                if "nohup sh" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, "1234\n", "")
+                if "remote-exit-*.json" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, json.dumps({"event": "remote_exit", "exit_code": 0}), "")
+                if "__KURA_LOG_SIZE__" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, b"\n__KURA_LOG_SIZE__:0\n", b"")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with patch.dict(os.environ, {"HF_TOKEN": "hf-secret"}, clear=False):
+                with patch("kura.cli._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                    with patch("kura.cli.subprocess.run", side_effect=fake_run):
+                        self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1), 0)
+
+            argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
+            self.assertNotIn("hf-secret", argv_text)
+            self.assertIn("sleep 43200", argv_text)
+            self.assertIn("runpodctl pod stop", argv_text)
+            self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
+
+    def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+            def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append((args, kwargs))
+                command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
+                if "nohup sh" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, "1234\n", "")
+                if "remote-exit-*.json" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, json.dumps({"event": "remote_exit", "exit_code": 0}), "")
+                if "__KURA_LOG_SIZE__" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, b"\n__KURA_LOG_SIZE__:0\n", b"")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with patch("kura.cli._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                with patch("kura.cli.subprocess.run", side_effect=fake_run):
+                    self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=0), 0)
+
+            argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
+            self.assertNotIn("runpodctl pod stop", argv_text)
+
+    def test_reconcile_runpod_exited_is_unknown_without_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "EXITED"}):
+                    status = reconcile_runpod(run_dir, self._config())
+            self.assertEqual(status["state"], "unknown")
+            self.assertIsNone(status["exit_code"])
+
+    def test_cli_reconcile_runpod_syncs_remote_log_without_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            run_dir = self._run_dir(root)
+            (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
+            realization = {
+                "id": "r1",
+                "executor": "runpod",
+                "pod": {"id": "pod-1"},
+                "request": {"env": {"KURA_WORKSPACE": "/workspace"}},
+            }
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps(realization), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json", "pod_id": "pod-1"}), encoding="utf-8")
+            remote_stdout = (
+                b"steps:  10%|#         | 3/30 [00:06<00:54,  2.00s/it, avr_loss=0.234]\n"
+                b"\n__KURA_LOG_SIZE__:77\n"
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": ""}, clear=False):
+                    with patch("kura.cli._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                        with patch("kura.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0, remote_stdout, b"")):
+                            self.assertEqual(cmd_run_reconcile(argparse.Namespace(run_id="example")), 0)
+            finally:
+                os.chdir(previous)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["last_step"], 3)
+            self.assertEqual(status["total_steps"], 30)
+
+    def test_run_remote_does_not_stop_pod_when_download_is_unconfirmed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.cmd_run_stage", return_value=0), \
+                     patch("kura.cli.cmd_run_launch", return_value=0), \
+                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.cli._download_with_retries", return_value=1), \
+                     patch("kura.cli.cmd_run_stop") as stop:
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            stop.assert_not_called()
+
+    def test_run_remote_notifies_loudly_on_controller_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.cmd_run_stage", return_value=0), \
+                     patch("kura.cli.cmd_run_launch", return_value=0), \
+                     patch("kura.cli._runpod_run_over_ssh", side_effect=subprocess.TimeoutExpired(["runpod-remote-job", "example"], 1)), \
+                     patch("kura.cli._notify") as notify, \
+                     patch("kura.cli.cmd_run_stop") as stop:
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, notify="ntfy", hold_for="30m", notify_repeat_interval="10m"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            stop.assert_not_called()
+            notify.assert_called_once()
+            self.assertIn("controller failed", notify.call_args.kwargs["subject"])
+            self.assertIn("may still be running and billing", notify.call_args.kwargs["body"])
+            self.assertIn("kura run stop example", notify.call_args.kwargs["body"])
+
+    def test_run_remote_stops_pod_immediately_when_hold_is_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.cmd_run_stage", return_value=0), \
+                     patch("kura.cli.cmd_run_launch", return_value=0), \
+                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.cli._download_with_retries", return_value=0), \
+                     patch("kura.cli.cmd_run_stop") as stop:
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="0"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            stop.assert_called_once()
+
+    def test_run_remote_defaults_to_bounded_review_hold_after_confirmed_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.cmd_run_stage", return_value=0), \
+                     patch("kura.cli.cmd_run_launch", return_value=0), \
+                     patch("kura.cli._runpod_run_over_ssh", return_value=0) as remote_run, \
+                     patch("kura.cli._download_with_retries", return_value=0), \
+                     patch("kura.cli._sleep_with_completion_reminders") as hold, \
+                     patch("kura.cli.cmd_run_stop") as stop:
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            hold.assert_called_once()
+            self.assertEqual(hold.call_args.kwargs["delay_sec"], 1800)
+            self.assertEqual(remote_run.call_args.kwargs["max_lease_sec"], 43200)
+            stop.assert_called_once()
+
+    def test_run_remote_repeats_completion_notification_during_review_hold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.cmd_run_stage", return_value=0), \
+                     patch("kura.cli.cmd_run_launch", return_value=0), \
+                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.cli._download_with_retries", return_value=0), \
+                     patch("kura.cli.time.sleep") as sleep, \
+                     patch("kura.cli._notify") as notify, \
+                     patch("kura.cli.cmd_run_stop") as stop:
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [600, 600])
+            self.assertEqual(notify.call_count, 2)
+            self.assertIn("completed", notify.call_args_list[0].kwargs["subject"])
+            self.assertIn("reminder", notify.call_args_list[1].kwargs["subject"])
+            stop.assert_called_once()
+
+    def test_run_remote_stops_pod_when_review_hold_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.cmd_run_stage", return_value=0), \
+                     patch("kura.cli.cmd_run_launch", return_value=0), \
+                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.cli._download_with_retries", return_value=0), \
+                     patch("kura.cli._sleep_with_completion_reminders", side_effect=KeyboardInterrupt), \
+                     patch("kura.cli.cmd_run_stop") as stop:
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            stop.assert_called_once()
+
+    def test_run_download_rejects_snapshot_without_remote_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "downloads" / "example" / "realizations").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+
+    def test_run_download_materializes_outputs_at_run_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            output_dir = run_dir / "downloads" / "example" / "outputs"
+            realization_dir = run_dir / "downloads" / "example" / "realizations"
+            output_dir.mkdir(parents=True)
+            realization_dir.mkdir(parents=True)
+            (output_dir / "artifact.safetensors").write_text("artifact", encoding="utf-8")
+            (realization_dir / "remote-exit-20260101.json").write_text(json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            self.assertEqual((run_dir / "outputs" / "artifact.safetensors").read_text(encoding="utf-8"), "artifact")
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["outputs"], ["outputs/artifact.safetensors"])
+            self.assertEqual(status["downloaded_run"], "downloads/example")
+
+    def test_run_download_rejects_fresh_archive_without_remote_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            real_run = subprocess.run
+
+            def fake_run(command: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["runpodctl", "pod", "get"]:
+                    pod = {"ssh": {"ip": "127.0.0.1", "port": 22, "ssh_key": {"path": "/tmp/key"}}}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(pod), "")
+                if command and command[0] == "ssh":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if command and command[0] == "scp":
+                    archive_path = Path(command[-1])
+                    source = root / "remote-snapshot"
+                    (source / "example" / "realizations").mkdir(parents=True)
+                    (source / "example" / "run.yaml").write_text("id: example\n", encoding="utf-8")
+                    with tarfile.open(archive_path, "w:gz") as archive:
+                        archive.add(source / "example", arcname="example")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if command and command[0] == "tar":
+                    return real_run(command, *args, **kwargs)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.cli.subprocess.run", side_effect=fake_run):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+
+    def test_doctor_runpod_fails_when_network_volumes_remain(self) -> None:
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self.payload = payload
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        def fake_urlopen(request: object, timeout: int = 20) -> FakeResponse:
+            url = getattr(request, "full_url", "")
+            if str(url).endswith("/networkvolumes"):
+                return FakeResponse([{"id": "volume-1"}])
+            return FakeResponse([])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                completed = subprocess.CompletedProcess([], 0, "ok", "")
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                     patch("kura.cli.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.cli.subprocess.run", return_value=completed), \
+                     patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                    code = cmd_doctor_runpod(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+
+    def test_stage_runpod_object_staging_uploads_under_run_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "realizations").mkdir()
+            (run_dir / "logs").mkdir()
+            (run_dir / "logs" / "events.jsonl").touch()
+            (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("locked: true\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            dataset = root / "datasets" / "tiny" / "images"
+            dataset.mkdir(parents=True)
+            (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
+            client = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+            with patch.dict(os.environ, {"R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}, clear=False):
+                with patch("kura.executors.boto3.client", return_value=client):
+                    record = stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._object_config())
+            keys = [call.args[2] for call in client.upload_file.call_args_list]
+            self.assertEqual(set(keys), {"tests/runs/example/runs/example/run.yaml", "tests/runs/example/runs/example/resolved/manifest.lock.yaml", "tests/runs/example/datasets/tiny/images/one.txt"})
+            self.assertEqual(record["storage_mode"], "object_staging")
+            self.assertEqual(record["object_bucket"], "kura")
+
+    def test_stop_runpod_terminates_disposable_pod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={}) as request:
+                    status = stop_runpod(run_dir, self._config())
+            self.assertEqual(status["state"], "interrupted")
+            self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
+
+    def test_stop_runpod_preserves_completed_status_after_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0, "pod_id": "pod-1"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={}):
+                    status = stop_runpod(run_dir, self._config())
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["exit_code"], 0)
+            self.assertIn("pod_stopped_at", status)

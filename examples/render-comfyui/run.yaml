@@ -1,0 +1,28 @@
+schema_version: 1
+type: render
+intent: "fixed prompt ComfyUI render"
+inputs:
+  train_run: null
+  checkpoint:
+    path: runs/example/outputs/example.safetensors
+    hash: null
+  workflow:
+    path: workflows/replace-with-api-workflow.json
+    digest: null
+  promptset:
+    path: promptsets/example-render.jsonl
+    digest: null
+generator:
+  name: comfyui
+  endpoint: http://127.0.0.1:8188
+executor:
+  name: local
+workflow_patches:
+  prompt: {node: "6", field: inputs.text}
+  negative_prompt: {node: "7", field: inputs.text}
+  seed: {node: "3", field: inputs.seed}
+  lora: {node: "12", field: inputs.lora_name}
+render:
+  output_dir: samples/images
+  timeout_sec: 600
+  default_seed: 42

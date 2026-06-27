@@ -1,0 +1,31 @@
+---
+name: ai-toolkit-backend
+description: AI-Toolkit backend and image workflow for Kura. Use when changing AI-Toolkit compile output, Docker image build/publish, Hugging Face cache behavior, or local/RunPod image contracts.
+---
+
+# AI-Toolkit Backend
+
+Use this skill for AI-Toolkit-specific backend and image work.
+
+## Rules
+
+- Do not run AI-Toolkit directly on the host.
+- Build/run through Docker or RunPod only.
+- Keep Hugging Face cache paths configurable through ignored local workspace config.
+- Do not bake tokens or model weights into images.
+- Treat tiny 1-5 step runs as infrastructure smoke tests, not training recipes.
+
+## Useful commands
+
+```sh
+uv run kura image build ai-toolkit --ref <branch-or-commit>
+uv run kura image inspect ai-toolkit
+uv run kura image publish ai-toolkit --dry-run
+uv run kura doctor docker
+uv run kura run compile <run-id>
+uv run kura run launch <run-id> --executor docker --dry-run
+```
+
+## Check before changing docs
+
+README may lag implementation. Verify with CLI help before documenting flags.

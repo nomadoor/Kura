@@ -1,0 +1,40 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+dist/
+*.egg-info/
+*:Zone.Identifier
+.env
+.env.local
+.env.*.local
+AGENT_STATE.md
+.claude/settings.local.json
+
+# Local workspace configuration and generated workspace data.
+# Keep reusable fixtures and authored examples under tests/ and examples/.
+workspace.yaml
+index.jsonl
+datasets/
+experiments/
+runs/
+workflows/
+promptsets/
+backends/
+executors/
+
+# Defense in depth: generated artifacts should live under ignored workspace
+# directories, but keep accidental root-level drops out of git too.
+outputs/
+downloads/
+pulled/
+cache/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.gguf
+*.onnx
+*.bin
+*.tar.gz
+*.zip

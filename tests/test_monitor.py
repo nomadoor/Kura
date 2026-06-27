@@ -1,0 +1,370 @@
+"""Tests for read-only run monitoring projections."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from kura.monitor import collect_run_summaries, loss_sparkline
+
+
+class MonitorProjectionTests(unittest.TestCase):
+    def test_sparkline_tracks_increasing_values(self) -> None:
+        line = loss_sparkline([1, 2, 3, 4], width=4)
+        self.assertEqual(line, "▁▃▆█")
+
+    def test_collect_run_summaries_tolerates_missing_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "missing-pieces"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: missing-pieces\ntype: train\n", encoding="utf-8")
+
+            summaries = collect_run_summaries(root)
+
+            self.assertEqual(len(summaries), 1)
+            self.assertEqual(summaries[0].id, "missing-pieces")
+            self.assertIsNone(summaries[0].state)
+
+    def test_collect_run_summaries_reads_config_status_and_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "metrics").mkdir()
+            (run_dir / "logs").mkdir()
+            (root / "index.jsonl").write_text(json.dumps({"id": "train-1"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: train-1",
+                        "type: train",
+                        "experiment: exp",
+                        "created: '2026-06-21T10:00:00+09:00'",
+                        "dataset: {id: tiny}",
+                        "params: {rank: 4, lr: 0.0001, steps: 3}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "started": "2026-06-21T10:01:00+09:00", "last_step": 0, "total_steps": 3, "exit_code": 0}),
+                encoding="utf-8",
+            )
+            (run_dir / "metrics" / "metrics.jsonl").write_text(
+                "\n".join(json.dumps({"loss": value}) for value in (0.9, 0.7, 0.8)) + "\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root, loss_tail=2)[0]
+
+            self.assertEqual(summary.id, "train-1")
+            self.assertEqual(summary.experiment, "exp")
+            self.assertEqual(summary.executor, "docker")
+            self.assertEqual(summary.state, "running")
+            self.assertEqual(summary.key_config["rank"], 4)
+            self.assertEqual(summary.progress.step, 0)
+            self.assertEqual(summary.progress.total, 3)
+            self.assertEqual(summary.exit_code, 0)
+            self.assertEqual(summary.losses, (0.7, 0.8))
+            self.assertEqual(summary.latest_loss, 0.8)
+            self.assertEqual(summary.best_loss, 0.7)
+
+    def test_collect_run_summaries_falls_back_to_ai_toolkit_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "stdout-train"
+            (run_dir / "metrics").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: stdout-train",
+                        "type: train",
+                        "params: {steps: 30}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 0, "exit_code": 0}), encoding="utf-8")
+            (run_dir / "metrics" / "metrics.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "\rstdout-train:  3%|▎| 1/30 [00:11<05:36, lr: 1.0e-04 loss: 3.825e-01]"
+                "\rstdout-train: 97%|█| 29/30 [01:34<00:03, lr: 1.0e-04 loss: 8.186e-01]\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.progress.step, 30)
+            self.assertEqual(summary.progress.total, 30)
+            self.assertEqual(summary.losses, (0.3825, 0.8186))
+            self.assertEqual(summary.best_loss, 0.3825)
+
+    def test_collect_run_summaries_falls_back_to_musubi_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "musubi-train"
+            (run_dir / "metrics").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: musubi-train",
+                        "type: train",
+                        "backend: {name: musubi-tuner}",
+                        "params: {steps: 100}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0}), encoding="utf-8")
+            (run_dir / "metrics" / "metrics.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "\rsteps:  99%|█████████▉| 99/100 [04:13<00:02,  2.56s/it, avr_loss=0.316]\n"
+                "\rsteps: 100%|██████████| 100/100 [04:16<00:00,  2.56s/it, avr_loss=0.321]\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.progress.step, 100)
+            self.assertEqual(summary.progress.total, 100)
+            self.assertEqual(summary.progress.seconds_per_iter, 2.56)
+            self.assertEqual(summary.losses, (0.316, 0.321))
+            self.assertEqual(summary.latest_loss, 0.321)
+            self.assertEqual(summary.best_loss, 0.316)
+
+    def test_collect_run_summaries_reads_downloaded_stdout_for_remote_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "remote-train"
+            downloaded = run_dir / "downloads" / "remote-train"
+            (run_dir / "metrics").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (downloaded / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: remote-train",
+                        "type: train",
+                        "backend: {name: musubi-tuner}",
+                        "params: {steps: 1}",
+                        "compute: {executor: runpod}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps(
+                    {
+                        "state": "completed",
+                        "exit_code": 0,
+                        "downloaded_run": "downloads/remote-train",
+                        "outputs": ["downloads/remote-train/outputs/result.safetensors"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "metrics" / "metrics.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text("", encoding="utf-8")
+            (downloaded / "logs" / "stdout.log").write_text(
+                "\rsteps: 100%|██████████| 1/1 [00:00<00:00,  4.33it/s, avr_loss=0.379]\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.progress.step, 1)
+            self.assertEqual(summary.progress.total, 1)
+            self.assertEqual(summary.losses, (0.379,))
+            self.assertEqual(summary.latest_loss, 0.379)
+
+    def test_collect_run_summaries_reads_dataset_array_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "paired"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "metrics").mkdir()
+            (run_dir / "logs").mkdir()
+            (root / "datasets" / "cond").mkdir(parents=True)
+            (root / "datasets" / "target").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: paired\ntype: train\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: paired",
+                        "type: train",
+                        "datasets:",
+                        "  - {id: cond, digest: sha256:aaa, role: cond}",
+                        "  - {id: target, digest: sha256:bbb, role: target}",
+                        "params: {rank: 8, lr: 0.0001, steps: 10}",
+                        "compute: {executor: runpod}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual([dataset.id for dataset in summary.datasets], ["cond", "target"])
+            self.assertEqual([dataset.role for dataset in summary.datasets], ["cond", "target"])
+            self.assertEqual(summary.datasets[0].path, root / "datasets" / "cond")
+            self.assertEqual(summary.key_config["dataset"], "cond+target")
+
+    def test_collect_run_summaries_estimates_runpod_cost_from_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "remote"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: remote",
+                        "type: train",
+                        "compute: {executor: runpod}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps(
+                    {
+                        "state": "interrupted",
+                        "started": "2026-06-22T10:00:00+00:00",
+                        "ended": "2026-06-22T10:30:00+00:00",
+                        "pod_id": "pod1",
+                        "last_realization": "realizations/launch.json",
+                        "last_observation": "realizations/launch.observed-1.json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "launch.json").write_text(
+                json.dumps(
+                    {
+                        "id": "launch",
+                        "executor": "runpod",
+                        "launched_at": "2026-06-22T10:00:00+00:00",
+                        "pod": {"id": "pod1", "desired_status": "RUNNING"},
+                        "request": {"gpuTypeIds": ["NVIDIA A40"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "launch.observed-1.json").write_text(
+                json.dumps(
+                    {
+                        "observed_at": "2026-06-22T10:10:00+00:00",
+                        "state": "running",
+                        "pod_id": "pod1",
+                        "desired_status": "RUNNING",
+                        "last_started_at": "2026-06-22T10:00:00+00:00",
+                        "cost_per_h": 0.44,
+                        "machine": {"gpu_display_name": "NVIDIA A40"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.executor_info.kind, "remote")
+            self.assertEqual(summary.executor_info.gpu, "NVIDIA A40")
+            self.assertIsNotNone(summary.executor_info.pod)
+            assert summary.executor_info.pod is not None
+            self.assertEqual(summary.executor_info.pod.cost_per_h, 0.44)
+            self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.22)
+
+    def test_collect_run_summaries_estimates_runpod_cost_from_launch_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "remote"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: remote",
+                        "type: train",
+                        "compute: {executor: runpod}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps(
+                    {
+                        "state": "completed",
+                        "started": "2026-06-22T19:12:00+09:00",
+                        "ended": "2026-06-22T10:20:00+00:00",
+                        "pod_stopped_at": "2026-06-22T10:17:00+00:00",
+                        "pod_id": "pod1",
+                        "last_realization": "realizations/launch.json",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "launch.json").write_text(
+                json.dumps(
+                    {
+                        "id": "launch",
+                        "executor": "runpod",
+                        "launched_at": "2026-06-22T19:12:00+09:00",
+                        "pod": {
+                            "id": "pod1",
+                            "desired_status": "RUNNING",
+                            "last_started_at": "2026-06-22 10:14:00.000 +0000 UTC",
+                            "cost_per_h": 0.60,
+                        },
+                        "request": {"gpuTypeIds": ["NVIDIA A40"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertIsNotNone(summary.executor_info.pod)
+            assert summary.executor_info.pod is not None
+            self.assertEqual(summary.executor_info.pod.cost_per_h, 0.60)
+            self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.03)
+
+    def test_collect_run_summaries_reads_batch_and_accumulation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "musubi-batch"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: musubi-batch",
+                        "type: train",
+                        "backend: {name: musubi-tuner}",
+                        "params: {batch_size: 4, steps: 100}",
+                        "backend_overrides:",
+                        "  musubi-tuner:",
+                        "    extra_args:",
+                        "      - --gradient_accumulation_steps",
+                        "      - '2'",
+                        "    dataset_config:",
+                        "      general: {batch_size: 1}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.key_config["batch_size"], 1)
+            self.assertEqual(summary.key_config["gradient_accumulation_steps"], 2)
+            self.assertEqual(summary.key_config["effective_batch_size"], 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
