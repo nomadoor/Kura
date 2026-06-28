@@ -376,9 +376,9 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run_stop(args: argparse.Namespace) -> int:
+def stop_run(run_id: str) -> int:
     try:
-        run_dir = _run_path(args.run_id)
+        run_dir = _run_path(run_id)
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
         if realization.get("executor") == "runpod":
@@ -389,6 +389,10 @@ def cmd_run_stop(args: argparse.Namespace) -> int:
         print(f"cannot stop run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0
+
+
+def cmd_run_stop(args: argparse.Namespace) -> int:
+    return stop_run(args.run_id)
 
 
 def cmd_run_logs(args: argparse.Namespace) -> int:
@@ -417,11 +421,11 @@ def cmd_run_logs(args: argparse.Namespace) -> int:
         return 0
 
 
-def cmd_run_stage(args: argparse.Namespace) -> int:
-    if args.executor != "runpod":
-        print(f"staging is not implemented for executor: {args.executor}", file=sys.stderr)
+def stage_run(run_id: str, *, executor: str = "runpod") -> int:
+    if executor != "runpod":
+        print(f"staging is not implemented for executor: {executor}", file=sys.stderr)
         return 2
-    run_dir = _run_path(args.run_id)
+    run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -438,6 +442,10 @@ def cmd_run_stage(args: argparse.Namespace) -> int:
         print(f"cannot stage run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0
+
+
+def cmd_run_stage(args: argparse.Namespace) -> int:
+    return stage_run(args.run_id, executor=args.executor)
 
 
 def _latest_runpod_transfer(run_dir: Path) -> dict[str, Any]:
@@ -482,11 +490,11 @@ def cmd_run_upload(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_run_download(args: argparse.Namespace) -> int:
+def download_run(run_id: str, *, force: bool = False) -> int:
     try:
-        run_dir = _run_path(args.run_id)
+        run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
-        downloaded_run = destination / args.run_id
+        downloaded_run = destination / run_id
 
         def materialize_primary_outputs(output_dir: Path) -> list[str]:
             primary = run_dir / "outputs"
@@ -536,12 +544,12 @@ def cmd_run_download(args: argparse.Namespace) -> int:
             (run_dir / "status.json").write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return True
 
-        if downloaded_run.exists() and not getattr(args, "force", False):
+        if downloaded_run.exists() and not force:
             if materialize_downloaded_status():
                 print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
                 return 0
             raise ValueError("downloaded run snapshot is missing remote-exit; use --force to retry or inspect the Pod before stopping it")
-        if downloaded_run.exists() and getattr(args, "force", False):
+        if downloaded_run.exists() and force:
             shutil.rmtree(downloaded_run)
         if not shutil.which("runpodctl"):
             raise ValueError("runpodctl is not installed locally; install it before downloading")
@@ -559,17 +567,17 @@ def cmd_run_download(args: argparse.Namespace) -> int:
         if not isinstance(ip, str) or not isinstance(port, int) or not isinstance(key, str):
             raise ValueError("pod SSH is not ready")
         destination.mkdir(exist_ok=True)
-        remote_archive = f"/tmp/kura-download-{args.run_id}.tar.gz"
+        remote_archive = f"/tmp/kura-download-{run_id}.tar.gz"
         remote_script = (
             f"tar -C /workspace/runs "
-            f"--exclude {shlex.quote(args.run_id + '/cache')} "
-            f"--exclude {shlex.quote(args.run_id + '/transfer')} "
-            f"-czf {shlex.quote(remote_archive)} {shlex.quote(args.run_id)}"
+            f"--exclude {shlex.quote(run_id + '/cache')} "
+            f"--exclude {shlex.quote(run_id + '/transfer')} "
+            f"-czf {shlex.quote(remote_archive)} {shlex.quote(run_id)}"
         )
         packed = subprocess.run([*_ssh_base({"ip": ip, "port": port, "key": key}), remote_script], check=False)
         if packed.returncode:
             return packed.returncode
-        local_archive = destination / f"kura-download-{args.run_id}.tar.gz"
+        local_archive = destination / f"kura-download-{run_id}.tar.gz"
         command = [
             "scp",
             "-o", "StrictHostKeyChecking=no",
@@ -593,6 +601,10 @@ def cmd_run_download(args: argparse.Namespace) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
         return 1
+
+
+def cmd_run_download(args: argparse.Namespace) -> int:
+    return download_run(args.run_id, force=args.force)
 
 
 def _runpod_workspace_for_run(run_dir: Path) -> str:
@@ -1068,50 +1080,65 @@ echo $!
         time.sleep(2)
 
 
-def _download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
+def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
     for _ in range(attempts):
-        code = cmd_run_download(argparse.Namespace(run_id=run_id, force=True))
+        code = download_run(run_id, force=True)
         if code == 0:
             return 0
         time.sleep(interval_sec)
     return 1
 
 
-def cmd_run_remote(args: argparse.Namespace) -> int:
-    run_dir = _run_path(args.run_id)
+def _download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
+    return download_with_retries(run_id, attempts, interval_sec)
+
+
+def run_remote(
+    run_id: str,
+    *,
+    upload_timeout: int,
+    job_timeout: int | None,
+    download_attempts: int,
+    download_interval: int,
+    hold_for: Any = "30m",
+    max_lease: Any = "12h",
+    notify_repeat_interval: Any = "10m",
+    notify_channels: Any = None,
+    image: str | None = None,
+) -> int:
+    run_dir = _run_path(run_id)
     launched = False
     safe_to_stop = False
     exit_code = 1
-    hold_for = 0
-    notify_channels = getattr(args, "notify", None)
+    hold_for_sec = 0
     notify_subject: str | None = None
     notify_body: str | None = None
     try:
-        hold_for = _parse_duration_seconds(getattr(args, "hold_for", "30m"))
-        max_lease = _parse_duration_seconds(getattr(args, "max_lease", "12h"))
-        repeat_interval = _parse_duration_seconds(getattr(args, "notify_repeat_interval", "10m"))
-        stage_code = cmd_run_stage(argparse.Namespace(run_id=args.run_id, executor="runpod"))
+        hold_for_sec = _parse_duration_seconds(hold_for)
+        max_lease_sec = _parse_duration_seconds(max_lease)
+        repeat_interval = _parse_duration_seconds(notify_repeat_interval)
+        stage_code = stage_run(run_id, executor="runpod")
         if stage_code:
             return stage_code
-        launch_code = cmd_run_launch(argparse.Namespace(run_id=args.run_id, executor="runpod", dry_run=False, image=getattr(args, "image", None)))
+        launch_code = launch_run(run_id, executor="runpod", dry_run=False, image=image)
         if launch_code:
             return launch_code
         launched = True
         exit_code = _runpod_run_over_ssh(
             run_dir,
-            ssh_timeout_sec=args.upload_timeout,
-            job_timeout_sec=args.job_timeout,
+            ssh_timeout_sec=upload_timeout,
+            job_timeout_sec=job_timeout,
             remote_notify="ntfy" in _notification_channels(notify_channels),
-            max_lease_sec=max_lease,
+            max_lease_sec=max_lease_sec,
         )
-        download_code = _download_with_retries(args.run_id, args.download_attempts, args.download_interval)
+        download_code = download_with_retries(run_id, download_attempts, download_interval)
         if download_code:
             raise ValueError("download did not complete before timeout")
         safe_to_stop = True
         state_word = "completed" if exit_code == 0 else "failed"
-        stop_note = f" Pod is held for review and will be stopped after {hold_for} seconds." if hold_for else " Pod will be stopped now."
-        notify_subject = f"Kura run {state_word}: {args.run_id}"
-        notify_body = f"Run {args.run_id} {state_word} with exit code {exit_code}.{stop_note}"
+        stop_note = f" Pod is held for review and will be stopped after {hold_for_sec} seconds." if hold_for_sec else " Pod will be stopped now."
+        notify_subject = f"Kura run {state_word}: {run_id}"
+        notify_body = f"Run {run_id} {state_word} with exit code {exit_code}.{stop_note}"
         _notify(notify_channels, subject=notify_subject, body=notify_body)
         return exit_code
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
@@ -1119,35 +1146,50 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
         print(f"cannot run remote job: {message}", file=sys.stderr)
         _notify(
             notify_channels,
-            subject=f"Kura run controller failed: {args.run_id}",
+            subject=f"Kura run controller failed: {run_id}",
             body=(
-                f"Run {args.run_id} controller stopped before confirmed download/stop:\n"
+                f"Run {run_id} controller stopped before confirmed download/stop:\n"
                 f"{message}\n\n"
                 "The remote Pod may still be running and billing. Recover with:\n"
-                f"uv run kura run reconcile {args.run_id}\n"
-                f"uv run kura run download {args.run_id} --force\n"
-                f"uv run kura run stop {args.run_id}"
+                f"uv run kura run reconcile {run_id}\n"
+                f"uv run kura run download {run_id} --force\n"
+                f"uv run kura run stop {run_id}"
             ),
         )
         return 1
     finally:
         if launched and safe_to_stop:
-            if hold_for > 0:
-                print(f"RunPod pod is held for review and will stop after {hold_for} seconds.", file=sys.stderr)
+            if hold_for_sec > 0:
+                print(f"RunPod pod is held for review and will stop after {hold_for_sec} seconds.", file=sys.stderr)
                 try:
                     if notify_subject and notify_body:
-                        _sleep_with_completion_reminders(delay_sec=hold_for, interval_sec=repeat_interval, channels=notify_channels, subject=notify_subject, body=notify_body)
+                        _sleep_with_completion_reminders(delay_sec=hold_for_sec, interval_sec=repeat_interval, channels=notify_channels, subject=notify_subject, body=notify_body)
                     else:
-                        time.sleep(hold_for)
+                        time.sleep(hold_for_sec)
                 except KeyboardInterrupt:
                     print("review hold interrupted; stopping RunPod pod now.", file=sys.stderr)
-            cmd_run_stop(argparse.Namespace(run_id=args.run_id))
+            stop_run(run_id)
         elif launched:
-            print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `uv run kura run stop {args.run_id}` after recovery", file=sys.stderr)
+            print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `uv run kura run stop {run_id}` after recovery", file=sys.stderr)
 
 
-def cmd_run_launch(args: argparse.Namespace) -> int:
-    run_dir = _run_path(args.run_id)
+def cmd_run_remote(args: argparse.Namespace) -> int:
+    return run_remote(
+        args.run_id,
+        upload_timeout=args.upload_timeout,
+        job_timeout=args.job_timeout,
+        download_attempts=args.download_attempts,
+        download_interval=args.download_interval,
+        hold_for=getattr(args, "hold_for", "30m"),
+        max_lease=getattr(args, "max_lease", "12h"),
+        notify_repeat_interval=getattr(args, "notify_repeat_interval", "10m"),
+        notify_channels=getattr(args, "notify", None),
+        image=getattr(args, "image", None),
+    )
+
+
+def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None = None, notify_channels: Any = None) -> int:
+    run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
         run_type = locked.get("type", "train")
@@ -1155,15 +1197,15 @@ def cmd_run_launch(args: argparse.Namespace) -> int:
         print(f"cannot launch run: compile the run first ({_safe_error(exc)})", file=sys.stderr); return 1
     if run_type == "render":
         try:
-            code = launch_render(_workspace(), run_dir, dry_run=args.dry_run)
-            if not args.dry_run:
+            code = launch_render(_workspace(), run_dir, dry_run=dry_run)
+            if not dry_run:
                 state_word = "completed" if code == 0 else "failed"
-                _notify(getattr(args, "notify", None), subject=f"Kura render {state_word}: {args.run_id}", body=f"Render {args.run_id} {state_word} with exit code {code}.")
+                _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"Render {run_id} {state_word} with exit code {code}.")
             return code
         except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
             message = _safe_error(exc)
             print(f"cannot launch render: {message}", file=sys.stderr)
-            _notify(getattr(args, "notify", None), subject=f"Kura render failed: {args.run_id}", body=f"Render {args.run_id} failed before completion:\n{message}")
+            _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}")
             return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -1180,12 +1222,12 @@ def cmd_run_launch(args: argparse.Namespace) -> int:
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
         image_name = _backend_image_name(backend_name)
         image = _image_config(image_name)
-        if args.executor == "docker":
+        if executor == "docker":
             docker = config.get("docker", {})
             mounts = docker.get("mounts", [])
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
-            launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image["local"], dockerfile=image["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=args.dry_run)
+            launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image["local"], dockerfile=image["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
         else:
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
@@ -1203,15 +1245,19 @@ def cmd_run_launch(args: argparse.Namespace) -> int:
             default_image = runpod_config.get("default_image")
             if isinstance(default_image, dict) and isinstance(default_image.get(image_name), str):
                 remote_image = default_image[image_name]
-            if getattr(args, "image", None):
-                remote_image = args.image
-            launch_runpod(run_dir=run_dir, spec=remote_spec, image=remote_image, config=runpod_config, dry_run=args.dry_run)
+            if image:
+                remote_image = image
+            launch_runpod(run_dir=run_dir, spec=remote_spec, image=remote_image, config=runpod_config, dry_run=dry_run)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    if args.dry_run:
+    if dry_run:
         return 0
     return 0
+
+
+def cmd_run_launch(args: argparse.Namespace) -> int:
+    return launch_run(args.run_id, executor=args.executor, dry_run=args.dry_run, image=getattr(args, "image", None), notify_channels=getattr(args, "notify", None))
 
 
 def cmd_image_build(args: argparse.Namespace) -> int:
