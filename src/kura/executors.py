@@ -131,7 +131,7 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str,
     paths = {"workspace": workspace.resolve()}
     for mount in mounts:
         if mount.get("mode") != "ro":
-            source = Path(mount["source"]).expanduser()
+            source = _resolve_mount_source(workspace, mount["source"])
             source.mkdir(parents=True, exist_ok=True)
             paths[f"mount:{mount.get('target', source)}"] = source.resolve()
     disk: dict[str, dict[str, int | str]] = {}
@@ -148,6 +148,13 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str,
     if available is not None and available < LOW_AVAILABLE_MEMORY_BYTES:
         warnings.append(f"only {available // 1024**3} GiB of host memory is currently available")
     return {"wsl": _is_wsl(), "memory_available_bytes": available, "disk": disk, "warnings": warnings}
+
+
+def _resolve_mount_source(workspace: Path, source: str) -> Path:
+    path = Path(source).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    return path.resolve()
 
 
 def _container_name(run_id: str, realization_id: str) -> str:
@@ -227,7 +234,7 @@ def docker_command(
         "--workdir", spec["cwd"], "--volume", f"{workspace.resolve()}:{workspace_target}",
     ]
     for mount in mounts:
-        source = Path(mount["source"]).expanduser().resolve()
+        source = _resolve_mount_source(workspace, mount["source"])
         suffix = ":ro" if mount.get("mode") == "ro" else ""
         command.extend(["--volume", f"{source}:{mount['target']}{suffix}"])
     if gpu:
@@ -240,6 +247,7 @@ def docker_command(
     # Container output is redirected to a mounted file; force Python progress
     # messages through immediately instead of waiting for its file buffer.
     runtime_env.setdefault("PYTHONUNBUFFERED", "1")
+    runtime_env.setdefault("HF_HOME", "/root/.cache/huggingface")
     if os.environ.get("HF_TOKEN"):
         runtime_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
     for key, value in sorted(runtime_env.items()):
@@ -282,7 +290,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "local_image": image, "image_id": image_id, "dockerfile": dockerfile,
         "container": {"id": container_id, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command, "workspace_mount": {"source": str(workspace.resolve()), "target": workspace_target},
-        "mounts": [{**mount, "source": str(Path(mount["source"]).expanduser().resolve())} for mount in mounts],
+        "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},

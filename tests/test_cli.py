@@ -19,7 +19,7 @@ import yaml
 
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
 from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, cmd_doctor_runpod, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote
-from kura.executors import docker_command, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -35,6 +35,9 @@ class InitCommandTests(unittest.TestCase):
                 for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "docker/ai-toolkit/Dockerfile"):
                     self.assertTrue((root / relative).exists(), relative)
                 self.assertTrue((root / "docker/musubi-tuner/Dockerfile").exists())
+                workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
+                self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
+                self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/root/.cache/huggingface")
             finally:
                 os.chdir(previous)
 
@@ -799,14 +802,33 @@ class DockerLifecycleTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
-            command, _, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
+            command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
         self.assertIn("-d", command)
         self.assertIn("--init", command)
         self.assertIn("--stop-timeout", command)
         self.assertNotIn("--rm", command)
         self.assertIn("io.kura.realization_id=r1", command)
         self.assertIn("PYTHONUNBUFFERED=1", command)
+        self.assertEqual(runtime_env["HF_HOME"], "/root/.cache/huggingface")
+        self.assertIn("HF_HOME=/root/.cache/huggingface", command)
         self.assertIn('exec "$@" >> "$KURA_LOG_PATH" 2>&1', command)
+
+    def test_docker_mount_sources_are_resolved_from_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+            command, _, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", mounts, True, "r1")
+        self.assertIn(f"{root}/cache/huggingface:/root/.cache/huggingface", command)
+
+    def test_docker_preflight_creates_writable_mount_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+            with patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                docker_preflight(root, mounts)
+            self.assertTrue((root / "cache" / "huggingface").is_dir())
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

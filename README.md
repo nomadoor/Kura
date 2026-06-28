@@ -27,7 +27,7 @@ If you keep ComfyUI running, you can also test-generate with the LoRA you traine
 | NVIDIA GPU | Needed for practical local training | Not needed if you only use RunPod |
 | [RunPod](https://www.runpod.io/) account | For training on cloud GPUs | Get an API key |
 
-- **Windows / WSL2:** enable Docker Desktop's WSL integration for your distribution, and keep Docker's disk image and caches on a drive with plenty of free space.
+- **Windows / WSL2:** enable Docker Desktop's WSL integration for your distribution.
 - A **Hugging Face token** is only needed for gated/private models.
 - For **render runs**, have ComfyUI running at `http://127.0.0.1:8188`.
 
@@ -61,6 +61,8 @@ Open `.env.local` and fill in only what you need. **`.env.local` is ignored by G
 | `KURA_NTFY_TOPIC` | Only if you want completion notifications (optional) |
 
 There are no other variables to set. (If you publish your own Docker images, just run `docker login` first.)
+
+Local Docker runs reuse Hugging Face downloads through `cache/huggingface/` by default. The directory is ignored by Git. If you want the cache somewhere else, change the mount source in `workspace.yaml`.
 
 ## Working with an AI agent
 
