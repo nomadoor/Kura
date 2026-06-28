@@ -31,13 +31,14 @@ Default flow when the user asks to test-generate with a Kura-trained LoRA:
 2. Check whether the target file is already visible: GET `/object_info` and look at
    the loader node's options (e.g. `LoraLoader.input.required.lora_name`). If the
    name is in the list, skip to patching.
-3. If it is not visible, find ComfyUI's `models` directory (ask the user once and
-   remember it, e.g. note it in `workspace.yaml`; `models/loras` and the other model
-   folders live under it). Create a **temporary symlink** from
-   `runs/<id>/outputs/<file>.safetensors` into `models/loras`.
-4. Patch the loader's name field (via `workflow_patches`) to that filename and render.
-5. **Remove the temporary symlink** afterward. If ComfyUI cached the old list, a
-   refresh/restart may be needed before the new file appears.
+3. If it is not visible and `workspace.yaml` has no `comfyui.lora_dir`, ask the
+   user for ComfyUI's `models/loras` directory and record it in local
+   `workspace.yaml`.
+4. With `comfyui.lora_dir` set, let `kura render launch` create the temporary
+   staged LoRA under `Kura_tmp/`, patch the loader's name field through
+   `workflow_patches`, render, and remove the staged file/link afterward.
+5. If ComfyUI cached the old list, a refresh/restart may be needed before the new
+   file appears.
 6. To keep a LoRA permanently available, tell the user to place it in `models/loras`
    themselves — that is a human decision, not a Kura mutation.
 

@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import yaml
@@ -20,6 +21,7 @@ import yaml
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
 from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, cmd_doctor_runpod, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.render import compile_render, launch_render
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -38,6 +40,8 @@ class InitCommandTests(unittest.TestCase):
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
                 self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/root/.cache/huggingface")
+                self.assertEqual(workspace["comfyui"]["lora_dir"], "")
+                self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
             finally:
                 os.chdir(previous)
 
@@ -209,6 +213,83 @@ class RenderNotificationTests(unittest.TestCase):
             launch.assert_called_once()
             notify.assert_called_once()
             self.assertIn("completed", notify.call_args.kwargs["subject"])
+
+    def test_render_stages_local_lora_for_comfyui_and_cleans_it_up(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "comfyui" / "models" / "loras"
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            output_run = root / "runs" / "train-1" / "outputs"
+            for path in (workflow_dir, promptset_dir, run_dir / "logs", run_dir / "resolved", run_dir / "samples", output_run):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n",
+                encoding="utf-8",
+            )
+            checkpoint = output_run / "example.safetensors"
+            checkpoint.write_bytes(b"fake-lora")
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"inputs": {"seed": 0}},
+                    "6": {"inputs": {"text": ""}},
+                    "7": {"inputs": {"text": ""}},
+                    "12": {"inputs": {"lora_name": "old.safetensors"}},
+                }),
+                encoding="utf-8",
+            )
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}, "lora": {"node": "12", "field": "inputs.lora_name"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            (run_dir / "logs" / "events.jsonl").touch()
+            (run_dir / "samples" / "images.jsonl").touch()
+            compile_render(root, run_dir)
+            captured: dict[str, Any] = {}
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    captured["endpoint"] = endpoint
+                    captured["timeout"] = timeout
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    captured["workflow"] = workflow
+                    staged_name = workflow["12"]["inputs"]["lora_name"]
+                    staged_path = lora_dir / staged_name
+                    captured["staged_path"] = staged_path
+                    captured["staged_exists_during_queue"] = staged_path.is_symlink() or staged_path.is_file()
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "image.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"png"
+
+            with patch("kura.render.ComfyUIClient", FakeClient):
+                code = launch_render(root, run_dir)
+            self.assertEqual(code, 0)
+            self.assertTrue(captured["staged_exists_during_queue"])
+            lora_name = captured["workflow"]["12"]["inputs"]["lora_name"]
+            self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
+            self.assertFalse(captured["staged_path"].exists())
+            images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"comfyui_lora_name":', images)
 
 
 class RunPodLiveSyncTests(unittest.TestCase):

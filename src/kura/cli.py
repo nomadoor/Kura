@@ -270,7 +270,7 @@ def cmd_init(_: argparse.Namespace) -> int:
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
-        _dump_yaml(workspace, {"schema_version": 1, "name": root.name, "docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "kura/musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "cloud_type": "ANY", "gpu_type_priority": "availability", "interruptible": False}})
+        _dump_yaml(workspace, {"schema_version": 1, "name": root.name, "docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "kura/musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render"}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "cloud_type": "ANY", "gpu_type_priority": "availability", "interruptible": False}})
     agents = root / "AGENTS.md"
     if not agents.exists():
         agents.write_text("# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n", encoding="utf-8")
@@ -1490,7 +1490,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
                     diagnosis = "The local image cannot access a GPU. In WSL, confirm Docker Desktop WSL integration and NVIDIA Container Toolkit support."
     mounts = _workspace_config().get("docker", {}).get("mounts", [])
     cache_path = next((_workspace_relative_path(item["source"]) for item in mounts if isinstance(item, dict) and isinstance(item.get("source"), str) and item.get("target") == "/root/.cache/huggingface"), None)
-    cache: dict[str, Any] = {"path": str(cache_path) if cache_path else None, "exists": bool(cache_path and cache_path.exists())}
+    cache: dict[str, Any] = {"path": str(cache_path) if cache_path else None, "exists": bool(cache_path and cache_path.exists()), "default_path": str(_workspace_relative_path("./cache/huggingface"))}
     if cache_path:
         try:
             filesystem_path = cache_path
@@ -1500,6 +1500,10 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             cache["free_bytes"] = usage.free
         except OSError:
             cache["free_bytes"] = None
+        if not cache_path.exists():
+            cache["note"] = "Kura will create this cache directory before local Docker launch. Change docker.mounts[].source in workspace.yaml if you want another location."
+    else:
+        cache["note"] = "No Hugging Face cache mount is configured. Add docker.mounts source ./cache/huggingface target /root/.cache/huggingface to reuse downloads across local Docker runs."
     if checks["daemon_reachable"] and not diagnosis:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
     print(json.dumps({**checks, "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
