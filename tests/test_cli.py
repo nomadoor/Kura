@@ -1615,9 +1615,9 @@ class RunPodLifecycleTests(unittest.TestCase):
             try:
                 completed = subprocess.CompletedProcess([], 0, "ok", "")
                 with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
-                     patch("kura.cli.shutil.which", return_value="/usr/bin/runpodctl"), \
-                     patch("kura.cli.subprocess.run", return_value=completed), \
-                     patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                     patch("kura.doctor.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.doctor.subprocess.run", return_value=completed), \
+                     patch("kura.doctor.urllib.request.urlopen", side_effect=fake_urlopen):
                     code = cmd_doctor_runpod(argparse.Namespace())
             finally:
                 os.chdir(previous)
@@ -1630,7 +1630,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+                with patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("connection refused")):
                     code = cmd_doctor_comfyui(argparse.Namespace())
             finally:
                 os.chdir(previous)
@@ -1666,7 +1666,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("urllib.request.urlopen", return_value=FakeResponse()):
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()):
                     code = cmd_doctor_comfyui(argparse.Namespace())
             finally:
                 os.chdir(previous)
