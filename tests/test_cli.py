@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, cmd_doctor_runpod, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_runpod, cmd_doctor_workspace, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, compile_render, launch_render
 from kura.tui import KuraMonitorApp, _compact_path
@@ -135,6 +135,54 @@ class EnvLocalTests(unittest.TestCase):
                 self.assertEqual(os.environ["KURA_NTFY_TOKEN"], "token-example")
                 self.assertEqual(os.environ["EXISTING"], "value-from-env")
 
+    def test_env_local_loads_from_workspace_root_when_called_in_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "datasets" / "tiny"
+            nested.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / ".env.local").write_text("KURA_NTFY_TOPIC=root-topic\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(nested)
+            try:
+                with patch.dict(os.environ, {}, clear=True):
+                    _load_env_local()
+                    self.assertEqual(os.environ["KURA_NTFY_TOPIC"], "root-topic")
+                    self.assertEqual(_workspace(), root)
+            finally:
+                os.chdir(previous)
+
+
+class WorkspaceDiscoveryTests(unittest.TestCase):
+    def test_run_status_resolves_workspace_from_subdirectory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            nested = root / "datasets" / "tiny"
+            run_dir.mkdir(parents=True)
+            nested.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(nested)
+            try:
+                self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+            finally:
+                os.chdir(previous)
+
+    def test_doctor_workspace_reports_resolved_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "runs"
+            nested.mkdir()
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(nested)
+            try:
+                self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 0)
+            finally:
+                os.chdir(previous)
+
 
 class NotificationTests(unittest.TestCase):
     def test_notification_channels_auto_detect_ntfy_topic(self) -> None:
@@ -199,6 +247,7 @@ class RenderNotificationTests(unittest.TestCase):
     def test_render_launch_notifies_on_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
@@ -904,6 +953,7 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
@@ -1472,6 +1522,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_materializes_outputs_at_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             output_dir = run_dir / "downloads" / "example" / "outputs"
             realization_dir = run_dir / "downloads" / "example" / "realizations"

@@ -40,12 +40,23 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _workspace() -> Path:
-    return Path.cwd()
+def _workspace(start: Path | None = None) -> Path:
+    current = (start or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "workspace.yaml").is_file():
+            return candidate
+    return current
+
+
+def _require_workspace() -> Path:
+    workspace = _workspace()
+    if not (workspace / "workspace.yaml").is_file():
+        raise ValueError("workspace.yaml was not found; run `kura init` or execute this command from inside a Kura workspace")
+    return workspace
 
 
 def _workspace_config() -> dict[str, Any]:
-    return _load_yaml(_workspace() / "workspace.yaml")
+    return _load_yaml(_require_workspace() / "workspace.yaml")
 
 
 def _parse_env_file_line(line: str) -> tuple[str, str] | None:
@@ -141,13 +152,13 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _run_path(run_id: str) -> Path:
-    return _workspace() / "runs" / run_id
+    return _require_workspace() / "runs" / run_id
 
 
 def _workspace_relative_path(value: str) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
-        path = _workspace() / path
+        path = _require_workspace() / path
     return path.resolve()
 
 
@@ -265,7 +276,7 @@ def _sleep_with_completion_reminders(*, delay_sec: int, interval_sec: int, chann
 
 
 def cmd_init(_: argparse.Namespace) -> int:
-    root = _workspace()
+    root = Path.cwd()
     for relative in ("datasets", "experiments", "runs", "workflows", "promptsets", "backends", "executors", "docker/ai-toolkit", "docker/musubi-tuner"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
@@ -462,8 +473,8 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
 
 
 def cmd_run_status(args: argparse.Namespace) -> int:
-    path = _run_path(args.run_id) / "status.json"
     try:
+        path = _run_path(args.run_id) / "status.json"
         status = json.loads(path.read_text(encoding="utf-8"))
         run_dir = path.parent
         realization_ref = status.get("last_realization")
@@ -480,7 +491,7 @@ def cmd_run_status(args: argparse.Namespace) -> int:
             "outputs": status.get("outputs", []),
         }
         print(json.dumps(status, indent=2))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"cannot read status: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0
@@ -1443,6 +1454,7 @@ def cmd_image_publish(args: argparse.Namespace) -> int:
 
 def cmd_doctor_docker(_: argparse.Namespace) -> int:
     try:
+        workspace_root = _require_workspace()
         image = _image_config("ai-toolkit")
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"docker: configuration error: {_safe_error(exc)}", file=sys.stderr)
@@ -1506,12 +1518,17 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         cache["note"] = "No Hugging Face cache mount is configured. Add docker.mounts source ./cache/huggingface target /root/.cache/huggingface to reuse downloads across local Docker runs."
     if checks["daemon_reachable"] and not diagnosis:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
-    print(json.dumps({**checks, "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    print(json.dumps({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
     return 0 if all(checks.values()) else 1
 
 
 def cmd_doctor_runpod(_: argparse.Namespace) -> int:
-    config = _workspace_config().get("runpod", {})
+    try:
+        workspace_root = _require_workspace()
+        config = _workspace_config().get("runpod", {})
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"runpod: configuration error: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     api_key_env = config.get("api_key_env", "RUNPOD_API_KEY")
     api_key_present = isinstance(api_key_env, str) and bool(os.environ.get(api_key_env))
     checks: dict[str, Any] = {
@@ -1558,7 +1575,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         diagnosis = "RunPod has Network Volumes remaining; delete volumes that should not persist."
     else:
         diagnosis = "RunPod is not fully ready; inspect checks and diagnostics."
-    print(json.dumps(_redact_secrets({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
+    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
     return 0 if ok else 1
 
 
@@ -1570,6 +1587,17 @@ def cmd_doctor_secrets(_: argparse.Namespace) -> int:
     except (OSError, json.JSONDecodeError):
         pass
     print(json.dumps({"secrets": _secret_state(), "docker_login_registries": registries}, indent=2))
+    return 0
+
+
+def cmd_doctor_workspace(_: argparse.Namespace) -> int:
+    workspace = _workspace()
+    subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets", "docker")}
+    print(json.dumps({
+        "workspace_root": str(workspace),
+        "workspace_yaml": (workspace / "workspace.yaml").is_file(),
+        "subdirs": subdirs,
+    }, indent=2))
     return 0
 
 
@@ -1592,11 +1620,19 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
 
 
 def cmd_monitor(args: argparse.Namespace) -> int:
-    return run_textual_monitor(_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit)
+    try:
+        return run_textual_monitor(_require_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit)
+    except ValueError as exc:
+        print(f"cannot open monitor: {_safe_error(exc)}", file=sys.stderr)
+        return 1
 
 
 def cmd_run_watch(args: argparse.Namespace) -> int:
-    return run_textual_monitor(_workspace(), interval=args.interval, initial_run_id=args.run_id)
+    try:
+        return run_textual_monitor(_require_workspace(), interval=args.interval, initial_run_id=args.run_id)
+    except ValueError as exc:
+        print(f"cannot watch run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
 
 
 def main() -> None:
@@ -1658,6 +1694,7 @@ def main() -> None:
     doctor_docker = doctor_sub.add_parser("docker"); doctor_docker.set_defaults(func=cmd_doctor_docker)
     doctor_runpod = doctor_sub.add_parser("runpod"); doctor_runpod.set_defaults(func=cmd_doctor_runpod)
     doctor_secrets = doctor_sub.add_parser("secrets"); doctor_secrets.set_defaults(func=cmd_doctor_secrets)
+    doctor_workspace = doctor_sub.add_parser("workspace"); doctor_workspace.set_defaults(func=cmd_doctor_workspace)
     index = sub.add_parser("index"); index_sub = index.add_subparsers(dest="index_command", required=True)
     rebuild = index_sub.add_parser("rebuild"); rebuild.set_defaults(func=cmd_index_rebuild)
     args = parser.parse_args()

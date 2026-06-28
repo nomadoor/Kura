@@ -14,6 +14,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura init` | Create the workspace folders and default config |
 | `uv run kura doctor docker` | Check Docker / GPU / cache readiness |
 | `uv run kura doctor runpod` | Check RunPod API, Pods, and Network Volumes |
+| `uv run kura doctor workspace` | Show which Kura workspace this command sees |
 
 ## Datasets
 
