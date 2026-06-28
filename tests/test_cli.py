@@ -260,7 +260,7 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.launch_render", return_value=0) as launch, patch("kura.cli._notify") as notify:
+                with patch("kura.run_commands.launch_render", return_value=0) as launch, patch("kura.run_commands._notify") as notify:
                     code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="local", dry_run=False, notify="ntfy"))
             finally:
                 os.chdir(previous)
@@ -1300,7 +1300,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args[0], 0, "", "")
 
             with patch.dict(os.environ, {"HF_TOKEN": "hf-secret"}, clear=False):
-                with patch("kura.cli._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                with patch("kura.run_commands._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                     with patch("kura.cli.subprocess.run", side_effect=fake_run):
                         self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1), 0)
 
@@ -1333,7 +1333,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     return subprocess.CompletedProcess(args[0], 0, b"\n__KURA_LOG_SIZE__:0\n", b"")
                 return subprocess.CompletedProcess(args[0], 0, "", "")
 
-            with patch("kura.cli._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+            with patch("kura.run_commands._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                 with patch("kura.cli.subprocess.run", side_effect=fake_run):
                     self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=0), 0)
 
@@ -1373,7 +1373,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch.dict(os.environ, {"RUNPOD_API_KEY": ""}, clear=False):
-                    with patch("kura.cli._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                    with patch("kura.run_commands._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                         with patch("kura.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0, remote_stdout, b"")):
                             self.assertEqual(cmd_run_reconcile(argparse.Namespace(run_id="example")), 0)
             finally:
@@ -1390,11 +1390,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.stage_run", return_value=0), \
-                     patch("kura.cli.launch_run", return_value=0), \
-                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.cli.download_with_retries", return_value=1), \
-                     patch("kura.cli.stop_run") as stop:
+                with patch("kura.run_commands.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch_run", return_value=0), \
+                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.download_with_retries", return_value=1), \
+                     patch("kura.run_commands.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
             finally:
                 os.chdir(previous)
@@ -1409,11 +1409,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.stage_run", return_value=0), \
-                     patch("kura.cli.launch_run", return_value=0), \
-                     patch("kura.cli._runpod_run_over_ssh", side_effect=subprocess.TimeoutExpired(["runpod-remote-job", "example"], 1)), \
-                     patch("kura.cli._notify") as notify, \
-                     patch("kura.cli.stop_run") as stop:
+                with patch("kura.run_commands.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch_run", return_value=0), \
+                     patch("kura.run_commands._runpod_run_over_ssh", side_effect=subprocess.TimeoutExpired(["runpod-remote-job", "example"], 1)), \
+                     patch("kura.run_commands._notify") as notify, \
+                     patch("kura.run_commands.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, notify="ntfy", hold_for="30m", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)
@@ -1432,11 +1432,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.stage_run", return_value=0), \
-                     patch("kura.cli.launch_run", return_value=0), \
-                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.cli.download_with_retries", return_value=0), \
-                     patch("kura.cli.stop_run") as stop:
+                with patch("kura.run_commands.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch_run", return_value=0), \
+                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.download_with_retries", return_value=0), \
+                     patch("kura.run_commands.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="0"))
             finally:
                 os.chdir(previous)
@@ -1451,12 +1451,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.stage_run", return_value=0), \
-                     patch("kura.cli.launch_run", return_value=0), \
-                     patch("kura.cli._runpod_run_over_ssh", return_value=0) as remote_run, \
-                     patch("kura.cli.download_with_retries", return_value=0), \
-                     patch("kura.cli._sleep_with_completion_reminders") as hold, \
-                     patch("kura.cli.stop_run") as stop:
+                with patch("kura.run_commands.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch_run", return_value=0), \
+                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0) as remote_run, \
+                     patch("kura.run_commands.download_with_retries", return_value=0), \
+                     patch("kura.run_commands._sleep_with_completion_reminders") as hold, \
+                     patch("kura.run_commands.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
             finally:
                 os.chdir(previous)
@@ -1474,14 +1474,14 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.stage_run", return_value=0), \
-                     patch("kura.cli.launch_run", return_value=0), \
-                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.cli.download_with_retries", return_value=0), \
+                with patch("kura.run_commands.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch_run", return_value=0), \
+                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.download_with_retries", return_value=0), \
                      patch("kura.notifications.time.sleep") as sleep, \
-                     patch("kura.cli._notify") as initial_notify, \
+                     patch("kura.run_commands._notify") as initial_notify, \
                      patch("kura.notifications.notify") as reminder_notify, \
-                     patch("kura.cli.stop_run") as stop:
+                     patch("kura.run_commands.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)
@@ -1501,12 +1501,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli.stage_run", return_value=0), \
-                     patch("kura.cli.launch_run", return_value=0), \
-                     patch("kura.cli._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.cli.download_with_retries", return_value=0), \
-                     patch("kura.cli._sleep_with_completion_reminders", side_effect=KeyboardInterrupt), \
-                     patch("kura.cli.stop_run") as stop:
+                with patch("kura.run_commands.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch_run", return_value=0), \
+                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.download_with_retries", return_value=0), \
+                     patch("kura.run_commands._sleep_with_completion_reminders", side_effect=KeyboardInterrupt), \
+                     patch("kura.run_commands.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)

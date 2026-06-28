@@ -9,23 +9,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "src" / "kura" / "cli.py"
+RUN_COMMANDS = ROOT / "src" / "kura" / "run_commands.py"
 TESTS = ROOT / "tests" / "test_cli.py"
 
 
 def main() -> int:
     cli = CLI.read_text(encoding="utf-8")
+    run_commands = RUN_COMMANDS.read_text(encoding="utf-8")
+    runpod_source = cli + "\n" + run_commands
     tests = TESTS.read_text(encoding="utf-8")
     errors: list[str] = []
 
     forbidden = ["--keep-pod", "keep_pod", "--stop-delay", "stop_delay"]
     for item in forbidden:
-        if item in cli:
-            errors.append(f"forbidden unbounded/legacy remote flag remains in cli.py: {item}")
+        if item in runpod_source:
+            errors.append(f"forbidden unbounded/legacy remote flag remains in RunPod lifecycle code: {item}")
 
     required_cli = ["--hold-for", "--max-lease", "remote completion/download was not confirmed", "cmd_run_stop"]
     for item in required_cli:
-        if item not in cli:
-            errors.append(f"missing RunPod safety marker in cli.py: {item}")
+        if item not in runpod_source:
+            errors.append(f"missing RunPod safety marker in RunPod lifecycle code: {item}")
 
     required_tests = [
         "test_run_remote_does_not_stop_pod_when_download_is_unconfirmed",
