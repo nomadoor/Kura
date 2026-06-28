@@ -16,6 +16,36 @@ Use this skill for render runs and workflow JSON changes.
 - Freeze workflow and promptset at compile time under `resolved/`.
 - Record generated images in `samples/images.jsonl`.
 
+## Making the LoRA/model visible to ComfyUI
+
+Kura only talks to ComfyUI over HTTP (`/prompt`, `/history`, `/view`). It does not
+install models. ComfyUI loads LoRAs/checkpoints from the directories it scans
+(`models/...` plus any `extra_model_paths.yaml`). Visibility is decided by those
+directories, not by the port. `runs/<id>/outputs/` stays the source of truth;
+exposing a file to ComfyUI is an execution-time convenience.
+
+Default flow when the user asks to test-generate with a Kura-trained LoRA:
+
+1. Confirm ComfyUI is reachable at the endpoint (default `http://127.0.0.1:8188`).
+   If not, ask the user to start it.
+2. Check whether the target file is already visible: GET `/object_info` and look at
+   the loader node's options (e.g. `LoraLoader.input.required.lora_name`). If the
+   name is in the list, skip to patching.
+3. If it is not visible, find ComfyUI's `models` directory (ask the user once and
+   remember it, e.g. note it in `workspace.yaml`; `models/loras` and the other model
+   folders live under it). Create a **temporary symlink** from
+   `runs/<id>/outputs/<file>.safetensors` into `models/loras`.
+4. Patch the loader's name field (via `workflow_patches`) to that filename and render.
+5. **Remove the temporary symlink** afterward. If ComfyUI cached the old list, a
+   refresh/restart may be needed before the new file appears.
+6. To keep a LoRA permanently available, tell the user to place it in `models/loras`
+   themselves — that is a human decision, not a Kura mutation.
+
+Optional (only if transient symlinks in the user's daily ComfyUI become a nuisance):
+launch a dedicated test instance on a separate port with its own
+`--extra-model-paths-config` pointing at a Kura-owned directory. Isolation comes from
+the separate config/dir, not the port; never edit the user's main ComfyUI config.
+
 ## Workflow patches
 
 - Patch existing API workflow node IDs and fields only.
