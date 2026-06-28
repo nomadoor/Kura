@@ -19,9 +19,9 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_runpod, cmd_doctor_workspace, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
-from kura.render import _cleanup_lora_stage, _materialize_lora_stage, compile_render, launch_render
+from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -50,6 +50,47 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
             finally:
                 os.chdir(previous)
+
+
+class ImageCommandTests(unittest.TestCase):
+    def test_image_build_resolves_paths_from_workspace_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nested = root / "datasets" / "tiny"
+            nested.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({
+                    "docker": {
+                        "images": {
+                            "ai-toolkit": {
+                                "local": "kura/ai-toolkit:test",
+                                "remote": "registry.example/kura/ai-toolkit:test",
+                                "dockerfile": "docker/ai-toolkit/Dockerfile",
+                                "context": ".",
+                            },
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            calls: list[list[str]] = []
+
+            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0, "sha256:image\n" if capture else "", "")
+
+            previous = Path.cwd()
+            os.chdir(nested)
+            try:
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run):
+                    self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None)), 0)
+            finally:
+                os.chdir(previous)
+
+            self.assertGreaterEqual(len(calls), 1)
+            build = calls[0]
+            self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
+            self.assertEqual(build[-1], str(root))
 
 
 class MonitorCommandTests(unittest.TestCase):
@@ -368,6 +409,14 @@ class RenderNotificationTests(unittest.TestCase):
 
             self.assertFalse(plan["created"])
             self.assertTrue(target.exists())
+
+    def test_lora_stage_name_preserves_safetensors_suffix_when_truncated(self) -> None:
+        source = Path("/tmp") / (("very-long-checkpoint-name-" * 20) + ".safetensors")
+        name = _safe_stage_name("20260629-" + ("long-run-id-" * 20), source)
+
+        self.assertLessEqual(len(name), 220)
+        self.assertTrue(name.endswith(".safetensors"))
+        self.assertRegex(name, r"-[0-9a-f]{8}\.safetensors$")
 
 
 class RunPodLiveSyncTests(unittest.TestCase):

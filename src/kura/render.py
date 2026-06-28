@@ -105,7 +105,12 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
     stem = "".join(character if character.isalnum() or character in "._-" else "-" for character in source.stem)
     digest8 = hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:8]
     suffix = source.suffix or ".safetensors"
-    return f"{run_id}-{stem}-{digest8}{suffix}"[:220]
+    tail = f"-{digest8}{suffix}"
+    prefix = f"{run_id}-"
+    max_prefix = max(0, 220 - len(tail))
+    prefix = prefix[:max_prefix]
+    max_stem = max(0, 220 - len(prefix) - len(tail))
+    return f"{prefix}{stem[:max_stem]}{tail}"
 
 
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:

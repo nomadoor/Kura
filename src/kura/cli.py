@@ -359,7 +359,9 @@ def cmd_image_build(args: argparse.Namespace) -> int:
         return 1
     ref_arg = "MUSUBI_TUNER_REF" if args.name == "musubi-tuner" else "AI_TOOLKIT_REF"
     default_ref = "main" if args.name == "musubi-tuner" else "548a286992261fbef40c380e82495d21fd3bca86"
-    command = ["docker", "build", "--tag", image["local"], "--file", image["dockerfile"], "--build-arg", f"{ref_arg}={args.ref or default_ref}", image["context"]]
+    dockerfile = _workspace_relative_path(image["dockerfile"])
+    context = _workspace_relative_path(image["context"])
+    command = ["docker", "build", "--tag", image["local"], "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(context)]
     try:
         result = _docker_run(command)
     except FileNotFoundError:
