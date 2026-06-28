@@ -34,6 +34,9 @@ Default flow when the user asks to test-generate with a Kura-trained LoRA:
 3. If it is not visible and `workspace.yaml` has no `comfyui.lora_dir`, ask the
    user for ComfyUI's `models/loras` directory and record it in local
    `workspace.yaml`.
+   After changing `comfyui.lora_dir`, run `kura render compile <run-id>` again
+   before launch; render compile freezes the ComfyUI staging settings into
+   `resolved/manifest.lock.yaml`.
 4. With `comfyui.lora_dir` set, let `kura render launch` create the temporary
    staged LoRA under `Kura_tmp/`, patch the loader's name field through
    `workflow_patches`, render, and remove the staged file/link afterward.

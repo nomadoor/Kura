@@ -108,14 +108,6 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
     return f"{run_id}-{stem}-{digest8}{suffix}"[:220]
 
 
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).strip().lower() not in ("", "0", "false", "off", "no", "none")
-
-
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
     if "lora" not in frozen.get("workflow_patches", {}):
         return None
@@ -147,6 +139,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
         "lora_name": f"{stage_subdir}/{target.name}",
         "mode": mode,
         "cleanup": cleanup,
+        "created": False,
     }
 
 
@@ -156,22 +149,27 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() or target.is_symlink():
         if target.is_symlink() and target.resolve() == source.resolve():
+            plan["created"] = False
             return
         if target.is_file() and not target.is_symlink() and target.stat().st_size == source.stat().st_size:
+            plan["created"] = False
             return
         raise ValueError(f"ComfyUI LoRA stage target already exists with different content: {target}")
     if plan["mode"] == "copy":
         shutil.copy2(source, target)
+        plan["created"] = True
         return
     try:
         os.symlink(source, target)
+        plan["created"] = True
     except OSError:
         shutil.copy2(source, target)
         plan["mode"] = "copy"
+        plan["created"] = True
 
 
 def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
-    if not plan or plan.get("cleanup") != "remove_after_render":
+    if not plan or plan.get("cleanup") != "remove_after_render" or not plan.get("created"):
         return
     target = Path(str(plan.get("target", "")))
     try:

@@ -21,7 +21,7 @@ import yaml
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
 from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, cmd_doctor_runpod, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
-from kura.render import compile_render, launch_render
+from kura.render import _cleanup_lora_stage, _materialize_lora_stage, compile_render, launch_render
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -290,6 +290,29 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertFalse(captured["staged_path"].exists())
             images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
             self.assertIn('"comfyui_lora_name":', images)
+
+    def test_render_cleanup_keeps_preexisting_stage_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.safetensors"
+            target = root / "Kura_tmp" / "source.safetensors"
+            target.parent.mkdir()
+            source.write_bytes(b"same-lora")
+            target.write_bytes(b"same-lora")
+            plan = {
+                "source": str(source),
+                "target": str(target),
+                "lora_name": "Kura_tmp/source.safetensors",
+                "mode": "copy",
+                "cleanup": "remove_after_render",
+                "created": False,
+            }
+
+            _materialize_lora_stage(plan)
+            _cleanup_lora_stage(plan)
+
+            self.assertFalse(plan["created"])
+            self.assertTrue(target.exists())
 
 
 class RunPodLiveSyncTests(unittest.TestCase):
