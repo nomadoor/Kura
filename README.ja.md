@@ -60,7 +60,7 @@ cp .env.example .env.local
 | `HF_TOKEN` | gated/private モデルを使うときだけ |
 | `KURA_NTFY_TOPIC` | スマホ/PCに完了通知が欲しいときだけ（任意） |
 
-その他の変数（自前イメージのpush用、S3転送用）は `.env.example` のコメントを参照。基本は触らなくて大丈夫です。
+上記以外に設定が必要な変数はありません（自分の Docker イメージを push する場合だけ、先に `docker login` してください）。
 
 ## AI と進める流れ
 

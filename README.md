@@ -60,7 +60,7 @@ Open `.env.local` and fill in only what you need. **`.env.local` is ignored by G
 | `HF_TOKEN` | Only for gated/private models |
 | `KURA_NTFY_TOPIC` | Only if you want completion notifications (optional) |
 
-Other variables (for pushing your own images, or S3 transfers) are documented in `.env.example`. Most users can leave them blank.
+There are no other variables to set. (If you publish your own Docker images, just run `docker login` first.)
 
 ## Working with an AI agent
 

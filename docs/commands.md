@@ -33,7 +33,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run pull <run-id> --step <step>` | Pull an intermediate checkpoint from a running RunPod run |
 | `uv run kura run stop <run-id>` | Stop the associated Pod/container |
 | `uv run kura run reconcile <run-id>` | Refresh observed external state |
-| `uv run kura run prune --dry-run` | Preview cleanup of old runs |
+| `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 
 ## Monitoring
 
