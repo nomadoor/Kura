@@ -43,6 +43,8 @@ Never bake secrets into Docker images or write them to `workspace.yaml`, `run.ya
 - Project skills: `.claude/skills/`
 - Mechanical checks: `scripts/check_*.py`
 
+For local workspace configuration keys, see `docs/workspace-config.md`.
+
 ## Task-Specific Skills
 
 Use the focused project skills under `.claude/skills/` for details that should not live in this always-loaded file:

@@ -1,0 +1,81 @@
+# Workspace config reference
+
+`workspace.yaml` is local workspace configuration. It is ignored by Git and is
+created by `kura init`. Relative host paths are resolved from the workspace root.
+
+This page is intentionally short: it is mostly for AI agents that need to adjust
+runtime configuration without guessing.
+
+## Docker
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `docker.images.ai-toolkit.local` | Local Docker image used for AI-Toolkit runs | `kura/ai-toolkit:dev` |
+| `docker.images.ai-toolkit.remote` | Image name used when publishing your own AI-Toolkit image | `nomadoor/kura-ai-toolkit:dev` |
+| `docker.images.musubi-tuner.local` | Local Docker image used for Musubi Tuner runs | `kura/musubi-tuner:dev` |
+| `docker.images.musubi-tuner.remote` | Image name used for RunPod when not using the default image override | `nomadoor/kura-musubi-tuner:dev` |
+| `docker.workspace_target` | Container path for the mounted workspace | `/workspace` |
+| `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
+| `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
+
+Default Hugging Face cache mount:
+
+```yaml
+docker:
+  mounts:
+    - source: ./cache/huggingface
+      target: /root/.cache/huggingface
+      mode: rw
+```
+
+`./cache/huggingface` stays outside Git and is reused across local Docker runs
+inside the same workspace. Advanced users can point `source` at a shared absolute
+path.
+
+## ComfyUI
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `comfyui.endpoint` | Local ComfyUI API endpoint | `http://127.0.0.1:8188` |
+| `comfyui.lora_dir` | Host path to ComfyUI `models/loras`; empty means no automatic LoRA staging | `""` |
+| `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
+| `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI | `symlink` |
+| `comfyui.lora_stage_cleanup` | Whether temporary staged LoRAs are removed after render | `remove_after_render` |
+
+If `comfyui.lora_dir` is changed after a render run was compiled, re-run:
+
+```sh
+uv run kura render compile <run-id>
+```
+
+Render compile freezes these settings into `resolved/manifest.lock.yaml`.
+
+## RunPod
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `runpod.default_image.ai-toolkit` | Default AI-Toolkit remote image/template image | `ostris/aitoolkit:latest` |
+| `runpod.default_image.musubi-tuner` | Default Musubi remote image | `nomadoor/kura-musubi-tuner:dev` |
+| `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
+| `runpod.api_key_env` | Environment variable that holds the RunPod API key | `RUNPOD_API_KEY` |
+| `runpod.storage_mode` | Remote staging mode | `upload` |
+| `runpod.gpu_type_ids` | Candidate RunPod GPU type IDs | `["NVIDIA A40"]` |
+| `runpod.gpu_count` | Number of GPUs | `1` |
+| `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |
+| `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
+| `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
+| `runpod.cloud_type` / `runpod.cloud_types` | RunPod cloud preference; `ANY` tries community then secure | `ANY` |
+| `runpod.gpu_type_priority` | RunPod GPU selection priority | `availability` |
+| `runpod.interruptible` | Whether to allow interruptible Pods | `false` |
+
+`--hold-for` and `--max-lease` are not `workspace.yaml` keys. They are
+`kura run remote` flags; see [commands.md](commands.md).
+
+## Useful checks
+
+```sh
+uv run kura doctor workspace
+uv run kura doctor docker
+uv run kura doctor comfyui
+uv run kura doctor runpod
+```

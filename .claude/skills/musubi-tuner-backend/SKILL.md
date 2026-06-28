@@ -23,6 +23,19 @@ Use this skill for `backend.name: musubi-tuner` work.
 - If an OOM retry changes these, make it visible in run intent or a documented retry plan.
 - Treat Musubi `batch_size` as GPU micro-batch. Use explicit gradient accumulation when preserving effective batch.
 
+## Unknown model policy
+
+- Kura does not need a friendly bundle entry for every new model. If the model is
+  not in Kura's known bundle map, use explicit
+  `backend_overrides.musubi-tuner.model_downloads` or `model_paths`.
+- A bundle miss should be treated as a configuration task, not as permission to
+  silently substitute another model size or family.
+- New architectures are primarily gated by the Musubi Tuner version inside the
+  Docker image. Bump `MUSUBI_TUNER_REF` and rebuild the image when the upstream
+  tool adds support.
+- Validate model roles by safetensors headers after adding explicit paths or
+  downloads.
+
 ## Dataset policy
 
 - `datasets` is an array.

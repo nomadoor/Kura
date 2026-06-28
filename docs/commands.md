@@ -37,6 +37,13 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run reconcile <run-id>` | Refresh observed external state |
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 
+Useful `run remote` flags:
+
+- `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
+  can inspect results. Use `--hold-for 0` to stop immediately.
+- `--max-lease 12h` is a best-effort Pod-side billing fuse if the local
+  controller dies.
+
 ## Monitoring
 
 | Command | Purpose |
