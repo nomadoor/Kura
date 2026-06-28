@@ -1,0 +1,60 @@
+# Command reference
+
+The commands you'll reach for most. In normal use you tell an AI agent what you
+want and it runs these for you; this page is for when you want to look one up.
+
+This is a curated subset. Run `uv run kura --help` (or `uv run kura <command> --help`)
+for the complete, authoritative, up-to-date list of commands and options.
+
+## Setup
+
+| Command | Purpose |
+| --- | --- |
+| `uv sync` | Install Kura and its dependencies into `.venv` |
+| `uv run kura init` | Create the workspace folders and default config |
+| `uv run kura doctor docker` | Check Docker / GPU / cache readiness |
+| `uv run kura doctor runpod` | Check RunPod API, Pods, and Network Volumes |
+
+## Datasets
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura dataset validate <dataset>` | Validate a dataset manifest |
+
+## Training runs
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura run new --experiment <name> --slug <slug>` | Create a train run |
+| `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
+| `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
+| `uv run kura run launch <run-id> --executor docker` | Run locally through Docker |
+| `uv run kura run remote <run-id>` | Run on RunPod, download outputs, then auto-stop |
+| `uv run kura run pull <run-id> --step <step>` | Pull an intermediate checkpoint from a running RunPod run |
+| `uv run kura run stop <run-id>` | Stop the associated Pod/container |
+| `uv run kura run reconcile <run-id>` | Refresh observed external state |
+| `uv run kura run prune --dry-run` | Preview cleanup of old runs |
+
+## Monitoring
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura monitor` | Open the run monitor TUI |
+| `uv run kura run watch <run-id>` | Watch one run in the TUI |
+
+## Render (ComfyUI comparison images)
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura render new --slug <slug>` | Create a ComfyUI render run |
+| `uv run kura render compile <run-id>` | Freeze workflow and promptset inputs |
+| `uv run kura render launch <run-id>` | Generate images through ComfyUI |
+
+## Images
+
+Image names are set in `workspace.yaml`. Build only when needed.
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura image build ai-toolkit --ref <ref>` | Build the AI-Toolkit image |
+| `uv run kura image build musubi-tuner --ref <ref>` | Build the Musubi Tuner image |

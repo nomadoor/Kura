@@ -4,153 +4,103 @@
 
 Kura is a file-first experiment workspace for working with AI agents on LoRA training and image-comparison runs.
 
-You can use it manually from the CLI, but the intended workflow is to prepare a dataset, specify the training parameters, and let an AI agent create, check, run, monitor, and compare the runs.
+You decide what you want and which data to use; the agent creates, runs, monitors, and compares the runs for you (you can also drive it manually from the CLI).
 
 <img width="1920" height="1080" alt="Kura" src="https://github.com/user-attachments/assets/a23f92f8-460c-40d8-be8f-e42a5ef06f72" />
 
-## What Kura does
+## What Kura is
 
-Kura is not a trainer by itself. It is a thin experiment-management layer around backends such as AI-Toolkit and Musubi Tuner, designed to make those tools safer, more reproducible, and easier for agents to operate.
+Kura is not a trainer itself. It is a thin management layer around training tools such as AI-Toolkit and Musubi Tuner, designed to make them **safer, reproducible, and easy for agents to operate**.
 
-- Keep training intent in `run.yaml` so runs can be reviewed and reproduced.
-- Run AI-Toolkit / Musubi Tuner through Docker locally or disposable RunPod Pods remotely.
-- Download RunPod outputs back into the local workspace before cleanup.
-- Monitor active and historical runs with `kura monitor`.
-- Use ComfyUI API workflows to generate step/strength comparison images.
-- Keep datasets, workflows, promptsets, run records, and outputs separated.
-- Keep secrets, model weights, checkpoints, generated images, and training artifacts out of git.
+Training runs in Docker (locally) or on RunPod (remotely), and everything — settings and results — is stored as plain files, so any run can be reviewed and reproduced later.
 
-## File-first model
+If you keep ComfyUI running, you can also test-generate with the LoRA you trained using your chosen workflow.
 
-Kura treats files as the source of truth.
+## Getting started
 
-| Path | Purpose |
+### What you need
+
+| Requirement | What it's for | How to get it |
+| --- | --- | --- |
+| [uv](https://docs.astral.sh/uv/getting-started/installation/) | The Python environment manager that runs Kura | The one-line command in setup step 0 |
+| [Docker](https://docs.docker.com/get-started/get-docker/) | Runs the training tools in containers (you don't need to know the internals) | Just install Docker Desktop |
+| NVIDIA GPU | Needed for practical local training | Not needed if you only use RunPod |
+| [RunPod](https://www.runpod.io/) account | For training on cloud GPUs | Get an API key |
+
+- **Windows / WSL2:** enable Docker Desktop's WSL integration for your distribution, and keep Docker's disk image and caches on a drive with plenty of free space.
+- A **Hugging Face token** is only needed for gated/private models.
+- For **render runs**, have ComfyUI running at `http://127.0.0.1:8188`.
+
+### Setup
+
+```sh
+# 0. Install uv (only if you don't have it yet; macOS / Linux / WSL)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# On Windows (PowerShell): irm https://astral.sh/uv/install.ps1 | iex
+
+# 1. Get Kura
+git clone https://github.com/nomadoor/Kura.git
+cd Kura
+
+# 2. Install Kura and its dependencies
+uv sync
+
+# 3. Create the workspace folders and default config (datasets/, runs/, workspace.yaml, ...)
+uv run kura init
+
+# 4. Set up your secrets
+cp .env.example .env.local
+```
+
+Open `.env.local` and fill in only what you need. **`.env.local` is ignored by Git and loaded automatically by every `kura` command** — there is nothing to source or export.
+
+| Variable | When to set it |
 | --- | --- |
-| `run.yaml` | Human/agent training intent |
-| `resolved/` | Compile-time frozen inputs |
-| `realizations/` | Append-only launch/reconcile observations |
-| `status.json` | Materialized latest state |
-| `outputs/` | Downloaded or collected artifacts |
+| `RUNPOD_API_KEY` | If you train on RunPod (almost always) |
+| `HF_TOKEN` | Only for gated/private models |
+| `KURA_NTFY_TOPIC` | Only if you want completion notifications (optional) |
 
-Dataset payloads, model weights, checkpoints, generated images, RunPod downloads, local machine config, and secrets are not tracked by git.
-
-## Requirements
-
-- Python 3.11+
-- `uv`
-- Docker Desktop or Docker Engine for local training and image builds
-- NVIDIA GPU support for practical local training
-- RunPod account/API key for remote training
-- Hugging Face API token for gated/private models when the selected backend or model requires it
-- ComfyUI running at `http://127.0.0.1:8188` when using render runs
-
-On WSL2, enable Docker Desktop integration for the target distribution and keep Docker's disk image on a drive with enough free space for caches and temporary run files.
+Other variables (for pushing your own images, or S3 transfers) are documented in `.env.example`. Most users can leave them blank.
 
 ## Working with an AI agent
 
-The usual flow is:
+You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 
-1. Put the dataset under `datasets/`.
-2. Tell the agent the goal.  
-   Example: `I want to train a character LoRA with this dataset.`
-3. Tell the agent the parameters.  
-   Example: `rank 16, alpha 16, lr 5e-5, batch 2, 768px, 1500 steps, save every 100 steps.`
-4. Ask the agent to create a local smoke run.
-5. If the smoke passes, run locally or on RunPod.
-6. Watch progress with `kura monitor`.
-7. Pull intermediate checkpoints and generate ComfyUI comparison images.
-8. Stop, continue, or extend training based on the comparison.
+1. 🧑 Put your dataset under `datasets/`.
+2. 🧑 Tell the agent the goal — e.g. `Train a Krea 2 character LoRA with this dataset.`
+3. 🧑 Tell the agent the parameters — e.g. `rank 16, alpha 16, lr 5e-5, batch 2, 768px, 1500 steps, save every 100 steps.`
+4. 🤖 Create and try a local smoke run.
+5. 🤖 If it passes, run locally or on RunPod.
+6. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
+7. 🤖 (Optional) Pull intermediate checkpoints and generate ComfyUI comparison images.
+8. 🧑 Review the results and decide whether to stop or keep training (🤖 carries out the instruction).
 
-## Kura monitor
+> 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
 
-`kura monitor` is a TUI for observing training and render runs.
+## Monitoring
 
-It shows active runs, history, loss, progress, GPU/RunPod information, and output paths. It is read-only: it does not start or stop training.
+`kura monitor` is a **read-only** TUI showing active and historical runs, loss, progress, GPU/RunPod info, and output paths. It does not start or stop training.
 
 ```sh
-uv run kura monitor
-uv run kura run watch <run-id>
+uv run kura monitor            # list
+uv run kura run watch <run-id> # one run in detail
 ```
-
-## Common commands
-
-| Command | Purpose |
-| --- | --- |
-| `uv sync` | Set up the development environment |
-| `uv run kura init` | Initialize a workspace |
-| `uv run kura doctor docker` | Check Docker/GPU/cache readiness |
-| `uv run kura doctor runpod` | Check RunPod API, Pods, and Network Volumes |
-| `uv run kura dataset validate <dataset>` | Validate a dataset manifest |
-| `uv run kura run new --experiment <name> --slug <slug>` | Create a train run |
-| `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
-| `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
-| `uv run kura run launch <run-id> --executor docker` | Run locally through Docker |
-| `uv run kura run remote <run-id>` | Run on RunPod and keep a short review window after download |
-| `uv run kura run pull <run-id> --step <step>` | Pull an intermediate checkpoint from a running RunPod run |
-| `uv run kura run stop <run-id>` | Stop the associated Pod/container |
-| `uv run kura run reconcile <run-id>` | Refresh observed external state |
-| `uv run kura run prune --dry-run` | Preview cleanup of old runs |
-| `uv run kura monitor` | Open the run monitor TUI |
-| `uv run kura run watch <run-id>` | Watch one run in the TUI |
-| `uv run kura render new --slug <slug>` | Create a ComfyUI render run |
-| `uv run kura render compile <run-id>` | Freeze workflow and promptset inputs |
-| `uv run kura render launch <run-id>` | Generate images through ComfyUI |
 
 ## RunPod safety
 
-Kura's RunPod path is designed around disposable Pods.
+RunPod runs use **disposable Pods**. Kura uploads only the inputs it needs, trains, downloads the outputs, and then **stops the Pod automatically**, so you don't leave GPUs billing in the background.
 
-1. Compile the run locally.
-2. Upload only the required run inputs.
-3. Train on the Pod.
-4. Download outputs and logs back to the local workspace.
-5. Keep the Pod briefly for review.
-6. Stop it automatically.
+- By default it does not use Network Volumes (no persistent storage left behind, flexible GPU placement).
+- After download it keeps the Pod for `--hold-for 30m` by default so you can inspect the LoRA.
+- It then terminates automatically unless you tell it otherwise.
+- A Pod-side `--max-lease 12h` guard is a last billing fuse if the local controller dies.
 
-By default, Kura does not use RunPod Network Volumes. This keeps GPU placement flexible and avoids leaving persistent storage on RunPod.
+## Learn more
 
-After a confirmed download, `kura run remote` keeps the Pod for `--hold-for 30m` by default so you can inspect the LoRA and decide whether to stop or continue. A Pod-side `--max-lease 12h` guard is installed as a last billing fuse if the local controller dies.
-
-## Runtime images
-
-Kura does not bake model weights or secrets into images.
-
-| Backend | Default image behavior |
-| --- | --- |
-| AI-Toolkit | Uses the official `ostris/aitoolkit:latest` image/template on RunPod. A local `kura/ai-toolkit:dev` image can be built when needed. |
-| Musubi Tuner | Defaults to `nomadoor/kura-musubi-tuner:dev` for remote runs and `kura/musubi-tuner:dev` locally. Replace these in `workspace.yaml` if you use your own image. |
-
-Image names are set in `workspace.yaml`. Build only when needed.
-
-```sh
-uv run kura image build ai-toolkit --ref <ref>
-uv run kura image build musubi-tuner --ref <ref>
-```
-
-## Notifications
-
-Kura uses desktop notifications when `notify-send` is available. If `KURA_NTFY_TOPIC` is set in `.env.local`, it can also send ntfy notifications.
-
-```env
-KURA_NTFY_TOPIC=long-random-topic-name
-```
-
-Use a long, unguessable topic and treat it like a secret.
-
-## Agent documentation
-
-Always-loaded agent rules live in [AGENTS.md](AGENTS.md). Task-specific instructions live under `.claude/skills/`. When using an agent, have it read `AGENTS.md` first.
-
-## Check
-
-```sh
-uv run python scripts/check_release.py
-```
-
-## More documentation
-
-- [README.ja.md](README.ja.md): Japanese overview
+- [docs/commands.md](docs/commands.md): full command reference
+- [AGENTS.md](AGENTS.md) and [.claude/skills/](.claude/skills/): always-loaded agent rules and task-specific instructions (have your agent read `AGENTS.md` first)
 - [docs/smoke-test.md](docs/smoke-test.md): smoke test notes
+- [README.ja.md](README.ja.md): Japanese version
 
 ## License
 
