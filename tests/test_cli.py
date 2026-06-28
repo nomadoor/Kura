@@ -37,6 +37,12 @@ class InitCommandTests(unittest.TestCase):
                 for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "docker/ai-toolkit/Dockerfile"):
                     self.assertTrue((root / relative).exists(), relative)
                 self.assertTrue((root / "docker/musubi-tuner/Dockerfile").exists())
+                self.assertTrue((root / "docker/ai-toolkit/kura_runpod_object_job.py").exists())
+                for dockerfile in (root / "docker/ai-toolkit/Dockerfile", root / "docker/musubi-tuner/Dockerfile"):
+                    for line in dockerfile.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("COPY "):
+                            source = line.split()[1]
+                            self.assertTrue((root / source).exists(), f"{dockerfile}: {source}")
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
                 self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/root/.cache/huggingface")
