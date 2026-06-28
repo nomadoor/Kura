@@ -192,15 +192,15 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 
 class NotificationTests(unittest.TestCase):
     def test_notification_channels_auto_detect_ntfy_topic(self) -> None:
-        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.cli.shutil.which", return_value=None):
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.notifications.shutil.which", return_value=None):
             self.assertEqual(_notification_channels(None), ["ntfy"])
 
     def test_notification_channels_auto_detect_desktop(self) -> None:
-        with patch.dict(os.environ, {}, clear=True), patch("kura.cli.shutil.which", return_value="/usr/bin/notify-send"):
+        with patch.dict(os.environ, {}, clear=True), patch("kura.notifications.shutil.which", return_value="/usr/bin/notify-send"):
             self.assertEqual(_notification_channels(None), ["desktop"])
 
     def test_notification_channels_explicit_none_disables_auto_detection(self) -> None:
-        with patch.dict(os.environ, {"KURA_NOTIFY": "none", "KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.cli.shutil.which", return_value="/usr/bin/notify-send"):
+        with patch.dict(os.environ, {"KURA_NOTIFY": "none", "KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.notifications.shutil.which", return_value="/usr/bin/notify-send"):
             self.assertEqual(_notification_channels(None), [])
 
     def test_ntfy_notification_posts_to_topic(self) -> None:
@@ -224,7 +224,7 @@ class NotificationTests(unittest.TestCase):
             captured["timeout"] = timeout
             return Response()
 
-        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=False), patch("kura.cli.urllib.request.urlopen", fake_urlopen):
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=False), patch("kura.notifications.urllib.request.urlopen", fake_urlopen):
             _notify("ntfy", subject="finished", body="run done")
 
         self.assertEqual(captured["url"], "https://ntfy.sh/kura-test-topic")
@@ -1478,17 +1478,19 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.cli.cmd_run_launch", return_value=0), \
                      patch("kura.cli._runpod_run_over_ssh", return_value=0), \
                      patch("kura.cli._download_with_retries", return_value=0), \
-                     patch("kura.cli.time.sleep") as sleep, \
-                     patch("kura.cli._notify") as notify, \
+                     patch("kura.notifications.time.sleep") as sleep, \
+                     patch("kura.cli._notify") as initial_notify, \
+                     patch("kura.notifications.notify") as reminder_notify, \
                      patch("kura.cli.cmd_run_stop") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
             self.assertEqual([call.args[0] for call in sleep.call_args_list], [600, 600])
-            self.assertEqual(notify.call_count, 2)
-            self.assertIn("completed", notify.call_args_list[0].kwargs["subject"])
-            self.assertIn("reminder", notify.call_args_list[1].kwargs["subject"])
+            initial_notify.assert_called_once()
+            reminder_notify.assert_called_once()
+            self.assertIn("completed", initial_notify.call_args.kwargs["subject"])
+            self.assertIn("reminder", reminder_notify.call_args.kwargs["subject"])
             stop.assert_called_once()
 
     def test_run_remote_stops_pod_when_review_hold_is_interrupted(self) -> None:
