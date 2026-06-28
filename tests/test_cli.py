@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_runpod, cmd_doctor_workspace, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_runpod, cmd_doctor_workspace, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, compile_render, launch_render
 from kura.tui import KuraMonitorApp, _compact_path
@@ -1620,6 +1620,55 @@ class RunPodLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 1)
+
+    def test_doctor_comfyui_handles_unreachable_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: http://127.0.0.1:8188}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+                    code = cmd_doctor_comfyui(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+
+    def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({
+                    "LoraLoader": {
+                        "input": {
+                            "required": {
+                                "lora_name": [["one.safetensors", "two.safetensors"], {}],
+                            },
+                        },
+                    },
+                }).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "comfyui" / "models" / "loras"
+            (lora_dir / "Kura_tmp").mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  endpoint: http://127.0.0.1:8188\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n",
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("urllib.request.urlopen", return_value=FakeResponse()):
+                    code = cmd_doctor_comfyui(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
 
     def test_stage_runpod_object_staging_uploads_under_run_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

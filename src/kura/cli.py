@@ -1709,6 +1709,61 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _comfyui_lora_count(object_info: dict[str, Any]) -> int | None:
+    loader = object_info.get("LoraLoader")
+    if not isinstance(loader, dict):
+        return None
+    required = loader.get("input", {}).get("required") if isinstance(loader.get("input"), dict) else None
+    lora_name = required.get("lora_name") if isinstance(required, dict) else None
+    if isinstance(lora_name, list) and lora_name and isinstance(lora_name[0], list):
+        return len(lora_name[0])
+    return None
+
+
+def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
+    try:
+        workspace_root = _require_workspace()
+        config = _workspace_config()
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"comfyui: configuration error: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
+    endpoint = str(comfyui.get("endpoint") or "http://127.0.0.1:8188").rstrip("/")
+    lora_dir = _workspace_relative_path(str(comfyui["lora_dir"])) if isinstance(comfyui.get("lora_dir"), str) and comfyui.get("lora_dir") else None
+    stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
+    stage_dir = lora_dir / stage_subdir if lora_dir is not None and stage_subdir else None
+    checks = {
+        "endpoint_reachable": False,
+        "object_info": False,
+        "lora_dir_configured": lora_dir is not None,
+        "lora_dir_exists": bool(lora_dir and lora_dir.is_dir()),
+        "stage_dir_exists": bool(stage_dir and stage_dir.is_dir()),
+        "stage_dir_writable": bool(stage_dir and stage_dir.is_dir() and os.access(stage_dir, os.W_OK)),
+    }
+    diagnostics: dict[str, Any] = {
+        "endpoint": endpoint,
+        "lora_dir": str(lora_dir) if lora_dir else None,
+        "stage_dir": str(stage_dir) if stage_dir else None,
+    }
+    try:
+        with urllib.request.urlopen(f"{endpoint}/object_info", timeout=5) as response:
+            object_info = json.loads(response.read().decode("utf-8"))
+        checks["endpoint_reachable"] = True
+        checks["object_info"] = isinstance(object_info, dict)
+        if isinstance(object_info, dict):
+            diagnostics["lora_loader_count"] = _comfyui_lora_count(object_info)
+    except Exception as exc:
+        diagnostics["object_info_error"] = _redact_secret_text(str(exc))
+    if stage_dir and not stage_dir.exists() and lora_dir and lora_dir.is_dir():
+        diagnostics["stage_parent_writable"] = os.access(lora_dir, os.W_OK)
+    if checks["endpoint_reachable"] and checks["object_info"]:
+        diagnosis = "ComfyUI endpoint is reachable."
+    else:
+        diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."
+    print(json.dumps({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    return 0 if checks["endpoint_reachable"] and checks["object_info"] else 1
+
+
 def cmd_doctor_secrets(_: argparse.Namespace) -> int:
     config = Path.home() / ".docker" / "config.json"
     registries: list[str] = []
@@ -1823,6 +1878,7 @@ def main() -> None:
     doctor = sub.add_parser("doctor"); doctor_sub = doctor.add_subparsers(dest="doctor_command", required=True)
     doctor_docker = doctor_sub.add_parser("docker"); doctor_docker.set_defaults(func=cmd_doctor_docker)
     doctor_runpod = doctor_sub.add_parser("runpod"); doctor_runpod.set_defaults(func=cmd_doctor_runpod)
+    doctor_comfyui = doctor_sub.add_parser("comfyui"); doctor_comfyui.set_defaults(func=cmd_doctor_comfyui)
     doctor_secrets = doctor_sub.add_parser("secrets"); doctor_secrets.set_defaults(func=cmd_doctor_secrets)
     doctor_workspace = doctor_sub.add_parser("workspace"); doctor_workspace.set_defaults(func=cmd_doctor_workspace)
     index = sub.add_parser("index"); index_sub = index.add_subparsers(dest="index_command", required=True)
