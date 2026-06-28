@@ -1670,7 +1670,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 0)
 
-    def test_stage_runpod_object_staging_uploads_under_run_prefix(self) -> None:
+    def test_stage_runpod_object_staging_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "example"
@@ -1684,14 +1684,9 @@ class RunPodLifecycleTests(unittest.TestCase):
             dataset = root / "datasets" / "tiny" / "images"
             dataset.mkdir(parents=True)
             (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
-            client = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
             with patch.dict(os.environ, {"R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}, clear=False):
-                with patch("kura.executors.boto3.client", return_value=client):
-                    record = stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._object_config())
-            keys = [call.args[2] for call in client.upload_file.call_args_list]
-            self.assertEqual(set(keys), {"tests/runs/example/runs/example/run.yaml", "tests/runs/example/runs/example/resolved/manifest.lock.yaml", "tests/runs/example/datasets/tiny/images/one.txt"})
-            self.assertEqual(record["storage_mode"], "object_staging")
-            self.assertEqual(record["object_bucket"], "kura")
+                with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
+                    stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._object_config())
 
     def test_stop_runpod_terminates_disposable_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

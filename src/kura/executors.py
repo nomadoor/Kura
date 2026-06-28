@@ -16,10 +16,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import boto3
-from botocore.config import Config
-from boto3.s3.transfer import TransferConfig
-
 from kura import __version__
 
 CONTAINER_WORKSPACE = "/workspace"
@@ -491,6 +487,11 @@ def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
 
 def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
     settings = _object_store_settings(config)
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError as exc:
+        raise ValueError("runpod.storage_mode=object_staging requires optional dependency: pip install 'kura[object-staging]'") from exc
     client = boto3.client("s3", endpoint_url=settings["endpoint_url"], region_name=settings["region"], aws_access_key_id=settings["access_key"], aws_secret_access_key=settings["secret_key"], config=Config(retries={"max_attempts": 10, "mode": "standard"}, read_timeout=7200))
     return client, settings
 
@@ -521,13 +522,7 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     total_bytes = sum(path.stat().st_size for path, _ in files)
     staged_at = _now()
     if settings["storage_mode"] == "object_staging":
-        client, object_store = _object_store_client(config)
-        bucket = object_store["bucket"]
-        object_prefix = f"{object_store['prefix']}/runs/{run_dir.name}".strip("/")
-        transfer = TransferConfig(multipart_threshold=100 * 1024**2, multipart_chunksize=100 * 1024**2)
-        for path, key in files:
-            client.upload_file(str(path), bucket, f"{object_prefix}/{key}", Config=transfer)
-        storage_label = {"storage_mode": "object_staging", "object_bucket": bucket, "object_prefix": object_prefix, "object_endpoint_url": object_store["endpoint_url"]}
+        raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
     else:
         transfer_dir = run_dir / "transfer"
         transfer_dir.mkdir(exist_ok=True)

@@ -44,7 +44,6 @@ name = "kura"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "boto3" },
     { name = "plotext" },
     { name = "pyperclip" },
     { name = "pyyaml" },
@@ -53,9 +52,14 @@ dependencies = [
     { name = "textual-plotext" },
 ]
 
+[package.optional-dependencies]
+object-staging = [
+    { name = "boto3" },
+]
+
 [package.metadata]
 requires-dist = [
-    { name = "boto3", specifier = ">=1.43.34" },
+    { name = "boto3", marker = "extra == 'object-staging'", specifier = ">=1.43.34" },
     { name = "plotext", specifier = ">=5.3.2" },
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "pyyaml", specifier = ">=6.0" },
@@ -63,6 +67,7 @@ requires-dist = [
     { name = "textual", specifier = ">=6.6.0" },
     { name = "textual-plotext", specifier = ">=1.0.1" },
 ]
+provides-extras = ["object-staging"]
 
 [[package]]
 name = "linkify-it-py"
