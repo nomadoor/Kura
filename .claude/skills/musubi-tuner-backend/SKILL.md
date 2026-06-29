@@ -57,9 +57,16 @@ fits one FLUX.2/Krea-class model can be invalid for another.
   `backend_overrides.musubi-tuner.model_downloads` or `model_paths`.
 - A bundle miss should be treated as a configuration task, not as permission to
   silently substitute another model size or family.
-- New architectures are primarily gated by the Musubi Tuner version inside the
-  Docker image. Bump `MUSUBI_TUNER_REF` and rebuild the image when the upstream
-  tool adds support.
+- Distinguish upstream Musubi support from Kura built-in adapter support. Do not
+  say "Musubi Tuner does not support X" unless upstream actually does not. Say
+  "Kura does not yet have a built-in Musubi adapter for X."
+- Kura's built-in adapter matrix lives in `docs/musubi-adapters.md`. Check it
+  before claiming support or non-support.
+- New architectures require both an upstream Musubi script and a Kura adapter
+  that knows which train/cache scripts, model roles, arguments, network module,
+  and validation rules to generate.
+- For an upstream-supported architecture without a Kura adapter, use explicit
+  `backend_overrides.musubi-tuner.command` as a temporary escape hatch.
 - Validate model roles by safetensors headers after adding explicit paths or
   downloads.
 

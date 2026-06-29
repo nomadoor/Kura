@@ -609,6 +609,16 @@ def _musubi_architecture(run: dict[str, Any]) -> str:
     return str(override.get("architecture") or override.get("model_arch") or "flux2").lower().replace("-", "_")
 
 
+def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
+    return ValueError(
+        "unsupported Kura built-in Musubi adapter: "
+        f"{architecture}. Musubi Tuner may support this architecture upstream, "
+        "but Kura does not generate its command automatically yet. "
+        "Use backend_overrides.musubi-tuner.command for an explicit command, "
+        "or add a Kura adapter."
+    )
+
+
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
     override = run.get("backend_overrides", {}).get("musubi-tuner", {})
     model_version = str(override.get("model_version") or "").lower().replace("_", "-")
@@ -1269,6 +1279,6 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands)
     else:
-        raise ValueError(f"unsupported Musubi Tuner architecture: {architecture}")
+        raise _unsupported_musubi_adapter_error(architecture)
 
     return {"cwd": "/opt/musubi-tuner", "argv": argv, "env": _backend_env("Musubi Tuner", override)}

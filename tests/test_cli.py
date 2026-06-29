@@ -1053,6 +1053,17 @@ class MusubiBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "model_paths, model_downloads, or a known model.base bundle"):
             command_musubi_tuner(run)
 
+    def test_command_musubi_unknown_architecture_names_kura_adapter_layer(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "ideogram4",
+                "model_paths": {"dit": "/models/ideogram4.safetensors"},
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported Kura built-in Musubi adapter"):
+            command_musubi_tuner(run)
+
     def test_command_musubi_can_download_models_from_huggingface(self) -> None:
         run = self._run()
         run["backend_overrides"] = {
