@@ -341,8 +341,13 @@ class RunRow(Static):
         loc_style = DONE if summary.executor_info.kind == "remote" else MUTED
         name = _fit_plain(_short_run_label(summary), 13).ljust(13)
         sparkline = loss_sparkline(summary.losses, width=5)
-        spark = _fit_plain(sparkline, 5).rjust(5) if sparkline else " " * 5
-        return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), (spark, LOSS), (" "), (dot, _state_style(summary)))
+        if sparkline:
+            middle = (_fit_plain(sparkline, 5).rjust(5), LOSS)
+        elif summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
+            middle = (_fit_plain(summary.activity, 5).rjust(5), FG_MUTED)
+        else:
+            middle = (" " * 5, LOSS)
+        return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), middle, (" "), (dot, _state_style(summary)))
 
     def on_click(self) -> None:
         self.post_message(self.Selected(self.summary.id if self.summary else None, self.lane))
@@ -438,6 +443,8 @@ class MetricGrid(Static):
         table.add_column(style=FG_MUTED, width=8)
         table.add_column()
         table.add_row("step", Text(f"{summary.progress.step or 0}/{summary.progress.total or '-'}", style="bold"))
+        if summary.activity and (summary.state or "").lower() in ACTIVE_STATES and (summary.progress.step or 0) == 0:
+            table.add_row("phase", Text(summary.activity, style=FG_MUTED))
         table.add_row("s/it", Text(_seconds_per_iter(summary), style="bold"))
         table.add_row("elapsed", Text(_elapsed(summary), style="bold"))
         table.add_row("loss", Text(f"{summary.latest_loss:.4g}" if summary.latest_loss is not None else "-", style=f"bold {LOSS}"))
@@ -553,6 +560,7 @@ class DetailPane(VerticalScroll):
             summary.last_updated if summary else None,
             summary.latest_loss if summary else None,
             summary.is_stale if summary else None,
+            summary.activity if summary else None,
             summary.outputs_path if summary else None,
             selected_target,
         )
@@ -651,7 +659,10 @@ class LossPane(Vertical):
     def update_summary(self, summary: RunSummary | None) -> None:
         self.query_one(PaneTitle).update("LOSS")
         chart = self.query_one("#loss-chart", Static)
-        chart.update(Text(_mini_loss_chart(summary.losses, width=26, height=3) if summary else "no active run", style=LOSS if summary else MUTED))
+        if summary and not summary.losses and summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
+            chart.update(Text.assemble(("MODEL DOWNLOAD / STARTUP\n", FG_MUTED), (_fit_plain(summary.activity, 28), f"bold {ACCENT}")))
+        else:
+            chart.update(Text(_mini_loss_chart(summary.losses, width=26, height=3) if summary else "no active run", style=LOSS if summary else MUTED))
         self.metrics.update_summary(summary)
 
     def update_dataset(self, dataset: RunDataset | None) -> None:
@@ -928,7 +939,7 @@ class MonitorScreen(Screen[None]):
 
     def update_view(self) -> None:
         current = self.current_run
-        self.query_one("#status", Static).update(_status_bar(self.summaries, width=max(self.size.width, 1)))
+        self.query_one("#status", Static).update(_status_bar(self.summaries, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
         datasets = _all_datasets(self.summaries)
         dataset_keys = {_dataset_key(dataset) for dataset in datasets}
         if self.tab == "datasets" and self.selected_dataset_key not in dataset_keys:
@@ -1079,7 +1090,7 @@ class WatchScreen(Screen[None]):
     def refresh_data(self) -> None:
         summaries = collect_run_summaries(self.app_ref.workspace, loss_tail=10_000, stale_after=self.app_ref.stale_after)
         summary = next((item for item in summaries if item.id == self.run_id), None)
-        self.query_one("#status", Static).update(_watch_status_bar(summaries, self.run_id, width=max(self.size.width, 1)))
+        self.query_one("#status", Static).update(_watch_status_bar(summaries, self.run_id, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
         self.path_targets = _path_targets(summary)
         self.path_index = min(self.path_index, max(len(self.path_targets) - 1, 0))
         selected_target = self.path_targets[self.path_index] if self.path_targets else None
@@ -1120,7 +1131,7 @@ def run_textual_monitor(workspace: Path, *, interval: float = 2.0, stale_after: 
     return 0
 
 
-def _status_bar(summaries: list[RunSummary], *, width: int | None = None, suffix: Text | None = None) -> Text:
+def _status_bar(summaries: list[RunSummary], *, workspace: Path | None = None, width: int | None = None, suffix: Text | None = None) -> Text:
     counts = {
         "running": sum(item.state == "running" for item in summaries),
         "queued": sum(item.state in {"queued", "staged", "launching"} for item in summaries),
@@ -1128,6 +1139,10 @@ def _status_bar(summaries: list[RunSummary], *, width: int | None = None, suffix
         "failed": sum(item.state in {"failed", "launch_failed", "interrupted"} for item in summaries),
     }
     left = Text.assemble(("▸ kura", f"bold {ACCENT}"), ("   "), (str(counts["running"]), f"bold {RUN}"), (" running   ", RUN), (str(counts["queued"]), f"bold {QUEUE}"), (" queued   ", QUEUE), (str(counts["done"]), f"bold {DONE}"), (" done   ", DONE), (str(counts["failed"]), f"bold {FAIL}"), (" failed", FAIL))
+    if workspace is not None:
+        left.append("   ")
+        left.append("ws ", style=FG_MUTED)
+        left.append(_compact_path(workspace.resolve(), max_len=36), style=MUTED)
     if suffix:
         left.append("   ")
         left.append_text(suffix)
@@ -1137,9 +1152,9 @@ def _status_bar(summaries: list[RunSummary], *, width: int | None = None, suffix
     return left
 
 
-def _watch_status_bar(summaries: list[RunSummary], run_id: str, *, width: int | None = None) -> Text:
+def _watch_status_bar(summaries: list[RunSummary], run_id: str, *, workspace: Path | None = None, width: int | None = None) -> Text:
     suffix = Text.assemble(("WATCH", f"bold {STALE}"), (" "), (_fit_plain(run_id, 22), FG_MUTED), ("  Esc", ACCENT))
-    return _status_bar(summaries, width=width, suffix=suffix)
+    return _status_bar(summaries, workspace=workspace, width=width, suffix=suffix)
 
 
 def _all_datasets(summaries: list[RunSummary]) -> list[RunDataset]:
@@ -1617,6 +1632,10 @@ def _progress_text(summary: RunSummary) -> Text:
     text.append(f"step {step}/{total or '-'}", style=FG_MUTED)
     if summary.progress.seconds_per_iter is not None:
         text.append(f" · {_seconds_per_iter(summary)}", style=FG_MUTED)
+    if summary.activity and (summary.state or "").lower() in ACTIVE_STATES and (step == 0 or not total):
+        text.append("\n")
+        text.append("phase ", style=FG_MUTED)
+        text.append(summary.activity, style=f"bold {ACCENT}")
     return text
 
 

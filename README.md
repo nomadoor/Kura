@@ -10,7 +10,7 @@ You decide what you want and which data to use; the agent creates, runs, monitor
 
 ## What Kura is
 
-Kura is not a trainer itself. It is a thin management layer around training tools such as AI-Toolkit and Musubi Tuner, designed to make them **safer, reproducible, and easy for agents to operate**.
+Kura is not a trainer itself. It is a thin management layer around training tools such as [AI-Toolkit](https://github.com/ostris/ai-toolkit) and [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner), designed to make them **safer, reproducible, and easy for agents to operate**.
 
 Training runs in Docker (locally) or on RunPod (remotely), and everything — settings and results — is stored as plain files, so any run can be reviewed and reproduced later.
 
@@ -27,7 +27,7 @@ If you keep ComfyUI running, you can also test-generate with the LoRA you traine
 | NVIDIA GPU | Needed for practical local training | Not needed if you only use RunPod |
 | [RunPod](https://www.runpod.io/) account | For training on cloud GPUs | Get an API key |
 
-- **Windows / WSL2:** enable Docker Desktop's WSL integration for your distribution, and keep Docker's disk image and caches on a drive with plenty of free space.
+- **Windows / WSL2:** enable Docker Desktop's WSL integration for your distribution.
 - A **Hugging Face token** is only needed for gated/private models.
 - For **render runs**, have ComfyUI running at `http://127.0.0.1:8188`.
 
@@ -62,6 +62,8 @@ Open `.env.local` and fill in only what you need. **`.env.local` is ignored by G
 
 There are no other variables to set. (If you publish your own Docker images, just run `docker login` first.)
 
+Local Docker runs reuse Hugging Face downloads through `cache/huggingface/` by default. The directory is ignored by Git. If you want the cache somewhere else, change the mount source in `workspace.yaml`.
+
 ## Working with an AI agent
 
 You (🧑) decide the direction; the agent (🤖) does the hands-on work.
@@ -86,6 +88,12 @@ uv run kura monitor            # list
 uv run kura run watch <run-id> # one run in detail
 ```
 
+## Image generation with ComfyUI (optional)
+
+Start ComfyUI and drop an **API-format** workflow into `workflows/`, and the agent can generate images with your trained LoRA — test renders, step/strength comparison grids, promptset batches, and so on, depending on the workflow you provide.
+
+> Export the workflow with ComfyUI's "File → Export (API)" (the regular UI export is not accepted by `/prompt`). See [Using ComfyUI from an AI agent](https://comfyui.nomadoor.net/en/data-utilities/ai-agent-api/) for details.
+
 ## RunPod safety
 
 RunPod runs use **disposable Pods**. Kura uploads only the inputs it needs, trains, downloads the outputs, and then **stops the Pod automatically**, so you don't leave GPUs billing in the background.
@@ -94,6 +102,25 @@ RunPod runs use **disposable Pods**. Kura uploads only the inputs it needs, trai
 - After download it keeps the Pod for `--hold-for 30m` by default so you can inspect the LoRA.
 - It then terminates automatically unless you tell it otherwise.
 - A Pod-side `--max-lease 12h` guard is a last billing fuse if the local controller dies.
+
+## Where files live & cleanup
+
+Kura keeps everything as files inside the workspace.
+
+| Location | Contents |
+| --- | --- |
+| `datasets/<id>/` | Your datasets (images + captions) |
+| `runs/<run-id>/outputs/` | Trained LoRAs and other results |
+| `cache/huggingface/` | Downloaded model weights (can be tens of GB) |
+
+None of these are tracked by Git. When you no longer need them:
+
+```sh
+uv run kura run prune                                              # remove old runs (add --yes to apply)
+uv run kura run prune --docker-containers --docker-volumes --yes   # also remove Kura-managed stopped containers/volumes
+```
+
+To reclaim the model cache, delete `cache/huggingface/` (it re-downloads when needed).
 
 ## Learn more
 

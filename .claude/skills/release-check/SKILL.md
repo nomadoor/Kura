@@ -22,6 +22,9 @@ uv run python scripts/check_runpod_safety.py
 ```
 
 Also run targeted smoke commands when the change touches Docker, RunPod, render, or TUI behavior.
+Before publishing, inspect ignored files with `git status --ignored --short`
+and confirm datasets, runs, downloads, caches, checkpoints, and prompt/workflow
+experiments are not about to be committed.
 
 ## Before final handoff
 
@@ -29,3 +32,14 @@ Also run targeted smoke commands when the change touches Docker, RunPod, render,
 - Report known skipped external checks.
 - Confirm whether RunPod has live Pods/Network Volumes when relevant.
 - Do not hide dirty worktree state.
+
+## Pull requests
+
+- Keep PR titles and bodies about the product change, risk, validation, and
+  reviewer context.
+- Do not include tool/agent attribution such as "Codex", "Claude", or
+  "AI-generated" unless the user explicitly asks for it or it is technically
+  relevant to the change.
+- Do not paste local paths, secrets, dataset details, or generated experiment
+  artifacts into the PR body.
+- Prefer a short structure: summary, validation, notes/risks.

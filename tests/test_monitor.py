@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from kura.monitor import collect_run_summaries, loss_sparkline
 
@@ -73,6 +75,56 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.latest_loss, 0.8)
             self.assertEqual(summary.best_loss, 0.7)
 
+    def test_collect_run_summaries_overlays_finished_local_docker_state_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "docker-finished"
+            (run_dir / "realizations").mkdir(parents=True)
+            (root / "index.jsonl").write_text(json.dumps({"id": "docker-finished"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: docker-finished",
+                        "type: train",
+                        "backend: {name: ai-toolkit}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "r1.json").write_text(
+                json.dumps({"id": "r1", "executor": "docker", "state": "running", "container": {"id": "container-1"}}),
+                encoding="utf-8",
+            )
+            result = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0, "FinishedAt": "2026-06-29T01:02:03Z"}', "")
+
+            with patch("kura.monitor.shutil.which", return_value="/usr/bin/docker"), patch("kura.monitor.subprocess.run", return_value=result) as run:
+                summary = collect_run_summaries(root)[0]
+
+            run.assert_called_once_with(["/usr/bin/docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2)
+            self.assertEqual(summary.state, "completed")
+            self.assertEqual(summary.exit_code, 0)
+            self.assertIsNotNone(summary.ended)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+
+    def test_collect_run_summaries_ignores_timed_out_docker_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "docker-timeout"
+            (run_dir / "realizations").mkdir(parents=True)
+            (root / "index.jsonl").write_text(json.dumps({"id": "docker-timeout"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: docker-timeout\ntype: train\ncompute: {executor: docker}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "container_id": "container-1"}), encoding="utf-8")
+
+            with patch("kura.monitor.shutil.which", return_value="/usr/bin/docker"), patch("kura.monitor.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 2)):
+                summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.state, "running")
+
     def test_collect_run_summaries_falls_back_to_ai_toolkit_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -139,6 +191,34 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.losses, (0.316, 0.321))
             self.assertEqual(summary.latest_loss, 0.321)
             self.assertEqual(summary.best_loss, 0.316)
+
+    def test_collect_run_summaries_reads_model_download_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "downloading"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: downloading",
+                        "type: train",
+                        "backend: {name: musubi-tuner}",
+                        "params: {steps: 20}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "[kura] musubi step 1/6: hf_hub_download\n"
+                "[kura] hf download progress dit:raw.safetensors files=40 bytes=2147483648\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.activity, "downloading dit raw.safetensors · 2.0GB")
 
     def test_collect_run_summaries_reads_downloaded_stdout_for_remote_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

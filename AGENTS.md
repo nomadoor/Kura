@@ -21,11 +21,19 @@ Kura is an agent-first, file-first workspace for reproducible training and rende
 - `status.json` materializes the latest state.
 - Apart from `notes.md`, treat run artifacts as append-only or immutable unless a Kura CLI command explicitly owns the mutation.
 
+Smoke and training runs the user will watch belong in the current workspace. Do not create a second workspace for user-observed runs. A throwaway workspace is only for CI or isolated developer checks. If a separate workspace is unavoidable, say so up front, give the exact `kura monitor` / `kura run watch` command for it, and state where its `runs/` and `cache/` live.
+
 ## Boundaries
 
 Keep backend adapters and executors separate. Backends compile native configuration and container-native command specifications; they do not launch runs. Executors launch, reconcile, and stop runs.
 
 Training uses Docker locally and RunPod remotely. Never run AI-Toolkit or Musubi directly on the host. Render runs are the explicit exception: they call a locally reachable ComfyUI endpoint.
+
+Treat training configuration and compute selection as one plan. Dataset size, resolution, batch, accumulation, precision, rank, optimizer, and backend low-memory options all affect quality, runtime, memory, and cost. Do not silently change these trade-offs.
+
+When a run does not fit the available hardware, diagnose from concrete evidence such as CUDA OOM logs, stalled startup, or doctor output. Propose the least meaning-changing adjustment first, explain the trade-off, then record the accepted change in `run.yaml` / backend overrides before recompiling and launching a new realization. Do not silently retry with changed batch, resolution, precision, or low-memory modes.
+
+Before launching a training run, run `uv run kura run plan <run-id>` and show the output to the user. Do not reconstruct launch settings from memory. Launch only after explicit approval; if anything changes afterward, record it in `run.yaml`, recompile, and show the plan again.
 
 ## Secrets and Artifacts
 
@@ -42,6 +50,8 @@ Never bake secrets into Docker images or write them to `workspace.yaml`, `run.ya
 - Authored docs: `docs/`
 - Project skills: `.claude/skills/`
 - Mechanical checks: `scripts/check_*.py`
+
+For local workspace configuration keys, see `docs/workspace-config.md`.
 
 ## Task-Specific Skills
 

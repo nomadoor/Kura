@@ -16,10 +16,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import boto3
-from botocore.config import Config
-from boto3.s3.transfer import TransferConfig
-
 from kura import __version__
 
 CONTAINER_WORKSPACE = "/workspace"
@@ -131,7 +127,7 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str,
     paths = {"workspace": workspace.resolve()}
     for mount in mounts:
         if mount.get("mode") != "ro":
-            source = Path(mount["source"]).expanduser()
+            source = _resolve_mount_source(workspace, mount["source"])
             source.mkdir(parents=True, exist_ok=True)
             paths[f"mount:{mount.get('target', source)}"] = source.resolve()
     disk: dict[str, dict[str, int | str]] = {}
@@ -148,6 +144,13 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str,
     if available is not None and available < LOW_AVAILABLE_MEMORY_BYTES:
         warnings.append(f"only {available // 1024**3} GiB of host memory is currently available")
     return {"wsl": _is_wsl(), "memory_available_bytes": available, "disk": disk, "warnings": warnings}
+
+
+def _resolve_mount_source(workspace: Path, source: str) -> Path:
+    path = Path(source).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    return path.resolve()
 
 
 def _container_name(run_id: str, realization_id: str) -> str:
@@ -227,7 +230,7 @@ def docker_command(
         "--workdir", spec["cwd"], "--volume", f"{workspace.resolve()}:{workspace_target}",
     ]
     for mount in mounts:
-        source = Path(mount["source"]).expanduser().resolve()
+        source = _resolve_mount_source(workspace, mount["source"])
         suffix = ":ro" if mount.get("mode") == "ro" else ""
         command.extend(["--volume", f"{source}:{mount['target']}{suffix}"])
     if gpu:
@@ -240,6 +243,7 @@ def docker_command(
     # Container output is redirected to a mounted file; force Python progress
     # messages through immediately instead of waiting for its file buffer.
     runtime_env.setdefault("PYTHONUNBUFFERED", "1")
+    runtime_env.setdefault("HF_HOME", "/root/.cache/huggingface")
     if os.environ.get("HF_TOKEN"):
         runtime_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
     for key, value in sorted(runtime_env.items()):
@@ -282,7 +286,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "local_image": image, "image_id": image_id, "dockerfile": dockerfile,
         "container": {"id": container_id, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command, "workspace_mount": {"source": str(workspace.resolve()), "target": workspace_target},
-        "mounts": [{**mount, "source": str(Path(mount["source"]).expanduser().resolve())} for mount in mounts],
+        "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
@@ -452,6 +456,12 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
+    """Return ordered GPU attempts for deterministic fallback."""
+
+    return [[gpu_type_id] for gpu_type_id in gpu_type_ids]
+
+
 def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
     object_store = config.get("object_store")
     if not isinstance(object_store, dict):
@@ -483,6 +493,11 @@ def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
 
 def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
     settings = _object_store_settings(config)
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError as exc:
+        raise ValueError("runpod.storage_mode=object_staging requires optional dependency: pip install 'kura[object-staging]'") from exc
     client = boto3.client("s3", endpoint_url=settings["endpoint_url"], region_name=settings["region"], aws_access_key_id=settings["access_key"], aws_secret_access_key=settings["secret_key"], config=Config(retries={"max_attempts": 10, "mode": "standard"}, read_timeout=7200))
     return client, settings
 
@@ -490,6 +505,8 @@ def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
     """Explicitly upload the compiled inputs needed by a RunPod Pod."""
     settings = _runpod_settings(config)
+    if settings["storage_mode"] == "object_staging":
+        raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
     raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
     ids = list(dict.fromkeys(item for item in raw_ids if item))
     sources = [run_dir / "run.yaml", run_dir / "resolved", *(workspace / "datasets" / item for item in ids)]
@@ -512,23 +529,14 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
         raise ValueError("nothing to stage")
     total_bytes = sum(path.stat().st_size for path, _ in files)
     staged_at = _now()
-    if settings["storage_mode"] == "object_staging":
-        client, object_store = _object_store_client(config)
-        bucket = object_store["bucket"]
-        object_prefix = f"{object_store['prefix']}/runs/{run_dir.name}".strip("/")
-        transfer = TransferConfig(multipart_threshold=100 * 1024**2, multipart_chunksize=100 * 1024**2)
+    transfer_dir = run_dir / "transfer"
+    transfer_dir.mkdir(exist_ok=True)
+    archive_name = f"kura-upload-{run_dir.name}.tar.gz"
+    archive_path = transfer_dir / archive_name
+    with tarfile.open(archive_path, "w:gz") as archive:
         for path, key in files:
-            client.upload_file(str(path), bucket, f"{object_prefix}/{key}", Config=transfer)
-        storage_label = {"storage_mode": "object_staging", "object_bucket": bucket, "object_prefix": object_prefix, "object_endpoint_url": object_store["endpoint_url"]}
-    else:
-        transfer_dir = run_dir / "transfer"
-        transfer_dir.mkdir(exist_ok=True)
-        archive_name = f"kura-upload-{run_dir.name}.tar.gz"
-        archive_path = transfer_dir / archive_name
-        with tarfile.open(archive_path, "w:gz") as archive:
-            for path, key in files:
-                archive.add(path, arcname=key)
-        storage_label = {"storage_mode": "upload", "archive": str(archive_path.relative_to(run_dir)), "archive_name": archive_name}
+            archive.add(path, arcname=key)
+    storage_label = {"storage_mode": "upload", "archive": str(archive_path.relative_to(run_dir)), "archive_name": archive_name}
     record = {"timestamp": staged_at, "executor": "runpod", **storage_label, "files": [key for _, key in files], "total_bytes": total_bytes}
     stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
     stage_path.parent.mkdir(exist_ok=True)
@@ -633,7 +641,7 @@ sleep infinity
         workspace_contract = "Container disk only; caller must ensure inputs exist in the container workspace"
     request_body = {
         "name": f"kura-{run_dir.name}-{realization_id}",
-        "gpuTypeIds": settings["gpu_type_ids"], "gpuCount": settings["gpu_count"],
+        "gpuCount": settings["gpu_count"],
         "containerDiskInGb": settings["container_disk_gb"],
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"], "env": runtime_env,
@@ -658,6 +666,8 @@ sleep infinity
         request_body["ports"] = settings["ports"]
     safe_request = dict(request_body)
     safe_request["env"] = _safe_env(runtime_env)
+    safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
+    safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
     safe_request["cloudTypeCandidates"] = settings["cloud_types"]
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
@@ -668,15 +678,19 @@ sleep infinity
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
-    for cloud_type in settings["cloud_types"]:
-        attempt_request = dict(request_body)
-        attempt_request["cloudType"] = cloud_type
-        try:
-            pod = _runpod_request("POST", "/pods", api_key, attempt_request)
-            used_request = attempt_request
+    for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]):
+        for cloud_type in settings["cloud_types"]:
+            attempt_request = dict(request_body)
+            attempt_request["gpuTypeIds"] = gpu_type_ids
+            attempt_request["cloudType"] = cloud_type
+            try:
+                pod = _runpod_request("POST", "/pods", api_key, attempt_request)
+                used_request = attempt_request
+                break
+            except ValueError as exc:
+                launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
+        if pod is not None:
             break
-        except ValueError as exc:
-            launch_errors.append({"cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
     if pod is None or used_request is None:
         failed_at = _now()
         realization_path = run_dir / "realizations" / f"{realization_id}.json"
@@ -689,7 +703,7 @@ sleep infinity
             "container_cwd": spec["cwd"], "backend_command": spec["argv"],
             "logs_path": log_path,
             "workspace_contract": workspace_contract,
-            "error": "; ".join(f"{item['cloud_type']}: {item['error']}" for item in launch_errors),
+            "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
             "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
             "kura_version": __version__,
         }
