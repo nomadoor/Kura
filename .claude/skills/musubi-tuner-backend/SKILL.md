@@ -46,6 +46,10 @@ choice in `run.yaml` under `backend_overrides.musubi-tuner` before recompiling.
 4. Reduce resolution, rank, or model size only after explaining that this changes
    the training recipe itself.
 
+Block swap limits are model-specific. If Musubi reports a maximum swappable
+block count, follow that error instead of guessing a larger value. A value that
+fits one FLUX.2/Krea-class model can be invalid for another.
+
 ## Unknown model policy
 
 - Kura does not need a friendly bundle entry for every new model. If the model is

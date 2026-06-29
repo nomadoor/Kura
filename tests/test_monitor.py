@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from kura.monitor import collect_run_summaries, loss_sparkline
 
@@ -72,6 +74,41 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.losses, (0.7, 0.8))
             self.assertEqual(summary.latest_loss, 0.8)
             self.assertEqual(summary.best_loss, 0.7)
+
+    def test_collect_run_summaries_overlays_finished_local_docker_state_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "docker-finished"
+            (run_dir / "realizations").mkdir(parents=True)
+            (root / "index.jsonl").write_text(json.dumps({"id": "docker-finished"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: docker-finished",
+                        "type: train",
+                        "backend: {name: ai-toolkit}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "r1.json").write_text(
+                json.dumps({"id": "r1", "executor": "docker", "state": "running", "container": {"id": "container-1"}}),
+                encoding="utf-8",
+            )
+            result = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0, "FinishedAt": "2026-06-29T01:02:03Z"}', "")
+
+            with patch("kura.monitor.subprocess.run", return_value=result):
+                summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.state, "completed")
+            self.assertEqual(summary.exit_code, 0)
+            self.assertIsNotNone(summary.ended)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
 
     def test_collect_run_summaries_falls_back_to_ai_toolkit_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -266,6 +267,9 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     progress = _progress(status, config, stdout_progress=stdout_progress)
     executor = _executor(run_type, config, status, realization)
     state = _string(status.get("state") or realization.get("state"))
+    observed = _read_docker_state_overlay(status, realization) if state == "running" and executor == "docker" else {}
+    if observed:
+        state = _string(observed.get("state")) or state
     if state == "completed" and progress.total and (progress.step is None or progress.step < progress.total):
         progress = RunProgress(step=progress.total, total=progress.total)
     last_updated = _latest_mtime(
@@ -277,7 +281,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         *_artifact_candidates(run_dir, status, "logs/events.jsonl"),
         *sorted((run_dir / "realizations").glob("*.json")),
     )
-    ended = _parse_datetime(_first_present(status.get("ended"), realization.get("ended"), realization.get("timestamp")))
+    ended = _parse_datetime(_first_present(status.get("ended"), observed.get("ended"), realization.get("ended"), realization.get("timestamp")))
     return RunSummary(
         id=_string(config.get("id") or run.get("id")) or fallback_id,
         experiment=_string(config.get("experiment") or run.get("experiment")),
@@ -294,7 +298,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         started=_parse_datetime(_first_present(status.get("started"), realization.get("launched_at"))),
         ended=ended,
         finished=ended,
-        exit_code=_int_or_none(_first_present(status.get("exit_code"), realization.get("exit_code"))),
+        exit_code=_int_or_none(_first_present(status.get("exit_code"), observed.get("exit_code"), realization.get("exit_code"))),
         run_dir=run_dir,
         outputs_path=_outputs_path(run_dir, status),
         datasets=tuple(_datasets(workspace, config or run)),
@@ -302,6 +306,40 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         is_stale=bool(state == "running" and last_updated and (datetime.now().astimezone() - last_updated).total_seconds() > stale_after),
         activity=stdout_activity,
     )
+
+
+def _read_docker_state_overlay(status: dict[str, Any], realization: dict[str, Any]) -> dict[str, Any]:
+    """Read Docker state for stale local runs without mutating Kura artifacts."""
+    identity = _string(status.get("container_id") or status.get("container_name"))
+    if not identity:
+        container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
+        identity = _string(container.get("id") or container.get("name"))
+    if not identity:
+        return {}
+    try:
+        result = subprocess.run(["docker", "inspect", "--format", "{{json .State}}", identity], text=True, capture_output=True, check=False)
+    except FileNotFoundError:
+        return {}
+    if result.returncode:
+        text = (result.stderr + result.stdout).lower()
+        if "no such object" in text or "no such container" in text:
+            return {"state": "interrupted", "exit_code": None}
+        return {}
+    try:
+        docker_state = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(docker_state, dict):
+        return {}
+    if docker_state.get("Running"):
+        return {"state": "running", "exit_code": None}
+    exit_code = docker_state.get("ExitCode")
+    if not isinstance(exit_code, int):
+        return {}
+    ended = _string(docker_state.get("FinishedAt"))
+    if ended and ended.startswith("0001-"):
+        ended = None
+    return {"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": ended}
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:

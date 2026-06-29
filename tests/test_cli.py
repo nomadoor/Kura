@@ -22,6 +22,7 @@ from kura.backends import _safetensors_validator_code, command_ai_toolkit, comma
 from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
+from kura.run_commands import launch_run
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -1240,6 +1241,44 @@ class DockerLifecycleTests(unittest.TestCase):
                 status = reconcile_docker(run_dir)
             self.assertEqual(status["state"], "interrupted")
             self.assertIsNone(status["exit_code"])
+
+    def test_launch_wait_blocks_for_local_docker_and_reconciles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "realizations").mkdir()
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                encoding="utf-8",
+            )
+
+            def fake_launch(**_: Any) -> tuple[list[str], str]:
+                (run_dir / "status.json").write_text(json.dumps({"state": "running", "container_id": "container-1"}), encoding="utf-8")
+                return [], "r1"
+
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch_docker", side_effect=fake_launch), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    self.assertEqual(launch_run("example", executor="docker", dry_run=False, wait=True), 0)
+            finally:
+                os.chdir(previous)
+            wait.assert_called_once_with(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
+            reconcile.assert_called_once_with(run_dir)
 
 
 class RunPruneTests(unittest.TestCase):

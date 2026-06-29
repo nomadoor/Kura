@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from kura.backends import command_ai_toolkit, command_musubi_tuner
-from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, stage_runpod, stop_docker, stop_runpod
+from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, reconcile_docker, stage_runpod, stop_docker, stop_runpod
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
@@ -904,7 +904,23 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
     )
 
 
-def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None = None, notify_channels: Any = None) -> int:
+def _wait_for_docker_run(run_dir: Path) -> int:
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    identity = status.get("container_id") or status.get("container_name")
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("launched Docker run has no container identity")
+    try:
+        result = subprocess.run(["docker", "wait", identity], text=True, capture_output=True, check=False)
+    except FileNotFoundError as exc:
+        raise ValueError("docker executable was not found on PATH") from exc
+    if result.returncode:
+        raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker wait failed"))
+    final = reconcile_docker(run_dir)
+    print(json.dumps(final, ensure_ascii=False, indent=2))
+    return 0 if final.get("state") == "completed" else 1
+
+
+def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None = None, notify_channels: Any = None, wait: bool = False) -> int:
     run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
@@ -945,7 +961,11 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
             launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
+            if wait and not dry_run:
+                return _wait_for_docker_run(run_dir)
         else:
+            if wait:
+                raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
             remote_spec = dict(spec)
@@ -982,4 +1002,4 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
 
 
 def cmd_run_launch(args: argparse.Namespace) -> int:
-    return launch_run(args.run_id, executor=args.executor, dry_run=args.dry_run, image=getattr(args, "image", None), notify_channels=getattr(args, "notify", None))
+    return launch_run(args.run_id, executor=args.executor, dry_run=args.dry_run, image=getattr(args, "image", None), notify_channels=getattr(args, "notify", None), wait=bool(getattr(args, "wait", False)))
