@@ -148,6 +148,13 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     }
 
 
+def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
+    if not isinstance(comfyui, dict):
+        return {}
+    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup")
+    return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
+
+
 def _materialize_lora_stage(plan: dict[str, Any]) -> None:
     source = Path(plan["source"])
     target = Path(plan["target"])
@@ -256,9 +263,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     frozen = deepcopy(run)
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
-    comfyui = workspace_config.get("comfyui")
-    if isinstance(comfyui, dict):
-        frozen["comfyui"] = deepcopy(comfyui)
+    comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"))
+    if comfyui:
+        frozen["comfyui"] = comfyui
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
     if checkpoint_path:
         candidate = workspace / checkpoint_path

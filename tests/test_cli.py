@@ -444,7 +444,7 @@ class RenderNotificationTests(unittest.TestCase):
             for path in (workflow_dir, promptset_dir, run_dir / "logs", run_dir / "resolved", run_dir / "samples", output_run):
                 path.mkdir(parents=True)
             (root / "workspace.yaml").write_text(
-                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n",
+                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
                 encoding="utf-8",
             )
             checkpoint = output_run / "example.safetensors"
@@ -479,6 +479,8 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "logs" / "events.jsonl").touch()
             (run_dir / "samples" / "images.jsonl").touch()
             compile_render(root, run_dir)
+            manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(set(manifest["comfyui"]), {"lora_dir", "lora_stage_subdir", "lora_stage_cleanup"})
             captured: dict[str, Any] = {}
 
             class FakeClient:
