@@ -1057,12 +1057,83 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["backend_overrides"] = {
             "musubi-tuner": {
-                "architecture": "ideogram4",
-                "model_paths": {"dit": "/models/ideogram4.safetensors"},
+                "architecture": "sdxl",
+                "model_paths": {"unet": "/models/sdxl.safetensors"},
             }
         }
         with self.assertRaisesRegex(ValueError, "unsupported Kura built-in Musubi adapter"):
             command_musubi_tuner(run)
+
+    def test_command_musubi_generates_image_architecture_adapters(self) -> None:
+        cases = [
+            (
+                "qwen_image",
+                {"dit": "/models/qwen-dit.safetensors", "vae": "/models/qwen-vae.safetensors", "text_encoder": "/models/qwen-vl.safetensors"},
+                ("qwen_image_cache_latents.py", "qwen_image_cache_text_encoder_outputs.py", "qwen_image_train_network.py", "networks.lora_qwen_image", "--model_version original"),
+            ),
+            (
+                "zimage",
+                {"dit": "/models/zimage-dit.safetensors", "vae": "/models/zimage-vae.safetensors", "text_encoder": "/models/zimage-qwen3.safetensors"},
+                ("zimage_cache_latents.py", "zimage_cache_text_encoder_outputs.py", "zimage_train_network.py", "networks.lora_zimage", "--dit /models/zimage-dit.safetensors"),
+            ),
+            (
+                "flux_kontext",
+                {"dit": "/models/kontext-dit.safetensors", "vae": "/models/kontext-vae.safetensors", "text_encoder1": "/models/t5.safetensors", "text_encoder2": "/models/clip.safetensors"},
+                ("flux_kontext_cache_latents.py", "flux_kontext_cache_text_encoder_outputs.py", "flux_kontext_train_network.py", "networks.lora_flux", "--text_encoder2 /models/clip.safetensors"),
+            ),
+            (
+                "ideogram4",
+                {"dit": "/models/ideogram4.safetensors", "vae": "/models/flux2-vae.safetensors", "text_encoder": "/models/qwen3vl.safetensors"},
+                ("ideogram4_cache_latents.py", "ideogram4_cache_text_encoder_outputs.py", "ideogram4_train_network.py", "networks.lora_ideogram4", "--dit /models/ideogram4.safetensors"),
+            ),
+            (
+                "hidream_o1",
+                {"dit": "/models/hidream-o1.safetensors"},
+                ("hidream_o1_cache_pixel.py", "hidream_o1_cache_text_encoder_outputs.py", "hidream_o1_train_network.py", "networks.lora_hidream_o1", "--model_type full", "--task t2i"),
+            ),
+        ]
+        for architecture, model_paths, expected in cases:
+            with self.subTest(architecture=architecture):
+                run = self._run()
+                run["backend_overrides"] = {"musubi-tuner": {"architecture": architecture, "model_paths": model_paths}}
+                script = command_musubi_tuner(run)["argv"][2]
+                for text in expected:
+                    self.assertIn(text, script)
+                self.assertIn("--max_train_steps 30", script)
+                self.assertIn("--save_precision bf16", script)
+
+    def test_command_musubi_generates_video_architecture_adapters(self) -> None:
+        cases = [
+            (
+                "hunyuan_video",
+                {"dit": "/models/hv-dit.safetensors", "vae": "/models/hv-vae.safetensors", "text_encoder1": "hunyuanvideo-community/HunyuanVideo", "text_encoder2": "openai/clip-vit-large-patch14"},
+                ("cache_latents.py", "cache_text_encoder_outputs.py", "hv_train_network.py", "networks.lora", "--text_encoder1 hunyuanvideo-community/HunyuanVideo"),
+            ),
+            (
+                "hunyuan_video_1_5",
+                {"dit": "/models/hv15-dit.safetensors", "vae": "/models/hv15-vae.safetensors", "text_encoder": "Qwen/Qwen2.5-VL-7B-Instruct", "byt5": "google/byt5-small"},
+                ("hv_1_5_cache_latents.py", "hv_1_5_cache_text_encoder_outputs.py", "hv_1_5_train_network.py", "networks.lora_hv_1_5", "--task t2v"),
+            ),
+            (
+                "framepack",
+                {"dit": "/models/framepack.safetensors", "vae": "/models/fpack-vae.safetensors", "text_encoder1": "hunyuanvideo-community/HunyuanVideo", "text_encoder2": "openai/clip-vit-large-patch14", "image_encoder": "/models/siglip.safetensors"},
+                ("fpack_cache_latents.py", "fpack_cache_text_encoder_outputs.py", "fpack_train_network.py", "networks.lora_framepack", "--image_encoder /models/siglip.safetensors"),
+            ),
+            (
+                "kandinsky5",
+                {"dit": "/models/k5-dit.safetensors", "vae": "/models/k5-vae.safetensors", "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct", "text_encoder_clip": "openai/clip-vit-large-patch14"},
+                ("kandinsky5_cache_text_encoder_outputs.py", "kandinsky5_cache_latents.py", "kandinsky5_train_network.py", "networks.lora_kandinsky", "--task k5-pro-t2v-5s-sd"),
+            ),
+        ]
+        for architecture, model_paths, expected in cases:
+            with self.subTest(architecture=architecture):
+                run = self._run()
+                run["backend_overrides"] = {"musubi-tuner": {"architecture": architecture, "model_paths": model_paths}}
+                script = command_musubi_tuner(run)["argv"][2]
+                for text in expected:
+                    self.assertIn(text, script)
+                self.assertIn("--max_train_steps 30", script)
+                self.assertIn("--save_precision bf16", script)
 
     def test_command_musubi_can_download_models_from_huggingface(self) -> None:
         run = self._run()

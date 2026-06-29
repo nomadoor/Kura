@@ -675,6 +675,99 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "text_encoder": "safetensors",
             "turbo_dit": "safetensors",
         },
+        "qwen_image": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "qwen": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "zimage": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "z_image": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "flux_kontext": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder1": "safetensors",
+            "text_encoder2": "safetensors",
+        },
+        "flux1_kontext": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder1": "safetensors",
+            "text_encoder2": "safetensors",
+        },
+        "ideogram4": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "ideogram_4": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "hidream_o1": {
+            "dit": "safetensors",
+        },
+        "hidream": {
+            "dit": "safetensors",
+        },
+        "hunyuan_video": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder1": "hf_model_id_or_path",
+            "text_encoder2": "hf_model_id_or_path",
+        },
+        "hunyuanvideo": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder1": "hf_model_id_or_path",
+            "text_encoder2": "hf_model_id_or_path",
+        },
+        "hunyuan_video_1_5": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder": "hf_model_id_or_path",
+            "byt5": "hf_model_id_or_path",
+            "image_encoder": "hf_model_id_or_path",
+        },
+        "framepack": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder1": "hf_model_id_or_path",
+            "text_encoder2": "hf_model_id_or_path",
+            "image_encoder": "hf_model_id_or_path",
+        },
+        "frame_pack": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder1": "hf_model_id_or_path",
+            "text_encoder2": "hf_model_id_or_path",
+            "image_encoder": "hf_model_id_or_path",
+        },
+        "kandinsky5": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder_qwen": "hf_model_id_or_path",
+            "text_encoder_clip": "hf_model_id_or_path",
+        },
+        "kandinsky_5": {
+            "dit": "safetensors",
+            "vae": "safetensors",
+            "text_encoder_qwen": "hf_model_id_or_path",
+            "text_encoder_clip": "hf_model_id_or_path",
+        },
     }
     expectations = dict(defaults.get(architecture, {}))
     user_expectations = override.get("model_expectations")
@@ -788,6 +881,12 @@ def has_fragment(keys, fragment):
 
 
 def validate_model(role, path, expected):
+    if expected == "hf_model_id_or_path":
+        if "/" in path and not os.path.exists(path):
+            return
+        if os.path.exists(path):
+            return
+        die(f"{role} is neither a local path nor a Hugging Face model id: {path}")
     keys, metadata = read_header(path)
     base = os.path.basename(path).lower()
     if expected == "safetensors":
@@ -1044,6 +1143,33 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
     return any(arg.startswith("--sample_") for arg in extra_args)
 
 
+def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], output_dir: str, output_name: str, *, default_lr: str = "1e-4") -> list[str]:
+    params = run.get("params", {})
+    args = [
+        "--optimizer_type", str(override.get("optimizer_type") or "adamw8bit"),
+        "--learning_rate", str(params.get("lr") or override.get("learning_rate") or default_lr),
+        "--max_data_loader_n_workers", str(override.get("max_data_loader_n_workers") or 2),
+        "--persistent_data_loader_workers",
+        "--network_dim", str(params.get("rank") or override.get("network_dim") or 32),
+    ]
+    if params.get("alpha") is not None:
+        args.extend(["--network_alpha", str(params["alpha"])])
+    args.extend([
+        "--max_train_steps", str(params.get("steps") or override.get("max_train_steps") or 1600),
+        "--save_every_n_steps", str(override.get("save_every_n_steps") or params.get("steps") or 1600),
+        "--save_precision", _musubi_save_precision(override),
+        "--seed", str(params.get("seed") or override.get("seed") or 42),
+        "--output_dir", output_dir,
+        "--output_name", output_name,
+    ])
+    return args
+
+
+def _append_flag(args: list[str], override: dict[str, Any], key: str, flag: str | None = None) -> None:
+    if _truthy(override.get(key)):
+        args.append(flag or f"--{key}")
+
+
 def _validate_krea2_dataset_shape(override: dict[str, Any]) -> None:
     dataset_config = override.get("dataset_config")
     if not isinstance(dataset_config, dict):
@@ -1268,6 +1394,435 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                     "--dataset_config", dataset_config,
                     "--text_encoder", text_encoder,
                     "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                    "--skip_existing",
+                ],
+            ])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("qwen_image", "qwen"):
+        dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
+        model_version = str(override.get("model_version") or "original")
+        train_argv = [
+            *common, "src/musubi_tuner/qwen_image_train_network.py",
+            "--dit", dit, "--vae", vae, "--text_encoder", text_encoder,
+            "--model_version", model_version,
+            "--dataset_config", dataset_config,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--weighting_scheme", str(override.get("weighting_scheme") or "none"),
+            "--network_module", "networks.lora_qwen_image",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
+        _append_flag(train_argv, override, "fp8_scaled")
+        _append_flag(train_argv, override, "fp8_vl")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/qwen_image_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", vae,
+                "--model_version", model_version,
+                "--skip_existing",
+            ]
+            text_argv = [
+                "python", "src/musubi_tuner/qwen_image_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder", text_encoder,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                "--model_version", model_version,
+                "--skip_existing",
+            ]
+            if _truthy(override.get("fp8_vl")):
+                text_argv.append("--fp8_vl")
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("zimage", "z_image"):
+        dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
+        train_argv = [
+            *common, "src/musubi_tuner/zimage_train_network.py",
+            "--dit", dit, "--vae", vae, "--text_encoder", text_encoder,
+            "--dataset_config", dataset_config,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--network_module", "networks.lora_zimage",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
+        _append_flag(train_argv, override, "fp8_scaled")
+        _append_flag(train_argv, override, "fp8_llm")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/zimage_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", vae,
+                "--skip_existing",
+            ]
+            text_argv = [
+                "python", "src/musubi_tuner/zimage_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder", text_encoder,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                "--skip_existing",
+            ]
+            if _truthy(override.get("fp8_llm")):
+                text_argv.append("--fp8_llm")
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("flux_kontext", "flux1_kontext"):
+        dit, vae, text_encoder1, text_encoder2 = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2"))
+        train_argv = [
+            *common, "src/musubi_tuner/flux_kontext_train_network.py",
+            "--dit", dit, "--vae", vae,
+            "--text_encoder1", text_encoder1, "--text_encoder2", text_encoder2,
+            "--dataset_config", dataset_config,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--network_module", "networks.lora_flux",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        if _truthy(override.get("fp8_base")) or _truthy(override.get("fp8")):
+            train_argv.append("--fp8")
+        _append_flag(train_argv, override, "fp8_scaled")
+        _append_flag(train_argv, override, "fp8_t5")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/flux_kontext_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", vae,
+                "--skip_existing",
+            ]
+            text_argv = [
+                "python", "src/musubi_tuner/flux_kontext_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder1", text_encoder1,
+                "--text_encoder2", text_encoder2,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                "--skip_existing",
+            ]
+            if _truthy(override.get("fp8_t5")):
+                text_argv.append("--fp8_t5")
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("ideogram4", "ideogram_4"):
+        extra_args = _extra_args(override)
+        uses_sampling = _musubi_uses_sample_prompts(override, extra_args)
+        if precache or uses_sampling:
+            dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
+        else:
+            dit = _require_paths(paths, ("dit",))[0]
+            vae = paths.get("vae")
+            text_encoder = paths.get("text_encoder")
+        train_argv = [
+            *common, "src/musubi_tuner/ideogram4_train_network.py",
+            "--dataset_config", dataset_config,
+            "--dit", dit,
+            "--network_module", "networks.lora_ideogram4",
+            "--mixed_precision", "bf16",
+            "--sdpa",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        if uses_sampling:
+            train_argv.extend(["--vae", vae, "--text_encoder", text_encoder])
+        if override.get("dit_dtype"):
+            train_argv.extend(["--dit_dtype", str(override["dit_dtype"])])
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        train_argv.extend(extra_args)
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/ideogram4_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", vae,
+                "--skip_existing",
+            ]
+            if override.get("vae_dtype"):
+                latent_argv.extend(["--vae_dtype", str(override["vae_dtype"])])
+            text_argv = [
+                "python", "src/musubi_tuner/ideogram4_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder", text_encoder,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                "--skip_existing",
+            ]
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("hidream_o1", "hidream"):
+        dit = _require_paths(paths, ("dit",))[0]
+        model_type = str(override.get("model_type") or "full")
+        task = str(override.get("task") or "t2i")
+        train_argv = [
+            *common, "src/musubi_tuner/hidream_o1_train_network.py",
+            "--dit", dit,
+            "--dataset_config", dataset_config,
+            "--model_type", model_type,
+            "--task", task,
+            "--mixed_precision", "bf16",
+            "--timestep_sampling", str(override.get("timestep_sampling") or "uniform"),
+            "--weighting_scheme", str(override.get("weighting_scheme") or "none"),
+            "--network_module", "networks.lora_hidream_o1",
+            *_musubi_common_train_args(run, override, output_dir, output_name, default_lr="4e-5"),
+        ]
+        if "noise_scale_start" in override:
+            train_argv.extend(["--noise_scale_start", str(override["noise_scale_start"])])
+        if "noise_scale_end" in override:
+            train_argv.extend(["--noise_scale_end", str(override["noise_scale_end"])])
+        if "noise_clip_std" in override:
+            train_argv.extend(["--noise_clip_std", str(override["noise_clip_std"])])
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_scaled")
+        _append_flag(train_argv, override, "flash_attn")
+        _append_flag(train_argv, override, "skip_t2i_visual_dummy")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            pixel_argv = [
+                "python", "src/musubi_tuner/hidream_o1_cache_pixel.py",
+                "--dataset_config", dataset_config,
+                "--batch_size", str(override.get("pixel_cache_batch_size") or 1),
+            ]
+            text_argv = [
+                "python", "src/musubi_tuner/hidream_o1_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 16),
+            ]
+            if _truthy(override.get("fp8_te")):
+                text_argv.extend(["--dit", dit, "--fp8_te"])
+            commands.extend([pixel_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("hunyuan_video", "hunyuanvideo"):
+        dit, vae, text_encoder1, text_encoder2 = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2"))
+        train_argv = [
+            *common, "src/musubi_tuner/hv_train_network.py",
+            "--dit", dit,
+            "--dataset_config", dataset_config,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--network_module", "networks.lora",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", vae,
+                "--skip_existing",
+            ]
+            if override.get("vae_chunk_size"):
+                latent_argv.extend(["--vae_chunk_size", str(override["vae_chunk_size"])])
+            if _truthy(override.get("vae_tiling")):
+                latent_argv.append("--vae_tiling")
+            text_argv = [
+                "python", "src/musubi_tuner/cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder1", text_encoder1,
+                "--text_encoder2", text_encoder2,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 16),
+                "--skip_existing",
+            ]
+            if _truthy(override.get("fp8_llm")):
+                text_argv.append("--fp8_llm")
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture == "hunyuan_video_1_5":
+        task = str(override.get("task") or "t2v")
+        required = ("dit", "vae", "text_encoder", "byt5", "image_encoder") if task == "i2v" else ("dit", "vae", "text_encoder", "byt5")
+        required_paths = dict(zip(required, _require_paths(paths, required)))
+        train_argv = [
+            *common, "src/musubi_tuner/hv_1_5_train_network.py",
+            "--dit", required_paths["dit"],
+            "--vae", required_paths["vae"],
+            "--text_encoder", required_paths["text_encoder"],
+            "--byt5", required_paths["byt5"],
+            "--dataset_config", dataset_config,
+            "--task", task,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--network_module", "networks.lora_hv_1_5",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        if task == "i2v":
+            train_argv.extend(["--image_encoder", required_paths["image_encoder"]])
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
+        _append_flag(train_argv, override, "fp8_scaled")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/hv_1_5_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", required_paths["vae"],
+                "--skip_existing",
+            ]
+            if task == "i2v":
+                latent_argv.extend(["--i2v", "--image_encoder", required_paths["image_encoder"]])
+            text_argv = [
+                "python", "src/musubi_tuner/hv_1_5_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder", required_paths["text_encoder"],
+                "--byt5", required_paths["byt5"],
+                "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                "--skip_existing",
+            ]
+            if _truthy(override.get("fp8_vl")):
+                text_argv.append("--fp8_vl")
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("framepack", "frame_pack"):
+        dit, vae, text_encoder1, text_encoder2, image_encoder = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2", "image_encoder"))
+        train_argv = [
+            *common, "src/musubi_tuner/fpack_train_network.py",
+            "--dit", dit, "--vae", vae,
+            "--text_encoder1", text_encoder1, "--text_encoder2", text_encoder2,
+            "--image_encoder", image_encoder,
+            "--dataset_config", dataset_config,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--network_module", "networks.lora_framepack",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        if _truthy(override.get("f1")):
+            train_argv.append("--f1")
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        if _truthy(override.get("fp8_base")) or _truthy(override.get("fp8")):
+            train_argv.append("--fp8")
+        _append_flag(train_argv, override, "fp8_scaled")
+        _append_flag(train_argv, override, "fp8_llm")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/fpack_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--vae", vae,
+                "--skip_existing",
+            ]
+            if override.get("vae_chunk_size"):
+                latent_argv.extend(["--vae_chunk_size", str(override["vae_chunk_size"])])
+            text_argv = [
+                "python", "src/musubi_tuner/fpack_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--text_encoder1", text_encoder1,
+                "--text_encoder2", text_encoder2,
+                "--batch_size", str(override.get("text_encoder_batch_size") or 16),
+                "--skip_existing",
+            ]
+            if _truthy(override.get("fp8_llm")):
+                text_argv.append("--fp8_llm")
+            commands.extend([latent_argv, text_argv])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(output_dir, output_name, override.get("prune_checkpoints_before_step"))
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands)
+    elif architecture in ("kandinsky5", "kandinsky_5"):
+        dit, vae, text_encoder_qwen, text_encoder_clip = _require_paths(paths, ("dit", "vae", "text_encoder_qwen", "text_encoder_clip"))
+        task = str(override.get("task") or "k5-pro-t2v-5s-sd")
+        train_argv = [
+            *common, "src/musubi_tuner/kandinsky5_train_network.py",
+            "--mixed_precision", "bf16",
+            "--dataset_config", dataset_config,
+            "--task", task,
+            "--dit", dit,
+            "--text_encoder_qwen", text_encoder_qwen,
+            "--text_encoder_clip", text_encoder_clip,
+            "--vae", vae,
+            "--sdpa",
+            "--network_module", "networks.lora_kandinsky",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
+        train_argv.extend(_extra_args(override))
+        commands = [*download_commands]
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            commands.extend([
+                [
+                    "python", "src/musubi_tuner/kandinsky5_cache_text_encoder_outputs.py",
+                    "--dataset_config", dataset_config,
+                    "--text_encoder_qwen", text_encoder_qwen,
+                    "--text_encoder_clip", text_encoder_clip,
+                    "--batch_size", str(override.get("text_encoder_batch_size") or 1),
+                    "--skip_existing",
+                ],
+                [
+                    "python", "src/musubi_tuner/kandinsky5_cache_latents.py",
+                    "--dataset_config", dataset_config,
+                    "--vae", vae,
                     "--skip_existing",
                 ],
             ])

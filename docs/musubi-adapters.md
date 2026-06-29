@@ -18,15 +18,15 @@ generator for it.
 | FLUX.2 / FLUX.2 klein | yes | `architecture: flux2` or `flux_2` |
 | Wan | yes | `architecture: wan` |
 | Krea 2 | yes | `architecture: krea2` or `krea_2` |
-| HunyuanVideo | not yet | Upstream Musubi supports it; adapter not implemented in Kura yet |
-| HunyuanVideo 1.5 | not yet | Upstream Musubi docs exist; adapter not implemented in Kura yet |
-| FramePack | not yet | Upstream Musubi supports it; adapter not implemented in Kura yet |
-| FLUX.1 Kontext | not yet | Upstream Musubi supports it; adapter not implemented in Kura yet |
-| Qwen-Image | not yet | Upstream Musubi supports it; adapter not implemented in Kura yet |
-| Z-Image | not yet | Upstream Musubi supports it; adapter not implemented in Kura yet |
-| Ideogram 4 | not yet | Upstream Musubi has experimental support; adapter not implemented in Kura yet |
-| HiDream-O1-Image | not yet | Upstream Musubi has experimental support; adapter not implemented in Kura yet |
-| Kandinsky 5 | not yet | Upstream Musubi docs exist; adapter not implemented in Kura yet |
+| Qwen-Image | yes | `architecture: qwen_image` |
+| Z-Image | yes | `architecture: zimage` or `z_image` |
+| FLUX.1 Kontext | yes | `architecture: flux_kontext` or `flux1_kontext` |
+| Ideogram 4 | yes | `architecture: ideogram4` or `ideogram_4` |
+| HiDream-O1-Image | yes | `architecture: hidream_o1` or `hidream` |
+| HunyuanVideo | yes | `architecture: hunyuan_video` or `hunyuanvideo` |
+| HunyuanVideo 1.5 | yes | `architecture: hunyuan_video_1_5` |
+| FramePack | yes | `architecture: framepack` or `frame_pack` |
+| Kandinsky 5 | yes | `architecture: kandinsky5` or `kandinsky_5` |
 
 This list should be checked against the current upstream Musubi Tuner README
 before adding adapters.
