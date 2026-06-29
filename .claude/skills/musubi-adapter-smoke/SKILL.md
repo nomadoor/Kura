@@ -52,6 +52,14 @@ adapter as experimental or unverified in `docs/musubi-adapters.md`.
    calling the adapter stable. If a real smoke is not practical yet, keep the docs
    wording explicit: command generation works, image smoke may pass, Docker
    launch smoke may pass, real training is unverified.
+6. Use the formal runner when a spec exists:
+
+   ```sh
+   uv run python scripts/musubi_real_smoke.py <architecture>
+   ```
+
+   Add new architecture specs only after checking the current Musubi docs for
+   required model files, low-VRAM flags, and dataset shape.
 
 ## Rules
 

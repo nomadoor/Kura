@@ -20,6 +20,10 @@ the generated command reached the adapter's Musubi training script. That smoke
 used dummy model paths and intentionally failed at model loading, so it is not a
 real one-step training proof.
 
+Real one-step smoke is tracked separately. It must use actual model files and
+finish one optimizer step through Kura's normal Docker or RunPod executor. The
+developer runner is `uv run python scripts/musubi_real_smoke.py <architecture>`.
+
 If an architecture is not listed as built-in below, do not say that Musubi Tuner
 does not support it. Say that Kura does not yet have a built-in Musubi command
 generator for it.
@@ -30,7 +34,7 @@ generator for it.
 | --- | --- | --- | --- | --- |
 | FLUX.2 / FLUX.2 klein | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | verified in prior local/RunPod runs | `architecture: flux2` or `flux_2` |
 | Wan | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: wan` |
-| Krea 2 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | verified in prior RunPod runs | `architecture: krea2` or `krea_2` |
+| Krea 2 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py krea2`) | `architecture: krea2` or `krea_2` |
 | Qwen-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: qwen_image` |
 | Z-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: zimage` or `z_image` |
 | FLUX.1 Kontext | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: flux_kontext` or `flux1_kontext` |
