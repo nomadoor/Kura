@@ -156,7 +156,7 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
         if target.is_symlink() and target.resolve() == source.resolve():
             plan["created"] = False
             return
-        if target.is_file() and not target.is_symlink() and target.stat().st_size == source.stat().st_size:
+        if target.is_file() and not target.is_symlink() and digest(target) == digest(source):
             plan["created"] = False
             return
         raise ValueError(f"ComfyUI LoRA stage target already exists with different content: {target}")

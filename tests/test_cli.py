@@ -533,6 +533,26 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertFalse(plan["created"])
             self.assertTrue(target.exists())
 
+    def test_render_stage_rejects_same_size_different_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.safetensors"
+            target = root / "Kura_tmp" / "source.safetensors"
+            target.parent.mkdir()
+            source.write_bytes(b"abcd")
+            target.write_bytes(b"wxyz")
+            plan = {
+                "source": str(source),
+                "target": str(target),
+                "lora_name": "Kura_tmp/source.safetensors",
+                "mode": "copy",
+                "cleanup": "remove_after_render",
+                "created": False,
+            }
+
+            with self.assertRaisesRegex(ValueError, "different content"):
+                _materialize_lora_stage(plan)
+
     def test_lora_stage_name_preserves_safetensors_suffix_when_truncated(self) -> None:
         source = Path("/tmp") / (("very-long-checkpoint-name-" * 20) + ".safetensors")
         name = _safe_stage_name("20260629-" + ("long-run-id-" * 20), source)
