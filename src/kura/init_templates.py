@@ -50,6 +50,7 @@ def s3_client():
 
 def download_prefix(client, bucket: str, prefix: str, workspace: Path) -> int:
     count = 0
+    workspace = workspace.resolve()
     paginator = client.get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix}/"):
         for item in page.get("Contents", []):
@@ -57,7 +58,12 @@ def download_prefix(client, bucket: str, prefix: str, workspace: Path) -> int:
             relative = key[len(prefix) + 1:]
             if not relative or relative.endswith("/"):
                 continue
-            target = workspace / relative
+            relative_path = Path(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise RuntimeError(f"refusing unsafe object key: {key}")
+            target = (workspace / relative_path).resolve()
+            if not target.is_relative_to(workspace):
+                raise RuntimeError(f"refusing object key outside workspace: {key}")
             target.parent.mkdir(parents=True, exist_ok=True)
             client.download_file(bucket, key, str(target))
             count += 1

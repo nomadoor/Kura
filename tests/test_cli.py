@@ -21,6 +21,7 @@ import yaml
 from kura.backends import _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import launch_run
 from kura.tui import KuraMonitorApp, _compact_path
@@ -85,6 +86,27 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(yaml.safe_load((Path(directory) / "workspace.yaml").read_text(encoding="utf-8"))["name"], "existing")
             finally:
                 os.chdir(previous)
+
+    def test_object_job_template_rejects_download_keys_outside_workspace(self) -> None:
+        start = RUNPOD_OBJECT_JOB_TEMPLATE.index("def download_prefix")
+        end = RUNPOD_OBJECT_JOB_TEMPLATE.index("\n\ndef upload_tree")
+        namespace: dict[str, Any] = {"Path": Path}
+        exec(RUNPOD_OBJECT_JOB_TEMPLATE[start:end], namespace)
+
+        class FakePaginator:
+            def paginate(self, **_: object) -> list[dict[str, object]]:
+                return [{"Contents": [{"Key": "prefix/../../escape.txt"}]}]
+
+        class FakeClient:
+            def get_paginator(self, _: str) -> FakePaginator:
+                return FakePaginator()
+
+            def download_file(self, *_: object) -> None:
+                raise AssertionError("unsafe key should not be downloaded")
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "unsafe object key"):
+                namespace["download_prefix"](FakeClient(), "bucket", "prefix", Path(directory))
 
 
 class ImageCommandTests(unittest.TestCase):
