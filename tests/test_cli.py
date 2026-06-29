@@ -1399,6 +1399,52 @@ class RunPruneTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn(["docker", "rm", "abc"], calls)
 
+    def test_run_prune_reports_docker_container_delete_failure(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "runs").mkdir()
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["docker", "ps"]:
+                    return subprocess.CompletedProcess(command, 0, '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n', "")
+                if command[:2] == ["docker", "rm"]:
+                    return subprocess.CompletedProcess(command, 1, "", "permission denied")
+                return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+            os.chdir(root)
+            try:
+                with patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=True, docker_volumes=False, yes=True))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 1)
+        self.assertIn("cannot prune Docker containers: permission denied", stderr.getvalue())
+
+    def test_run_prune_reports_docker_volume_delete_failure(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "runs").mkdir()
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["docker", "volume", "ls"]:
+                    return subprocess.CompletedProcess(command, 0, '{"Name":"kura-cache","Driver":"local"}\n', "")
+                if command[:3] == ["docker", "volume", "rm"]:
+                    return subprocess.CompletedProcess(command, 1, "", "volume is in use")
+                return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+            os.chdir(root)
+            try:
+                with patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=False, docker_volumes=True, yes=True))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 1)
+        self.assertIn("cannot prune Docker volumes: volume is in use", stderr.getvalue())
+
     def test_run_prune_falls_back_to_docker_for_root_owned_artifacts(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -1429,6 +1475,34 @@ class RunPruneTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(docker_calls[0][:7], ["docker", "run", "--rm", "--volume", f"{root.resolve()}:/workspace", "--entrypoint", "sh"])
         self.assertIn("/workspace/runs/old", docker_calls[0])
+
+    def test_run_prune_reports_artifact_delete_failure(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:test"}}}}),
+                encoding="utf-8",
+            )
+            (root / "runs").mkdir()
+            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
+
+            def fake_rmtree(path: Path) -> None:
+                if path == old:
+                    raise PermissionError("root-owned")
+                shutil.rmtree(path)
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(command, 1, "", "docker cleanup failed")
+
+            os.chdir(root)
+            try:
+                with patch("kura.cli.shutil.rmtree", side_effect=fake_rmtree), patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=False, docker_volumes=False, yes=True))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 1)
+        self.assertIn("cannot prune run artifacts: docker cleanup failed", stderr.getvalue())
 
 
 class RunPodLifecycleTests(unittest.TestCase):

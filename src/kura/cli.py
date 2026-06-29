@@ -428,7 +428,11 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         if args.yes:
             for target in targets:
                 if target.exists():
-                    _remove_tree(workspace, target)
+                    try:
+                        _remove_tree(workspace, target)
+                    except (OSError, ValueError) as exc:
+                        print(f"cannot prune run artifacts: {_safe_error(exc)}", file=sys.stderr)
+                        return 1
 
     docker_actions: dict[str, Any] = {"containers": [], "volumes": []}
     if getattr(args, "docker_containers", False):
@@ -442,7 +446,9 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
             if ids:
                 result = subprocess.run(["docker", "rm", *ids], text=True, capture_output=True, check=False)
                 if result.returncode:
-                    raise RuntimeError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker rm failed"))
+                    message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker rm failed")
+                    print(f"cannot prune Docker containers: {message}", file=sys.stderr)
+                    return 1
     if getattr(args, "docker_volumes", False):
         volumes = _kura_docker_volumes()
         docker_actions["volumes"] = [{"name": item.get("Name"), "driver": item.get("Driver")} for item in volumes]
@@ -451,7 +457,9 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
             if names:
                 result = subprocess.run(["docker", "volume", "rm", *names], text=True, capture_output=True, check=False)
                 if result.returncode:
-                    raise RuntimeError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker volume rm failed"))
+                    message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker volume rm failed")
+                    print(f"cannot prune Docker volumes: {message}", file=sys.stderr)
+                    return 1
 
     print(json.dumps({"dry_run": not args.yes, "outputs_only": args.outputs_only, "keep": args.keep, "states": sorted(states), "actions": actions, "docker_actions": docker_actions}, ensure_ascii=False, indent=2))
     return 0
