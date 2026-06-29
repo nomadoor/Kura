@@ -60,6 +60,7 @@ Use the focused project skills under `.claude/skills/` for details that should n
 - `kura-core`
 - `runpod-lifecycle`
 - `musubi-tuner-backend`
+- `musubi-adapter-smoke`
 - `ai-toolkit-backend`
 - `comfyui-render-workflow`
 - `monitor-tui`

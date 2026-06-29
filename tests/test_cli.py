@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.backends import _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -46,6 +46,7 @@ class InitCommandTests(unittest.TestCase):
         doctor_help = subprocess.run([*command, "doctor", "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(doctor_help.returncode, 0)
         self.assertIn("Check RunPod API, Pods, and Network Volumes", doctor_help.stdout)
+        self.assertIn("Smoke-test Musubi adapter scripts", doctor_help.stdout)
 
     def test_init_creates_required_files_and_is_idempotent(self) -> None:
         previous = Path.cwd()
@@ -205,6 +206,52 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(managed["containers"][0]["Names"], "kura-old")
             self.assertEqual(managed["stopped_containers"][0]["ID"], "abc")
             self.assertEqual(managed["volumes"][0]["Name"], "kura-cache")
+
+    def test_doctor_musubi_reports_adapter_script_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "musubi-tuner": {
+                                    "local": "kura/musubi-tuner:test",
+                                    "remote": "registry.example/kura/musubi-tuner:test",
+                                    "dockerfile": "docker/musubi-tuner/Dockerfile",
+                                    "context": ".",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["/usr/bin/docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
+                if command[:3] == ["/usr/bin/docker", "run", "--rm"] and "--entrypoint" in command:
+                    results = [
+                        {"adapter": adapter, "script": script, "exists": True, "help_returncode": 0}
+                        for adapter, scripts in MUSUBI_ADAPTER_SCRIPTS.items()
+                        for script in scripts
+                    ]
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"results": results}) + "\n", "")
+                raise AssertionError(command)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_musubi(argparse.Namespace(skip_help=False, no_gpu=False, timeout=30.0, script_timeout=5.0))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["checks"]["adapter_scripts_exist"])
+            self.assertTrue(payload["checks"]["adapter_help_smoke"])
+            self.assertIn({"adapter": "flux2", "script": "flux_2_train_network.py", "exists": True, "help_returncode": 0}, payload["diagnostics"]["scripts"])
 
 
 class MonitorCommandTests(unittest.TestCase):

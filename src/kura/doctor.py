@@ -16,6 +16,7 @@ from typing import Any
 
 import yaml
 
+from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
@@ -162,6 +163,138 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
     print(json.dumps({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
     return 0 if all(checks.values()) else 1
+
+
+def _musubi_probe_items() -> list[tuple[str, str]]:
+    return [
+        (adapter, script)
+        for adapter, scripts in MUSUBI_ADAPTER_SCRIPTS.items()
+        for script in scripts
+    ]
+
+
+def cmd_doctor_musubi(args: argparse.Namespace) -> int:
+    try:
+        workspace_root = _require_workspace()
+        image = _image_config("musubi-tuner")["local"]
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"musubi: configuration error: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    docker = shutil.which("docker")
+    checks: dict[str, Any] = {
+        "docker_command": bool(docker),
+        "local_image": False,
+        "adapter_scripts_exist": False,
+        "adapter_help_smoke": False if not args.skip_help else None,
+    }
+    diagnostics: dict[str, Any] = {
+        "workspace_root": str(workspace_root),
+        "image": image,
+        "script_root": "/opt/musubi-tuner/src/musubi_tuner",
+        "help_smoke": not args.skip_help,
+        "gpu": not args.no_gpu,
+        "script_timeout_seconds": args.script_timeout,
+    }
+    if not docker:
+        diagnosis = "Docker CLI was not found on PATH."
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        return 1
+    image_check = subprocess.run([docker, "image", "inspect", image], text=True, capture_output=True, check=False, timeout=30)
+    checks["local_image"] = image_check.returncode == 0
+    if not checks["local_image"]:
+        diagnostics["image_inspect_stderr"] = _redact_secret_text(image_check.stderr.strip())
+        diagnosis = "Configured Musubi local image is missing. Build it with: kura image build musubi-tuner"
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        return 1
+
+    probe_code = r"""
+import json
+import os
+import subprocess
+import sys
+
+root = "/opt/musubi-tuner/src/musubi_tuner"
+items = json.loads(sys.argv[1])
+do_help = sys.argv[2] == "1"
+script_timeout = float(sys.argv[3])
+results = []
+ok = True
+for adapter, script in items:
+    path = os.path.join(root, script)
+    item = {"adapter": adapter, "script": script, "exists": os.path.isfile(path)}
+    if not item["exists"]:
+        ok = False
+    elif do_help:
+        try:
+            proc = subprocess.run(
+                [sys.executable, path, "--help"],
+                cwd="/opt/musubi-tuner",
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=script_timeout,
+            )
+            item["help_returncode"] = proc.returncode
+            if proc.returncode != 0:
+                ok = False
+                item["help_output_tail"] = proc.stdout[-2000:]
+        except Exception as exc:
+            ok = False
+            item["help_error"] = str(exc)
+    results.append(item)
+print(json.dumps({"script_root": root, "results": results}))
+raise SystemExit(0 if ok else 1)
+""".strip()
+    command = [
+        docker,
+        "run",
+        "--rm",
+    ]
+    if not args.no_gpu:
+        command.extend(["--gpus", "all"])
+    command.extend([
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        probe_code,
+        json.dumps(_musubi_probe_items()),
+        "0" if args.skip_help else "1",
+        str(args.script_timeout),
+    ])
+    try:
+        probe = subprocess.run(command, text=True, capture_output=True, check=False, timeout=args.timeout)
+    except subprocess.TimeoutExpired as exc:
+        diagnostics["probe_error"] = f"timed out after {exc.timeout}s"
+        diagnosis = "Musubi adapter probe timed out; inspect the local image and try a larger --timeout."
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        return 1
+    diagnostics["probe_returncode"] = probe.returncode
+    if probe.stderr.strip():
+        diagnostics["probe_stderr"] = _redact_secret_text(probe.stderr.strip()[-4000:])
+    payload = None
+    for line in reversed(probe.stdout.splitlines()):
+        try:
+            payload = json.loads(line)
+            break
+        except json.JSONDecodeError:
+            continue
+    if isinstance(payload, dict):
+        results = payload.get("results")
+        if isinstance(results, list):
+            diagnostics["scripts"] = results
+            checks["adapter_scripts_exist"] = all(isinstance(item, dict) and item.get("exists") is True for item in results)
+            if not args.skip_help:
+                checks["adapter_help_smoke"] = all(isinstance(item, dict) and item.get("help_returncode") == 0 for item in results)
+    else:
+        diagnostics["probe_stdout_tail"] = _redact_secret_text(probe.stdout[-4000:])
+    if checks["adapter_scripts_exist"] and (args.skip_help or checks["adapter_help_smoke"]):
+        diagnosis = "Musubi adapter scripts are present in the configured image and the smoke check passed."
+    else:
+        diagnosis = "Musubi adapter smoke failed. The configured image/ref may not contain all Kura adapter scripts or their imports may not start."
+    print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    return 0 if checks["adapter_scripts_exist"] and (args.skip_help or checks["adapter_help_smoke"]) else 1
 
 
 def cmd_doctor_runpod(_: argparse.Namespace) -> int:

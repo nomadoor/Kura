@@ -11,6 +11,70 @@ from typing import Any
 import yaml
 
 
+MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
+    "flux2": (
+        "flux_2_train_network.py",
+        "flux_2_cache_latents.py",
+        "flux_2_cache_text_encoder_outputs.py",
+    ),
+    "wan": (
+        "wan_train_network.py",
+        "wan_cache_latents.py",
+        "wan_cache_text_encoder_outputs.py",
+    ),
+    "krea2": (
+        "krea2_train_network.py",
+        "krea2_cache_latents.py",
+        "krea2_cache_text_encoder_outputs.py",
+    ),
+    "qwen_image": (
+        "qwen_image_train_network.py",
+        "qwen_image_cache_latents.py",
+        "qwen_image_cache_text_encoder_outputs.py",
+    ),
+    "zimage": (
+        "zimage_train_network.py",
+        "zimage_cache_latents.py",
+        "zimage_cache_text_encoder_outputs.py",
+    ),
+    "flux_kontext": (
+        "flux_kontext_train_network.py",
+        "flux_kontext_cache_latents.py",
+        "flux_kontext_cache_text_encoder_outputs.py",
+    ),
+    "ideogram4": (
+        "ideogram4_train_network.py",
+        "ideogram4_cache_latents.py",
+        "ideogram4_cache_text_encoder_outputs.py",
+    ),
+    "hidream_o1": (
+        "hidream_o1_train_network.py",
+        "hidream_o1_cache_pixel.py",
+        "hidream_o1_cache_text_encoder_outputs.py",
+    ),
+    "hunyuan_video": (
+        "hv_train_network.py",
+        "cache_latents.py",
+        "cache_text_encoder_outputs.py",
+    ),
+    "hunyuan_video_1_5": (
+        "hv_1_5_train_network.py",
+        "hv_1_5_cache_latents.py",
+        "hv_1_5_cache_text_encoder_outputs.py",
+    ),
+    "framepack": (
+        "fpack_train_network.py",
+        "fpack_cache_latents.py",
+        "fpack_cache_text_encoder_outputs.py",
+    ),
+    "kandinsky5": (
+        "kandinsky5_train_network.py",
+        "kandinsky5_cache_text_encoder_outputs.py",
+        "kandinsky5_cache_latents.py",
+    ),
+}
+
+
 def _datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     datasets = run.get("datasets")
     if isinstance(datasets, list):

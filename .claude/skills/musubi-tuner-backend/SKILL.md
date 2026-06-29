@@ -65,6 +65,9 @@ fits one FLUX.2/Krea-class model can be invalid for another.
 - New architectures require both an upstream Musubi script and a Kura adapter
   that knows which train/cache scripts, model roles, arguments, network module,
   and validation rules to generate.
+- When adding or updating adapters, use the `musubi-adapter-smoke` skill. Command
+  generation is not enough; verify the configured Docker image with
+  `uv run kura doctor musubi`, and mark real training smoke separately.
 - For an upstream-supported architecture without a Kura adapter, use explicit
   `backend_overrides.musubi-tuner.command` as a temporary escape hatch.
 - Validate model roles by safetensors headers after adding explicit paths or

@@ -20,7 +20,7 @@ import yaml
 
 from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
-from kura.doctor import cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
+from kura.doctor import cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.init_templates import cmd_init
 from kura.notifications import notification_channels as _notification_channels
@@ -696,6 +696,12 @@ def main() -> None:
     doctor_sub = doctor.add_subparsers(dest="doctor_command", required=True)
     doctor_docker = doctor_sub.add_parser("docker", help="Check Docker / GPU / cache readiness")
     doctor_docker.set_defaults(func=cmd_doctor_docker)
+    doctor_musubi = doctor_sub.add_parser("musubi", help="Smoke-test Musubi adapter scripts in the configured image")
+    doctor_musubi.add_argument("--skip-help", action="store_true", help="Only check script existence; skip python <script> --help smoke")
+    doctor_musubi.add_argument("--no-gpu", action="store_true", help="Do not pass --gpus all to the Docker smoke container")
+    doctor_musubi.add_argument("--timeout", type=float, default=300.0, help="Overall Docker probe timeout in seconds")
+    doctor_musubi.add_argument("--script-timeout", type=float, default=25.0, help="Per-script --help timeout in seconds")
+    doctor_musubi.set_defaults(func=cmd_doctor_musubi)
     doctor_runpod = doctor_sub.add_parser("runpod", help="Check RunPod API, Pods, and Network Volumes")
     doctor_runpod.set_defaults(func=cmd_doctor_runpod)
     doctor_comfyui = doctor_sub.add_parser("comfyui", help="Check local ComfyUI endpoint and LoRA staging config")
