@@ -14,6 +14,12 @@ Musubi Tuner and Kura's Musubi backend are not the same layer.
   that adapter. If this has not been done, call the adapter experimental or
   unverified rather than simply "done."
 
+As of 2026-06-30, all adapters listed below passed Docker launch smoke on
+`kura/musubi-tuner:dev`: Kura compiled the run, started a Docker container, and
+the generated command reached the adapter's Musubi training script. That smoke
+used dummy model paths and intentionally failed at model loading, so it is not a
+real one-step training proof.
+
 If an architecture is not listed as built-in below, do not say that Musubi Tuner
 does not support it. Say that Kura does not yet have a built-in Musubi command
 generator for it.
