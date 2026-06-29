@@ -316,9 +316,12 @@ def _read_docker_state_overlay(status: dict[str, Any], realization: dict[str, An
         identity = _string(container.get("id") or container.get("name"))
     if not identity:
         return {}
+    docker = shutil.which("docker")
+    if not docker:
+        return {}
     try:
-        result = subprocess.run(["docker", "inspect", "--format", "{{json .State}}", identity], text=True, capture_output=True, check=False)
-    except FileNotFoundError:
+        result = subprocess.run([docker, "inspect", "--format", "{{json .State}}", identity], text=True, capture_output=True, check=False, timeout=2)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return {}
     if result.returncode:
         text = (result.stderr + result.stdout).lower()
