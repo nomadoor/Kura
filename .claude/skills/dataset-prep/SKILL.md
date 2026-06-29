@@ -27,3 +27,10 @@ Use this skill for dataset operations.
 uv run kura dataset validate datasets/<id>
 uv run kura run compile <run-id>
 ```
+
+Minimal `items.jsonl` rows need `id` and `path`; include `caption` and `hash`
+when available:
+
+```json
+{"id":"one","path":"images/one.png","caption":"trigger word, short caption","hash":"sha256:..."}
+```

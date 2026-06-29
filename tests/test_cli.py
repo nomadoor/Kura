@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
+from kura.backends import _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -565,6 +565,34 @@ class RunPodPullSelectionTests(unittest.TestCase):
         ]
         selected = _select_remote_outputs(items, since_step=1000)
         self.assertEqual([item["name"] for item in selected], ["model-step00001000.safetensors", "model-step00001500.safetensors"])
+
+
+class AiToolkitBackendTests(unittest.TestCase):
+    def _run(self) -> dict[str, object]:
+        return {
+            "id": "ai-toolkit-example",
+            "type": "train",
+            "backend": {"name": "ai-toolkit", "adapter_version": 1},
+            "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
+            "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
+            "params": {"rank": 4, "alpha": 4, "lr": 1.0e-4, "steps": 1, "batch_size": 1, "resolution": 512, "seed": 42},
+            "backend_overrides": {},
+        }
+
+    def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            compile_ai_toolkit(self._run(), destination)
+            config = yaml.safe_load((destination.with_suffix(".yaml")).read_text(encoding="utf-8"))
+        command = command_ai_toolkit(self._run())
+
+        self.assertEqual(config["config"]["name"], "ai-toolkit-example")
+        process = config["config"]["process"][0]
+        self.assertEqual(process["model"]["name_or_path"], "black-forest-labs/FLUX.2-klein-base-4B")
+        self.assertEqual(process["datasets"][0]["folder_path"], "/workspace/datasets/tiny/images")
+        self.assertEqual(process["network"]["linear"], 4)
+        self.assertEqual(process["train"]["steps"], 1)
+        self.assertEqual(command, {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "/workspace/runs/ai-toolkit-example/resolved/ai-toolkit.yaml"], "env": {}})
 
 
 class MusubiBackendTests(unittest.TestCase):

@@ -170,6 +170,7 @@ def cmd_init(_: argparse.Namespace) -> int:
     print(f"initialized workspace: {root}")
     print("next:")
     print("  1. Put a dataset under datasets/<id>/ with dataset.yaml and items.jsonl.")
-    print("  2. Tell your AI agent what LoRA/render run you want and which model to use.")
-    print("  3. Watch progress with: uv run kura monitor")
+    print("  2. Check it with: uv run kura dataset validate datasets/<id>")
+    print("  3. Tell your AI agent what LoRA/render run you want and which model to use.")
+    print("  4. Watch progress with: uv run kura monitor")
     return 0
