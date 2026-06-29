@@ -22,6 +22,9 @@ uv run python scripts/check_runpod_safety.py
 ```
 
 Also run targeted smoke commands when the change touches Docker, RunPod, render, or TUI behavior.
+Before publishing, inspect ignored files with `git status --ignored --short`
+and confirm datasets, runs, downloads, caches, checkpoints, and prompt/workflow
+experiments are not about to be committed.
 
 ## Before final handoff
 

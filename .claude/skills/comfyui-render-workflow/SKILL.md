@@ -34,6 +34,8 @@ Default flow when the user asks to test-generate with a Kura-trained LoRA:
 3. If it is not visible and `workspace.yaml` has no `comfyui.lora_dir`, ask the
    user for ComfyUI's `models/loras` directory and record it in local
    `workspace.yaml`.
+   Ask plainly: "Where is your ComfyUI `models/loras` directory?" Do not guess
+   or edit ComfyUI's own config.
    After changing `comfyui.lora_dir`, run `kura render compile <run-id>` again
    before launch; render compile freezes the ComfyUI staging settings into
    `resolved/manifest.lock.yaml`.

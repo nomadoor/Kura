@@ -59,6 +59,13 @@ choice in `run.yaml` under `backend_overrides.musubi-tuner` before recompiling.
 - Validate model roles by safetensors headers after adding explicit paths or
   downloads.
 
+## Backend selection notes
+
+- Prefer Musubi when the user asks for an architecture or training mode that is
+  better supported there, or when explicit model bundle control is important.
+- Do not silently switch from a requested AI-Toolkit run to Musubi. Treat backend
+  choice as a proposal, then record it in `run.yaml`.
+
 ## Dataset policy
 
 - `datasets` is an array.

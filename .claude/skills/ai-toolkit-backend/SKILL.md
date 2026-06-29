@@ -32,6 +32,13 @@ choice in `run.yaml` before recompiling.
 3. Reduce resolution or rank only after explaining that this changes the
    training recipe itself.
 
+## Backend selection notes
+
+- Prefer AI-Toolkit when the user asks for a model/workflow it supports well and
+  wants the backend to resolve companion weights automatically.
+- Do not silently switch from a requested Musubi run to AI-Toolkit. Treat backend
+  choice as a proposal, then record it in `run.yaml`.
+
 ## Useful commands
 
 ```sh
