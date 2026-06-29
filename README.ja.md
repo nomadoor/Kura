@@ -88,6 +88,12 @@ uv run kura monitor            # 一覧
 uv run kura run watch <run-id> # 1本を詳しく
 ```
 
+## ComfyUI で画像生成（任意）
+
+ComfyUI を起動し、`workflows/` に **API形式**の workflow を置いておけば、学習した LoRA を使った画像生成を AI にやってもらえます。テスト生成、step別・strength別の比較画像づくり、promptset を使ったまとめ生成など、用意した workflow 次第で自由に使えます。
+
+> API形式の workflow は ComfyUI の「File → Export (API)」で書き出します（通常のUIエクスポートは `/prompt` が受け付けません）。やり方は [ComfyUI を AIエージェントから使う](https://comfyui.nomadoor.net/ja/data-utilities/ai-agent-api/) を参照してください。
+
 ## RunPod の安全設計
 
 RunPod 実行は**使い捨て Pod**が基本です。ローカルで必要な入力だけ送り、学習し、出力を回収したら**自動で止まります**。課金が垂れ流しにならないようになっています。

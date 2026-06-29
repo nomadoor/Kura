@@ -88,6 +88,12 @@ uv run kura monitor            # list
 uv run kura run watch <run-id> # one run in detail
 ```
 
+## Image generation with ComfyUI (optional)
+
+Start ComfyUI and drop an **API-format** workflow into `workflows/`, and the agent can generate images with your trained LoRA — test renders, step/strength comparison grids, promptset batches, and so on, depending on the workflow you provide.
+
+> Export the workflow with ComfyUI's "File → Export (API)" (the regular UI export is not accepted by `/prompt`). See [Using ComfyUI from an AI agent](https://comfyui.nomadoor.net/en/data-utilities/ai-agent-api/) for details.
+
 ## RunPod safety
 
 RunPod runs use **disposable Pods**. Kura uploads only the inputs it needs, trains, downloads the outputs, and then **stops the Pod automatically**, so you don't leave GPUs billing in the background.
