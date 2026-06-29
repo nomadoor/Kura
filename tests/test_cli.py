@@ -595,6 +595,13 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(process["train"]["steps"], 1)
         self.assertEqual(command, {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "/workspace/runs/ai-toolkit-example/resolved/ai-toolkit.yaml"], "env": {}})
 
+    def test_compile_rejects_non_mapping_native_config_override(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {"ai-toolkit": {"config": ["not", "a", "mapping"]}}
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "backend_overrides.ai-toolkit.config"):
+                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+
 
 class MusubiBackendTests(unittest.TestCase):
     def _run(self) -> dict[str, object]:

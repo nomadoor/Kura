@@ -54,6 +54,8 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
         },
     }
     process = config["config"]["process"][0]
+    if "config" in override and not isinstance(native, dict):
+        raise ValueError("backend_overrides.ai-toolkit.config must be a mapping.")
     if isinstance(native, dict):
         for section, values in native.items():
             if section in process and isinstance(process[section], dict) and isinstance(values, dict):
