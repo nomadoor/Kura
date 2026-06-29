@@ -234,10 +234,11 @@ def _comfyui_lora_count(object_info: dict[str, Any]) -> int | None:
 
 def _redact_url_userinfo(value: str) -> str:
     parsed = urllib.parse.urlparse(value)
+    replacement = {"query": "", "fragment": ""}
     if "@" not in parsed.netloc:
-        return value
+        return urllib.parse.urlunparse(parsed._replace(**replacement))
     host = parsed.netloc.rsplit("@", 1)[1]
-    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}"))
+    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}", **replacement))
 
 
 def cmd_doctor_comfyui(_: argparse.Namespace) -> int:

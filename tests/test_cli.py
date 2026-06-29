@@ -2308,7 +2308,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_doctor_comfyui_redacts_endpoint_userinfo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("comfyui: {endpoint: http://user:pa55@example.invalid:8188}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: 'http://user:pa55@example.invalid:8188?debug=abc123#frag123'}\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -2320,6 +2320,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             payload = json.loads(payload_text)
             self.assertEqual(code, 1)
             self.assertNotIn("pa55", payload_text)
+            self.assertNotIn("abc123", payload_text)
+            self.assertNotIn("frag123", payload_text)
             self.assertEqual(payload["diagnostics"]["endpoint"], "http://***@example.invalid:8188")
 
     def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
