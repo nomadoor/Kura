@@ -87,6 +87,13 @@ clearly too large for a GPU class, skip that class instead of paying to discover
 an obvious OOM. Trying a borderline cheaper GPU is acceptable only when the plan
 states why it might fit and what signal will decide the next retry.
 
+Prefer local Docker before RunPod when the model and settings plausibly fit.
+Local Docker reuses the workspace HF cache and does not bill during model
+downloads; RunPod disposable Pods usually redownload large models while the GPU
+is already rented. If a local smoke would require downloading very large models,
+state where that cache will live and whether it should be removed after the
+test.
+
 Suggested smoke GPU choices:
 
 - Small image adapters or already-cached local tests: local Docker if the model
