@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import _safetensors_validator_code, command_musubi_tuner, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.tui import KuraMonitorApp, _compact_path
@@ -125,6 +125,63 @@ class ImageCommandTests(unittest.TestCase):
             build = calls[0]
             self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
             self.assertEqual(build[-1], str(root))
+
+
+class DoctorDockerTests(unittest.TestCase):
+    def test_doctor_docker_reports_kura_managed_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {
+                                    "local": "kura/ai-toolkit:test",
+                                    "remote": "registry.example/kura/ai-toolkit:test",
+                                    "dockerfile": "docker/ai-toolkit/Dockerfile",
+                                    "context": ".",
+                                }
+                            },
+                            "mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}],
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                text = ""
+                if command[:2] == ["docker", "info"] and "--format" not in command:
+                    text = "ok"
+                elif command[:3] == ["docker", "info", "--format"]:
+                    text = "/var/lib/docker\n"
+                elif command[:2] == ["docker", "version"]:
+                    text = "Docker version\n"
+                elif command[:3] == ["docker", "system", "df"]:
+                    text = '{"Type":"Images","TotalCount":"1"}\n'
+                elif command[:2] == ["docker", "ps"]:
+                    text = '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n'
+                elif command[:3] == ["docker", "volume", "ls"]:
+                    text = '{"Name":"kura-cache","Driver":"local"}\n'
+                elif command[:3] == ["docker", "image", "inspect"]:
+                    text = "[]\n"
+                elif command[:2] == ["docker", "run"] and "/opt/kura-runtime.json" in command:
+                    text = "{}\n"
+                return subprocess.CompletedProcess(command, 0, text, "")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            managed = payload["docker_storage"]["kura_managed"]
+            self.assertEqual(managed["containers"][0]["Names"], "kura-old")
+            self.assertEqual(managed["stopped_containers"][0]["ID"], "abc")
+            self.assertEqual(managed["volumes"][0]["Name"], "kura-cache")
 
 
 class MonitorCommandTests(unittest.TestCase):

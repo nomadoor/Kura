@@ -44,6 +44,54 @@ def _safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
 
 
+def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
+    result = _docker_run(command, capture=True)
+    if result.returncode != 0:
+        return []
+    items: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            items.append(value)
+    return items
+
+
+def _docker_managed_resources() -> dict[str, Any]:
+    containers = _docker_json_lines(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            "label=io.kura.managed=true",
+            "--format",
+            "{{json .}}",
+        ]
+    )
+    volumes = _docker_json_lines(
+        [
+            "docker",
+            "volume",
+            "ls",
+            "--filter",
+            "label=io.kura.managed=true",
+            "--format",
+            "{{json .}}",
+        ]
+    )
+    stopped = [
+        item
+        for item in containers
+        if not str(item.get("State") or item.get("Status") or "").lower().startswith(("running", "up"))
+    ]
+    return {"containers": containers, "stopped_containers": stopped, "volumes": volumes}
+
+
 def cmd_doctor_docker(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
@@ -78,6 +126,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             usage = _docker_run(["docker", "system", "df", "--format", "{{json .}}"], capture=True)
             if usage.returncode == 0:
                 docker_storage["usage"] = [json.loads(line) for line in usage.stdout.splitlines() if line.strip()]
+            docker_storage["kura_managed"] = _docker_managed_resources()
             checks["local_image"] = _docker_run(["docker", "image", "inspect", image["local"]], capture=True).returncode == 0
             if not checks["local_image"]:
                 diagnosis = "Docker daemon is reachable but local image is missing. Run: kura image build ai-toolkit"
