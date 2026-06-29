@@ -539,7 +539,7 @@ class RenderNotificationTests(unittest.TestCase):
             promptset_dir = root / "promptsets"
             run_dir = root / "runs" / "render-1"
             output_run = root / "runs" / "train-1" / "outputs"
-            for path in (workflow_dir, promptset_dir, run_dir / "logs", run_dir / "resolved", run_dir / "samples", output_run):
+            for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
                 path.mkdir(parents=True)
             (root / "workspace.yaml").write_text(
                 f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
@@ -574,8 +574,6 @@ class RenderNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
-            (run_dir / "logs" / "events.jsonl").touch()
-            (run_dir / "samples" / "images.jsonl").touch()
             compile_render(root, run_dir)
             manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(set(manifest["comfyui"]), {"lora_dir", "lora_stage_subdir", "lora_stage_cleanup"})

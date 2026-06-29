@@ -313,8 +313,10 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
     output_dir = run_dir / frozen.get("render", {}).get("output_dir", "samples/images")
     output_dir.mkdir(parents=True, exist_ok=True)
     images_log = run_dir / "samples" / "images.jsonl"
+    images_log.parent.mkdir(parents=True, exist_ok=True)
     client = ComfyUIClient(frozen["generator"]["endpoint"], int(frozen.get("render", {}).get("timeout_sec", 600)))
     stdout_log = run_dir / "logs" / "stdout.log"
+    stdout_log.parent.mkdir(parents=True, exist_ok=True)
     stdout_log.write_text(f"render endpoint: {frozen['generator']['endpoint']}\n", encoding="utf-8")
     status(run_dir, state="running", started=now(), ended=None, exit_code=None)
     try:
@@ -330,7 +332,9 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
             for index, image in enumerate(client.wait(prompt_id)):
                 suffix = Path(image.get("filename", "image.png")).suffix or ".png"
                 relative = f"samples/images/{item['id']}_seed{seed}_{index}{suffix}"
-                (run_dir / relative).write_bytes(client.download(image))
+                image_path = run_dir / relative
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                image_path.write_bytes(client.download(image))
                 record = {"file": relative, "prompt_id": item["id"], "prompt": item["prompt"], "negative_prompt": item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
