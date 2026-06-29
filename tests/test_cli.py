@@ -392,6 +392,11 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(captured["priority"], "4")
         self.assertEqual(captured["timeout"], 20)
 
+    def test_ntfy_notification_rejects_non_http_server(self) -> None:
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic", "KURA_NTFY_SERVER": "file:///tmp/ntfy", "KURA_NTFY_TOKEN": "secret"}, clear=False), patch("kura.notifications.urllib.request.urlopen") as urlopen:
+            _notify("ntfy", subject="finished", body="run done")
+        urlopen.assert_not_called()
+
     def test_runpod_remote_notify_secrets_are_temp_env_only(self) -> None:
         env = {
             "KURA_NTFY_TOPIC": "kura-topic",

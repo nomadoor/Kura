@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -77,6 +78,9 @@ def send_ntfy_notification(subject: str, body: str) -> None:
     if not topic:
         raise ValueError("ntfy notification requires KURA_NTFY_TOPIC")
     server = os.environ.get("KURA_NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+    parsed = urllib.parse.urlparse(server)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("KURA_NTFY_SERVER must be an absolute http:// or https:// URL")
     token = os.environ.get("KURA_NTFY_TOKEN")
     priority = os.environ.get("KURA_NTFY_PRIORITY", "4")
     url = f"{server}/{topic.lstrip('/')}"
