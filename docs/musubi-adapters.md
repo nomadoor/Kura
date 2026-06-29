@@ -35,7 +35,7 @@ generator for it.
 | FLUX.2 / FLUX.2 klein | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | verified in prior local/RunPod runs | `architecture: flux2` or `flux_2` |
 | Wan | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: wan` |
 | Krea 2 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py krea2`) | `architecture: krea2` or `krea_2` |
-| Qwen-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: qwen_image` |
+| Qwen-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | passed RunPod A40 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py qwen_image --executor runpod --gpu "NVIDIA A40"`); A5000 reached training start but was SIGKILLed | `architecture: qwen_image` |
 | Z-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: zimage` or `z_image` |
 | FLUX.1 Kontext | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: flux_kontext` or `flux1_kontext` |
 | Ideogram 4 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: ideogram4` or `ideogram_4` |

@@ -60,6 +60,16 @@ adapter as experimental or unverified in `docs/musubi-adapters.md`.
 
    Add new architecture specs only after checking the current Musubi docs for
    required model files, low-VRAM flags, and dataset shape.
+   For RunPod-only or heavy architectures, pass an explicit GPU selector instead
+   of relying on workspace defaults, for example:
+
+   ```sh
+   uv run python scripts/musubi_real_smoke.py qwen_image --executor runpod --gpu "NVIDIA A40"
+   ```
+
+   A real smoke must reach one optimizer step and download or otherwise verify
+   the produced LoRA outputs. Merely downloading models or reaching the train
+   script is not enough.
 
 ## Rules
 
