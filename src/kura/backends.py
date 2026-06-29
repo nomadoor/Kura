@@ -516,18 +516,32 @@ def tree_snapshot(directory):
     return total, newest, count
 
 
-def remove_incomplete_files(directory):
+def repo_cache_dirs(cache_dir, item):
+    repo_type = item.get("repo_type") or "model"
+    prefix = {"model": "models", "dataset": "datasets", "space": "spaces"}.get(repo_type, f"{repo_type}s")
+    repo_dir = f"{prefix}--{item['repo_id'].replace('/', '--')}"
+    hub_dir = os.path.join(cache_dir, "hub")
+    return [
+        os.path.join(hub_dir, repo_dir),
+        os.path.join(hub_dir, ".locks", repo_dir),
+    ]
+
+
+def remove_incomplete_files(directories):
     removed = 0
-    for root, _, files in os.walk(directory):
-        for name in files:
-            if ".incomplete" not in name:
-                continue
-            path = os.path.join(root, name)
-            try:
-                os.remove(path)
-            except OSError:
-                continue
-            removed += 1
+    for directory in directories:
+        if not os.path.isdir(directory):
+            continue
+        for root, _, files in os.walk(directory):
+            for name in files:
+                if ".incomplete" not in name:
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    os.remove(path)
+                except OSError:
+                    continue
+                removed += 1
     return removed
 
 
@@ -556,7 +570,7 @@ def run_one(item):
             if idle >= NO_PROGRESS_SEC:
                 process.kill()
                 process.wait(timeout=30)
-                removed = remove_incomplete_files(cache_dir)
+                removed = remove_incomplete_files(repo_cache_dirs(cache_dir, item))
                 print(f"[kura] hf download stalled {label}; removed {removed} incomplete file(s); retrying", flush=True)
                 last_total, last_mtime, _ = tree_snapshot(cache_dir)
                 break

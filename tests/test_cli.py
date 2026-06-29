@@ -925,6 +925,8 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertNotIn("local_dir", script)
         self.assertNotIn("/workspace/cache/hf-models/musubi", script)
         self.assertIn("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", script)
+        self.assertIn("repo_cache_dirs(cache_dir, item)", script)
+        self.assertNotIn("remove_incomplete_files(cache_dir)", script)
         self.assertIn("removed {removed} incomplete", script)
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
         self.assertIn("/workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
