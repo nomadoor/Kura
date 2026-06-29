@@ -16,6 +16,15 @@ Training runs in Docker (locally) or on RunPod (remotely), and everything — se
 
 If you keep ComfyUI running, you can also test-generate with the LoRA you trained using your chosen workflow.
 
+## Training backends
+
+Kura currently works with:
+
+- [AI-Toolkit](https://github.com/ostris/ai-toolkit)
+- [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner)
+
+Kura does not replace these projects; it prepares files, launches containers, monitors runs, and keeps the results reproducible.
+
 ## Getting started
 
 ### What you need

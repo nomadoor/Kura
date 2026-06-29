@@ -16,6 +16,15 @@ Kura は「学習ソフト」そのものではありません。AI-Toolkit や 
 
 ComfyUIを起動しておけば、作成したLoRAと設定したworkflowを使いテスト生成なども可能です。
 
+## 接続する学習バックエンド
+
+Kura は現在、次の学習ツールを扱います。
+
+- [AI-Toolkit](https://github.com/ostris/ai-toolkit)
+- [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner)
+
+Kura はこれらの代替ではありません。設定ファイルを作り、コンテナで起動し、進捗を見て、結果を再現できる形で残すための管理レイヤーです。
+
 ## はじめに
 
 ### 必要なもの
