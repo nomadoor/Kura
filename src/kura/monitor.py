@@ -22,6 +22,10 @@ TRAIN_STDOUT_PROGRESS_RE = re.compile(
     r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)",
     re.IGNORECASE,
 )
+HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
+HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
+KURA_STEP_RE = re.compile(r"\[kura\]\s+musubi step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
+KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+downloaded\s+(?P<key>\S+)\s+->", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,7 @@ class RunSummary:
     datasets: tuple[RunDataset, ...] = ()
     executor_info: ExecutorInfo = field(default_factory=ExecutorInfo)
     is_stale: bool = False
+    activity: str | None = None
 
 
 def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: float = 90.0) -> list[RunSummary]:
@@ -255,6 +260,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     losses = tuple(_read_losses_from_candidates(metrics_paths, limit=loss_tail))
     run_type = _string(config.get("type") or run.get("type"))
     stdout_progress, stdout_losses = _read_training_stdout_from_candidates(stdout_paths, loss_tail=loss_tail)
+    stdout_activity = _read_activity_from_stdout_candidates(stdout_paths)
     if not losses and stdout_losses:
         losses = tuple(stdout_losses)
     progress = _progress(status, config, stdout_progress=stdout_progress)
@@ -294,6 +300,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         datasets=tuple(_datasets(workspace, config or run)),
         executor_info=_executor_info(executor, config, status, realization, run_dir),
         is_stale=bool(state == "running" and last_updated and (datetime.now().astimezone() - last_updated).total_seconds() > stale_after),
+        activity=stdout_activity,
     )
 
 
@@ -571,6 +578,98 @@ def _read_training_stdout_from_candidates(paths: Iterable[Path], *, loss_tail: i
     return None, []
 
 
+def _read_activity_from_stdout_candidates(paths: Iterable[Path]) -> str | None:
+    for path in paths:
+        activity = _read_activity_from_stdout(path)
+        if activity:
+            return activity
+    return None
+
+
+def _read_activity_from_stdout(path: Path) -> str | None:
+    try:
+        text = _read_text_tail(path, max_bytes=64 * 1024)
+    except OSError:
+        return None
+    for raw_line in reversed(text.replace("\r", "\n").splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
+        activity = _activity_from_stdout_line(line)
+        if activity:
+            return activity
+    return None
+
+
+def _activity_from_stdout_line(line: str) -> str | None:
+    stalled = HF_DOWNLOAD_STALLED_RE.search(line)
+    if stalled:
+        return f"download stalled · {_download_label(stalled.group('label'))}"
+    match = HF_DOWNLOAD_RE.search(line)
+    if match:
+        kind = match.group("kind").lower()
+        label = _download_label(match.group("label"))
+        rest = match.group("rest")
+        bytes_value = _int_from_pattern(rest, r"\bbytes=(\d+)")
+        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None else ""
+        if kind == "start":
+            attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
+            return f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
+        if kind == "progress":
+            return f"downloading {label}{suffix}"
+        idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
+        return f"download idle {idle}s · {label}{suffix}" if idle is not None else f"download idle · {label}{suffix}"
+    downloaded = KURA_DOWNLOADED_RE.search(line)
+    if downloaded:
+        return f"downloaded {downloaded.group('key')}"
+    step = KURA_STEP_RE.search(line)
+    if step:
+        name = step.group("name").strip()
+        if "hf_hub_download" in name:
+            label = "model download"
+        elif "cache_latents" in name:
+            label = "caching latents"
+        elif "cache_text_encoder" in name or "text_encoder" in name:
+            label = "caching text embeddings"
+        elif "accelerate" in name or "train" in name:
+            label = "training"
+        else:
+            label = name
+        return f"{label} · step {step.group('step')}/{step.group('total')}"
+    return None
+
+
+def _download_label(label: str) -> str:
+    key, _, filename = label.strip().partition(":")
+    if not filename:
+        return key
+    return f"{key} {filename}"
+
+
+def _int_from_pattern(text: str, pattern: str) -> int | None:
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _match_text(text: str, pattern: str) -> str | None:
+    match = re.search(pattern, text)
+    return match.group(1).replace(" ", "") if match else None
+
+
+def _format_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024 or unit == "TB":
+            return f"{amount:.0f}{unit}" if unit == "B" else f"{amount:.1f}{unit}"
+        amount /= 1024
+    return f"{value}B"
+
+
 def _executor(run_type: str | None, config: dict[str, Any], status: dict[str, Any], realization: dict[str, Any]) -> str | None:
     if isinstance(realization.get("executor"), str):
         return realization["executor"]
@@ -747,7 +846,11 @@ def _format_progress_cell(summary: RunSummary, *, active: bool) -> Any:
     from rich.text import Text
 
     text = _format_progress(summary.progress)
+    if text == "-" and active and summary.activity:
+        return Text(summary.activity, style="dim")
     if not active or summary.progress.total in (None, 0):
+        if active and summary.activity and summary.progress.step in (None, 0):
+            return Text(summary.activity, style="dim")
         return Text(text)
     step = summary.progress.step or 0
     total = max(summary.progress.total or 0, 1)

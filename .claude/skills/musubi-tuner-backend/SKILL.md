@@ -22,6 +22,14 @@ Use this skill for `backend.name: musubi-tuner` work.
 - Treat these as explicit execution constraints: `blocks_to_swap`, H2D swap, `gradient_checkpointing`, `fp8_base`, `fp8_scaled`.
 - If an OOM retry changes these, make it visible in run intent or a documented retry plan.
 - Treat Musubi `batch_size` as GPU micro-batch. Use explicit gradient accumulation when preserving effective batch.
+- When proposing a run, separate quality-bearing choices from execution
+  accommodations. Dataset size, resolution, learning rate, rank/alpha, batch,
+  and effective batch define the training recipe. Precision, checkpointing,
+  offload/swap, and GPU class define whether and how fast that recipe fits.
+- Prefer preserving the recipe first. If memory pressure requires an
+  accommodation, explain the trade-off before launch: smaller micro-batch or
+  gradient accumulation changes throughput; offload/swap usually saves VRAM at
+  the cost of time; lower precision can affect stability and compatibility.
 
 ## Unknown model policy
 

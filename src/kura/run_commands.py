@@ -964,6 +964,14 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 remote_image = default_image[image_name]
             if image:
                 remote_image = image
+            compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
+            gpu_override = compute.get("gpu") if isinstance(compute, dict) else None
+            if isinstance(gpu_override, str) and gpu_override and gpu_override.lower() not in {"true", "false", "gpu", "cpu"}:
+                runpod_config["gpu_type_ids"] = [gpu_override]
+                runpod_config["gpu_type_priority"] = "custom"
+            elif isinstance(gpu_override, list) and all(isinstance(item, str) and item for item in gpu_override):
+                runpod_config["gpu_type_ids"] = list(gpu_override)
+                runpod_config["gpu_type_priority"] = "custom"
             launch_runpod(run_dir=run_dir, spec=remote_spec, image=remote_image, config=runpod_config, dry_run=dry_run)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)

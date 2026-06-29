@@ -14,6 +14,10 @@ Use this skill for AI-Toolkit-specific backend and image work.
 - Keep Hugging Face cache paths configurable through ignored local workspace config.
 - Do not bake tokens or model weights into images.
 - Treat tiny 1-5 step runs as infrastructure smoke tests, not training recipes.
+- Treat resource workarounds as visible execution accommodations. Preserve the
+  requested training recipe when possible; if memory pressure requires smaller
+  micro-batch, accumulation, lower precision, or low-VRAM options, explain the
+  time/quality/cost trade-off before launch.
 
 ## Useful commands
 

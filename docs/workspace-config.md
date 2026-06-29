@@ -59,17 +59,20 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
 | `runpod.api_key_env` | Environment variable that holds the RunPod API key | `RUNPOD_API_KEY` |
 | `runpod.storage_mode` | Remote staging mode | `upload` |
-| `runpod.gpu_type_ids` | Candidate RunPod GPU type IDs | `["NVIDIA A40"]` |
+| `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |
 | `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_type` / `runpod.cloud_types` | RunPod cloud preference; `ANY` tries community then secure | `ANY` |
-| `runpod.gpu_type_priority` | RunPod GPU selection priority | `availability` |
+| `runpod.gpu_type_priority` | RunPod GPU selection priority | `custom` |
 | `runpod.interruptible` | Whether to allow interruptible Pods | `false` |
 
 `--hold-for` and `--max-lease` are not `workspace.yaml` keys. They are
 `kura run remote` flags; see [commands.md](commands.md).
+
+If a run needs a specific GPU, set `compute.gpu` in that run. Kura will use that
+GPU before the workspace-level candidates.
 
 ## Useful checks
 

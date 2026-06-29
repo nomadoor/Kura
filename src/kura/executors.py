@@ -456,6 +456,12 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
+    """Return ordered GPU attempts for deterministic fallback."""
+
+    return [[gpu_type_id] for gpu_type_id in gpu_type_ids]
+
+
 def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
     object_store = config.get("object_store")
     if not isinstance(object_store, dict):
@@ -636,7 +642,7 @@ sleep infinity
         workspace_contract = "Container disk only; caller must ensure inputs exist in the container workspace"
     request_body = {
         "name": f"kura-{run_dir.name}-{realization_id}",
-        "gpuTypeIds": settings["gpu_type_ids"], "gpuCount": settings["gpu_count"],
+        "gpuCount": settings["gpu_count"],
         "containerDiskInGb": settings["container_disk_gb"],
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"], "env": runtime_env,
@@ -661,6 +667,8 @@ sleep infinity
         request_body["ports"] = settings["ports"]
     safe_request = dict(request_body)
     safe_request["env"] = _safe_env(runtime_env)
+    safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
+    safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
     safe_request["cloudTypeCandidates"] = settings["cloud_types"]
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
@@ -671,15 +679,19 @@ sleep infinity
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
-    for cloud_type in settings["cloud_types"]:
-        attempt_request = dict(request_body)
-        attempt_request["cloudType"] = cloud_type
-        try:
-            pod = _runpod_request("POST", "/pods", api_key, attempt_request)
-            used_request = attempt_request
+    for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]):
+        for cloud_type in settings["cloud_types"]:
+            attempt_request = dict(request_body)
+            attempt_request["gpuTypeIds"] = gpu_type_ids
+            attempt_request["cloudType"] = cloud_type
+            try:
+                pod = _runpod_request("POST", "/pods", api_key, attempt_request)
+                used_request = attempt_request
+                break
+            except ValueError as exc:
+                launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
+        if pod is not None:
             break
-        except ValueError as exc:
-            launch_errors.append({"cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
     if pod is None or used_request is None:
         failed_at = _now()
         realization_path = run_dir / "realizations" / f"{realization_id}.json"
@@ -692,7 +704,7 @@ sleep infinity
             "container_cwd": spec["cwd"], "backend_command": spec["argv"],
             "logs_path": log_path,
             "workspace_contract": workspace_contract,
-            "error": "; ".join(f"{item['cloud_type']}: {item['error']}" for item in launch_errors),
+            "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
             "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
             "kura_version": __version__,
         }

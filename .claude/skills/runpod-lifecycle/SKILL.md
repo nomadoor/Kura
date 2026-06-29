@@ -28,6 +28,9 @@ stop Pod
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.
 - `runpod.storage_mode: upload`: no Network Volume by default.
+- GPU candidates default to `NVIDIA RTX A5000` then `NVIDIA A40` with custom priority.
+- If a run explicitly sets `compute.gpu`, treat it as part of the user's run
+  intent and use it before workspace-level candidates.
 
 ## Non-negotiables
 
@@ -37,6 +40,10 @@ stop Pod
 - If review hold is interrupted, stop the Pod.
 - `max-lease` is a billing safety fuse, not output preservation. Do not set it shorter than expected training plus review unless loss of container-disk outputs is acceptable.
 - Do not put `HF_TOKEN`, RunPod keys, ntfy tokens, or object-store credentials in Pod create environment.
+- Treat compute choice as a constrained resource plan, not a convenience
+  default. Start with the smallest candidate that should satisfy the declared
+  training plan, then move up only when capacity, memory, or runtime evidence
+  justifies it.
 
 ## Recovery commands
 

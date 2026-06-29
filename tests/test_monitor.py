@@ -140,6 +140,34 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.latest_loss, 0.321)
             self.assertEqual(summary.best_loss, 0.316)
 
+    def test_collect_run_summaries_reads_model_download_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "downloading"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                "\n".join(
+                    [
+                        "id: downloading",
+                        "type: train",
+                        "backend: {name: musubi-tuner}",
+                        "params: {steps: 20}",
+                        "compute: {executor: docker}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "[kura] musubi step 1/6: hf_hub_download\n"
+                "[kura] hf download progress dit:raw.safetensors files=40 bytes=2147483648\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.activity, "downloading dit raw.safetensors · 2.0GB")
+
     def test_collect_run_summaries_reads_downloaded_stdout_for_remote_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

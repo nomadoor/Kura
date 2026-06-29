@@ -34,7 +34,7 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 root = Path(directory)
-                for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "docker/ai-toolkit/Dockerfile"):
+                for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "docker/ai-toolkit/Dockerfile"):
                     self.assertTrue((root / relative).exists(), relative)
                 self.assertTrue((root / "docker/musubi-tuner/Dockerfile").exists())
                 self.assertTrue((root / "docker/ai-toolkit/kura_runpod_object_job.py").exists())
@@ -46,8 +46,23 @@ class InitCommandTests(unittest.TestCase):
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
                 self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/root/.cache/huggingface")
+                self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
+                self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
                 self.assertEqual(workspace["comfyui"]["lora_dir"], "")
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
+            finally:
+                os.chdir(previous)
+
+    def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                Path("workspace.yaml").write_text("schema_version: 1\nname: existing\n", encoding="utf-8")
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                self.assertTrue((Path(directory) / "cache" / "huggingface").is_dir())
+                self.assertTrue((Path(directory) / "cache" / "models").is_dir())
+                self.assertEqual(yaml.safe_load((Path(directory) / "workspace.yaml").read_text(encoding="utf-8"))["name"], "existing")
             finally:
                 os.chdir(previous)
 
@@ -794,17 +809,38 @@ class MusubiBackendTests(unittest.TestCase):
         script = command["argv"][2]
         self.assertIn("hf_hub_download", script)
         self.assertIn("HF_HUB_DISABLE_XET", script)
+        self.assertIn('cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"', script)
+        self.assertNotIn("local_dir", script)
+        self.assertNotIn("/workspace/cache/hf-models/musubi", script)
         self.assertIn("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", script)
         self.assertIn("removed {removed} incomplete", script)
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
-        self.assertIn("/workspace/runs/musubi-example/cache/hf-models/dit/flux2-klein-base-4b.safetensors", script)
-        self.assertIn("--dit /workspace/runs/musubi-example/cache/hf-models/dit/flux2-klein-base-4b.safetensors", script)
+        self.assertIn("/workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
+        self.assertIn("--dit /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
         self.assertIn("flux2_vae", script)
         self.assertIn("qwen3_4b_text_encoder", script)
         self.assertIn("lora_unet_*", script)
         self.assertLess(script.index("hf_hub_download"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
         self.assertLess(script.index("expected_format"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
         self.assertLess(script.index("src/musubi_tuner/flux_2_train_network.py"), script.rindex("lora_unet_*"))
+
+    def test_command_musubi_rejects_model_download_local_dir(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "flux2",
+                "model_version": "klein-base-4b",
+                "model_downloads": {
+                    "dit": {
+                        "repo": "black-forest-labs/FLUX.2-klein-base-4B",
+                        "filename": "flux2-klein-base-4b.safetensors",
+                        "local_dir": "/workspace/cache/hf-models/musubi/legacy",
+                    },
+                },
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "model_downloads.local_dir is not supported"):
+            command_musubi_tuner(run)
 
     def test_command_musubi_resolves_known_flux2_klein_bundle(self) -> None:
         run = self._run()
@@ -815,7 +851,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("split_files/diffusion_models/flux-2-klein-base-4b.safetensors", script)
         self.assertIn("split_files/vae/flux2-vae.safetensors", script)
         self.assertIn("split_files/text_encoders/qwen_3_4b.safetensors", script)
-        self.assertIn("--vae /workspace/runs/musubi-example/cache/hf-models/vae/split_files/vae/flux2-vae.safetensors", script)
+        self.assertIn("--vae /workspace/cache/models/musubi/Comfy-Org--vae-text-encorder-for-flux-klein-4b/vae/split_files/vae/flux2-vae.safetensors", script)
 
     def test_command_musubi_resolves_known_flux2_klein_base_9b_bundle(self) -> None:
         run = self._run()
@@ -831,8 +867,8 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("text_encoder/model-00004-of-00004.safetensors", script)
         self.assertIn("text_encoder/model.safetensors.index.json", script)
         self.assertIn("--model_version klein-base-9b", script)
-        self.assertIn("--vae /workspace/runs/musubi-example/cache/hf-models/vae/vae/diffusion_pytorch_model.safetensors", script)
-        self.assertIn("--text_encoder /workspace/runs/musubi-example/cache/hf-models/text_encoder/text_encoder/model-00001-of-00004.safetensors", script)
+        self.assertIn("--vae /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-9B/vae/vae/diffusion_pytorch_model.safetensors", script)
+        self.assertIn("--text_encoder /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-9B/text_encoder/text_encoder/model-00001-of-00004.safetensors", script)
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
             compile_musubi_tuner(run, destination)
@@ -868,7 +904,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--fp8_base --fp8_scaled", script)
         self.assertIn("--gradient_checkpointing", script)
         self.assertIn("--save_precision bf16", script)
-        self.assertNotIn("--text_encoder /workspace/runs/musubi-example/cache/hf-models/text_encoder", script.split("src/musubi_tuner/krea2_train_network.py", 1)[1])
+        self.assertNotIn("--text_encoder /workspace/cache/models/musubi/Comfy-Org--Qwen3-VL/text_encoder", script.split("src/musubi_tuner/krea2_train_network.py", 1)[1])
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
@@ -893,8 +929,8 @@ class MusubiBackendTests(unittest.TestCase):
 
         self.assertIn("krea/Krea-2-Turbo", script)
         self.assertIn("turbo.safetensors", script)
-        self.assertIn("--text_encoder /workspace/runs/musubi-example/cache/hf-models/text_encoder/text_encoders/qwen3vl_4b_bf16.safetensors", script)
-        self.assertIn("--turbo_dit /workspace/runs/musubi-example/cache/hf-models/turbo_dit/turbo.safetensors", script)
+        self.assertIn("--text_encoder /workspace/cache/models/musubi/Comfy-Org--Qwen3-VL/text_encoder/text_encoders/qwen3vl_4b_bf16.safetensors", script)
+        self.assertIn("--turbo_dit /workspace/cache/models/musubi/krea--Krea-2-Turbo/turbo_dit/turbo.safetensors", script)
 
     def test_command_musubi_krea2_rejects_paired_control_dataset(self) -> None:
         run = self._run()
@@ -1274,6 +1310,57 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(second["cloudType"], "SECURE")
             self.assertNotIn("dataCenterIds", first)
             self.assertNotIn("countryCodes", first)
+
+    def test_launch_runpod_falls_back_across_gpu_types_before_secure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "cloud_types": ["COMMUNITY"], "gpu_type_priority": "custom"}
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", side_effect=[ValueError("no A5000 capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config)
+            first = request.call_args_list[0].args[3]
+            second = request.call_args_list[1].args[3]
+            self.assertEqual(first["gpuTypeIds"], ["NVIDIA RTX A5000"])
+            self.assertEqual(second["gpuTypeIds"], ["NVIDIA A40"])
+
+    def test_run_launch_uses_explicit_compute_gpu_for_runpod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs" / "example" / "resolved").mkdir(parents=True)
+            (root / "runs" / "example" / "logs").mkdir()
+            (root / "runs" / "example" / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (root / "runs" / "example" / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "compute": {"executor": "runpod", "gpu": "NVIDIA A40"},
+                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "cloud_type": "COMMUNITY"},
+                        "docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch_runpod") as launch:
+                    self.assertEqual(cmd_run_launch(argparse.Namespace(run_id="example", executor="runpod", dry_run=False, image=None)), 0)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_ids"], ["NVIDIA A40"])
+            self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_priority"], "custom")
 
     def test_launch_runpod_rejects_unsupported_udp_ports(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

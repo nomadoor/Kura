@@ -338,6 +338,20 @@ def _safe_download_filename(filename: str) -> str:
     return filename
 
 
+def _safe_cache_component(value: str) -> str:
+    component = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in value.strip())
+    component = component.strip(".-")
+    if not component or component in (".", ".."):
+        raise ValueError(f"invalid Hugging Face cache component for Musubi Tuner: {value}")
+    return component
+
+
+def _musubi_model_cache_path(repo_id: str, key: str, filename: str) -> str:
+    repo_component = _safe_cache_component(repo_id.replace("/", "--"))
+    key_component = _safe_cache_component(key)
+    return f"/workspace/cache/models/musubi/{repo_component}/{key_component}/{filename}"
+
+
 def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     model = run.get("model", {})
     base = str(model.get("base") or "").lower().replace("_", "-")
@@ -437,12 +451,15 @@ def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] 
             raise ValueError(f"Musubi Tuner model_downloads.{key} requires repo_id and filename")
         filename = _safe_download_filename(filename)
         filenames = [_safe_download_filename(item) for item in (filenames or [filename])]
-        local_dir = value.get("local_dir")
-        if not isinstance(local_dir, str) or not local_dir:
-            local_dir = f"/workspace/runs/{run['id']}/cache/hf-models/{key}"
-        local_dir = local_dir.rstrip("/")
+        if value.get("local_dir"):
+            raise ValueError("Musubi Tuner model_downloads.local_dir is not supported; use HF_HOME cache or explicit model_paths")
         for item_filename in filenames:
-            item = {"key": key, "repo_id": repo_id, "filename": item_filename, "local_dir": local_dir}
+            item = {
+                "key": key,
+                "repo_id": repo_id,
+                "filename": item_filename,
+                "link_path": _musubi_model_cache_path(repo_id, key, item_filename),
+            }
             revision = value.get("revision")
             if isinstance(revision, str) and revision:
                 item["revision"] = revision
@@ -450,7 +467,7 @@ def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] 
             if isinstance(repo_type, str) and repo_type:
                 item["repo_type"] = repo_type
             download_specs.append(item)
-        paths[key] = f"{local_dir}/{filename}"
+        paths[key] = _musubi_model_cache_path(repo_id, key, filename)
     if not download_specs:
         return [], {}
     code = r'''
@@ -483,7 +500,8 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from huggingface_hub import hf_hub_download
 
 item = json.loads(sys.argv[1])
-kwargs = dict(repo_id=item["repo_id"], filename=item["filename"], local_dir=item["local_dir"])
+cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"
+kwargs = dict(repo_id=item["repo_id"], filename=item["filename"], cache_dir=cache_dir)
 if item.get("revision"):
     kwargs["revision"] = item["revision"]
 if item.get("repo_type"):
@@ -526,17 +544,20 @@ def remove_incomplete_files(directory):
 
 
 def run_one(item):
-    local_dir = item["local_dir"]
-    os.makedirs(local_dir, exist_ok=True)
+    link_path = item["link_path"]
+    link_dir = os.path.dirname(link_path)
+    os.makedirs(link_dir, exist_ok=True)
+    cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"
+    os.makedirs(cache_dir, exist_ok=True)
     label = f"{item['key']}:{item['filename']}"
-    last_total, last_mtime, _ = tree_snapshot(local_dir)
+    last_total, last_mtime, _ = tree_snapshot(cache_dir)
     for attempt in range(1, ATTEMPTS + 1):
         print(f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}", flush=True)
         process = subprocess.Popen([sys.executable, "-c", CHILD, json.dumps(item, ensure_ascii=False)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         last_progress = time.monotonic()
         while process.poll() is None:
             time.sleep(POLL_SEC)
-            total, newest, count = tree_snapshot(local_dir)
+            total, newest, count = tree_snapshot(cache_dir)
             if total != last_total or newest != last_mtime:
                 last_total, last_mtime = total, newest
                 last_progress = time.monotonic()
@@ -547,16 +568,26 @@ def run_one(item):
             if idle >= NO_PROGRESS_SEC:
                 process.kill()
                 process.wait(timeout=30)
-                removed = remove_incomplete_files(local_dir)
+                removed = remove_incomplete_files(cache_dir)
                 print(f"[kura] hf download stalled {label}; removed {removed} incomplete file(s); retrying", flush=True)
-                last_total, last_mtime, _ = tree_snapshot(local_dir)
+                last_total, last_mtime, _ = tree_snapshot(cache_dir)
                 break
         output = ""
         if process.stdout is not None:
             output = process.stdout.read() or ""
         if process.returncode == 0:
-            path = output.strip().splitlines()[-1] if output.strip() else os.path.join(local_dir, item["filename"])
+            path = output.strip().splitlines()[-1] if output.strip() else ""
+            if not path:
+                raise SystemExit(f"[kura] hf download did not return a cache path: {label}")
+            if os.path.lexists(link_path):
+                if os.path.islink(link_path):
+                    os.unlink(link_path)
+                elif os.path.realpath(link_path) != os.path.realpath(path):
+                    raise SystemExit(f"[kura] cannot replace non-symlink model cache path: {link_path}")
+            if not os.path.lexists(link_path):
+                os.symlink(path, link_path)
             print(f"[kura] downloaded {item['key']} -> {path}", flush=True)
+            print(f"[kura] linked {item['key']} -> {link_path}", flush=True)
             return
         if output.strip():
             print(output.strip(), flush=True)
