@@ -232,6 +232,14 @@ def _comfyui_lora_count(object_info: dict[str, Any]) -> int | None:
     return None
 
 
+def _redact_url_userinfo(value: str) -> str:
+    parsed = urllib.parse.urlparse(value)
+    if "@" not in parsed.netloc:
+        return value
+    host = parsed.netloc.rsplit("@", 1)[1]
+    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}"))
+
+
 def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
@@ -254,14 +262,14 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
         "stage_dir_writable": bool(stage_dir and stage_dir.is_dir() and os.access(stage_dir, os.W_OK)),
     }
     diagnostics: dict[str, Any] = {
-        "endpoint": endpoint,
+        "endpoint": _redact_url_userinfo(endpoint),
         "lora_dir": str(lora_dir) if lora_dir else None,
         "stage_dir": str(stage_dir) if stage_dir else None,
     }
     if parsed_endpoint.scheme not in ("http", "https"):
         diagnostics["object_info_error"] = f"unsupported comfyui.endpoint scheme: {parsed_endpoint.scheme or '(none)'}"
         diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
-        print(json.dumps({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
         return 1
     try:
         with urllib.request.urlopen(f"{endpoint}/object_info", timeout=5) as response:
@@ -278,7 +286,7 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
         diagnosis = "ComfyUI endpoint is reachable."
     else:
         diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."
-    print(json.dumps({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
     return 0 if checks["endpoint_reachable"] and checks["object_info"] else 1
 
 
