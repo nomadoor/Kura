@@ -32,3 +32,14 @@ experiments are not about to be committed.
 - Report known skipped external checks.
 - Confirm whether RunPod has live Pods/Network Volumes when relevant.
 - Do not hide dirty worktree state.
+
+## Pull requests
+
+- Keep PR titles and bodies about the product change, risk, validation, and
+  reviewer context.
+- Do not include tool/agent attribution such as "Codex", "Claude", or
+  "AI-generated" unless the user explicitly asks for it or it is technically
+  relevant to the change.
+- Do not paste local paths, secrets, dataset details, or generated experiment
+  artifacts into the PR body.
+- Prefer a short structure: summary, validation, notes/risks.
