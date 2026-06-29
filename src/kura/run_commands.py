@@ -163,7 +163,9 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     run_yaml = run_dir / "run.yaml"
     if not run_yaml.is_file():
         raise ValueError(f"run.yaml was not found for run: {run_id}")
-    run = _load_yaml(run_yaml)
+    manifest = run_dir / "resolved" / "manifest.lock.yaml"
+    source = manifest if manifest.is_file() else run_yaml
+    run = _load_yaml(source)
     if run.get("type") != "train":
         raise ValueError("kura run plan is for train runs; render runs use `kura render` commands")
 
@@ -172,7 +174,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     params = run.get("params") if isinstance(run.get("params"), dict) else {}
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
-    manifest = run_dir / "resolved" / "manifest.lock.yaml"
 
     datasets: list[dict[str, Any]] = []
     for dataset in _run_datasets(run):
@@ -208,7 +209,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     return {
         "id": run_id,
         "type": run.get("type"),
-        "source": _workspace_display_path(run_yaml),
+        "source": _workspace_display_path(source),
+        "intent_source": _workspace_display_path(run_yaml),
         "compiled": manifest.is_file(),
         "resolved_manifest": _workspace_display_path(manifest) if manifest.is_file() else None,
         "backend": {
@@ -249,8 +251,10 @@ def format_run_plan(payload: dict[str, Any]) -> str:
     _append_kv(lines, "id", payload.get("id"))
     _append_kv(lines, "type", payload.get("type"))
     _append_kv(lines, "source", payload.get("source"))
+    if payload.get("compiled"):
+        _append_kv(lines, "intent", payload.get("intent_source"))
     _append_kv(lines, "compiled", "yes" if payload.get("compiled") else "no")
-    if payload.get("resolved_manifest"):
+    if payload.get("resolved_manifest") and payload.get("resolved_manifest") != payload.get("source"):
         _append_kv(lines, "resolved", payload.get("resolved_manifest"))
 
     lines.append("")

@@ -403,14 +403,14 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("lr           0.00005", output)
             self.assertIn("extra_args   --blocks_to_swap, 3", output)
 
-    def test_run_plan_json_marks_compiled_manifest(self) -> None:
+    def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "compiled-example"
             (run_dir / "resolved").mkdir(parents=True)
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit}\nparams: {lr: 1e-4}\n", encoding="utf-8")
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner}\nparams: {lr: 0.00005}\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -420,8 +420,11 @@ class RunPlanTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             self.assertTrue(payload["compiled"])
+            self.assertEqual(payload["source"], "runs/compiled-example/resolved/manifest.lock.yaml")
+            self.assertEqual(payload["intent_source"], "runs/compiled-example/run.yaml")
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
-            self.assertIn("lr", payload["params"])
+            self.assertEqual(payload["backend"]["name"], "musubi-tuner")
+            self.assertEqual(payload["params"]["lr"], 0.00005)
 
     def test_run_plan_rejects_render_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
