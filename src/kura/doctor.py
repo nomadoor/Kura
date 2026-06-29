@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -240,6 +241,7 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
         return 1
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
     endpoint = str(comfyui.get("endpoint") or "http://127.0.0.1:8188").rstrip("/")
+    parsed_endpoint = urllib.parse.urlparse(endpoint)
     lora_dir = _workspace_relative_path(str(comfyui["lora_dir"])) if isinstance(comfyui.get("lora_dir"), str) and comfyui.get("lora_dir") else None
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
     stage_dir = lora_dir / stage_subdir if lora_dir is not None and stage_subdir else None
@@ -256,6 +258,11 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
         "lora_dir": str(lora_dir) if lora_dir else None,
         "stage_dir": str(stage_dir) if stage_dir else None,
     }
+    if parsed_endpoint.scheme not in ("http", "https"):
+        diagnostics["object_info_error"] = f"unsupported comfyui.endpoint scheme: {parsed_endpoint.scheme or '(none)'}"
+        diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
+        print(json.dumps({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        return 1
     try:
         with urllib.request.urlopen(f"{endpoint}/object_info", timeout=5) as response:
             object_info = json.loads(response.read().decode("utf-8"))

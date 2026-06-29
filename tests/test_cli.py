@@ -2136,6 +2136,22 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 1)
 
+    def test_doctor_comfyui_rejects_non_http_endpoint_scheme(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: file:///tmp/comfyui.sock}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen") as urlopen, patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            urlopen.assert_not_called()
+            self.assertIn("unsupported comfyui.endpoint scheme", payload["diagnostics"]["object_info_error"])
+
     def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
         class FakeResponse:
             def __enter__(self) -> "FakeResponse":
