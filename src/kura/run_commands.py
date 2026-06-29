@@ -684,6 +684,9 @@ chmod 600 {shlex.quote(remote_secret_path)}
         installed = subprocess.run([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, check=False)
         if installed.returncode:
             raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
+    lease_log_path = f"{workspace}/runs/{run_id}/logs/stdout.log"
+    pod_id = status.get("pod_id")
+    pod_id_value = pod_id if isinstance(pod_id, str) else ""
     remote_job_script = f"""
 set -u
 secret_file={shlex.quote(remote_secret_path)}
@@ -747,12 +750,15 @@ exit "$exit_code"
     if max_lease_sec > 0:
         lease_guard = f"""
 (
+  KURA_LEASE_LOG_PATH={shlex.quote(lease_log_path)}
+  RUNPOD_POD_ID={shlex.quote(pod_id_value)}
   sleep {int(max_lease_sec)}
-  echo "Kura max lease expired after {int(max_lease_sec)} seconds; attempting to stop RunPod pod" >> "$KURA_LOG_PATH" 2>&1 || true
-  if command -v runpodctl >/dev/null 2>&1 && [ -n "${{RUNPOD_POD_ID:-}}" ]; then
-    runpodctl pod stop "$RUNPOD_POD_ID" >> "$KURA_LOG_PATH" 2>&1 || true
+  mkdir -p "$(dirname "$KURA_LEASE_LOG_PATH")" || true
+  echo "Kura max lease expired after {int(max_lease_sec)} seconds; attempting to stop RunPod pod" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
+  if command -v runpodctl >/dev/null 2>&1 && [ -n "$RUNPOD_POD_ID" ]; then
+    runpodctl pod stop "$RUNPOD_POD_ID" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
   else
-    echo "Kura max lease could not stop pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LOG_PATH" 2>&1 || true
+    echo "Kura max lease could not stop pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
   fi
 ) </dev/null >/dev/null 2>&1 &
 """.strip()

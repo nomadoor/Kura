@@ -1820,6 +1820,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
             self.assertNotIn("hf-secret", argv_text)
             self.assertIn("sleep 43200", argv_text)
+            self.assertIn("KURA_LEASE_LOG_PATH=/workspace/runs/example/logs/stdout.log", argv_text)
+            self.assertIn("RUNPOD_POD_ID=pod-1", argv_text)
             self.assertIn("runpodctl pod stop", argv_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
 
