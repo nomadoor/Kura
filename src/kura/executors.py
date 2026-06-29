@@ -505,6 +505,8 @@ def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
     """Explicitly upload the compiled inputs needed by a RunPod Pod."""
     settings = _runpod_settings(config)
+    if settings["storage_mode"] == "object_staging":
+        raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
     raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
     ids = list(dict.fromkeys(item for item in raw_ids if item))
     sources = [run_dir / "run.yaml", run_dir / "resolved", *(workspace / "datasets" / item for item in ids)]
@@ -527,17 +529,14 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
         raise ValueError("nothing to stage")
     total_bytes = sum(path.stat().st_size for path, _ in files)
     staged_at = _now()
-    if settings["storage_mode"] == "object_staging":
-        raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
-    else:
-        transfer_dir = run_dir / "transfer"
-        transfer_dir.mkdir(exist_ok=True)
-        archive_name = f"kura-upload-{run_dir.name}.tar.gz"
-        archive_path = transfer_dir / archive_name
-        with tarfile.open(archive_path, "w:gz") as archive:
-            for path, key in files:
-                archive.add(path, arcname=key)
-        storage_label = {"storage_mode": "upload", "archive": str(archive_path.relative_to(run_dir)), "archive_name": archive_name}
+    transfer_dir = run_dir / "transfer"
+    transfer_dir.mkdir(exist_ok=True)
+    archive_name = f"kura-upload-{run_dir.name}.tar.gz"
+    archive_path = transfer_dir / archive_name
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for path, key in files:
+            archive.add(path, arcname=key)
+    storage_label = {"storage_mode": "upload", "archive": str(archive_path.relative_to(run_dir)), "archive_name": archive_name}
     record = {"timestamp": staged_at, "executor": "runpod", **storage_label, "files": [key for _, key in files], "total_bytes": total_bytes}
     stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
     stage_path.parent.mkdir(exist_ok=True)

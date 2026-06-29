@@ -2206,6 +2206,13 @@ class RunPodLifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
                     stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._object_config())
 
+    def test_stage_runpod_object_staging_fails_before_source_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "missing"
+            with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
+                stage_runpod(workspace=root, run_dir=run_dir, dataset_id="missing-dataset", config=self._object_config())
+
     def test_stop_runpod_terminates_disposable_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
