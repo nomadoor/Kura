@@ -19,6 +19,19 @@ Use this skill for AI-Toolkit-specific backend and image work.
   micro-batch, accumulation, lower precision, or low-VRAM options, explain the
   time/quality/cost trade-off before launch.
 
+## Resource-fit ladder
+
+Use this ladder when logs or doctor output show the run does not fit available
+VRAM. Do not apply it silently; propose the change, then record the accepted
+choice in `run.yaml` before recompiling.
+
+1. Prefer execution accommodations that preserve the recipe: `quantize`,
+   `quantize_te`, and backend-supported `low_vram` options.
+2. If needed, reduce micro-batch and increase gradient accumulation to preserve
+   effective batch size.
+3. Reduce resolution or rank only after explaining that this changes the
+   training recipe itself.
+
 ## Useful commands
 
 ```sh

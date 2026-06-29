@@ -26,6 +26,25 @@ from kura.tui import KuraMonitorApp, _compact_path
 
 
 class InitCommandTests(unittest.TestCase):
+    def test_cli_version_and_help_text(self) -> None:
+        command = [sys.executable, "-c", "from kura.cli import main; main()"]
+        version = subprocess.run([*command, "--version"], text=True, capture_output=True, check=False)
+        self.assertEqual(version.returncode, 0)
+        self.assertIn("kura 0.1.0", version.stdout)
+
+        help_result = subprocess.run([*command, "--help"], text=True, capture_output=True, check=False)
+        self.assertEqual(help_result.returncode, 0)
+        self.assertIn("Agent-first, file-first workspace", help_result.stdout)
+        self.assertIn("Create the workspace folders and default config", help_result.stdout)
+
+        run_help = subprocess.run([*command, "run", "--help"], text=True, capture_output=True, check=False)
+        self.assertEqual(run_help.returncode, 0)
+        self.assertIn("Run on RunPod, download outputs, then auto-stop", run_help.stdout)
+
+        doctor_help = subprocess.run([*command, "doctor", "--help"], text=True, capture_output=True, check=False)
+        self.assertEqual(doctor_help.returncode, 0)
+        self.assertIn("Check RunPod API, Pods, and Network Volumes", doctor_help.stdout)
+
     def test_init_creates_required_files_and_is_idempotent(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:

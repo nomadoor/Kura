@@ -31,6 +31,21 @@ Use this skill for `backend.name: musubi-tuner` work.
   gradient accumulation changes throughput; offload/swap usually saves VRAM at
   the cost of time; lower precision can affect stability and compatibility.
 
+## Resource-fit ladder
+
+Use this ladder when logs or doctor output show the run does not fit available
+VRAM. Do not apply it silently; propose the change, then record the accepted
+choice in `run.yaml` under `backend_overrides.musubi-tuner` before recompiling.
+
+1. Enable recipe-preserving memory aids first: `gradient_checkpointing`, then
+   architecture-appropriate `fp8_base` / `fp8_scaled` when compatible.
+2. If the effective batch matters, reduce Musubi `batch_size` as micro-batch and
+   raise `gradient_accumulation_steps` to preserve effective batch.
+3. Use offload/swap options such as `--blocks_to_swap` only when the slower
+   runtime is acceptable. H2D-only swap requires explicit gradient checkpointing.
+4. Reduce resolution, rank, or model size only after explaining that this changes
+   the training recipe itself.
+
 ## Unknown model policy
 
 - Kura does not need a friendly bundle entry for every new model. If the model is
