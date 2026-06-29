@@ -31,7 +31,11 @@ def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, r
 
 
 def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
-    """Write AI-Toolkit native YAML for configured training runs."""
+    """
+    Write an AI-Toolkit native YAML configuration for a training run.
+    
+    Merges `backend_overrides.ai-toolkit.config` into the first training process section when it is a mapping, and raises `ValueError` if `config` is present but not a mapping.
+    """
     override = run.get("backend_overrides", {}).get("ai-toolkit", {})
     params = run.get("params", {})
     model = run.get("model", {})
@@ -66,7 +70,12 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
 
 
 def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
-    """Return a container-native command spec, without executing it."""
+    """
+    Build the AI-Toolkit container command specification.
+    
+    Returns:
+    	spec (dict[str, Any]): Command spec with `cwd`, `argv`, and `env` fields.
+    """
     command = run.get("backend_overrides", {}).get("ai-toolkit", {}).get("command")
     if command is None:
         return {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}
@@ -321,12 +330,33 @@ def _musubi_explicit_model_paths(override: dict[str, Any]) -> dict[str, str]:
 
 
 def _safe_download_filename(filename: str) -> str:
+    """
+    Validate a Hugging Face download filename for Musubi Tuner.
+    
+    Parameters:
+    	filename (str): The filename to validate.
+    
+    Returns:
+    	str: The validated filename.
+    """
     if filename.startswith("/") or any(part in ("", ".", "..") for part in filename.split("/")):
         raise ValueError(f"invalid Hugging Face filename for Musubi Tuner: {filename}")
     return filename
 
 
 def _safe_cache_component(value: str) -> str:
+    """
+    Convert a string into a safe Musubi Tuner cache path component.
+    
+    Parameters:
+    	value (str): The input string to sanitize.
+    
+    Returns:
+    	str: A filesystem-safe path component.
+    
+    Raises:
+    	ValueError: If the sanitized component is empty or resolves to "." or "..".
+    """
     component = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in value.strip())
     component = component.strip(".-")
     if not component or component in (".", ".."):
@@ -335,12 +365,29 @@ def _safe_cache_component(value: str) -> str:
 
 
 def _musubi_model_cache_path(repo_id: str, key: str, filename: str) -> str:
+    """
+    Build the cache path for a Musubi model file.
+    
+    Parameters:
+    	repo_id (str): Hugging Face repository identifier.
+    	key (str): Cache namespace for the model role or variant.
+    	filename (str): Downloaded file name.
+    
+    Returns:
+    	str: Absolute cache path for the model file.
+    """
     repo_component = _safe_cache_component(repo_id.replace("/", "--"))
     key_component = _safe_cache_component(key)
     return f"/workspace/cache/models/musubi/{repo_component}/{key_component}/{filename}"
 
 
 def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """
+    Resolve the FLUX.2 Klein model bundle download mapping.
+    
+    Returns:
+    	dict[str, dict[str, Any]]: Download specs for the FLUX.2 Klein bundle roles, or an empty dict when the bundle does not apply.
+    """
     model = run.get("model", {})
     base = str(model.get("base") or "").lower().replace("_", "-")
     override = run.get("backend_overrides", {}).get("musubi-tuner", {})
@@ -416,6 +463,16 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[list[str]], dict[str, str]]:
+    """
+    Resolve model download commands and cache paths for Musubi Tuner.
+    
+    Parameters:
+    	run (dict[str, Any]): Training run configuration.
+    	existing_paths (dict[str, str] | None): Model paths that are already available and should be skipped.
+    
+    Returns:
+    	tuple[list[list[str]], dict[str, str]]: A download command spec list and a mapping of model keys to resolved cache paths.
+    """
     override = run.get("backend_overrides", {}).get("musubi-tuner", {})
     existing_paths = existing_paths or {}
     resolved_downloads: dict[str, Any] = _known_musubi_bundle(run)

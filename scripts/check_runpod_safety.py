@@ -14,6 +14,12 @@ TESTS = ROOT / "tests" / "test_cli.py"
 
 
 def main() -> int:
+    """
+    Check RunPod lifecycle source and tests for required safety markers.
+    
+    Returns:
+    	exit_code (int): `0` when all checks pass, `1` when any required marker is missing or any forbidden flag remains.
+    """
     cli = CLI.read_text(encoding="utf-8")
     run_commands = RUN_COMMANDS.read_text(encoding="utf-8")
     runpod_source = cli + "\n" + run_commands

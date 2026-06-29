@@ -174,6 +174,12 @@ class DoctorDockerTests(unittest.TestCase):
             )
 
             def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                """
+                Return a canned Docker command result for supported subcommands.
+                
+                Returns:
+                    subprocess.CompletedProcess[str]: A successful process result with preset stdout for known Docker commands and empty stderr.
+                """
                 text = ""
                 if command[:2] == ["docker", "info"] and "--format" not in command:
                     text = "ok"
@@ -463,6 +469,12 @@ class NotificationTests(unittest.TestCase):
     def test_ntfy_notification_posts_to_topic(self) -> None:
         class Response:
             def __enter__(self) -> "Response":
+                """
+                Enter the response context.
+                
+                Returns:
+                	self (Response): This response object.
+                """
                 return self
 
             def __exit__(self, *args: object) -> None:
@@ -593,6 +605,15 @@ class RenderNotificationTests(unittest.TestCase):
                     return "prompt-1"
 
                 def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    """
+                    Wait for a prompt to finish and return its output files.
+                    
+                    Parameters:
+                    	prompt_id (str): The prompt identifier to wait on.
+                    
+                    Returns:
+                    	list[dict[str, Any]]: Output file records produced for the prompt.
+                    """
                     return [{"filename": "image.png", "subfolder": "", "type": "output"}]
 
                 def download(self, image: dict[str, Any]) -> bytes:
@@ -2237,6 +2258,12 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_doctor_runpod_fails_when_network_volume_check_is_unknown(self) -> None:
         class FakeResponse:
             def __init__(self, payload: object) -> None:
+                """
+                Store the payload for later access.
+                
+                Parameters:
+                	payload (object): The value to store.
+                """
                 self.payload = payload
 
             def __enter__(self) -> "FakeResponse":
@@ -2246,6 +2273,12 @@ class RunPodLifecycleTests(unittest.TestCase):
                 return None
 
             def read(self) -> bytes:
+                """
+                Return the payload encoded as UTF-8 JSON bytes.
+                
+                Returns:
+                	bytes: The JSON representation of ``self.payload`` encoded as UTF-8.
+                """
                 return json.dumps(self.payload).encode("utf-8")
 
         def fake_urlopen(request: object, timeout: int = 20) -> FakeResponse:

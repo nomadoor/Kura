@@ -115,7 +115,19 @@ def _is_wsl() -> bool:
 
 
 def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str, Any]:
-    """Reject only unsafe launches; retain advisory host signals for realization truth."""
+    """
+    Check Docker availability and host resources before launch.
+    
+    Parameters:
+    	workspace (Path): The run workspace directory.
+    	mounts (list[dict[str, str]]): Additional mount specifications to include in the resource check.
+    
+    Returns:
+    	dict[str, Any]: A summary containing WSL detection, available host memory, per-path disk usage, and any advisory warnings.
+    
+    Raises:
+    	ValueError: If Docker is unavailable, the daemon cannot be reached, or any checked path has less than 10 GiB of free space.
+    """
     try:
         daemon = subprocess.run(["docker", "info"], text=True, capture_output=True, check=False)
     except FileNotFoundError as exc:
@@ -147,6 +159,16 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str,
 
 
 def _resolve_mount_source(workspace: Path, source: str) -> Path:
+    """
+    Resolve a mount source path against the workspace.
+    
+    Parameters:
+    	workspace (Path): Base directory used for relative sources.
+    	source (str): Mount source path to normalize.
+    
+    Returns:
+    	Path: Absolute resolved path for the mount source.
+    """
     path = Path(source).expanduser()
     if not path.is_absolute():
         path = workspace / path
@@ -154,6 +176,16 @@ def _resolve_mount_source(workspace: Path, source: str) -> Path:
 
 
 def _container_name(run_id: str, realization_id: str) -> str:
+    """
+    Build a Docker container name from a run ID and realization ID.
+    
+    Parameters:
+    	run_id (str): The run identifier to include in the container name.
+    	realization_id (str): The realization identifier to append.
+    
+    Returns:
+    	str: A container name prefixed with `kura-`, with unsupported run ID characters replaced by `-` and the result truncated to 200 characters.
+    """
     clean_run = re.sub(r"[^a-zA-Z0-9_.-]", "-", run_id)
     return f"kura-{clean_run}-{realization_id}"[:200]
 
@@ -219,7 +251,22 @@ def docker_command(
     realization_id: str,
     workspace_target: str = CONTAINER_WORKSPACE,
 ) -> tuple[list[str], dict[str, str], str]:
-    """Build a detached Docker command and direct container output into the run mount."""
+    """
+    Build a detached Docker run command for a Kura execution and redirect container output to the run log.
+    
+    Parameters:
+    	workspace (Path): Host workspace directory mounted into the container.
+    	run_dir (Path): Run directory used to derive the container name and log path.
+    	spec (dict[str, Any]): Execution specification containing the working directory, environment, and command arguments.
+    	image (str): Docker image to run.
+    	mounts (list[dict[str, str]]): Additional volume mounts for the container.
+    	gpu (bool): Whether to request GPU access.
+    	realization_id (str): Identifier for this execution attempt.
+    	workspace_target (str): Container path where the workspace is mounted.
+    
+    Returns:
+    	tuple[list[str], dict[str, str], str]: The Docker command, the runtime environment passed to the container, and the container name.
+    """
     name = _container_name(run_dir.name, realization_id)
     log_path = f"{workspace_target}/runs/{run_dir.name}/logs/stdout.log"
     command = [
@@ -258,7 +305,23 @@ def docker_command(
 
 
 def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, dockerfile: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False) -> tuple[list[str], str | None]:
-    """Start a detached Docker realization; completion is recovered by reconcile."""
+    """
+    Start a Docker-backed realization and record its launch metadata.
+    
+    Parameters:
+    	workspace (Path): Host workspace directory mounted into the container.
+    	run_dir (Path): Run directory used to store status, logs, and realization records.
+    	spec (dict[str, Any]): Resolved backend command specification.
+    	image (str): Docker image to launch.
+    	dockerfile (str): Dockerfile associated with the realization record.
+    	mounts (list[dict[str, str]]): Additional host mounts to pass to Docker.
+    	gpu (bool): Whether to request GPU access.
+    	workspace_target (str): Container path where the workspace is mounted.
+    	dry_run (bool): If true, print the Docker command without launching a container.
+    
+    Returns:
+    	tuple[list[str], str | None]: The Docker command and the realization ID, or ``None`` for the realization ID when ``dry_run`` is true.
+    """
     realization_id = _realization_id()
     preflight = {} if dry_run else docker_preflight(workspace, mounts)
     command, runtime_env, name = docker_command(workspace, run_dir, spec, image, mounts, gpu, realization_id, workspace_target)
@@ -385,6 +448,15 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
 
 
 def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Validate and normalize RunPod executor settings.
+    
+    Parameters:
+    	config (dict[str, Any]): Raw RunPod configuration values.
+    
+    Returns:
+    	dict[str, Any]: A normalized settings mapping with validated fields and defaults applied.
+    """
     storage_mode = config.get("storage_mode", "upload")
     if storage_mode not in ("upload", "container_disk", "object_staging"):
         raise ValueError("runpod.storage_mode must be upload, container_disk, or object_staging")
@@ -457,12 +529,27 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
-    """Return ordered GPU attempts for deterministic fallback."""
+    """
+    Build deterministic GPU type fallback attempts.
+    
+    Returns:
+    	list[list[str]]: A list containing one GPU type ID per attempt, in the
+    	same order as the input list.
+    """
 
     return [[gpu_type_id] for gpu_type_id in gpu_type_ids]
 
 
 def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
+    """
+    Build object storage settings for RunPod object staging.
+    
+    Parameters:
+        config (dict[str, Any]): RunPod configuration containing an object_store section.
+    
+    Returns:
+        dict[str, str]: Normalized object storage settings, including the endpoint, bucket, region, prefix, credential environment variable names, and resolved access credentials.
+    """
     object_store = config.get("object_store")
     if not isinstance(object_store, dict):
         raise ValueError("runpod.object_store must be configured for object_staging")
@@ -492,6 +579,13 @@ def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
 
 
 def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
+    """
+    Create an S3 client for object staging.
+    
+    Returns:
+    	client (Any): An S3 client configured for the object store endpoint.
+    	settings (dict[str, str]): The resolved object store settings, including credentials.
+    """
     settings = _object_store_settings(config)
     try:
         import boto3
@@ -503,7 +597,19 @@ def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
 
 
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
-    """Explicitly upload the compiled inputs needed by a RunPod Pod."""
+    """
+    Build and record a tar.gz bundle of the files required to launch a RunPod job.
+    
+    Parameters:
+    	workspace (Path): Workspace root used to resolve staged paths and dataset directories.
+    	run_dir (Path): Run directory containing the run spec, resolved inputs, and staging metadata.
+    	dataset_ids (list[str] | None): Dataset IDs to include from workspace/datasets.
+    	dataset_id (str | None): Optional single dataset ID to stage when dataset_ids is not provided.
+    	config (dict[str, Any]): RunPod configuration used to validate storage settings.
+    
+    Returns:
+    	dict[str, Any]: The staging record, including archive details, staged file keys, and total bytes.
+    """
     settings = _runpod_settings(config)
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
@@ -581,7 +687,19 @@ def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
 
 
 def launch_runpod(*, run_dir: Path, spec: dict[str, Any], image: str, config: dict[str, Any], dry_run: bool = False) -> str | None:
-    """Create a RunPod Pod using a pre-staged workspace."""
+    """
+    Create a RunPod pod for a staged run.
+    
+    Parameters:
+    	run_dir (Path): Run directory containing status, stage, and realization metadata.
+    	spec (dict[str, Any]): Resolved backend specification, including command arguments, environment, and working directory.
+    	image (str): Container image to launch when the run does not use a RunPod template.
+    	config (dict[str, Any]): RunPod executor configuration.
+    	dry_run (bool): Print the launch request without creating a pod.
+    
+    Returns:
+    	str | None: The realization ID for a successful launch, or `None` when `dry_run` is `True`.
+    """
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]

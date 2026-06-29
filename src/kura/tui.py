@@ -333,6 +333,12 @@ class RunRow(Static):
             self.add_class("selected")
 
     def render_row(self) -> Text:
+        """
+        Render a compact row for a run.
+        
+        Returns:
+        	Text: A formatted row showing the run location, label, loss sparkline or current activity, and state indicator.
+        """
         if self.summary is None:
             return Text("  none", style=MUTED)
         summary = self.summary
@@ -350,6 +356,11 @@ class RunRow(Static):
         return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), middle, (" "), (dot, _state_style(summary)))
 
     def on_click(self) -> None:
+        """
+        Select this run row.
+        
+        Posts a selection message containing the run ID when available, or `None` for the empty active row.
+        """
         self.post_message(self.Selected(self.summary.id if self.summary else None, self.lane))
 
 
@@ -436,6 +447,12 @@ class UrlRow(Static):
 
 class MetricGrid(Static):
     def update_summary(self, summary: RunSummary | None) -> None:
+        """
+        Update the metrics grid for a run.
+        
+        Parameters:
+            summary (RunSummary | None): The run summary to display, or `None` to show an idle state.
+        """
         if not summary:
             self.update(Text("no active run", style=MUTED))
             return
@@ -550,6 +567,13 @@ def _sync_static_section(container: VerticalScroll, text: str) -> None:
 
 class DetailPane(VerticalScroll):
     def update_summary(self, summary: RunSummary | None, selected_target: PathTarget | None) -> None:
+        """
+        Update the run detail view for the selected run.
+        
+        Parameters:
+            summary (RunSummary | None): The run to display, or `None` when no run is selected.
+            selected_target (PathTarget | None): The currently selected file path target to highlight.
+        """
         signature = (
             "summary",
             summary.id if summary else None,
@@ -657,6 +681,11 @@ class LossPane(Vertical):
         yield self.metrics
 
     def update_summary(self, summary: RunSummary | None) -> None:
+        """
+        Update the loss pane for the selected run.
+        
+        Shows a startup message for active runs with no loss history when run activity is available; otherwise displays a compact loss chart or an idle placeholder. Also refreshes the metrics grid.
+        """
         self.query_one(PaneTitle).update("LOSS")
         chart = self.query_one("#loss-chart", Static)
         if summary and not summary.losses and summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
@@ -666,6 +695,12 @@ class LossPane(Vertical):
         self.metrics.update_summary(summary)
 
     def update_dataset(self, dataset: RunDataset | None) -> None:
+        """
+        Update the dataset summary and filesystem metrics display.
+        
+        Parameters:
+        	dataset (RunDataset | None): The selected dataset, or ``None`` when no dataset is selected.
+        """
         self.query_one(PaneTitle).update("SUMMARY")
         chart = self.query_one("#loss-chart", Static)
         if not dataset:
@@ -938,6 +973,9 @@ class MonitorScreen(Screen[None]):
         self.update_view()
 
     def update_view(self) -> None:
+        """
+        Refresh the monitor view for the current run or dataset selection.
+        """
         current = self.current_run
         self.query_one("#status", Static).update(_status_bar(self.summaries, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
         datasets = _all_datasets(self.summaries)
@@ -1088,6 +1126,11 @@ class WatchScreen(Screen[None]):
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
     def refresh_data(self) -> None:
+        """
+        Refresh the watch view for the selected run.
+        
+        Updates the status bar, path selection, detail pane, and key bar from the latest run summaries.
+        """
         summaries = collect_run_summaries(self.app_ref.workspace, loss_tail=10_000, stale_after=self.app_ref.stale_after)
         summary = next((item for item in summaries if item.id == self.run_id), None)
         self.query_one("#status", Static).update(_watch_status_bar(summaries, self.run_id, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
@@ -1127,11 +1170,36 @@ class WatchScreen(Screen[None]):
 
 
 def run_textual_monitor(workspace: Path, *, interval: float = 2.0, stale_after: float = 90.0, initial_run_id: str | None = None, limit: int = 30) -> int:
+    """
+    Run the Textual monitor for a Kura workspace.
+    
+    Parameters:
+    	workspace (Path): Workspace root to inspect.
+    	interval (float): Refresh interval in seconds.
+    	stale_after (float): Age in seconds after which a run is considered stale.
+    	initial_run_id (str | None): Run to open on startup.
+    	limit (int): Maximum number of historical runs to show.
+    
+    Returns:
+    	int: Exit code after the UI closes.
+    """
     KuraMonitorApp(workspace, interval=interval, stale_after=stale_after, initial_run_id=initial_run_id, limit=limit).run()
     return 0
 
 
 def _status_bar(summaries: list[RunSummary], *, workspace: Path | None = None, width: int | None = None, suffix: Text | None = None) -> Text:
+    """
+    Build the monitor status bar with run counts and optional workspace context.
+    
+    Parameters:
+    	summaries (list[RunSummary]): Run summaries to count by state.
+    	workspace (Path | None): Workspace path to display in compact form.
+    	width (int | None): Target line width used to pad the result.
+    	suffix (Text | None): Additional text appended to the right side.
+    
+    Returns:
+    	Text: A status bar containing run counts and optional trailing context.
+    """
     counts = {
         "running": sum(item.state == "running" for item in summaries),
         "queued": sum(item.state in {"queued", "staged", "launching"} for item in summaries),
@@ -1153,11 +1221,32 @@ def _status_bar(summaries: list[RunSummary], *, workspace: Path | None = None, w
 
 
 def _watch_status_bar(summaries: list[RunSummary], run_id: str, *, workspace: Path | None = None, width: int | None = None) -> Text:
+    """
+    Build the watch-mode status bar.
+    
+    Parameters:
+    	summaries (list[RunSummary]): Run summaries used to compute status counts.
+    	run_id (str): The run identifier shown in the watch suffix.
+    	workspace (Path | None): Workspace path to display in the status bar.
+    	width (int | None): Maximum width of the rendered status line.
+    
+    Returns:
+    	Text: A styled status bar for watch mode.
+    """
     suffix = Text.assemble(("WATCH", f"bold {STALE}"), (" "), (_fit_plain(run_id, 22), FG_MUTED), ("  Esc", ACCENT))
     return _status_bar(summaries, workspace=workspace, width=width, suffix=suffix)
 
 
 def _all_datasets(summaries: list[RunSummary]) -> list[RunDataset]:
+    """
+    Collect the unique datasets referenced by a list of run summaries.
+    
+    Parameters:
+    	summaries (list[RunSummary]): Run summaries to scan.
+    
+    Returns:
+    	list[RunDataset]: Datasets in first-seen order, deduplicated by role and id.
+    """
     seen: set[tuple[str | None, str | None]] = set()
     datasets: list[RunDataset] = []
     for summary in summaries:
@@ -1621,6 +1710,12 @@ def _run_headline(summary: RunSummary) -> Text:
 
 
 def _progress_text(summary: RunSummary) -> Text:
+    """
+    Build a progress display for a run.
+    
+    Returns:
+    	Text: A formatted progress indicator with step counts, iteration timing when available, and a phase line for active runs at startup.
+    """
     step = summary.progress.step or 0
     total = summary.progress.total or 0
     width = 34

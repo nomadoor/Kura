@@ -29,6 +29,18 @@ def digest(path: Path) -> str:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
+    """
+    Load a YAML mapping from a file.
+    
+    Parameters:
+    	path (Path): The YAML file to read.
+    
+    Returns:
+    	dict[str, Any]: The parsed mapping.
+    
+    Raises:
+    	ValueError: If the file does not contain a YAML mapping.
+    """
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
@@ -36,12 +48,28 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def load_optional_yaml(path: Path) -> dict[str, Any]:
+    """
+    Load YAML from a file when it exists.
+    
+    Parameters:
+    	path (Path): The YAML file path.
+    
+    Returns:
+    	dict[str, Any]: The parsed YAML mapping, or an empty dict when the file does not exist.
+    """
     if not path.is_file():
         return {}
     return load_yaml(path)
 
 
 def write_yaml(path: Path, value: Any) -> None:
+    """
+    Write a value to a YAML file.
+    
+    Parameters:
+    	path (Path): The file to write.
+    	value (Any): The value to serialize as YAML.
+    """
     path.write_text(yaml.safe_dump(value, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
@@ -80,6 +108,20 @@ def _set_path(document: dict[str, Any], node: str, field: str, value: Any) -> No
 
 
 def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt: str, negative_prompt: str, seed: int, checkpoint: str) -> dict[str, Any]:
+    """
+    Apply configured workflow patch values to a copy of a ComfyUI workflow.
+    
+    Parameters:
+    	workflow (dict[str, Any]): Workflow to copy and patch.
+    	patches (dict[str, Any]): Patch definitions keyed by value name.
+    	prompt (str): Prompt text to apply.
+    	negative_prompt (str): Negative prompt text to apply.
+    	seed (int): Seed value to apply.
+    	checkpoint (str): Checkpoint or staged LoRA identifier to apply.
+    
+    Returns:
+    	dict[str, Any]: A patched copy of the workflow.
+    """
     patched = deepcopy(workflow)
     values = {"prompt": prompt, "negative_prompt": negative_prompt, "seed": seed, "lora": checkpoint, "checkpoint": checkpoint}
     for name, value in values.items():
@@ -93,6 +135,15 @@ def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt:
 
 
 def _workspace_path(workspace: Path, value: Any) -> Path | None:
+    """
+    Resolve a workspace-relative path value.
+    
+    Parameters:
+    	value (Any): Path text to resolve.
+    
+    Returns:
+    	Path | None: The resolved absolute path, or None when the value is missing or empty.
+    """
     if not isinstance(value, str) or not value:
         return None
     path = Path(value).expanduser()
@@ -102,6 +153,16 @@ def _workspace_path(workspace: Path, value: Any) -> Path | None:
 
 
 def _safe_stage_name(run_id: str, source: Path) -> str:
+    """
+    Build a deterministic staged filename for a LoRA source file.
+    
+    Parameters:
+    	run_id (str): The run identifier to include in the name.
+    	source (Path): The source file path used to derive the staged name.
+    
+    Returns:
+    	str: A filename-like staged name capped at 220 characters.
+    """
     stem = "".join(character if character.isalnum() or character in "._-" else "-" for character in source.stem)
     digest8 = hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:8]
     suffix = source.suffix or ".safetensors"
@@ -114,6 +175,12 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
 
 
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Build a LoRA staging plan for a render run.
+    
+    Returns:
+    	 dict[str, Any] | None: A staging plan containing the source and target paths, the staged LoRA name, the staging mode, the cleanup policy, and a created flag; ``None`` when staging does not apply.
+    """
     if "lora" not in frozen.get("workflow_patches", {}):
         return None
     if str(frozen.get("render", {}).get("lora_stage", "auto")).strip().lower() in ("0", "false", "off", "none", "no"):
@@ -149,6 +216,12 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
 
 
 def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
+    """
+    Extract supported ComfyUI staging settings.
+    
+    Returns:
+    	A dictionary containing the allowed ComfyUI configuration keys: ``lora_dir``, ``lora_stage_subdir``, ``lora_stage_mode``, and ``lora_stage_cleanup``.
+    """
     if not isinstance(comfyui, dict):
         return {}
     allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup")
@@ -156,6 +229,15 @@ def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
 
 
 def _materialize_lora_stage(plan: dict[str, Any]) -> None:
+    """
+    Create the staged LoRA file for a render run.
+    
+    Parameters:
+    	plan (dict[str, Any]): Staging plan containing the source file, target path, and mode.
+    
+    Raises:
+    	ValueError: If the target already exists with different content.
+    """
     source = Path(plan["source"])
     target = Path(plan["target"])
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +263,12 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
 
 
 def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
+    """
+    Remove a staged LoRA file after rendering when cleanup is enabled.
+    
+    Parameters:
+    	plan (dict[str, Any] | None): LoRA staging plan to clean up.
+    """
     if not plan or plan.get("cleanup") != "remove_after_render" or not plan.get("created"):
         return
     target = Path(str(plan.get("target", "")))
@@ -192,6 +280,15 @@ def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
 
 
 def promptset(path: Path) -> list[dict[str, Any]]:
+    """
+    Parse a JSONL prompt set into prompt definitions.
+    
+    Parameters:
+        path (Path): Path to the prompt set file.
+    
+    Returns:
+        list[dict[str, Any]]: Parsed prompt definitions.
+    """
     prompts: list[dict[str, Any]] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -243,6 +340,18 @@ class ComfyUIClient:
 
 
 def compile_render(workspace: Path, run_dir: Path) -> None:
+    """
+    Compile a render run into a frozen manifest and resolved inputs.
+    
+    This validates the workflow and prompt set, records input digests, and writes the compiled artifacts under ``resolved/``.
+    
+    Parameters:
+    	workspace (Path): Workspace root used to resolve input paths.
+    	run_dir (Path): Run directory containing ``run.yaml``.
+    
+    Raises:
+    	ValueError: If required inputs are missing or the workflow or prompt set is invalid.
+    """
     run = load_yaml(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
     inputs = run.get("inputs", {})
@@ -282,6 +391,17 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
 
 
 def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
+    """
+    Launch a compiled ComfyUI render run and record its outputs.
+    
+    Parameters:
+    	workspace (Path): Workspace root used to resolve input and staging paths.
+    	run_dir (Path): Run directory containing the compiled manifest and status files.
+    	dry_run (bool): If true, prints the planned launch details and exits without rendering.
+    
+    Returns:
+    	int: `0` on success or dry run completion, `1` if rendering fails.
+    """
     manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
     workflow_used_path = run_dir / "resolved" / "workflow_used.json"
     if not manifest_path.is_file() or not workflow_used_path.is_file():

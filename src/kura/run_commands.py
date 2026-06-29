@@ -38,10 +38,31 @@ from kura.workspace import workspace_config as _workspace_config
 
 
 def _safe_error(exc: BaseException | str) -> str:
+    """
+    Return a redacted error message string.
+    
+    Parameters:
+    	exc (BaseException | str): The exception or message to sanitize.
+    
+    Returns:
+    	str: The redacted message.
+    """
     return _redact_secret_text(str(exc))
 
 
 def _image_config(name: str) -> dict[str, Any]:
+    """
+    Get the Docker image configuration for a named run image.
+    
+    Parameters:
+    	name (str): Image configuration name under `docker.images`.
+    
+    Returns:
+    	dict[str, Any]: The image configuration mapping.
+    
+    Raises:
+    	ValueError: If the named image is missing or does not define `local`, `remote`, `dockerfile`, and `context` string values.
+    """
     try:
         image = _workspace_config()["docker"]["images"][name]
     except (KeyError, TypeError) as exc:
@@ -52,12 +73,33 @@ def _image_config(name: str) -> dict[str, Any]:
 
 
 def _backend_image_name(backend_name: Any) -> str:
+    """
+    Map a backend name to its image configuration key.
+    
+    Parameters:
+    	backend_name (Any): Backend name from the run configuration.
+    
+    Returns:
+    	str: The corresponding image configuration key.
+    """
     if backend_name == "musubi-tuner":
         return "musubi-tuner"
     return "ai-toolkit"
 
 
 def _command_for_backend(run: dict[str, Any]) -> dict[str, Any]:
+    """
+    Build the command specification for a run's backend.
+    
+    Parameters:
+    	run (dict[str, Any]): Run configuration data containing backend details.
+    
+    Returns:
+    	dict[str, Any]: The backend command specification.
+    
+    Raises:
+    	ValueError: If the backend name is not supported.
+    """
     backend_name = run.get("backend", {}).get("name") if isinstance(run.get("backend"), dict) else None
     if backend_name == "ai-toolkit":
         return command_ai_toolkit(run)
@@ -67,6 +109,17 @@ def _command_for_backend(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Return the dataset entries defined in a run configuration.
+    
+    This accepts either the plural ``datasets`` form or the legacy singular ``dataset`` form.
+    
+    Parameters:
+    	run (dict[str, Any]): Run configuration data.
+    
+    Returns:
+    	list[dict[str, Any]]: The dataset mappings found in the run configuration.
+    """
     datasets = run.get("datasets")
     if isinstance(datasets, list):
         return [item for item in datasets if isinstance(item, dict)]
@@ -77,6 +130,11 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _workspace_display_path(path: Path) -> str:
+    """
+    Return a workspace-relative display path when possible.
+    
+    If the path is inside the workspace root, the returned value is relative to that root and uses POSIX separators. Otherwise, the original path string is returned.
+    """
     root = _require_workspace()
     try:
         return path.resolve().relative_to(root.resolve()).as_posix()
@@ -85,6 +143,16 @@ def _workspace_display_path(path: Path) -> str:
 
 
 def _dataset_path(workspace: Path, dataset: dict[str, Any]) -> Path | None:
+    """
+    Determine the filesystem path for a dataset.
+    
+    Parameters:
+    	workspace (Path): Workspace root used to resolve relative dataset paths.
+    	dataset (dict[str, Any]): Dataset metadata.
+    
+    Returns:
+    	Path | None: The resolved dataset path, or `None` if no usable path information is present.
+    """
     path_value = dataset.get("path")
     if isinstance(path_value, str) and path_value:
         path = Path(path_value).expanduser()
@@ -98,6 +166,12 @@ def _dataset_path(workspace: Path, dataset: dict[str, Any]) -> Path | None:
 
 
 def _count_dataset_items(path: Path | None) -> int | None:
+    """
+    Count the items listed in a dataset directory.
+    
+    Returns:
+    	int | None: The number of non-empty lines in `items.jsonl`, or `None` if the file is missing, unreadable, or no path is provided.
+    """
     if path is None:
         return None
     items = path / "items.jsonl"
@@ -111,6 +185,16 @@ def _count_dataset_items(path: Path | None) -> int | None:
 
 
 def _nested_get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
+    """
+    Get a value from a nested mapping using a sequence of keys.
+    
+    Parameters:
+    	mapping (dict[str, Any]): The mapping to traverse.
+    	path (tuple[str, ...]): The key path to follow.
+    
+    Returns:
+    	Any: The value at the end of the path, or `None` if any key is missing or an intermediate value is not a mapping.
+    """
     current: Any = mapping
     for key in path:
         if not isinstance(current, dict) or key not in current:
@@ -120,6 +204,12 @@ def _nested_get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
 
 
 def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
+    """
+    Collect the backend override values that are relevant to the run plan.
+    
+    Returns:
+    	(dict[str, Any]): A mapping of selected override keys for the active backend, or an empty dict when no matching overrides are present.
+    """
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     overrides = run.get("backend_overrides")
@@ -158,6 +248,12 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
+    """
+    Build the payload used to display a train run plan.
+    
+    Returns:
+    	payload (dict[str, Any]): A dictionary containing the run metadata, resolved manifest source, backend/model/compute summaries, dataset details, selected training parameters, sampling cadence, and important backend overrides.
+    """
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
     run_yaml = run_dir / "run.yaml"
@@ -232,6 +328,12 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
 
 
 def _format_plan_value(value: Any) -> str:
+    """
+    Format a run plan value for display.
+    
+    Returns:
+    	A comma-separated string for lists, a JSON string with stable key order for mappings, "-" for missing values, or the string form of the value otherwise.
+    """
     if isinstance(value, list):
         return ", ".join(_format_plan_value(item) for item in value)
     if isinstance(value, dict):
@@ -242,11 +344,26 @@ def _format_plan_value(value: Any) -> str:
 
 
 def _append_kv(lines: list[str], label: str, value: Any, *, indent: int = 2) -> None:
+    """
+    Append an aligned key-value line to a plan display.
+    
+    Parameters:
+    	lines (list[str]): The output lines to extend.
+    	label (str): The field label to display.
+    	value (Any): The field value to format.
+    	indent (int): The number of leading spaces to add.
+    """
     prefix = " " * indent
     lines.append(f"{prefix}{label:<12} {_format_plan_value(value)}")
 
 
 def format_run_plan(payload: dict[str, Any]) -> str:
+    """
+    Format a run plan payload for display.
+    
+    Returns:
+    	str: A human-readable run plan with metadata, backend, model, compute, dataset, parameter, sampling, and backend override sections.
+    """
     lines = ["Run plan"]
     _append_kv(lines, "id", payload.get("id"))
     _append_kv(lines, "type", payload.get("type"))
@@ -312,10 +429,25 @@ def format_run_plan(payload: dict[str, Any]) -> str:
 
 
 def plan_run(run_id: str) -> dict[str, Any]:
+    """
+    Build the structured plan data for a run.
+    
+    Parameters:
+    	run_id (str): Run identifier.
+    
+    Returns:
+    	dict[str, Any]: Run plan payload.
+    """
     return _run_plan_payload(run_id)
 
 
 def cmd_run_plan(args: argparse.Namespace) -> int:
+    """
+    Show a run plan in JSON or human-readable form.
+    
+    Returns:
+    	0 on success, or 1 if the run plan cannot be loaded or displayed.
+    """
     try:
         payload = plan_run(args.run_id)
         if getattr(args, "json", False):
@@ -329,6 +461,18 @@ def cmd_run_plan(args: argparse.Namespace) -> int:
 
 
 def _parse_duration_seconds(value: Any) -> int:
+    """
+    Parse a duration value into seconds.
+    
+    Parameters:
+    	value (Any): A duration specified as seconds or with an optional s, m, h, or d suffix.
+    
+    Returns:
+    	int: The duration in seconds.
+    
+    Raises:
+    	ValueError: If the value is not a valid duration format.
+    """
     if value in (None, "", False):
         return 0
     if isinstance(value, int):
@@ -346,6 +490,13 @@ def _parse_duration_seconds(value: Any) -> int:
 
 
 def _event(run_dir: Path, payload: dict[str, Any]) -> None:
+    """
+    Append an event record to the run event log.
+    
+    Parameters:
+    	run_dir (Path): Run directory.
+    	payload (dict[str, Any]): Event data to write as JSON.
+    """
     path = run_dir / "logs" / "events.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -353,6 +504,12 @@ def _event(run_dir: Path, payload: dict[str, Any]) -> None:
 
 
 def stop_run(run_id: str) -> int:
+    """
+    Stop a run using the executor recorded in its latest realization.
+    
+    Returns:
+    	int: `0` on success, `1` if the run cannot be loaded or stopped.
+    """
     try:
         run_dir = _run_path(run_id)
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -368,10 +525,22 @@ def stop_run(run_id: str) -> int:
 
 
 def cmd_run_stop(args: argparse.Namespace) -> int:
+    """
+    Stop a run.
+    
+    Parameters:
+    	args (argparse.Namespace): Parsed command-line arguments containing `run_id`.
+    """
     return stop_run(args.run_id)
 
 
 def cmd_run_logs(args: argparse.Namespace) -> int:
+    """
+    Display the most recent local run log or direct RunPod users to the remote log location.
+    
+    Returns:
+    	1 if the log is unavailable or the run is a RunPod execution, otherwise the exit code from the log viewer.
+    """
     try:
         status = json.loads((_run_path(args.run_id) / "status.json").read_text(encoding="utf-8"))
         realization_ref = status.get("last_realization")
@@ -398,6 +567,15 @@ def cmd_run_logs(args: argparse.Namespace) -> int:
 
 
 def stage_run(run_id: str, *, executor: str = "runpod") -> int:
+    """
+    Stage a compiled run for upload to RunPod.
+    
+    Parameters:
+    	executor (str): The target executor.
+    
+    Returns:
+    	int: `0` on success, `1` when staging fails, or `2` when the executor is unsupported.
+    """
     if executor != "runpod":
         print(f"staging is not implemented for executor: {executor}", file=sys.stderr)
         return 2
@@ -421,10 +599,31 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
 
 
 def cmd_run_stage(args: argparse.Namespace) -> int:
+    """
+    Stage a compiled run for RunPod upload.
+    
+    Parameters:
+    	args (argparse.Namespace): Command-line arguments containing the run ID and executor.
+    
+    Returns:
+    	int: The exit code from staging the run.
+    """
     return stage_run(args.run_id, executor=args.executor)
 
 
 def _latest_runpod_transfer(run_dir: Path) -> dict[str, Any]:
+    """
+    Return the latest RunPod upload transfer details for a run.
+    
+    Parameters:
+    	run_dir (Path): Run directory containing status and realization records.
+    
+    Returns:
+    	dict[str, Any]: The transfer details from the latest RunPod realization.
+    
+    Raises:
+    	ValueError: If the run has no RunPod realization or no upload transfer.
+    """
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     realization_ref = status.get("last_realization")
     if not isinstance(realization_ref, str):
@@ -437,6 +636,12 @@ def _latest_runpod_transfer(run_dir: Path) -> dict[str, Any]:
 
 
 def _latest_runpod_stage(run_dir: Path) -> dict[str, Any]:
+    """
+    Load the latest RunPod upload stage for a run.
+    
+    Raises:
+    	ValueError: If the run has no recorded stage or the latest stage is not an upload bundle.
+    """
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     stage_ref = status.get("last_stage")
     if not isinstance(stage_ref, str):
@@ -448,6 +653,12 @@ def _latest_runpod_stage(run_dir: Path) -> dict[str, Any]:
 
 
 def cmd_run_upload(args: argparse.Namespace) -> int:
+    """
+    Upload the latest RunPod run bundle.
+    
+    Returns:
+    	int: The exit code from the upload command, or 1 if the upload cannot be started.
+    """
     try:
         run_dir = _run_path(args.run_id)
         transfer = _latest_runpod_transfer(run_dir)
@@ -467,6 +678,16 @@ def cmd_run_upload(args: argparse.Namespace) -> int:
 
 
 def download_run(run_id: str, *, force: bool = False) -> int:
+    """
+    Download a run snapshot and reconcile its local status.
+    
+    Parameters:
+        run_id (str): Identifier of the run to download.
+        force (bool): Re-download the snapshot even when one already exists.
+    
+    Returns:
+        int: `0` on success, `1` if the download cannot be completed, or a subprocess return code for transfer failures.
+    """
     try:
         run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
@@ -580,10 +801,22 @@ def download_run(run_id: str, *, force: bool = False) -> int:
 
 
 def cmd_run_download(args: argparse.Namespace) -> int:
+    """
+    Download a run snapshot and reconcile its status.
+    
+    Returns:
+    	int: The exit code from the download operation.
+    """
     return download_run(args.run_id, force=args.force)
 
 
 def _runpod_workspace_for_run(run_dir: Path) -> str:
+    """
+    Get the RunPod workspace path recorded for a run.
+    
+    Returns:
+    	str: The workspace path from the latest realization request, or "/workspace" when unavailable.
+    """
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     realization_ref = status.get("last_realization")
     if isinstance(realization_ref, str):
@@ -598,6 +831,15 @@ def _runpod_workspace_for_run(run_dir: Path) -> str:
 
 
 def _checkpoint_step(name: str) -> int | None:
+    """
+    Extract the training step number from a checkpoint file name.
+    
+    Parameters:
+    	name (str): Checkpoint file name.
+    
+    Returns:
+    	int | None: The parsed step number, or `None` if no step can be found.
+    """
     matches = re.findall(r"(?:step|_)(\d{4,})(?=\.safetensors$|[-_.])", name)
     if not matches:
         return None
@@ -605,6 +847,18 @@ def _checkpoint_step(name: str) -> int | None:
 
 
 def _select_remote_outputs(items: list[dict[str, Any]], *, step: int | None = None, since_step: int | None = None, all_outputs: bool = False) -> list[dict[str, Any]]:
+    """
+    Select remote output items for a requested step range.
+    
+    Parameters:
+    	items (list[dict[str, Any]]): Remote output records.
+    	step (int | None): Exact training step to match.
+    	since_step (int | None): Lowest step to include.
+    	all_outputs (bool): Include every eligible output.
+    
+    Returns:
+    	list[dict[str, Any]]: The selected output records.
+    """
     candidates = [item for item in items if isinstance(item.get("name"), str)]
     for item in candidates:
         if not isinstance(item.get("step"), int):
@@ -623,6 +877,18 @@ def _select_remote_outputs(items: list[dict[str, Any]], *, step: int | None = No
 
 
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
+    """
+    List `.safetensors` files in a RunPod run's remote outputs directory.
+    
+    Parameters:
+        details (dict[str, Any]): SSH connection details.
+        workspace (str): Remote workspace root.
+        run_id (str): Run identifier.
+        timeout_sec (int): SSH command timeout in seconds.
+    
+    Returns:
+        list[dict[str, Any]]: Remote output records with path, name, step, and size.
+    """
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
@@ -652,6 +918,15 @@ PY
 
 
 def cmd_run_pull(args: argparse.Namespace) -> int:
+    """
+    Pull selected remote `.safetensors` outputs into the local run directory.
+    
+    Parameters:
+    	args (argparse.Namespace): Command-line arguments containing the run ID, SSH timeout, selection filters, and force flag.
+    
+    Returns:
+    	int: `0` on success, or a non-zero exit code if pulling fails.
+    """
     try:
         run_dir = _run_path(args.run_id)
         if not shutil.which("runpodctl"):
@@ -701,6 +976,20 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
 
 
 def _runpod_upload_process(run_dir: Path, code_seed: str, timeout_sec: int) -> tuple[subprocess.Popen[str], str]:
+    """
+    Start a background RunPod upload process for the latest staged archive.
+    
+    Parameters:
+    	run_dir (Path): Run directory containing the staged upload metadata.
+    	code_seed (str): Code used to authorize the upload.
+    	timeout_sec (int): Maximum time to wait before checking that the process stayed running.
+    
+    Returns:
+    	tuple[subprocess.Popen[str], str]: The started process and the upload code.
+    
+    Raises:
+    	ValueError: If the stage metadata is missing, the archive cannot be found, or runpodctl is unavailable.
+    """
     stage = _latest_runpod_stage(run_dir)
     archive = stage.get("archive")
     if not isinstance(archive, str):
@@ -718,6 +1007,16 @@ def _runpod_upload_process(run_dir: Path, code_seed: str, timeout_sec: int) -> t
 
 
 def _wait_process(process: subprocess.Popen[str], timeout_sec: int) -> None:
+    """
+    Wait for a background process to finish within a timeout.
+    
+    Parameters:
+    	process (subprocess.Popen[str]): The process to wait for.
+    	timeout_sec (int): Maximum number of seconds to wait.
+    
+    Raises:
+    	ValueError: If the process times out or exits with a non-zero status.
+    """
     try:
         process.wait(timeout=timeout_sec)
     except subprocess.TimeoutExpired as exc:
@@ -728,6 +1027,19 @@ def _wait_process(process: subprocess.Popen[str], timeout_sec: int) -> None:
 
 
 def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 10) -> dict[str, Any]:
+    """
+    Get SSH connection details for a RunPod pod.
+    
+    Parameters:
+    	timeout_sec (int): Maximum time to wait for SSH details to become available.
+    	interval_sec (int): Seconds to wait between readiness checks.
+    
+    Returns:
+    	dict[str, Any]: A mapping containing the pod ID, SSH host IP, SSH port, and private key path.
+    
+    Raises:
+    	ValueError: If the run has no pod ID or SSH details do not become ready before the timeout.
+    """
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     pod_id = status.get("pod_id")
     if not isinstance(pod_id, str):
@@ -755,6 +1067,12 @@ def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 
 
 
 def _ssh_base(details: dict[str, Any]) -> list[str]:
+    """
+    Build the base SSH command for a RunPod connection.
+    
+    Parameters:
+    	details (dict[str, Any]): SSH connection details containing the host IP, port, and private key path.
+    """
     return [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
@@ -767,7 +1085,23 @@ def _ssh_base(details: dict[str, Any]) -> list[str]:
 
 
 def _sync_runpod_remote_stdout(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> bool:
-    """Mirror remote stdout progress into local run artifacts."""
+    """
+    Sync new bytes from the remote stdout log into the local run artifacts.
+    
+    Copies any unread local portion of the RunPod stdout log into the run's local
+    logs directory, updates the recorded remote log offset and sync timestamp, and
+    materializes stdout progress in the run status.
+    
+    Parameters:
+    	run_dir (Path): The local run directory.
+    	details (dict[str, Any]): SSH connection details for the remote RunPod pod.
+    	workspace (str): Remote workspace root.
+    	run_id (str): The run identifier.
+    	timeout_sec (int): SSH command timeout in seconds.
+    
+    Returns:
+    	bool: `True` if the remote stdout log was synchronized, `False` otherwise.
+    """
 
     status_path = run_dir / "status.json"
     try:
@@ -828,6 +1162,12 @@ fi
 
 
 def _try_sync_runpod_remote_stdout(run_dir: Path, *, ssh_timeout_sec: int = 10) -> bool:
+    """
+    Try to synchronize stdout from a RunPod run.
+    
+    Returns:
+    	``True`` if remote stdout was synchronized successfully, ``False`` otherwise.
+    """
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         realization_ref = status.get("last_realization")
@@ -844,6 +1184,18 @@ def _try_sync_runpod_remote_stdout(run_dir: Path, *, ssh_timeout_sec: int = 10) 
 
 
 def _read_runpod_remote_exit(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> dict[str, Any] | None:
+    """
+    Read the latest remote exit record from a RunPod run.
+    
+    Parameters:
+    	details (dict[str, Any]): SSH connection details.
+    	workspace (str): Remote workspace path.
+    	run_id (str): Run identifier.
+    	timeout_sec (int): SSH command timeout in seconds.
+    
+    Returns:
+    	dict[str, Any] | None: The decoded exit record, or None if it cannot be read.
+    """
     remote_dir = f"{workspace.rstrip('/')}/runs/{run_id}/realizations"
     script = f"""
 set -u
@@ -867,6 +1219,15 @@ fi
 
 
 def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
+    """
+    Build a shell snippet that exports selected secret environment variables.
+    
+    Parameters:
+    	remote_notify (bool): Include ntfy-related exports when notification forwarding is enabled.
+    
+    Returns:
+    	str | None: A newline-terminated shell snippet, or ``None`` when no exports are needed.
+    """
     lines: list[str] = []
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
     if hf_token:
@@ -887,6 +1248,23 @@ def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
 
 
 def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+    """
+    Run a compiled RunPod job over SSH and wait for its completion.
+    
+    Parameters:
+        run_dir (Path): The run directory.
+        ssh_timeout_sec (int): Timeout for establishing SSH access to the pod.
+        job_timeout_sec (int | None): Maximum time to wait for the remote job.
+        remote_notify (bool): Whether to export notification settings to the remote job.
+        max_lease_sec (int): Maximum time before attempting to stop the pod.
+    
+    Returns:
+        int: The remote job exit code, or ``1`` if the recorded exit code is unavailable.
+    
+    Raises:
+        ValueError: If the upload archive, realization, SSH details, or remote job setup is missing or invalid.
+        subprocess.TimeoutExpired: If the job does not finish within ``job_timeout_sec``.
+    """
     stage = _latest_runpod_stage(run_dir)
     archive = stage.get("archive")
     archive_name = stage.get("archive_name")
@@ -1056,6 +1434,16 @@ echo $!
 
 
 def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
+    """
+    Retry downloading a run snapshot until it succeeds or the attempt limit is reached.
+    
+    Parameters:
+    	attempts (int): Number of download attempts to make.
+    	interval_sec (int): Number of seconds to wait between failed attempts.
+    
+    Returns:
+    	int: `0` if a download succeeds, `1` otherwise.
+    """
     for _ in range(attempts):
         code = download_run(run_id, force=True)
         if code == 0:
@@ -1081,6 +1469,23 @@ def run_remote(
     notify_channels: Any = None,
     image: str | None = None,
 ) -> int:
+    """
+    Run a compiled run on RunPod, download its outputs, and stop the pod when safe.
+    
+    Parameters:
+    	upload_timeout (int): Timeout in seconds while waiting for the RunPod pod to become SSH-ready.
+    	job_timeout (int | None): Maximum time in seconds to wait for the remote job to finish.
+    	download_attempts (int): Number of attempts to download the completed run before failing.
+    	download_interval (int): Delay in seconds between download attempts.
+    	hold_for (Any): Review hold duration before stopping the pod.
+    	max_lease (Any): Maximum RunPod lease duration.
+    	notify_repeat_interval (Any): Interval for repeated completion reminders during the hold period.
+    	notify_channels (Any): Notification channels to use for status and failure messages.
+    	image (str | None): Optional image override for launch.
+    
+    Returns:
+    	int: The remote job exit code, or `1` if orchestration fails.
+    """
     run_dir = _run_path(run_id)
     launched = False
     safe_to_stop = False
@@ -1149,6 +1554,12 @@ def run_remote(
 
 
 def cmd_run_remote(args: argparse.Namespace) -> int:
+    """
+    Run a remote Kura job using the provided command-line arguments.
+    
+    Parameters:
+    	args (argparse.Namespace): Parsed command-line arguments.
+    """
     return run_remote(
         args.run_id,
         upload_timeout=args.upload_timeout,
@@ -1164,6 +1575,12 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
 
 
 def _wait_for_docker_run(run_dir: Path) -> int:
+    """
+    Wait for a launched Docker run to finish and reconcile its final status.
+    
+    Returns:
+    	0 if the reconciled run state is completed, 1 otherwise.
+    """
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     identity = status.get("container_id") or status.get("container_name")
     if not isinstance(identity, str) or not identity:
@@ -1180,6 +1597,18 @@ def _wait_for_docker_run(run_dir: Path) -> int:
 
 
 def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None = None, notify_channels: Any = None, wait: bool = False) -> int:
+    """
+    Launch a compiled run using the selected executor.
+    
+    Parameters:
+    	executor (str): Launch target, either `docker` or RunPod.
+    	image (str | None): Optional container image override for RunPod launches.
+    	notify_channels (Any): Notification channels to use for launch status updates.
+    	wait (bool): Wait for a local Docker run to finish.
+    
+    Returns:
+    	int: `0` on success, `1` on launch failure, or the underlying Docker wait exit code when `wait` is enabled.
+    """
     run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
@@ -1261,4 +1690,13 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
 
 
 def cmd_run_launch(args: argparse.Namespace) -> int:
+    """
+    Launch a compiled run using the selected execution backend.
+    
+    Parameters:
+    	args (argparse.Namespace): Parsed command-line arguments containing the run ID, executor, dry-run flag, and optional image, notification, and wait options.
+    
+    Returns:
+    	int: Exit code from the launch operation.
+    """
     return launch_run(args.run_id, executor=args.executor, dry_run=args.dry_run, image=getattr(args, "image", None), notify_channels=getattr(args, "notify", None), wait=bool(getattr(args, "wait", False)))

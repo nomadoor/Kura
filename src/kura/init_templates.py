@@ -142,6 +142,12 @@ if __name__ == "__main__":
 
 
 def cmd_init(_: argparse.Namespace) -> int:
+    """
+    Create the standard Kura workspace layout and default support files.
+    
+    Returns:
+    	int: `0` after the workspace has been initialized.
+    """
     root = Path.cwd()
     for relative in ("datasets", "experiments", "runs", "workflows", "promptsets", "backends", "executors", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner"):
         (root / relative).mkdir(parents=True, exist_ok=True)

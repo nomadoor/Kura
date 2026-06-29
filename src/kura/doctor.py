@@ -24,6 +24,18 @@ from kura.workspace import workspace_relative_path as _workspace_relative_path
 
 
 def _image_config(name: str) -> dict[str, Any]:
+    """
+    Get the configured Docker image entry from workspace configuration.
+    
+    Parameters:
+    	name (str): Image name under docker.images.
+    
+    Returns:
+    	dict[str, Any]: The image configuration mapping.
+    
+    Raises:
+    	ValueError: If the image entry is missing or does not define the required string fields.
+    """
     try:
         image = _workspace_config()["docker"]["images"][name]
     except (KeyError, TypeError) as exc:
@@ -34,18 +46,49 @@ def _image_config(name: str) -> dict[str, Any]:
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    """
+    Run a Docker command without raising on a non-zero exit code.
+    
+    Parameters:
+    	command (list[str]): The command and arguments to execute.
+    	capture (bool): Whether to capture standard output and standard error.
+    
+    Returns:
+    	subprocess.CompletedProcess[str]: The completed process result.
+    """
     return subprocess.run(command, text=True, capture_output=capture, check=False)
 
 
 def _secret_state() -> dict[str, str]:
+    """
+    Report whether selected token environment variables are set.
+    
+    Returns:
+    	A mapping from each token name to "present" when it is set and non-empty, or "absent" otherwise.
+    """
     return {name: "present" if os.environ.get(name) else "absent" for name in ("HF_TOKEN", "RUNPOD_API_KEY", "GHCR_TOKEN", "DOCKERHUB_TOKEN")}
 
 
 def _safe_error(exc: BaseException | str) -> str:
+    """
+    Redact secrets from an exception message or string.
+    
+    Parameters:
+    	exc (BaseException | str): The value to convert and redact.
+    
+    Returns:
+    	str: The redacted text.
+    """
     return _redact_secret_text(str(exc))
 
 
 def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
+    """
+    Run a Docker command and parse each JSON object from stdout.
+    
+    Returns:
+        list[dict[str, Any]]: Parsed dictionary values from valid JSON lines in the command output.
+    """
     result = _docker_run(command, capture=True)
     if result.returncode != 0:
         return []
@@ -63,6 +106,12 @@ def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
 
 
 def _docker_managed_resources() -> dict[str, Any]:
+    """
+    Collect Docker containers and volumes managed by Kura.
+    
+    Returns:
+        dict[str, Any]: A mapping with the managed containers, the subset of containers that are not running, and the managed volumes.
+    """
     containers = _docker_json_lines(
         [
             "docker",
@@ -94,6 +143,12 @@ def _docker_managed_resources() -> dict[str, Any]:
 
 
 def cmd_doctor_docker(_: argparse.Namespace) -> int:
+    """
+    Inspect Docker readiness for the current Kura workspace.
+    
+    Returns:
+    	int: `0` when Docker, the configured image, and GPU access checks pass; `1` otherwise.
+    """
     try:
         workspace_root = _require_workspace()
         image = _image_config("ai-toolkit")
@@ -165,6 +220,12 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
 
 
 def cmd_doctor_runpod(_: argparse.Namespace) -> int:
+    """
+    Check RunPod CLI and API readiness for the current workspace.
+    
+    Returns:
+    	int: `0` if RunPod is ready, `1` otherwise.
+    """
     try:
         workspace_root = _require_workspace()
         config = _workspace_config().get("runpod", {})
@@ -222,6 +283,12 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
 
 
 def _comfyui_lora_count(object_info: dict[str, Any]) -> int | None:
+    """
+    Extract the number of available LoRA names from ComfyUI object info.
+    
+    Returns:
+    	count (int | None): The number of LoRA names listed for `LoraLoader`, or `None` if the value cannot be determined.
+    """
     loader = object_info.get("LoraLoader")
     if not isinstance(loader, dict):
         return None
@@ -233,6 +300,15 @@ def _comfyui_lora_count(object_info: dict[str, Any]) -> int | None:
 
 
 def _redact_url_userinfo(value: str) -> str:
+    """
+    Redact credentials from a URL.
+    
+    Parameters:
+    	value (str): URL to sanitize.
+    
+    Returns:
+    	str: The URL with any userinfo replaced by `***` and with query and fragment removed.
+    """
     parsed = urllib.parse.urlparse(value)
     replacement = {"query": "", "fragment": ""}
     if "@" not in parsed.netloc:
@@ -242,6 +318,12 @@ def _redact_url_userinfo(value: str) -> str:
 
 
 def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
+    """
+    Check whether the configured ComfyUI endpoint and LoRA staging path are ready.
+    
+    Returns:
+    	int: `0` when the endpoint responds with valid object info, `1` otherwise.
+    """
     try:
         workspace_root = _require_workspace()
         config = _workspace_config()
@@ -292,6 +374,12 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
 
 
 def cmd_doctor_secrets(_: argparse.Namespace) -> int:
+    """
+    Report token presence and Docker login registries.
+    
+    Prints the presence state of selected secret environment variables and the registry
+    names stored in the local Docker config.
+    """
     config = Path.home() / ".docker" / "config.json"
     registries: list[str] = []
     try:
@@ -303,6 +391,12 @@ def cmd_doctor_secrets(_: argparse.Namespace) -> int:
 
 
 def cmd_doctor_workspace(_: argparse.Namespace) -> int:
+    """
+    Report the workspace root and the presence of key workspace directories.
+    
+    Returns:
+    	exit_code (int): Always 0.
+    """
     workspace = _workspace()
     subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets", "docker")}
     print(json.dumps({

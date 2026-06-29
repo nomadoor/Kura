@@ -53,6 +53,18 @@ from kura.workspace import workspace_relative_path as _workspace_relative_path
 
 
 def _image_config(name: str) -> dict[str, Any]:
+    """
+    Load the Docker image configuration for a named workspace image.
+    
+    Parameters:
+    	name (str): The image configuration key under docker.images.
+    
+    Returns:
+    	dict[str, Any]: The configured image definition.
+    
+    Raises:
+    	ValueError: If the image configuration is missing or does not define the required string fields.
+    """
     try:
         image = _workspace_config()["docker"]["images"][name]
     except (KeyError, TypeError) as exc:
@@ -63,16 +75,44 @@ def _image_config(name: str) -> dict[str, Any]:
 
 
 def _backend_image_name(backend_name: Any) -> str:
+    """
+    Select the runtime image name for a training backend.
+    
+    Parameters:
+    	backend_name (Any): The backend identifier.
+    
+    Returns:
+    	str: "musubi-tuner" for the Musubi Tuner backend, otherwise "ai-toolkit".
+    """
     if backend_name == "musubi-tuner":
         return "musubi-tuner"
     return "ai-toolkit"
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    """
+    Run a subprocess command and return the completed process.
+    
+    Parameters:
+    	command (list[str]): Command and arguments to execute.
+    	capture (bool): Whether to capture standard output and standard error.
+    
+    Returns:
+    	subprocess.CompletedProcess[str]: The completed process result.
+    """
     return subprocess.run(command, text=True, capture_output=capture, check=False)
 
 
 def _safe_error(exc: BaseException | str) -> str:
+    """
+    Return a redacted error message.
+    
+    Parameters:
+    	exc (BaseException | str): The exception or message to format.
+    
+    Returns:
+    	str: The redacted error text.
+    """
     return _redact_secret_text(str(exc))
 
 
@@ -91,6 +131,15 @@ def _dataset_digest(dataset_id: str) -> str:
 
 
 def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Return the dataset entries declared in a run manifest.
+    
+    Parameters:
+    	run (dict[str, Any]): Run manifest data.
+    
+    Returns:
+    	list[dict[str, Any]]: Declared dataset entries, or an empty list if none are present.
+    """
     datasets = run.get("datasets")
     if isinstance(datasets, list):
         return [item for item in datasets if isinstance(item, dict)]
@@ -101,10 +150,22 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _now() -> datetime:
+    """
+    Get the current local datetime with timezone information.
+    """
     return datetime.now().astimezone()
 
 
 def cmd_dataset_validate(args: argparse.Namespace) -> int:
+    """
+    Validate a dataset directory against its manifest files.
+    
+    Parameters:
+    	dataset_dir (str): Path to the dataset directory.
+    
+    Returns:
+    	int: `0` when validation succeeds, `1` when validation fails.
+    """
     directory = Path(args.dataset_dir)
     errors: list[str] = []
     warnings: list[str] = []
@@ -269,6 +330,17 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
 
 
 def cmd_run_status(args: argparse.Namespace) -> int:
+    """
+    Print the current status for a run.
+    
+    Includes the latest realization and observation records when their referenced files exist, and adds a compact summary of the run state, exit code, pod ID, downloaded run, and outputs.
+    
+    Parameters:
+    	args (argparse.Namespace): Command-line arguments containing run_id.
+    
+    Returns:
+    	0 if the status was read and printed successfully, 1 if the status could not be read.
+    """
     try:
         path = _run_path(args.run_id) / "status.json"
         status = json.loads(path.read_text(encoding="utf-8"))
@@ -294,6 +366,12 @@ def cmd_run_status(args: argparse.Namespace) -> int:
 
 
 def cmd_run_reconcile(args: argparse.Namespace) -> int:
+    """
+    Reconcile a run with its execution backend and print the updated status.
+    
+    Returns:
+    	int: ``0`` on success, ``1`` if the run status cannot be read or reconciliation fails.
+    """
     try:
         run_dir = _run_path(args.run_id)
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -317,6 +395,12 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
 
 
 def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
+    """
+    Parse JSON objects from the standard output of a command.
+    
+    Returns:
+    	A list of JSON objects parsed from non-empty output lines, or an empty list if the command fails.
+    """
     result = subprocess.run(command, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         return []
@@ -334,6 +418,12 @@ def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
 
 
 def _kura_stopped_docker_containers() -> list[dict[str, Any]]:
+    """
+    List stopped Kura-managed Docker containers.
+    
+    Returns:
+        list[dict[str, Any]]: Container metadata records for managed containers whose state or status does not start with ``running`` or ``up``.
+    """
     containers = _docker_json_lines(["docker", "ps", "-a", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
     return [
         item
@@ -343,10 +433,25 @@ def _kura_stopped_docker_containers() -> list[dict[str, Any]]:
 
 
 def _kura_docker_volumes() -> list[dict[str, Any]]:
+    """
+    List Docker volumes managed by Kura.
+    
+    Returns:
+    	A list of Docker volume records labeled ``io.kura.managed=true``.
+    """
     return _docker_json_lines(["docker", "volume", "ls", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
 
 
 def _docker_cleanup_image() -> str:
+    """
+    Select a local Docker image for workspace cleanup.
+    
+    Returns:
+    	the local image tag to use for cleanup operations.
+    
+    Raises:
+    	ValueError: If the workspace has no configured local image for cleanup.
+    """
     images = _workspace_config().get("docker", {}).get("images", {})
     if isinstance(images, dict):
         for name in ("ai-toolkit", "musubi-tuner"):
@@ -357,6 +462,19 @@ def _docker_cleanup_image() -> str:
 
 
 def _workspace_relative_target(workspace: Path, target: Path) -> str:
+    """
+    Convert a workspace path to a safe container path under /workspace/.
+    
+    Parameters:
+    	workspace (Path): The workspace root.
+    	target (Path): The path to convert.
+    
+    Returns:
+    	str: The corresponding /workspace/ path.
+    
+    Raises:
+    	ValueError: If target is outside the workspace or resolves to an unsafe path.
+    """
     resolved_workspace = workspace.resolve()
     resolved_target = target.resolve()
     try:
@@ -369,6 +487,16 @@ def _workspace_relative_target(workspace: Path, target: Path) -> str:
 
 
 def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None:
+    """
+    Remove workspace paths inside a cleanup container.
+    
+    Parameters:
+    	workspace (Path): Workspace root used to map targets into container paths.
+    	targets (list[Path]): Workspace paths to remove.
+    
+    Raises:
+    	PermissionError: If the cleanup container fails to delete the requested paths.
+    """
     container_targets = [_workspace_relative_target(workspace, target) for target in targets]
     if not container_targets:
         return
@@ -393,6 +521,13 @@ def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None
 
 
 def _remove_tree(workspace: Path, target: Path) -> None:
+    """
+    Remove a workspace path, falling back to Docker if local deletion is denied.
+    
+    Parameters:
+    	workspace (Path): Workspace root used for the Docker fallback.
+    	target (Path): Path to delete.
+    """
     try:
         shutil.rmtree(target)
     except PermissionError:
@@ -400,6 +535,15 @@ def _remove_tree(workspace: Path, target: Path) -> None:
 
 
 def cmd_run_prune(args: argparse.Namespace) -> int:
+    """
+    Prune run artifacts and optional Docker resources from the workspace.
+    
+    Parameters:
+    	args (argparse.Namespace): Command-line arguments controlling which runs and Docker resources are selected.
+    
+    Returns:
+    	int: Exit status code.
+    """
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
     runs: list[dict[str, Any]] = []
@@ -467,6 +611,15 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
 
 
 def cmd_image_build(args: argparse.Namespace) -> int:
+    """
+    Build a workspace Docker image.
+    
+    Parameters:
+    	args (argparse.Namespace): Command arguments, including the image name and optional ref.
+    
+    Returns:
+    	int: Exit code `0` on success, `1` if the image configuration cannot be loaded or Docker is unavailable, or the Docker build return code on build failure.
+    """
     try:
         image = _image_config(args.name)
     except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -505,6 +658,15 @@ def cmd_image_inspect(args: argparse.Namespace) -> int:
 
 
 def cmd_image_publish(args: argparse.Namespace) -> int:
+    """
+    Publish a configured Docker image.
+    
+    Parameters:
+    	args (argparse.Namespace): Command-line arguments containing the image name and dry-run flag.
+    
+    Returns:
+    	int: Exit code indicating success or failure.
+    """
     try:
         image = _image_config(args.name)
     except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -527,6 +689,14 @@ def cmd_image_publish(args: argparse.Namespace) -> int:
 
 
 def cmd_index_rebuild(_: argparse.Namespace) -> int:
+    """
+    Rebuild the workspace run index.
+    
+    Writes one JSON object per line to `index.jsonl` for each run that can be loaded successfully.
+    
+    Returns:
+    	0 when the index is rebuilt successfully.
+    """
     entries = []
     for run_file in sorted((_workspace() / "runs").glob("*/run.yaml")):
         try:
@@ -545,6 +715,15 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
 
 
 def cmd_monitor(args: argparse.Namespace) -> int:
+    """
+    Open the workspace monitor.
+    
+    Parameters:
+    	args (argparse.Namespace): Command-line arguments with monitor settings.
+    
+    Returns:
+    	int: Exit code.
+    """
     try:
         return run_textual_monitor(_require_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit)
     except ValueError as exc:
@@ -553,6 +732,15 @@ def cmd_monitor(args: argparse.Namespace) -> int:
 
 
 def cmd_run_watch(args: argparse.Namespace) -> int:
+    """
+    Open the run monitor for a specific run.
+    
+    Parameters:
+    	run_id (str): The run to highlight when the monitor opens.
+    
+    Returns:
+    	int: Exit code from the monitor, or `1` if the workspace cannot be opened.
+    """
     try:
         return run_textual_monitor(_require_workspace(), interval=args.interval, initial_run_id=args.run_id)
     except ValueError as exc:
@@ -561,6 +749,9 @@ def cmd_run_watch(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    """
+    Parse command-line arguments and dispatch the selected Kura command.
+    """
     _load_env_local()
     parser = argparse.ArgumentParser(
         prog="kura",

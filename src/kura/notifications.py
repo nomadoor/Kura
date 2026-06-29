@@ -15,10 +15,25 @@ from kura.executors import _redact_secret_text
 
 
 def safe_error(exc: BaseException | str) -> str:
+    """
+    Redact secrets from an error message.
+    
+    Parameters:
+    	exc (BaseException | str): The exception or message to sanitize.
+    
+    Returns:
+    	str: The redacted error text.
+    """
     return _redact_secret_text(str(exc))
 
 
 def format_duration(seconds: int) -> str:
+    """
+    Format a duration in compact days, hours, minutes, or seconds.
+    
+    Returns:
+    	str: A compact duration string such as "2d", "3h05m", "7m30s", or "45s".
+    """
     seconds = max(0, int(seconds))
     if seconds >= 86400 and seconds % 86400 == 0:
         return f"{seconds // 86400}d"
@@ -33,6 +48,15 @@ def format_duration(seconds: int) -> str:
 
 
 def notification_channels(raw: Any) -> list[str]:
+    """
+    Resolve the notification channels to use.
+    
+    Parameters:
+    	raw (Any): An explicit channel specification or a falsy value that allows environment-based detection.
+    
+    Returns:
+    	list[str]: The selected channel names.
+    """
     explicit = raw
     if explicit in (None, "", False):
         explicit = os.environ.get("KURA_NOTIFY")
@@ -56,6 +80,14 @@ def notification_channels(raw: Any) -> list[str]:
 
 
 def notify(channels: Any, *, subject: str, body: str) -> None:
+    """
+    Send a notification through the enabled channels.
+    
+    Parameters:
+    	channels (Any): Explicit channel selection or an override value.
+    	subject (str): Notification title.
+    	body (str): Notification message.
+    """
     selected = notification_channels(channels)
     if not selected:
         return
@@ -74,6 +106,16 @@ def notify(channels: Any, *, subject: str, body: str) -> None:
 
 
 def send_ntfy_notification(subject: str, body: str) -> None:
+    """
+    Send an ntfy notification.
+    
+    Parameters:
+    	subject (str): Notification title.
+    	body (str): Notification message body.
+    
+    Raises:
+    	ValueError: If the ntfy topic is missing or the ntfy server URL is invalid.
+    """
     topic = os.environ.get("KURA_NTFY_TOPIC")
     if not topic:
         raise ValueError("ntfy notification requires KURA_NTFY_TOPIC")
@@ -93,6 +135,16 @@ def send_ntfy_notification(subject: str, body: str) -> None:
 
 
 def sleep_with_completion_reminders(*, delay_sec: int, interval_sec: int, channels: Any, subject: str, body: str) -> None:
+    """
+    Sleep for a delay while sending periodic completion reminders.
+    
+    Parameters:
+    	delay_sec (int): Total delay before completion.
+    	interval_sec (int): Number of seconds between reminder notifications.
+    	channels (Any): Notification channels to use for reminders.
+    	subject (str): Notification subject.
+    	body (str): Notification body.
+    """
     remaining = max(0, int(delay_sec))
     interval = max(0, int(interval_sec))
     elapsed = 0

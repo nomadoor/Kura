@@ -88,7 +88,17 @@ class RunSummary:
 
 
 def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: float = 90.0) -> list[RunSummary]:
-    """Build a typed, read-only summary of all known runs in a workspace."""
+    """
+    Build typed, read-only summaries for all known runs in a workspace.
+    
+    Parameters:
+    	workspace (Path): Workspace directory containing run metadata and artifacts.
+    	loss_tail (int): Maximum number of recent loss values to keep per run.
+    	stale_after (float): Age in seconds after which a running run is marked stale.
+    
+    Returns:
+    	list[RunSummary]: Summaries for each discovered run, in discovery order.
+    """
 
     workspace = Path(workspace)
     run_ids = _collect_run_ids(workspace)
@@ -251,6 +261,19 @@ def _collect_run_ids(workspace: Path) -> list[str]:
 
 
 def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_tail: int, stale_after: float) -> RunSummary:
+    """
+    Build a run summary from workspace files and runtime observations.
+    
+    Parameters:
+    	workspace (Path): Workspace root containing run data.
+    	run_dir (Path): Directory for the run being summarized.
+    	fallback_id (str): Run ID to use when neither config nor run metadata provides one.
+    	loss_tail (int): Maximum number of loss values to retain from each source.
+    	stale_after (float): Age threshold, in seconds, for marking a running run as stale.
+    
+    Returns:
+    	RunSummary: The projected run metadata, progress, losses, executor details, and freshness state.
+    """
     run = _read_mapping(run_dir / "run.yaml")
     manifest = _read_mapping(run_dir / "resolved" / "manifest.lock.yaml")
     config = manifest or run
@@ -309,7 +332,12 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
 
 
 def _read_docker_state_overlay(status: dict[str, Any], realization: dict[str, Any]) -> dict[str, Any]:
-    """Read Docker state for stale local runs without mutating Kura artifacts."""
+    """
+    Read the current Docker container state for a run.
+    
+    Returns:
+    	Mapping with updated run state fields when Docker inspection succeeds, an interrupted marker when the container no longer exists, or an empty mapping when the state cannot be determined.
+    """
     identity = _string(status.get("container_id") or status.get("container_name"))
     if not identity:
         container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
@@ -346,6 +374,15 @@ def _read_docker_state_overlay(status: dict[str, Any], realization: dict[str, An
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:
+    """
+    Read a JSON or YAML file into a mapping.
+    
+    Parameters:
+    	path (Path): File to read.
+    
+    Returns:
+    	dict[str, Any]: Parsed mapping, or an empty mapping if the file cannot be read or does not contain a dictionary.
+    """
     try:
         if path.suffix in {".yaml", ".yml", ".lock"} or path.name in {"env.lock"}:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -612,6 +649,16 @@ def _parse_seconds_per_iter(text: str) -> float | None:
 
 
 def _read_training_stdout_from_candidates(paths: Iterable[Path], *, loss_tail: int) -> tuple[RunProgress | None, list[float]]:
+    """
+    Read training progress and loss data from the first stdout log that contains either.
+    
+    Parameters:
+    	paths (Iterable[Path]): Candidate stdout log paths.
+    	loss_tail (int): Maximum number of loss values to keep.
+    
+    Returns:
+    	tuple[RunProgress | None, list[float]]: The first available progress data and loss values, or `(None, [])` if none are found.
+    """
     for path in paths:
         progress, losses = _read_training_stdout(path, loss_tail=loss_tail)
         if progress or losses:
@@ -620,6 +667,15 @@ def _read_training_stdout_from_candidates(paths: Iterable[Path], *, loss_tail: i
 
 
 def _read_activity_from_stdout_candidates(paths: Iterable[Path]) -> str | None:
+    """
+    Extract the first readable activity label from a set of stdout logs.
+    
+    Parameters:
+    	paths (Iterable[Path]): Candidate stdout log paths.
+    
+    Returns:
+    	str | None: The first non-empty activity label found, or None if none can be read.
+    """
     for path in paths:
         activity = _read_activity_from_stdout(path)
         if activity:
@@ -628,6 +684,12 @@ def _read_activity_from_stdout_candidates(paths: Iterable[Path]) -> str | None:
 
 
 def _read_activity_from_stdout(path: Path) -> str | None:
+    """
+    Extract the most recent activity message from a stdout log.
+    
+    Returns:
+        str | None: The latest recognized activity line, or ``None`` if no activity is found or the file cannot be read.
+    """
     try:
         text = _read_text_tail(path, max_bytes=64 * 1024)
     except OSError:
@@ -643,6 +705,12 @@ def _read_activity_from_stdout(path: Path) -> str | None:
 
 
 def _activity_from_stdout_line(line: str) -> str | None:
+    """
+    Extract a human-readable activity label from a stdout log line.
+    
+    Returns:
+    	str | None: An activity description for recognized download, cache, or training progress lines, or ``None`` when the line does not match a known pattern.
+    """
     stalled = HF_DOWNLOAD_STALLED_RE.search(line)
     if stalled:
         return f"download stalled · {_download_label(stalled.group('label'))}"
@@ -681,6 +749,15 @@ def _activity_from_stdout_line(line: str) -> str | None:
 
 
 def _download_label(label: str) -> str:
+    """
+    Format a download label for display.
+    
+    Parameters:
+    	label (str): A label in ``key:filename`` form.
+    
+    Returns:
+    	str: A display label with the key and filename separated by a space.
+    """
     key, _, filename = label.strip().partition(":")
     if not filename:
         return key
@@ -688,6 +765,16 @@ def _download_label(label: str) -> str:
 
 
 def _int_from_pattern(text: str, pattern: str) -> int | None:
+    """
+    Extract the first captured integer from text that matches a pattern.
+    
+    Parameters:
+    	text (str): Text to search.
+    	pattern (str): Regular expression with a first capture group.
+    
+    Returns:
+    	int | None: The captured integer, or None if no match is found or the value cannot be parsed.
+    """
     match = re.search(pattern, text)
     if not match:
         return None
@@ -698,11 +785,30 @@ def _int_from_pattern(text: str, pattern: str) -> int | None:
 
 
 def _match_text(text: str, pattern: str) -> str | None:
+    """
+    Extract the first captured match from text and remove spaces.
+    
+    Parameters:
+    	text (str): The text to search.
+    	pattern (str): The regular expression pattern to apply.
+    
+    Returns:
+    	str | None: The first captured group with spaces removed, or None if no match is found.
+    """
     match = re.search(pattern, text)
     return match.group(1).replace(" ", "") if match else None
 
 
 def _format_bytes(value: int) -> str:
+    """
+    Format a byte count using a compact binary-size label.
+    
+    Parameters:
+    	value (int): The byte count to format.
+    
+    Returns:
+    	str: A human-readable size string such as `512B`, `1.5KB`, or `2.0MB`.
+    """
     amount = float(value)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if amount < 1024 or unit == "TB":
@@ -712,6 +818,18 @@ def _format_bytes(value: int) -> str:
 
 
 def _executor(run_type: str | None, config: dict[str, Any], status: dict[str, Any], realization: dict[str, Any]) -> str | None:
+    """
+    Determine the executor name for a run.
+    
+    Parameters:
+    	run_type (str | None): The run type.
+    	config (dict[str, Any]): Run configuration data.
+    	status (dict[str, Any]): Current run status data.
+    	realization (dict[str, Any]): Realization data.
+    
+    Returns:
+    	str | None: The executor name when it can be determined, otherwise `None`.
+    """
     if isinstance(realization.get("executor"), str):
         return realization["executor"]
     if isinstance(status.get("host"), str) and status["host"] == "runpod":
@@ -884,6 +1002,11 @@ def _format_seconds_per_iter(progress: RunProgress) -> str:
 
 
 def _format_progress_cell(summary: RunSummary, *, active: bool) -> Any:
+    """
+    Format a run's progress for display in the monitor table.
+    
+    When an active run has no numeric progress, uses the parsed activity text instead. For runs with known totals, renders a fixed-width progress bar with the step ratio and iteration speed.
+    """
     from rich.text import Text
 
     text = _format_progress(summary.progress)
