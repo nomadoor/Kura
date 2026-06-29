@@ -358,6 +358,10 @@ class NotificationTests(unittest.TestCase):
         with patch.dict(os.environ, {"KURA_NOTIFY": "none", "KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.notifications.shutil.which", return_value="/usr/bin/notify-send"):
             self.assertEqual(_notification_channels(None), [])
 
+    def test_notification_channels_list_none_disables_auto_detection(self) -> None:
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "kura-test-topic"}, clear=True), patch("kura.notifications.shutil.which", return_value="/usr/bin/notify-send"):
+            self.assertEqual(_notification_channels(["desktop", "none", "ntfy"]), [])
+
     def test_ntfy_notification_posts_to_topic(self) -> None:
         class Response:
             def __enter__(self) -> "Response":

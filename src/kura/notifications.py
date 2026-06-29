@@ -42,7 +42,10 @@ def notification_channels(raw: Any) -> list[str]:
                 return []
             return values
         if isinstance(explicit, (list, tuple)):
-            return [str(part).strip().lower() for part in explicit if str(part).strip()]
+            values = [str(part).strip().lower() for part in explicit if str(part).strip()]
+            if any(value in ("none", "off", "false", "0") for value in values):
+                return []
+            return values
     channels: list[str] = []
     if shutil.which("notify-send"):
         channels.append("desktop")
