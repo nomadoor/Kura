@@ -71,6 +71,37 @@ adapter as experimental or unverified in `docs/musubi-adapters.md`.
    the produced LoRA outputs. Merely downloading models or reaching the train
    script is not enough.
 
+## Capacity planning before real smoke
+
+Do not blindly try cheap GPUs in ascending order. Before launching a real smoke,
+write down a short hardware plan from the actual run inputs:
+
+- model files and approximate total size
+- image/video type, resolution, batch size, and step count
+- precision or quantization flags (`fp8_*`, `save_precision`, etc.)
+- memory-saving flags (`gradient_checkpointing`, block swap, CPU offload)
+- expected VRAM class and chosen executor/GPU
+
+Use low-VRAM settings only when they are part of the test claim. If an adapter is
+clearly too large for a GPU class, skip that class instead of paying to discover
+an obvious OOM. Trying a borderline cheaper GPU is acceptable only when the plan
+states why it might fit and what signal will decide the next retry.
+
+Suggested smoke GPU choices:
+
+- Small image adapters or already-cached local tests: local Docker if the model
+  and settings plausibly fit.
+- Medium image adapters: start at A5000 only when the plan suggests 24GB is
+  realistic.
+- Large image adapters with big DiT/text encoders, such as Qwen-Image: start at
+  A40 or higher unless deliberately testing an A5000 low-VRAM recipe.
+- Video adapters or architectures with very large temporal models: estimate
+  first; if A40 is likely insufficient, mark the real smoke as deferred rather
+  than probing blindly.
+
+Record failed capacity probes as capacity data, not as adapter failures, when
+the command reaches the training entrypoint and dies from SIGKILL/OOM.
+
 ## Rules
 
 - Do not run Musubi directly on the host.
