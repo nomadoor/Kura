@@ -1340,6 +1340,87 @@ class RunPruneTests(unittest.TestCase):
             self.assertTrue(old.exists())
             self.assertTrue((old / "run.yaml").exists())
 
+    def test_run_prune_can_preview_kura_managed_docker_containers(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "runs").mkdir()
+            os.chdir(root)
+            try:
+                with patch(
+                    "kura.cli.subprocess.run",
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n'
+                        '{"ID":"def","Names":"kura-live","State":"running","Status":"Up 1 minute"}\n',
+                        "",
+                    ),
+                ), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=True, docker_volumes=False, yes=False))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["docker_actions"]["containers"], [{"id": "abc", "name": "kura-old", "state": "exited", "status": "Exited (0)"}])
+
+    def test_run_prune_deletes_kura_managed_docker_containers_only_with_yes(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "runs").mkdir()
+            calls: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                calls.append(command)
+                if command[:2] == ["docker", "ps"]:
+                    return subprocess.CompletedProcess(command, 0, '{"ID":"abc","Names":"kura-old","State":"exited","Status":"Exited (0)"}\n', "")
+                if command[:2] == ["docker", "rm"]:
+                    return subprocess.CompletedProcess(command, 0, "abc\n", "")
+                return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+            os.chdir(root)
+            try:
+                with patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=True, docker_volumes=False, yes=True))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 0)
+        self.assertIn(["docker", "rm", "abc"], calls)
+
+    def test_run_prune_falls_back_to_docker_for_root_owned_artifacts(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:test"}}}}),
+                encoding="utf-8",
+            )
+            (root / "runs").mkdir()
+            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
+            docker_calls: list[list[str]] = []
+
+            def fake_rmtree(path: Path) -> None:
+                if path == old:
+                    raise PermissionError("root-owned")
+                shutil.rmtree(path)
+
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                docker_calls.append(command)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            os.chdir(root)
+            try:
+                with patch("kura.cli.shutil.rmtree", side_effect=fake_rmtree), patch("kura.cli.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    status = cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, docker_containers=False, docker_volumes=False, yes=True))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(status, 0)
+        self.assertEqual(docker_calls[0][:7], ["docker", "run", "--rm", "--volume", f"{root.resolve()}:/workspace", "--entrypoint", "sh"])
+        self.assertIn("/workspace/runs/old", docker_calls[0])
+
 
 class RunPodLifecycleTests(unittest.TestCase):
     @staticmethod

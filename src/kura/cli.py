@@ -315,6 +315,89 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        return []
+    items: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            items.append(item)
+    return items
+
+
+def _kura_stopped_docker_containers() -> list[dict[str, Any]]:
+    containers = _docker_json_lines(["docker", "ps", "-a", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
+    return [
+        item
+        for item in containers
+        if not str(item.get("State") or item.get("Status") or "").lower().startswith(("running", "up"))
+    ]
+
+
+def _kura_docker_volumes() -> list[dict[str, Any]]:
+    return _docker_json_lines(["docker", "volume", "ls", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
+
+
+def _docker_cleanup_image() -> str:
+    images = _workspace_config().get("docker", {}).get("images", {})
+    if isinstance(images, dict):
+        for name in ("ai-toolkit", "musubi-tuner"):
+            image = images.get(name)
+            if isinstance(image, dict) and isinstance(image.get("local"), str) and image["local"]:
+                return image["local"]
+    raise ValueError("workspace.yaml has no docker image available for cleanup")
+
+
+def _workspace_relative_target(workspace: Path, target: Path) -> str:
+    resolved_workspace = workspace.resolve()
+    resolved_target = target.resolve()
+    try:
+        relative = resolved_target.relative_to(resolved_workspace)
+    except ValueError as exc:
+        raise ValueError(f"refusing to delete path outside workspace: {target}") from exc
+    if not relative.parts or any(part == ".." for part in relative.parts):
+        raise ValueError(f"refusing unsafe delete target: {target}")
+    return "/workspace/" + "/".join(relative.parts)
+
+
+def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None:
+    container_targets = [_workspace_relative_target(workspace, target) for target in targets]
+    if not container_targets:
+        return
+    image = _docker_cleanup_image()
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--volume",
+        f"{workspace.resolve()}:/workspace",
+        "--entrypoint",
+        "sh",
+        image,
+        "-lc",
+        'rm -rf -- "$@"',
+        "kura-clean",
+        *container_targets,
+    ]
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode:
+        raise PermissionError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker cleanup failed"))
+
+
+def _remove_tree(workspace: Path, target: Path) -> None:
+    try:
+        shutil.rmtree(target)
+    except PermissionError:
+        _docker_remove_workspace_paths(workspace, [target])
+
+
 def cmd_run_prune(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
@@ -345,9 +428,32 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
         if args.yes:
             for target in targets:
                 if target.exists():
-                    shutil.rmtree(target)
+                    _remove_tree(workspace, target)
 
-    print(json.dumps({"dry_run": not args.yes, "outputs_only": args.outputs_only, "keep": args.keep, "states": sorted(states), "actions": actions}, ensure_ascii=False, indent=2))
+    docker_actions: dict[str, Any] = {"containers": [], "volumes": []}
+    if getattr(args, "docker_containers", False):
+        containers = _kura_stopped_docker_containers()
+        docker_actions["containers"] = [
+            {"id": item.get("ID"), "name": item.get("Names"), "state": item.get("State"), "status": item.get("Status")}
+            for item in containers
+        ]
+        if args.yes and containers:
+            ids = [str(item.get("ID")) for item in containers if item.get("ID")]
+            if ids:
+                result = subprocess.run(["docker", "rm", *ids], text=True, capture_output=True, check=False)
+                if result.returncode:
+                    raise RuntimeError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker rm failed"))
+    if getattr(args, "docker_volumes", False):
+        volumes = _kura_docker_volumes()
+        docker_actions["volumes"] = [{"name": item.get("Name"), "driver": item.get("Driver")} for item in volumes]
+        if args.yes and volumes:
+            names = [str(item.get("Name")) for item in volumes if item.get("Name")]
+            if names:
+                result = subprocess.run(["docker", "volume", "rm", *names], text=True, capture_output=True, check=False)
+                if result.returncode:
+                    raise RuntimeError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker volume rm failed"))
+
+    print(json.dumps({"dry_run": not args.yes, "outputs_only": args.outputs_only, "keep": args.keep, "states": sorted(states), "actions": actions, "docker_actions": docker_actions}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -530,6 +636,8 @@ def main() -> None:
     prune.add_argument("--keep", type=int, default=30)
     prune.add_argument("--states", default="completed,failed,interrupted,launch_failed")
     prune.add_argument("--outputs-only", action="store_true")
+    prune.add_argument("--docker-containers", action="store_true", help="Also prune stopped Docker containers labeled io.kura.managed=true")
+    prune.add_argument("--docker-volumes", action="store_true", help="Also prune Docker volumes labeled io.kura.managed=true")
     prune.add_argument("--yes", action="store_true")
     prune.set_defaults(func=cmd_run_prune)
     launch = run_sub.add_parser("launch", help="Launch a compiled run locally or on RunPod")
