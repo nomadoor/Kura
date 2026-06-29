@@ -325,13 +325,15 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
         for item, seed in pairs:
             patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name)
             prompt_id = client.queue(patched)
-            with stdout_log.open("a", encoding="utf-8") as handle: handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
+            with stdout_log.open("a", encoding="utf-8") as handle:
+                handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
             for index, image in enumerate(client.wait(prompt_id)):
                 suffix = Path(image.get("filename", "image.png")).suffix or ".png"
                 relative = f"samples/images/{item['id']}_seed{seed}_{index}{suffix}"
                 (run_dir / relative).write_bytes(client.download(image))
                 record = {"file": relative, "prompt_id": item["id"], "prompt": item["prompt"], "negative_prompt": item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "created": now()}
-                with images_log.open("a", encoding="utf-8") as handle: handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                with images_log.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
                 generated += 1
         status(run_dir, state="completed", ended=now(), exit_code=0)
