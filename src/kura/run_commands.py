@@ -31,6 +31,7 @@ from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
 from kura.render import launch_render
 from kura.workspace import load_yaml as _load_yaml
+from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -73,6 +74,254 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(dataset, dict):
         return [dataset]
     return []
+
+
+def _workspace_display_path(path: Path) -> str:
+    root = _require_workspace()
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _dataset_path(workspace: Path, dataset: dict[str, Any]) -> Path | None:
+    path_value = dataset.get("path")
+    if isinstance(path_value, str) and path_value:
+        path = Path(path_value).expanduser()
+        if not path.is_absolute():
+            path = workspace / path
+        return path
+    dataset_id = dataset.get("id")
+    if isinstance(dataset_id, str) and dataset_id:
+        return workspace / "datasets" / dataset_id
+    return None
+
+
+def _count_dataset_items(path: Path | None) -> int | None:
+    if path is None:
+        return None
+    items = path / "items.jsonl"
+    if not items.is_file():
+        return None
+    try:
+        with items.open("r", encoding="utf-8") as handle:
+            return sum(1 for line in handle if line.strip())
+    except OSError:
+        return None
+
+
+def _nested_get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = mapping
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
+    backend = run.get("backend")
+    backend_name = backend.get("name") if isinstance(backend, dict) else None
+    overrides = run.get("backend_overrides")
+    if not isinstance(backend_name, str) or not isinstance(overrides, dict):
+        return {}
+    backend_overrides = overrides.get(backend_name)
+    if not isinstance(backend_overrides, dict):
+        return {}
+
+    important: dict[str, Any] = {}
+    direct_keys = (
+        "fp8_base",
+        "fp8_scaled",
+        "gradient_checkpointing",
+        "low_vram",
+        "quantize",
+        "quantize_te",
+        "blocks_to_swap",
+        "extra_args",
+    )
+    for key in direct_keys:
+        if key in backend_overrides:
+            important[key] = backend_overrides[key]
+
+    nested_keys = {
+        "config.train.gradient_checkpointing": ("config", "train", "gradient_checkpointing"),
+        "config.model.low_vram": ("config", "model", "low_vram"),
+        "config.model.quantize": ("config", "model", "quantize"),
+        "config.model.quantize_te": ("config", "model", "quantize_te"),
+    }
+    for label, path in nested_keys.items():
+        value = _nested_get(backend_overrides, path)
+        if value is not None:
+            important[label] = value
+    return important
+
+
+def _run_plan_payload(run_id: str) -> dict[str, Any]:
+    workspace = _require_workspace()
+    run_dir = _run_path(run_id)
+    run_yaml = run_dir / "run.yaml"
+    if not run_yaml.is_file():
+        raise ValueError(f"run.yaml was not found for run: {run_id}")
+    run = _load_yaml(run_yaml)
+    if run.get("type") != "train":
+        raise ValueError("kura run plan is for train runs; render runs use `kura render` commands")
+
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
+    manifest = run_dir / "resolved" / "manifest.lock.yaml"
+
+    datasets: list[dict[str, Any]] = []
+    for dataset in _run_datasets(run):
+        path = _dataset_path(workspace, dataset)
+        datasets.append(
+            {
+                "id": dataset.get("id"),
+                "role": dataset.get("role"),
+                "digest": dataset.get("digest"),
+                "path": _workspace_display_path(path) if path is not None else None,
+                "items": _count_dataset_items(path),
+            }
+        )
+
+    plan_params = {
+        "optimizer": params.get("optimizer"),
+        "rank": params.get("rank"),
+        "alpha": params.get("alpha"),
+        "lr": params.get("lr"),
+        "scheduler": params.get("scheduler"),
+        "steps": params.get("steps"),
+        "batch_size": params.get("batch_size"),
+        "gradient_accumulation": params.get("gradient_accumulation"),
+        "gradient_accumulation_steps": params.get("gradient_accumulation_steps"),
+        "resolution": params.get("resolution"),
+        "dtype": params.get("dtype"),
+        "seed": params.get("seed"),
+    }
+    sampling_payload = {}
+    if sampling.get("cadence_steps") is not None:
+        sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
+
+    return {
+        "id": run_id,
+        "type": run.get("type"),
+        "source": _workspace_display_path(run_yaml),
+        "compiled": manifest.is_file(),
+        "resolved_manifest": _workspace_display_path(manifest) if manifest.is_file() else None,
+        "backend": {
+            "name": backend.get("name") if isinstance(backend, dict) else None,
+        },
+        "model": {
+            "base": model.get("base") if isinstance(model, dict) else None,
+            "revision": model.get("revision") if isinstance(model, dict) else None,
+        },
+        "compute": {
+            "executor": compute.get("executor") if isinstance(compute, dict) else None,
+            "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
+        },
+        "datasets": datasets,
+        "params": {key: value for key, value in plan_params.items() if value is not None},
+        "sampling": sampling_payload,
+        "backend_overrides": _important_backend_overrides(run),
+    }
+
+
+def _format_plan_value(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(_format_plan_value(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if value is None:
+        return "-"
+    return str(value)
+
+
+def _append_kv(lines: list[str], label: str, value: Any, *, indent: int = 2) -> None:
+    prefix = " " * indent
+    lines.append(f"{prefix}{label:<12} {_format_plan_value(value)}")
+
+
+def format_run_plan(payload: dict[str, Any]) -> str:
+    lines = ["Run plan"]
+    _append_kv(lines, "id", payload.get("id"))
+    _append_kv(lines, "type", payload.get("type"))
+    _append_kv(lines, "source", payload.get("source"))
+    _append_kv(lines, "compiled", "yes" if payload.get("compiled") else "no")
+    if payload.get("resolved_manifest"):
+        _append_kv(lines, "resolved", payload.get("resolved_manifest"))
+
+    lines.append("")
+    lines.append("Backend")
+    for key, value in payload.get("backend", {}).items():
+        _append_kv(lines, key, value)
+
+    lines.append("")
+    lines.append("Model")
+    for key, value in payload.get("model", {}).items():
+        if value is not None:
+            _append_kv(lines, key, value)
+
+    lines.append("")
+    lines.append("Compute")
+    for key, value in payload.get("compute", {}).items():
+        if value is not None:
+            _append_kv(lines, key, value)
+
+    lines.append("")
+    lines.append("Datasets")
+    datasets = payload.get("datasets") if isinstance(payload.get("datasets"), list) else []
+    if datasets:
+        for dataset in datasets:
+            lines.append(f"  - {_format_plan_value(dataset.get('id'))}")
+            for key in ("role", "path", "items", "digest"):
+                if dataset.get(key) is not None:
+                    _append_kv(lines, key, dataset.get(key), indent=4)
+    else:
+        lines.append("  - none")
+
+    lines.append("")
+    lines.append("Params")
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    if params:
+        for key, value in params.items():
+            _append_kv(lines, key, value)
+    else:
+        lines.append("  - none")
+
+    sampling = payload.get("sampling") if isinstance(payload.get("sampling"), dict) else {}
+    if sampling:
+        lines.append("")
+        lines.append("Sampling")
+        for key, value in sampling.items():
+            _append_kv(lines, key, value)
+
+    overrides = payload.get("backend_overrides") if isinstance(payload.get("backend_overrides"), dict) else {}
+    if overrides:
+        lines.append("")
+        lines.append("Backend overrides")
+        for key, value in overrides.items():
+            _append_kv(lines, key, value)
+    return "\n".join(lines)
+
+
+def plan_run(run_id: str) -> dict[str, Any]:
+    return _run_plan_payload(run_id)
+
+
+def cmd_run_plan(args: argparse.Namespace) -> int:
+    try:
+        payload = plan_run(args.run_id)
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(format_run_plan(payload))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot show run plan: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _parse_duration_seconds(value: Any) -> int:

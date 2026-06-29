@@ -38,6 +38,8 @@ choice in `run.yaml` before recompiling.
   wants the backend to resolve companion weights automatically.
 - Do not silently switch from a requested Musubi run to AI-Toolkit. Treat backend
   choice as a proposal, then record it in `run.yaml`.
+- Before launch, follow AGENTS.md: show `uv run kura run plan <run-id>` and get
+  explicit approval.
 
 ## Useful commands
 

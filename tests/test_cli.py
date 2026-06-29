@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -343,6 +343,101 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                 self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 0)
             finally:
                 os.chdir(previous)
+
+
+class RunPlanTests(unittest.TestCase):
+    def test_run_plan_prints_uncompiled_train_settings_from_run_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "plan-example"
+            dataset_dir = root / "datasets" / "tiny"
+            run_dir.mkdir(parents=True)
+            dataset_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (dataset_dir / "items.jsonl").write_text("{}\n{}\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "plan-example",
+                        "type": "train",
+                        "backend": {"name": "musubi-tuner"},
+                        "model": {"base": "black-forest-labs/FLUX.2-klein-base-9B", "revision": "main"},
+                        "compute": {"executor": "runpod", "gpu": "NVIDIA RTX A5000"},
+                        "datasets": [{"id": "tiny", "role": "target", "digest": "sha256:abc"}],
+                        "params": {
+                            "rank": 16,
+                            "alpha": 1024,
+                            "lr": "0.00005",
+                            "scheduler": "constant",
+                            "steps": 1500,
+                            "batch_size": 2,
+                            "resolution": [768],
+                            "seed": 42,
+                        },
+                        "sampling": {"cadence_steps": 100},
+                        "backend_overrides": {
+                            "musubi-tuner": {
+                                "fp8_base": True,
+                                "gradient_checkpointing": True,
+                                "extra_args": ["--blocks_to_swap", "3"],
+                            }
+                        },
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="plan-example", json=False)), 0)
+            finally:
+                os.chdir(previous)
+            output = stdout.getvalue()
+            self.assertIn("compiled     no", output)
+            self.assertIn("musubi-tuner", output)
+            self.assertIn("black-forest-labs/FLUX.2-klein-base-9B", output)
+            self.assertIn("datasets/tiny", output)
+            self.assertIn("items        2", output)
+            self.assertIn("lr           0.00005", output)
+            self.assertIn("extra_args   --blocks_to_swap, 3", output)
+
+    def test_run_plan_json_marks_compiled_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "compiled-example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit}\nparams: {lr: 1e-4}\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(payload["compiled"])
+            self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
+            self.assertIn("lr", payload["params"])
+
+    def test_run_plan_rejects_render_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-example"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: render-example\ntype: render\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="render-example", json=False)), 1)
+            finally:
+                os.chdir(previous)
+            self.assertIn("for train runs", stderr.getvalue())
 
 
 class NotificationTests(unittest.TestCase):

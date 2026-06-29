@@ -69,6 +69,8 @@ fits one FLUX.2/Krea-class model can be invalid for another.
   better supported there, or when explicit model bundle control is important.
 - Do not silently switch from a requested AI-Toolkit run to Musubi. Treat backend
   choice as a proposal, then record it in `run.yaml`.
+- Before launch, follow AGENTS.md: show `uv run kura run plan <run-id>` and get
+  explicit approval.
 
 ## Dataset policy
 

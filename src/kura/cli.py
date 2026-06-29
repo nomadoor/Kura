@@ -35,6 +35,7 @@ from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
 from kura.run_commands import cmd_run_launch
 from kura.run_commands import cmd_run_logs
+from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_remote
 from kura.run_commands import cmd_run_stage
@@ -595,6 +596,10 @@ def main() -> None:
     status = run_sub.add_parser("status", help="Print the latest run status")
     status.add_argument("run_id")
     status.set_defaults(func=cmd_run_status)
+    plan = run_sub.add_parser("plan", help="Show the train settings that will be launched")
+    plan.add_argument("run_id")
+    plan.add_argument("--json", action="store_true", help="Print the plan as JSON")
+    plan.set_defaults(func=cmd_run_plan)
     stage = run_sub.add_parser("stage", help="Stage compiled inputs for a remote executor")
     stage.add_argument("run_id")
     stage.add_argument("--executor", default="runpod", choices=("runpod",))
