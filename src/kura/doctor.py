@@ -207,7 +207,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
             checks["network_volumes_empty"] = volumes == []
         except Exception as exc:  # read-only doctor; keep diagnosis broad.
             diagnostics["network_volumes_error"] = _redact_secret_text(str(exc))
-    ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["rest_pods"] and checks["pods_empty"] is not False and checks["network_volumes_empty"] is not False)
+    ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["rest_pods"] and checks["pods_empty"] is not False and checks["network_volumes_empty"] is True)
     if ok:
         diagnosis = "RunPod CLI/API are ready."
     elif checks["pods_empty"] is False:

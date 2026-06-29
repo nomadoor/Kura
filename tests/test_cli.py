@@ -2083,6 +2083,46 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 1)
 
+    def test_doctor_runpod_fails_when_network_volume_check_is_unknown(self) -> None:
+        class FakeResponse:
+            def __init__(self, payload: object) -> None:
+                self.payload = payload
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        def fake_urlopen(request: object, timeout: int = 20) -> FakeResponse:
+            url = getattr(request, "full_url", "")
+            if str(url).endswith("/networkvolumes"):
+                raise OSError("network volume endpoint unavailable")
+            return FakeResponse([])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                completed = subprocess.CompletedProcess([], 0, "ok", "")
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                     patch("kura.doctor.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.doctor.subprocess.run", return_value=completed), \
+                     patch("kura.doctor.urllib.request.urlopen", side_effect=fake_urlopen), \
+                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_runpod(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIsNone(payload["checks"]["network_volumes_empty"])
+            self.assertIn("network_volumes_error", payload["diagnostics"])
+
     def test_doctor_comfyui_handles_unreachable_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
