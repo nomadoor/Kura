@@ -10,20 +10,11 @@ You decide what you want and which data to use; the agent creates, runs, monitor
 
 ## What Kura is
 
-Kura is not a trainer itself. It is a thin management layer around training tools such as AI-Toolkit and Musubi Tuner, designed to make them **safer, reproducible, and easy for agents to operate**.
+Kura is not a trainer itself. It is a thin management layer around training tools such as [AI-Toolkit](https://github.com/ostris/ai-toolkit) and [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner), designed to make them **safer, reproducible, and easy for agents to operate**.
 
 Training runs in Docker (locally) or on RunPod (remotely), and everything — settings and results — is stored as plain files, so any run can be reviewed and reproduced later.
 
 If you keep ComfyUI running, you can also test-generate with the LoRA you trained using your chosen workflow.
-
-## Training backends
-
-Kura currently works with:
-
-- [AI-Toolkit](https://github.com/ostris/ai-toolkit)
-- [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner)
-
-Kura does not replace these projects; it prepares files, launches containers, monitors runs, and keeps the results reproducible.
 
 ## Getting started
 
