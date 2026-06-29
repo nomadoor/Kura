@@ -316,7 +316,7 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
 
 
 def cmd_run_prune(args: argparse.Namespace) -> int:
-    workspace = _workspace()
+    workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
     runs: list[dict[str, Any]] = []
     for run_file in sorted((workspace / "runs").glob("*/run.yaml")):

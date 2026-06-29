@@ -1172,6 +1172,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
             os.chdir(root)
@@ -1186,6 +1187,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
             os.chdir(root)
@@ -1198,6 +1200,21 @@ class RunPruneTests(unittest.TestCase):
             self.assertTrue((old / "run.yaml").exists())
             self.assertFalse((old / "outputs").exists())
             self.assertFalse((old / "downloads").exists())
+
+    def test_run_prune_requires_workspace_before_deleting(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs").mkdir()
+            old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
+            os.chdir(root)
+            try:
+                with self.assertRaisesRegex(ValueError, "workspace.yaml was not found"):
+                    cmd_run_prune(argparse.Namespace(keep=0, states="completed", outputs_only=False, yes=True))
+            finally:
+                os.chdir(previous)
+            self.assertTrue(old.exists())
+            self.assertTrue((old / "run.yaml").exists())
 
 
 class RunPodLifecycleTests(unittest.TestCase):
