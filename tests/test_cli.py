@@ -23,7 +23,7 @@ from kura.cli import _docker_cleanup_image, _load_env_local, _notification_chann
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _local_launch_disk_preflight, launch_run
+from kura.run_commands import _ensure_free_bytes, _local_launch_disk_preflight, launch_run
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -1707,6 +1707,18 @@ class DockerLifecycleTests(unittest.TestCase):
             with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
                 with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
                     _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
+
+    def test_download_disk_guard_rejects_when_free_space_is_too_low(self) -> None:
+        class Usage:
+            total = 100 * 1024**3
+            used = 95 * 1024**3
+            free = 5 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+                with self.assertRaisesRegex(ValueError, "needs about 10 GiB free"):
+                    _ensure_free_bytes(target, 10 * 1024**3, context="test download")
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

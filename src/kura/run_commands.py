@@ -234,6 +234,25 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
     return {"required_gib": required_gib, "paths": checked}
 
 
+def _ensure_free_bytes(path: Path, required_bytes: int, *, context: str) -> dict[str, Any]:
+    path.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(path)
+    if usage.free < required_bytes:
+        raise ValueError(f"{context} needs about {required_bytes // 1024**3} GiB free at {path}, but only {usage.free // 1024**3} GiB is available")
+    return {"path": str(path), "free_bytes": usage.free, "required_bytes": required_bytes}
+
+
+def _remote_path_size(details: dict[str, Any], path: str, *, timeout_sec: int = 60) -> int | None:
+    script = f"du -sb {shlex.quote(path)} 2>/dev/null | awk '{{print $1}}'"
+    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=timeout_sec)
+    if result.returncode:
+        return None
+    try:
+        return int(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
+
+
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
@@ -628,6 +647,13 @@ def download_run(run_id: str, *, force: bool = False) -> int:
         if not isinstance(ip, str) or not isinstance(port, int) or not isinstance(key, str):
             raise ValueError("pod SSH is not ready")
         destination.mkdir(exist_ok=True)
+        workspace = _runpod_workspace_for_run(run_dir)
+        remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
+        remote_size = _remote_path_size({"ip": ip, "port": port, "key": key}, remote_run_dir)
+        if isinstance(remote_size, int) and remote_size > 0:
+            _ensure_free_bytes(destination, max(50 * 1024**3, remote_size * 2 + 5 * 1024**3), context="RunPod download")
+        else:
+            _ensure_free_bytes(destination, 50 * 1024**3, context="RunPod download")
         remote_archive = f"/tmp/kura-download-{run_id}.tar.gz"
         remote_script = (
             f"tar -C /workspace/runs "
@@ -749,6 +775,8 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             raise ValueError("no matching remote .safetensors outputs found")
         destination = run_dir / "pulled" / "outputs"
         destination.mkdir(parents=True, exist_ok=True)
+        selected_size = sum(item.get("size") for item in selected if isinstance(item.get("size"), int))
+        _ensure_free_bytes(destination, max(10 * 1024**3, selected_size + 5 * 1024**3), context="RunPod output pull")
         pulled: list[dict[str, Any]] = []
         for item in selected:
             name = item.get("name")
