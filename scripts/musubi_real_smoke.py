@@ -100,6 +100,36 @@ SPECS: dict[str, SmokeSpec] = {
         expected_script="qwen_image_train_network.py",
         expected_outputs=2,
     ),
+    "wan": SmokeSpec(
+        architecture="wan",
+        model_base="Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+        dataset_id="flux2-klein-tiny",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged", "filename": "split_files/diffusion_models/wan2.1_t2v_1.3B_bf16.safetensors"},
+            "vae": {"repo": "Comfy-Org/Wan_2.1_ComfyUI_repackaged", "filename": "split_files/vae/wan_2.1_vae.safetensors"},
+            "t5": {"repo": "Wan-AI/Wan2.1-I2V-14B-720P", "filename": "models_t5_umt5-xxl-enc-bf16.pth"},
+        },
+        extra_override={
+            "task": "t2v-1.3B",
+            "dataset_config": {"general": {"resolution": [256, 256], "batch_size": 1}},
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="wan_train_network.py",
+        expected_outputs=2,
+    ),
 }
 
 

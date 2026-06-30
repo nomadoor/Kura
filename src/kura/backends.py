@@ -724,8 +724,8 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         "wan": {
             "dit": "safetensors",
             "vae": "safetensors",
-            "t5": "safetensors",
-            "clip": "safetensors",
+            "t5": "file",
+            "clip": "file",
         },
         "krea2": {
             "dit": "safetensors",
@@ -951,6 +951,10 @@ def validate_model(role, path, expected):
         if os.path.exists(path):
             return
         die(f"{role} is neither a local path nor a Hugging Face model id: {path}")
+    if expected == "file":
+        if os.path.isfile(path):
+            return
+        die(f"{role} is not a readable model file: {path}")
     keys, metadata = read_header(path)
     base = os.path.basename(path).lower()
     if expected == "safetensors":
