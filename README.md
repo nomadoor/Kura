@@ -113,11 +113,13 @@ Kura keeps everything as files inside the workspace.
 | `runs/<run-id>/outputs/` | Trained LoRAs and other results |
 | `cache/huggingface/` | Downloaded model weights (can be tens of GB) |
 
-None of these are tracked by Git. When you no longer need them:
+None of these are tracked by Git. If disk is a concern, start with a read-only look:
 
 ```sh
-uv run kura run prune                                              # remove old runs (add --yes to apply)
-uv run kura run prune --docker-containers --docker-volumes --yes   # also remove Kura-managed stopped containers/volumes
+uv run kura doctor disk                                           # see what's using space and how much is free (read-only)
+uv run kura cleanup all                                           # preview deletion candidates (dry-run; add --yes to apply)
+uv run kura run prune                                             # remove old runs (add --yes to apply)
+uv run kura run prune --docker-containers --docker-volumes --yes  # also remove Kura-managed stopped containers/volumes
 ```
 
 To reclaim the model cache, delete `cache/huggingface/` (it re-downloads when needed).

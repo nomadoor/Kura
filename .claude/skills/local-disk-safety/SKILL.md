@@ -131,16 +131,22 @@ or WSL/VHDX/Windows-side operations.
 
 ## Human-facing wording
 
-Prefer this style:
+Explain disk actions in the user's own language — match how they wrote to you.
+Lead with the effect, not the command. The examples below are in English; translate
+them to the user's language.
 
-> 再ダウンロード可能な一時モデルキャッシュを削除して、約12GB空けます。
-> 学習結果、データセット、LoRA成果物は削除しません。次に同じモデルを
-> 使うと再ダウンロードが必要です。進めますか？
+Good — proposing a cleanup:
 
-> いまワークスペースの空きが残り18GBで、このモデルだと途中でWSLや
-> Dockerごと落ちる恐れがあります。先にKuraの一時データを整理するか、
-> RunPodで回すのが安全です。どうしますか？
+> I can free about 12 GB by removing re-downloadable temporary model cache. Your
+> training results, datasets, and final LoRAs are kept. The next time you use the
+> same model it will be downloaded again. Go ahead?
+
+Good — declining to launch:
+
+> The workspace only has 18 GB free, and this model is large enough that the run
+> could crash WSL or Docker partway through. It is safer to clear some Kura
+> temporary data first, or run it on RunPod. How do you want to proceed?
 
 Avoid this style:
 
-> `kura cleanup cache --yes` を実行していいですか？
+> Can I run `kura cleanup cache --yes`?
