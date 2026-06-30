@@ -19,8 +19,11 @@ launch.
 
 - `kura doctor disk` reports workspace cache/runs, filesystem free space, Docker
   storage, cache-related environment variables, and root-owned files.
-- `kura cleanup ...` starts as a dry-run inventory command. Destructive cleanup
-  must stay guarded and explicit.
+- `kura cleanup ...` defaults to dry-run. Destructive cleanup requires `--yes`.
+  Whole-run deletion, including outputs/downloads, additionally requires
+  `--delete-final-artifacts`.
+- `kura fix-permissions` repairs root-owned Kura cache/run files, defaulting to
+  dry-run and limiting its scope to Kura-managed workspace paths.
 - Local Docker launch refuses to start when the workspace or writable mounts have
   less than 50GiB free.
 - Large adapter smoke tests must run `kura doctor disk` before downloading
@@ -28,6 +31,6 @@ launch.
 
 ## Follow-up
 
-Future work may add guarded delete modes, permission repair, cache indexing, and
-more precise per-run disk estimates. Those features should preserve the same
-principle: show where bytes live before deleting or launching.
+Future work may add cache indexing and more precise per-run disk estimates.
+Those features should preserve the same principle: show where bytes live before
+deleting or launching.

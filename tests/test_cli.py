@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -141,7 +141,7 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(nested)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None)), 0)
             finally:
                 os.chdir(previous)
@@ -150,6 +150,37 @@ class ImageCommandTests(unittest.TestCase):
             build = calls[0]
             self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
             self.assertEqual(build[-1], str(root))
+
+    def test_image_build_rejects_large_build_cache_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({
+                    "docker": {
+                        "images": {
+                            "ai-toolkit": {
+                                "local": "kura/ai-toolkit:test",
+                                "remote": "registry.example/kura/ai-toolkit:test",
+                                "dockerfile": "docker/ai-toolkit/Dockerfile",
+                                "context": ".",
+                            },
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._docker_storage_summary", return_value={"usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}]}),
+                    patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
+                ):
+                    code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None, allow_large_build_cache=False))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            self.assertIn("Docker build cache exceeds 30GiB", stderr.getvalue())
 
 
 class DoctorDockerTests(unittest.TestCase):
@@ -169,7 +200,7 @@ class DoctorDockerTests(unittest.TestCase):
                     patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                 ):
-                    code = cmd_cleanup(argparse.Namespace(target="all"))
+                    code = cmd_cleanup(argparse.Namespace(target="all", keep_last=30, delete_final_artifacts=False, yes=False))
             finally:
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
@@ -178,6 +209,102 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["workspace_root"], str(root))
             self.assertIn("cache/huggingface", {item.get("target") for item in payload["actions"]})
             self.assertIn("docker system", {item.get("target") for item in payload["actions"]})
+
+    def test_cleanup_image_uses_available_remote_name_when_local_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {
+                                    "local": "kura/ai-toolkit:test",
+                                    "remote": "registry.example/kura/ai-toolkit:test",
+                                    "dockerfile": "Dockerfile",
+                                    "context": ".",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli._docker_image_exists", side_effect=lambda image: image == "registry.example/kura/ai-toolkit:test"):
+                    self.assertEqual(_docker_cleanup_image(), "registry.example/kura/ai-toolkit:test")
+            finally:
+                os.chdir(previous)
+
+    def test_cleanup_runs_keeps_outputs_without_explicit_final_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "runs" / "old"
+            (run / "cache").mkdir(parents=True)
+            (run / "outputs").mkdir()
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
+            (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_cleanup(argparse.Namespace(target="runs", keep_last=0, delete_final_artifacts=False, yes=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertFalse((run / "cache").exists())
+            self.assertTrue((run / "outputs").exists())
+            self.assertFalse(payload["dry_run"])
+
+    def test_cleanup_runs_requires_explicit_final_delete_for_whole_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "runs" / "old"
+            (run / "outputs").mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
+            (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO),
+                ):
+                    self.assertEqual(cmd_cleanup(argparse.Namespace(target="runs", keep_last=0, delete_final_artifacts=True, yes=True)), 0)
+            finally:
+                os.chdir(previous)
+            self.assertFalse(run.exists())
+
+    def test_fix_permissions_dry_run_reports_root_owned_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 1, "samples": ["cache/root"]}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_fix_permissions(argparse.Namespace(target="all", yes=False))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["root_owned"]["count"], 1)
 
     def test_doctor_disk_reports_workspace_storage_and_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -493,11 +620,12 @@ class RunPlanTests(unittest.TestCase):
                         "sampling": {"cadence_steps": 100},
                         "backend_overrides": {
                             "musubi-tuner": {
-                                "fp8_base": True,
-                                "gradient_checkpointing": True,
-                                "extra_args": ["--blocks_to_swap", "3"],
-                            }
-                        },
+                            "fp8_base": True,
+                            "gradient_checkpointing": True,
+                            "save_every_n_steps": 100,
+                            "extra_args": ["--blocks_to_swap", "3"],
+                        }
+                    },
                     },
                     sort_keys=False,
                 ),
@@ -518,6 +646,8 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("items        2", output)
             self.assertIn("lr           0.00005", output)
             self.assertIn("extra_args   --blocks_to_swap, 3", output)
+            self.assertIn("Disk warnings", output)
+            self.assertIn("checkpoint cadence may create about 15 checkpoints", output)
 
     def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -541,6 +671,7 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
             self.assertEqual(payload["params"]["lr"], 0.00005)
+            self.assertEqual(payload["disk_warnings"], [])
 
     def test_run_plan_rejects_render_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1835,8 +1966,9 @@ class RunPruneTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(status, 0)
-        self.assertEqual(docker_calls[0][:7], ["docker", "run", "--rm", "--volume", f"{root.resolve()}:/workspace", "--entrypoint", "sh"])
-        self.assertIn("/workspace/runs/old", docker_calls[0])
+        docker_run = next(call for call in docker_calls if call[:2] == ["docker", "run"])
+        self.assertEqual(docker_run[:7], ["docker", "run", "--rm", "--volume", f"{root.resolve()}:/workspace", "--entrypoint", "sh"])
+        self.assertIn("/workspace/runs/old", docker_run)
 
     def test_run_prune_reports_artifact_delete_failure(self) -> None:
         previous = Path.cwd()
@@ -1855,6 +1987,8 @@ class RunPruneTests(unittest.TestCase):
                 shutil.rmtree(path)
 
             def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
                 return subprocess.CompletedProcess(command, 1, "", "docker cleanup failed")
 
             os.chdir(root)

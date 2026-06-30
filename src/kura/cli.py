@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import re
 import secrets
@@ -346,13 +347,31 @@ def _kura_docker_volumes() -> list[dict[str, Any]]:
     return _docker_json_lines(["docker", "volume", "ls", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
 
 
+def _docker_image_exists(name: str) -> bool:
+    if not name:
+        return False
+    try:
+        result = subprocess.run(["docker", "image", "inspect", name], text=True, capture_output=True, check=False)
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
 def _docker_cleanup_image() -> str:
     images = _workspace_config().get("docker", {}).get("images", {})
+    candidates: list[str] = []
     if isinstance(images, dict):
         for name in ("ai-toolkit", "musubi-tuner"):
             image = images.get(name)
-            if isinstance(image, dict) and isinstance(image.get("local"), str) and image["local"]:
-                return image["local"]
+            if isinstance(image, dict):
+                for key in ("local", "remote"):
+                    if isinstance(image.get(key), str) and image[key]:
+                        candidates.append(image[key])
+    for candidate in candidates:
+        if _docker_image_exists(candidate):
+            return candidate
+    if candidates:
+        raise ValueError("no configured Docker image is available locally for cleanup/fix-permissions")
     raise ValueError("workspace.yaml has no docker image available for cleanup")
 
 
@@ -399,6 +418,48 @@ def _remove_tree(workspace: Path, target: Path) -> None:
         _docker_remove_workspace_paths(workspace, [target])
 
 
+def _docker_chown_workspace_paths(workspace: Path, targets: list[Path], *, uid: int, gid: int) -> None:
+    container_targets = [_workspace_relative_target(workspace, target) for target in targets if target.exists()]
+    if not container_targets:
+        return
+    image = _docker_cleanup_image()
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--volume",
+        f"{workspace.resolve()}:/workspace",
+        "--entrypoint",
+        "sh",
+        image,
+        "-lc",
+        f'chown -R {uid}:{gid} -- "$@"',
+        "kura-chown",
+        *container_targets,
+    ]
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode:
+        raise PermissionError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker permission repair failed"))
+
+
+def _chown_workspace_paths(workspace: Path, targets: list[Path], *, uid: int, gid: int) -> None:
+    try:
+        for target in targets:
+            if not target.exists():
+                continue
+            for root, dirs, files in os.walk(target, followlinks=False):
+                for name in [".", *dirs, *files]:
+                    path = Path(root) if name == "." else Path(root) / name
+                    try:
+                        os.chown(path, uid, gid, follow_symlinks=False)
+                    except PermissionError:
+                        raise
+                    except OSError:
+                        continue
+    except PermissionError:
+        _docker_chown_workspace_paths(workspace, targets, uid=uid, gid=gid)
+
+
 def _cleanup_path_item(workspace: Path, relative: str, *, classification: str) -> dict[str, Any]:
     path = workspace / relative
     return {
@@ -408,6 +469,54 @@ def _cleanup_path_item(workspace: Path, relative: str, *, classification: str) -
         "size_bytes": _path_size_bytes(path),
         "classification": classification,
     }
+
+
+def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_artifacts: bool) -> list[dict[str, Any]]:
+    states = {"completed", "failed", "interrupted", "launch_failed"}
+    runs: list[dict[str, Any]] = []
+    for run_dir in sorted((workspace / "runs").glob("*")):
+        if not run_dir.is_dir():
+            continue
+        try:
+            run = _load_yaml(run_dir / "run.yaml") if (run_dir / "run.yaml").exists() else {}
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8")) if (run_dir / "status.json").exists() else {}
+        except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError):
+            run = {}
+            status = {}
+        state = str(status.get("state") or "unknown")
+        recency = status.get("ended") or status.get("started") or run.get("created") or run_dir.name
+        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir})
+    runs.sort(key=lambda item: str(item["recency"]), reverse=True)
+    keep_ids = {item["id"] for item in runs[: max(keep_last, 0)]}
+    actions: list[dict[str, Any]] = []
+    for item in runs:
+        run_dir = item["path"]
+        if item["id"] in keep_ids or item["state"] not in states:
+            continue
+        if delete_final_artifacts:
+            targets = [run_dir]
+            note = "Deletes the whole run, including outputs/downloads."
+            classification = "dangerous-run-delete"
+        else:
+            targets = [run_dir / name for name in ("cache", "tmp", ".cache") if (run_dir / name).exists()]
+            note = "Keeps outputs/downloads/final artifacts; removes only run-local transient cache/tmp directories."
+            classification = "safe-run-transients"
+        actions.append({
+            "id": item["id"],
+            "state": item["state"],
+            "classification": classification,
+            "note": note,
+            "targets": [
+                {
+                    "target": str(path.relative_to(workspace)),
+                    "path": str(path),
+                    "exists": path.exists(),
+                    "size_bytes": _path_size_bytes(path),
+                }
+                for path in targets
+            ],
+        })
+    return actions
 
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
@@ -421,13 +530,17 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         ])
     if target in ("runs", "all"):
         actions.append(_cleanup_path_item(workspace, "runs", classification="maybe-run-artifacts"))
+        run_actions = _run_cleanup_candidates(workspace, keep_last=args.keep_last, delete_final_artifacts=args.delete_final_artifacts)
         run_dirs = sorted(path for path in (workspace / "runs").glob("*") if path.is_dir())
         actions.append({
             "target": "runs/*",
             "path": str(workspace / "runs"),
             "count": len(run_dirs),
             "classification": "maybe-run-artifacts",
-            "note": "Use kura run prune for selective run cleanup; do not delete final artifacts blindly.",
+            "keep_last": args.keep_last,
+            "delete_final_artifacts": args.delete_final_artifacts,
+            "run_actions": run_actions,
+            "note": "By default this keeps outputs/downloads/final artifacts. Whole-run deletion requires --delete-final-artifacts.",
         })
     docker_storage: dict[str, Any] | None = None
     if target in ("docker-cache", "all"):
@@ -435,12 +548,35 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         actions.append({
             "target": "docker system",
             "classification": "maybe-shared-docker-storage",
-            "note": "Docker images/build cache may be shared outside Kura. This command only reports them.",
+            "note": "With --yes, Kura prunes Docker build cache only. Images are not removed.",
             "storage": docker_storage,
         })
     root_owned = _root_owned_files([workspace / "cache", workspace / "runs"])
+    if args.yes:
+        try:
+            if target in ("cache", "all"):
+                for relative in ("cache/huggingface", "cache/models"):
+                    path = workspace / relative
+                    if path.exists():
+                        _remove_tree(workspace, path)
+                    path.mkdir(parents=True, exist_ok=True)
+            if target in ("runs", "all"):
+                for item in _run_cleanup_candidates(workspace, keep_last=args.keep_last, delete_final_artifacts=args.delete_final_artifacts):
+                    for target_item in item["targets"]:
+                        path = Path(target_item["path"])
+                        if path.exists():
+                            _remove_tree(workspace, path)
+            if target in ("docker-cache", "all"):
+                result = subprocess.run(["docker", "builder", "prune", "--force"], text=True, capture_output=True, check=False)
+                if result.returncode:
+                    message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker builder prune failed")
+                    print(f"cannot cleanup Docker build cache: {message}", file=sys.stderr)
+                    return 1
+        except (OSError, ValueError, PermissionError) as exc:
+            print(f"cannot cleanup {target}: {_safe_error(exc)}", file=sys.stderr)
+            return 1
     print(json.dumps({
-        "dry_run": True,
+        "dry_run": not args.yes,
         "workspace_root": str(workspace),
         "target": target,
         "actions": actions,
@@ -448,8 +584,43 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         "next_steps": [
             "Review this output before deleting anything.",
             "Use kura run prune for old run artifacts.",
-            "Use Docker Desktop or docker prune commands manually for shared Docker storage until Kura adds a guarded delete mode.",
+            "Use kura fix-permissions if root-owned cache/run files block cleanup.",
         ],
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_fix_permissions(args: argparse.Namespace) -> int:
+    workspace = _require_workspace()
+    target_map = {
+        "cache": [workspace / "cache"],
+        "runs": [workspace / "runs"],
+        "all": [workspace / "cache", workspace / "runs"],
+    }
+    targets = target_map[args.target]
+    root_owned = _root_owned_files(targets)
+    actions = [
+        {
+            "target": str(path.relative_to(workspace)),
+            "path": str(path),
+            "exists": path.exists(),
+        }
+        for path in targets
+    ]
+    if args.yes and root_owned.get("count"):
+        try:
+            _chown_workspace_paths(workspace, targets, uid=os.getuid(), gid=os.getgid())
+        except (OSError, ValueError, PermissionError) as exc:
+            print(f"cannot fix permissions: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+    print(json.dumps({
+        "dry_run": not args.yes,
+        "workspace_root": str(workspace),
+        "target": args.target,
+        "owner": {"uid": os.getuid(), "gid": os.getgid()},
+        "actions": actions,
+        "root_owned": root_owned,
+        "diagnosis": "Permission repair is limited to Kura cache/runs paths.",
     }, ensure_ascii=False, indent=2))
     return 0
 
@@ -527,6 +698,12 @@ def cmd_image_build(args: argparse.Namespace) -> int:
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
         return 1
+    if not getattr(args, "allow_large_build_cache", False):
+        storage = _docker_storage_summary()
+        for item in storage.get("usage", []):
+            if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
+                print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
+                return 1
     ref_arg = "MUSUBI_TUNER_REF" if args.name == "musubi-tuner" else "AI_TOOLKIT_REF"
     default_ref = "main" if args.name == "musubi-tuner" else "548a286992261fbef40c380e82495d21fd3bca86"
     dockerfile = _workspace_relative_path(image["dockerfile"])
@@ -629,7 +806,15 @@ def main() -> None:
 
     cleanup = sub.add_parser("cleanup", help="Preview local cache, run, and Docker cleanup targets")
     cleanup.add_argument("target", choices=("cache", "runs", "docker-cache", "all"))
+    cleanup.add_argument("--keep-last", type=int, default=30, help="Keep this many most-recent runs when considering run cleanup")
+    cleanup.add_argument("--delete-final-artifacts", action="store_true", help="Allow whole-run deletion including outputs/downloads")
+    cleanup.add_argument("--yes", action="store_true", help="Apply the cleanup plan; default is dry-run")
     cleanup.set_defaults(func=cmd_cleanup)
+
+    fix_permissions = sub.add_parser("fix-permissions", help="Repair root-owned Kura cache/run files")
+    fix_permissions.add_argument("target", choices=("cache", "runs", "all"), default="all", nargs="?")
+    fix_permissions.add_argument("--yes", action="store_true", help="Apply ownership repair; default is dry-run")
+    fix_permissions.set_defaults(func=cmd_fix_permissions)
 
     monitor = sub.add_parser("monitor", help="Open the run monitor TUI")
     monitor.add_argument("--interval", type=float, default=2.0)
@@ -742,6 +927,7 @@ def main() -> None:
     build = image_sub.add_parser("build", help="Build a runtime image")
     build.add_argument("name", choices=("ai-toolkit", "musubi-tuner"))
     build.add_argument("--ref")
+    build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds the safety threshold")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
     inspect.add_argument("name", choices=("ai-toolkit", "musubi-tuner"))

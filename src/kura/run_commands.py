@@ -139,6 +139,9 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         "quantize_te",
         "blocks_to_swap",
         "extra_args",
+        "save_every_n_steps",
+        "save_precision",
+        "prune_checkpoints_before_step",
     )
     for key in direct_keys:
         if key in backend_overrides:
@@ -155,6 +158,37 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             important[label] = value
     return important
+
+
+def _as_positive_int(value: Any) -> int | None:
+    if value in (None, "", False):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> list[str]:
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
+    warnings: list[str] = []
+    steps = _as_positive_int(params.get("steps"))
+    save_every = _as_positive_int(important_overrides.get("save_every_n_steps"))
+    prune_before = _as_positive_int(important_overrides.get("prune_checkpoints_before_step"))
+    cadence = _as_positive_int(sampling.get("cadence_steps"))
+    if steps and save_every:
+        expected_checkpoints = max(steps // save_every, 1)
+        if expected_checkpoints >= 10 and not prune_before:
+            warnings.append(f"checkpoint cadence may create about {expected_checkpoints} checkpoints; set prune_checkpoints_before_step or keep-last policy if this is not intentional")
+        elif save_every <= 100 and not prune_before:
+            warnings.append("checkpoint save_every_n_steps is 100 or less with no prune policy")
+    if steps and cadence:
+        expected_samples = max(steps // cadence, 1)
+        if expected_samples >= 20:
+            warnings.append(f"sampling cadence may create about {expected_samples} sample batches")
+    return warnings
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
@@ -206,6 +240,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     if sampling.get("cadence_steps") is not None:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
+    important_overrides = _important_backend_overrides(run)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -227,7 +262,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "datasets": datasets,
         "params": {key: value for key, value in plan_params.items() if value is not None},
         "sampling": sampling_payload,
-        "backend_overrides": _important_backend_overrides(run),
+        "backend_overrides": important_overrides,
+        "disk_warnings": _disk_warnings(run, important_overrides),
     }
 
 
@@ -308,6 +344,12 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("Backend overrides")
         for key, value in overrides.items():
             _append_kv(lines, key, value)
+    disk_warnings = payload.get("disk_warnings") if isinstance(payload.get("disk_warnings"), list) else []
+    if disk_warnings:
+        lines.append("")
+        lines.append("Disk warnings")
+        for warning in disk_warnings:
+            lines.append(f"  - {warning}")
     return "\n".join(lines)
 
 
