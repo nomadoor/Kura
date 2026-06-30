@@ -170,6 +170,41 @@ def _as_positive_int(value: Any) -> int | None:
     return number if number > 0 else None
 
 
+def _extra_args_has_keep_last_policy(extra_args: Any) -> bool:
+    if not isinstance(extra_args, list):
+        return False
+    keep_last_flags = {
+        "--save_last_n_steps",
+        "--save_last_n_epochs",
+        "--save_last_n_steps_state",
+        "--save_last_n_epochs_state",
+    }
+    index = 0
+    while index < len(extra_args):
+        item = extra_args[index]
+        if not isinstance(item, str):
+            index += 1
+            continue
+        flag, sep, inline_value = item.partition("=")
+        if flag not in keep_last_flags:
+            index += 1
+            continue
+        if sep:
+            if _as_positive_int(inline_value):
+                return True
+        elif index + 1 < len(extra_args) and _as_positive_int(extra_args[index + 1]):
+            return True
+        index += 1
+    return False
+
+
+def _checkpoint_retention_policy_present(important_overrides: dict[str, Any]) -> bool:
+    return bool(
+        _as_positive_int(important_overrides.get("prune_checkpoints_before_step"))
+        or _extra_args_has_keep_last_policy(important_overrides.get("extra_args"))
+    )
+
+
 def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> list[str]:
     params = run.get("params") if isinstance(run.get("params"), dict) else {}
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
@@ -177,13 +212,13 @@ def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> 
     warnings: list[str] = []
     steps = _as_positive_int(params.get("steps"))
     save_every = _as_positive_int(important_overrides.get("save_every_n_steps"))
-    prune_before = _as_positive_int(important_overrides.get("prune_checkpoints_before_step"))
+    has_retention_policy = _checkpoint_retention_policy_present(important_overrides)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
     if steps and save_every:
         expected_checkpoints = max(steps // save_every, 1)
-        if expected_checkpoints >= 10 and not prune_before:
+        if expected_checkpoints >= 10 and not has_retention_policy:
             warnings.append(f"checkpoint cadence may create about {expected_checkpoints} checkpoints; set prune_checkpoints_before_step or keep-last policy if this is not intentional")
-        elif save_every <= 100 and not prune_before:
+        elif save_every <= 100 and not has_retention_policy:
             warnings.append("checkpoint save_every_n_steps is 100 or less with no prune policy")
     if steps and cadence:
         expected_samples = max(steps // cadence, 1)
@@ -202,8 +237,7 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
     params = run.get("params") if isinstance(run.get("params"), dict) else {}
     steps = _as_positive_int(params.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
-    prune_before = _as_positive_int(important.get("prune_checkpoints_before_step"))
-    if not steps or not save_every or prune_before:
+    if not steps or not save_every or _checkpoint_retention_policy_present(important):
         return
     expected = max(steps // save_every, 1)
     if expected >= 10:

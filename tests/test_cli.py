@@ -701,6 +701,22 @@ class RunPlanTests(unittest.TestCase):
         run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
         _checkpoint_safety_preflight(run)
 
+    def test_checkpoint_safety_preflight_accepts_musubi_keep_last_policy(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 3000},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "save_every_n_steps": 100,
+                    "extra_args": ["--save_last_n_steps", "300"],
+                }
+            },
+        }
+        _checkpoint_safety_preflight(run)
+        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--save_last_n_epochs=2"]
+        _checkpoint_safety_preflight(run)
+
     def test_checkpoint_safety_preflight_can_be_explicitly_overridden(self) -> None:
         run = {
             "type": "train",

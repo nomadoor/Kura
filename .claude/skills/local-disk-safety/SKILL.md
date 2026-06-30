@@ -109,15 +109,12 @@ or WSL/VHDX/Windows-side operations.
 
 - `kura doctor disk` reports workspace sizes, filesystem free space, Docker
   storage, root-owned Kura files, and cache-related environment variables.
-- Local Docker launch requires sufficient free space. Defaults:
-  - `docker.min_free_gb: 100`
-  - lower only when the user understands the trade-off
-- Docker build cache is gated:
-  - `docker.build_cache_limit_gb: 30`
-- RunPod download/pull checks local free space:
-  - `runpod.download_min_free_gb: 50`
+- Local Docker launch, Docker build cache, and RunPod download/pull checks use
+  configurable disk gates. See `docs/workspace-config.md` for current defaults.
+- Lower those gates only when the user understands the trade-off.
 - Frequent unpruned checkpoints are blocked before launch unless:
   - `backend_overrides.<backend>.prune_checkpoints_before_step` is set, or
+  - the backend has an explicit keep-last checkpoint policy, or
   - `safety.allow_many_checkpoints: true` is explicitly accepted
 
 ## Incident recovery flow
@@ -139,6 +136,10 @@ Prefer this style:
 > 再ダウンロード可能な一時モデルキャッシュを削除して、約12GB空けます。
 > 学習結果、データセット、LoRA成果物は削除しません。次に同じモデルを
 > 使うと再ダウンロードが必要です。進めますか？
+
+> いまワークスペースの空きが残り18GBで、このモデルだと途中でWSLや
+> Dockerごと落ちる恐れがあります。先にKuraの一時データを整理するか、
+> RunPodで回すのが安全です。どうしますか？
 
 Avoid this style:
 
