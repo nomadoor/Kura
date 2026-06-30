@@ -40,11 +40,7 @@ SPECS: dict[str, SmokeSpec] = {
         architecture="krea2",
         model_base="krea/Krea-2-Raw",
         dataset_id="flux2-klein-tiny",
-        model_paths={
-            "dit": "/workspace/cache/models/musubi/krea--Krea-2-Raw/dit/raw.safetensors",
-            "vae": "/workspace/cache/models/musubi/Comfy-Org--Qwen-Image_ComfyUI/vae/split_files/vae/qwen_image_vae.safetensors",
-            "text_encoder": "/workspace/cache/models/musubi/Comfy-Org--Qwen3-VL/text_encoder/text_encoders/qwen3vl_4b_bf16.safetensors",
-        },
+        model_paths=None,
         model_downloads=None,
         extra_override={
             "dataset_config": {"general": {"resolution": [256, 256], "batch_size": 1}},
