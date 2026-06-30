@@ -14,11 +14,12 @@ Musubi Tuner and Kura's Musubi backend are not the same layer.
   that adapter. If this has not been done, call the adapter experimental or
   unverified rather than simply "done."
 
-As of 2026-06-30, all adapters listed below passed Docker launch smoke on
-`kura/musubi-tuner:dev`: Kura compiled the run, started a Docker container, and
-the generated command reached the adapter's Musubi training script. That smoke
-used dummy model paths and intentionally failed at model loading, so it is not a
-real one-step training proof.
+As of 2026-06-30, all adapters listed below passed image smoke on
+`nomadoor/kura-musubi-tuner:dev`: the configured Docker image contains the
+expected Musubi scripts and each script can start its `--help` path. Earlier
+Docker launch smoke also proved that Kura can compile and start adapter commands
+against the Musubi entrypoints, but dummy-path launch smoke is not a real
+one-step training proof.
 
 Real one-step smoke is tracked separately. It must use actual model files and
 finish one optimizer step through Kura's normal Docker or RunPod executor. The
@@ -34,18 +35,18 @@ generator for it.
 
 | Architecture | Kura built-in adapter | Image smoke | Real smoke | Notes |
 | --- | --- | --- | --- | --- |
-| FLUX.2 / FLUX.2 klein | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | verified in prior local/RunPod runs | `architecture: flux2` or `flux_2` |
-| Wan | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: wan` |
-| Krea 2 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py krea2`) | `architecture: krea2` or `krea_2` |
-| Qwen-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | passed RunPod A40 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py qwen_image --executor runpod --gpu "NVIDIA A40"`); A5000 reached training start but was SIGKILLed, likely OOM for that 256px/fp8/block-swap recipe | `architecture: qwen_image` |
-| Z-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: zimage` or `z_image` |
-| FLUX.1 Kontext | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: flux_kontext` or `flux1_kontext` |
-| Ideogram 4 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: ideogram4` or `ideogram_4` |
-| HiDream-O1-Image | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: hidream_o1` or `hidream` |
-| HunyuanVideo | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: hunyuan_video` or `hunyuanvideo` |
-| HunyuanVideo 1.5 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: hunyuan_video_1_5` |
-| FramePack | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: framepack` or `frame_pack` |
-| Kandinsky 5 | yes | passed `kura doctor musubi` on `kura/musubi-tuner:dev` | unverified | `architecture: kandinsky5` or `kandinsky_5` |
+| FLUX.2 / FLUX.2 klein | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | verified in prior local/RunPod runs | `architecture: flux2` or `flux_2` |
+| Wan | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py wan --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: wan` |
+| Krea 2 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py krea2`) | `architecture: krea2` or `krea_2` |
+| Qwen-Image | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed RunPod A40 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py qwen_image --executor runpod --gpu "NVIDIA A40"`); A5000 reached training start but was SIGKILLed, likely OOM for that 256px/fp8/block-swap recipe | `architecture: qwen_image` |
+| Z-Image | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: zimage` or `z_image` |
+| FLUX.1 Kontext | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: flux_kontext` or `flux1_kontext` |
+| Ideogram 4 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: ideogram4` or `ideogram_4` |
+| HiDream-O1-Image | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: hidream_o1` or `hidream` |
+| HunyuanVideo | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: hunyuan_video` or `hunyuanvideo` |
+| HunyuanVideo 1.5 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: hunyuan_video_1_5` |
+| FramePack | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: framepack` or `frame_pack` |
+| Kandinsky 5 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: kandinsky5` or `kandinsky_5` |
 
 This list should be checked against the current upstream Musubi Tuner README
 before adding adapters.

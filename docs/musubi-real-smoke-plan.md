@@ -22,6 +22,7 @@ that disposable Pods usually pay to redownload model files.
 | Architecture | Real smoke result | Capacity note |
 | --- | --- | --- |
 | FLUX.2 / FLUX.2 klein | Verified in prior local/RunPod runs | depends strongly on 4B vs 9B and fp8/block swap settings |
+| Wan | Passed local Docker 1-step on 2026-06-30 | used Wan 2.1 T2V 1.3B, 256px, batch 1, bf16/fp8 base, gradient checkpointing; model files were stored once in HF cache and exposed through Kura's Musubi symlink tree |
 | Krea 2 | Passed local Docker 1-step on 2026-06-30 | used tiny 256px image smoke with fp8 and block swap |
 | Qwen-Image | Passed RunPod A40 1-step on 2026-06-30 | 256px, batch 1, fp8, `blocks_to_swap 45`; A5000 reached training start but was SIGKILLed, likely OOM. Treat A5000 as too small for this recipe, not as a general adapter failure |
 
@@ -29,7 +30,6 @@ that disposable Pods usually pay to redownload model files.
 
 | Architecture | Required model roles in Kura | First real-smoke target | Why / guardrail |
 | --- | --- | --- | --- |
-| Wan | `dit`, `vae`, `t5`, optional `clip` | Plan first; try local only if using the smallest upstream task/model and low-VRAM settings | video adapter; choose the smallest upstream-supported task/model before running |
 | Z-Image | `dit`, `vae`, `text_encoder` | Plan first; local if model size/cache makes 12GB plausible, otherwise A40 | large image model class; do not try A5000 unless model sizes make 24GB plausible |
 | FLUX.1 Kontext | `dit`, `vae`, `text_encoder1`, `text_encoder2` | Plan first; local if using cached FLUX.1 stack and low-VRAM settings, otherwise A40 | FLUX-class image-edit stack; A5000 only for an explicit low-VRAM recipe |
 | Ideogram 4 | `dit`, optional/required `vae`, `text_encoder` depending cache/sampling | Plan first; local only if model files are modest/cached, otherwise A40+ | model files and upstream recipe must be confirmed before spending GPU time |
