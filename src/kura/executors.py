@@ -19,7 +19,7 @@ from typing import Any
 from kura import __version__
 
 CONTAINER_WORKSPACE = "/workspace"
-MIN_FREE_SPACE_BYTES = 10 * 1024**3
+MIN_FREE_SPACE_BYTES = 50 * 1024**3
 LOW_AVAILABLE_MEMORY_BYTES = 4 * 1024**3
 RUNPOD_API_ROOT = "https://rest.runpod.io/v1"
 AI_TOOLKIT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?loss:\s*(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
@@ -136,7 +136,7 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str,
         usage = shutil.disk_usage(path)
         disk[name] = {"path": str(path), "free_bytes": usage.free, "total_bytes": usage.total}
         if usage.free < MIN_FREE_SPACE_BYTES:
-            errors.append(f"{path} has only {usage.free // 1024**3} GiB free; Kura requires at least 10 GiB before launch")
+            errors.append(f"{path} has only {usage.free // 1024**3} GiB free; Kura requires at least 50 GiB before local Docker launch")
     if errors:
         raise ValueError("; ".join(errors))
     available = _memory_available_bytes()

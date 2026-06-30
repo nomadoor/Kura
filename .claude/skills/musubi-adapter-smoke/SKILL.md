@@ -94,6 +94,18 @@ is already rented. If a local smoke would require downloading very large models,
 state where that cache will live and whether it should be removed after the
 test.
 
+Local is not automatically safe: large model downloads can fill the WSL/Linux
+filesystem, Docker storage, or Kura cache. Before any real smoke that may
+download multi-GB models, run:
+
+```sh
+uv run kura doctor disk
+```
+
+If it reports low free space, large Docker storage, or root-owned cache/run
+files, stop and address that before launching. Do not continue a real smoke just
+because it is "only local".
+
 Suggested smoke GPU choices:
 
 - Small image adapters or already-cached local tests: local Docker if the model

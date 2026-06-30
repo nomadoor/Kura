@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -45,6 +45,7 @@ class InitCommandTests(unittest.TestCase):
 
         doctor_help = subprocess.run([*command, "doctor", "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(doctor_help.returncode, 0)
+        self.assertIn("Report local disk, cache, Docker storage", doctor_help.stdout)
         self.assertIn("Check RunPod API, Pods, and Network Volumes", doctor_help.stdout)
         self.assertIn("Smoke-test Musubi adapter scripts", doctor_help.stdout)
 
@@ -152,6 +153,74 @@ class ImageCommandTests(unittest.TestCase):
 
 
 class DoctorDockerTests(unittest.TestCase):
+    def test_cleanup_all_is_dry_run_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "cache" / "huggingface").mkdir(parents=True)
+            (root / "cache" / "models").mkdir(parents=True, exist_ok=True)
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=123),
+                    patch("kura.cli._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_cleanup(argparse.Namespace(target="all"))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["workspace_root"], str(root))
+            self.assertIn("cache/huggingface", {item.get("target") for item in payload["actions"]})
+            self.assertIn("docker system", {item.get("target") for item in payload["actions"]})
+
+    def test_doctor_disk_reports_workspace_storage_and_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "mounts": [
+                                {"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "cache" / "huggingface").mkdir(parents=True)
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 200 * 1024**3, "used_bytes": 150 * 1024**3, "free_bytes": 50 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=20),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 2, "samples": ["cache/root-owned"], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["workspace_root"], str(root))
+            self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
+            self.assertIn("workspace filesystem has less than 100GiB free", payload["warnings"])
+            self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
+            self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
+
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1466,6 +1535,21 @@ class DockerLifecycleTests(unittest.TestCase):
             with patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 docker_preflight(root, mounts)
             self.assertTrue((root / "cache" / "huggingface").is_dir())
+
+    def test_docker_preflight_rejects_low_disk_space(self) -> None:
+        class Usage:
+            total = 100 * 1024**3
+            used = 80 * 1024**3
+            free = 20 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.shutil.disk_usage", return_value=Usage()),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
+                    docker_preflight(root, [])
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

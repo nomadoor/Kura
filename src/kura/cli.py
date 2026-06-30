@@ -20,7 +20,7 @@ import yaml
 
 from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
-from kura.doctor import cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
+from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.init_templates import cmd_init
 from kura.notifications import notification_channels as _notification_channels
@@ -399,6 +399,61 @@ def _remove_tree(workspace: Path, target: Path) -> None:
         _docker_remove_workspace_paths(workspace, [target])
 
 
+def _cleanup_path_item(workspace: Path, relative: str, *, classification: str) -> dict[str, Any]:
+    path = workspace / relative
+    return {
+        "target": relative,
+        "path": str(path),
+        "exists": path.exists(),
+        "size_bytes": _path_size_bytes(path),
+        "classification": classification,
+    }
+
+
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    workspace = _require_workspace()
+    target = args.target
+    actions: list[dict[str, Any]] = []
+    if target in ("cache", "all"):
+        actions.extend([
+            _cleanup_path_item(workspace, "cache/huggingface", classification="safe-cache"),
+            _cleanup_path_item(workspace, "cache/models", classification="safe-cache-index-or-symlink-tree"),
+        ])
+    if target in ("runs", "all"):
+        actions.append(_cleanup_path_item(workspace, "runs", classification="maybe-run-artifacts"))
+        run_dirs = sorted(path for path in (workspace / "runs").glob("*") if path.is_dir())
+        actions.append({
+            "target": "runs/*",
+            "path": str(workspace / "runs"),
+            "count": len(run_dirs),
+            "classification": "maybe-run-artifacts",
+            "note": "Use kura run prune for selective run cleanup; do not delete final artifacts blindly.",
+        })
+    docker_storage: dict[str, Any] | None = None
+    if target in ("docker-cache", "all"):
+        docker_storage = _docker_storage_summary()
+        actions.append({
+            "target": "docker system",
+            "classification": "maybe-shared-docker-storage",
+            "note": "Docker images/build cache may be shared outside Kura. This command only reports them.",
+            "storage": docker_storage,
+        })
+    root_owned = _root_owned_files([workspace / "cache", workspace / "runs"])
+    print(json.dumps({
+        "dry_run": True,
+        "workspace_root": str(workspace),
+        "target": target,
+        "actions": actions,
+        "root_owned": root_owned,
+        "next_steps": [
+            "Review this output before deleting anything.",
+            "Use kura run prune for old run artifacts.",
+            "Use Docker Desktop or docker prune commands manually for shared Docker storage until Kura adds a guarded delete mode.",
+        ],
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_run_prune(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
@@ -572,6 +627,10 @@ def main() -> None:
     init = sub.add_parser("init", help="Create the workspace folders and default config")
     init.set_defaults(func=cmd_init)
 
+    cleanup = sub.add_parser("cleanup", help="Preview local cache, run, and Docker cleanup targets")
+    cleanup.add_argument("target", choices=("cache", "runs", "docker-cache", "all"))
+    cleanup.set_defaults(func=cmd_cleanup)
+
     monitor = sub.add_parser("monitor", help="Open the run monitor TUI")
     monitor.add_argument("--interval", type=float, default=2.0)
     monitor.add_argument("--stale-after", type=float, default=90.0)
@@ -696,6 +755,8 @@ def main() -> None:
     doctor_sub = doctor.add_subparsers(dest="doctor_command", required=True)
     doctor_docker = doctor_sub.add_parser("docker", help="Check Docker / GPU / cache readiness")
     doctor_docker.set_defaults(func=cmd_doctor_docker)
+    doctor_disk = doctor_sub.add_parser("disk", help="Report local disk, cache, Docker storage, and permission risks")
+    doctor_disk.set_defaults(func=cmd_doctor_disk)
     doctor_musubi = doctor_sub.add_parser("musubi", help="Smoke-test Musubi adapter scripts in the configured image")
     doctor_musubi.add_argument("--skip-help", action="store_true", help="Only check script existence; skip python <script> --help smoke")
     doctor_musubi.add_argument("--no-gpu", action="store_true", help="Do not pass --gpus all to the Docker smoke container")

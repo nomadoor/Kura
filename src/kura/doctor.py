@@ -94,6 +94,246 @@ def _docker_managed_resources() -> dict[str, Any]:
     return {"containers": containers, "stopped_containers": stopped, "volumes": volumes}
 
 
+def _bytes_from_docker_size(value: Any) -> int | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    number = ""
+    unit = ""
+    for char in text:
+        if char.isdigit() or char == ".":
+            number += char
+        elif not char.isspace():
+            unit += char
+    if not number:
+        return None
+    try:
+        amount = float(number)
+    except ValueError:
+        return None
+    unit = unit.lower().rstrip("b")
+    scale = {
+        "": 1,
+        "k": 1000,
+        "kb": 1000,
+        "ki": 1024,
+        "m": 1000**2,
+        "mb": 1000**2,
+        "mi": 1024**2,
+        "g": 1000**3,
+        "gb": 1000**3,
+        "gi": 1024**3,
+        "t": 1000**4,
+        "tb": 1000**4,
+        "ti": 1024**4,
+    }.get(unit)
+    if scale is None:
+        return None
+    return int(amount * scale)
+
+
+def _path_size_bytes(path: Path) -> int | None:
+    if not path.exists():
+        return 0
+    du = shutil.which("du")
+    if du:
+        try:
+            result = subprocess.run([du, "-sb", str(path)], text=True, capture_output=True, check=False, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.split()[0])
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    total = 0
+    try:
+        for root, dirs, files in os.walk(path, followlinks=False):
+            root_path = Path(root)
+            for name in dirs + files:
+                try:
+                    total += (root_path / name).lstat().st_size
+                except OSError:
+                    continue
+        return total
+    except OSError:
+        return None
+
+
+def _disk_usage_for(path: Path) -> dict[str, Any]:
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        usage = shutil.disk_usage(probe)
+    except OSError as exc:
+        return {"path": str(path), "probe": str(probe), "error": _safe_error(exc)}
+    return {
+        "path": str(path),
+        "probe": str(probe),
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_bytes": usage.free,
+    }
+
+
+def _root_owned_files(paths: list[Path], *, sample_limit: int = 20, scan_limit: int = 10000) -> dict[str, Any]:
+    if os.name == "nt":
+        return {"supported": False, "count": 0, "samples": []}
+    samples: list[str] = []
+    seen: set[Path] = set()
+    count = 0
+    scanned = 0
+    truncated = False
+    for base in paths:
+        if not base.exists():
+            continue
+        try:
+            iterator = os.walk(base, followlinks=False)
+            for root, dirs, files in iterator:
+                names = [".", *dirs, *files]
+                root_path = Path(root)
+                for name in names:
+                    path = root_path if name == "." else root_path / name
+                    try:
+                        normalized = path.resolve(strict=False)
+                    except OSError:
+                        normalized = path
+                    if normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    scanned += 1
+                    if scanned > scan_limit:
+                        truncated = True
+                        raise StopIteration
+                    try:
+                        if path.lstat().st_uid == 0:
+                            count += 1
+                            if len(samples) < sample_limit:
+                                samples.append(str(path))
+                    except OSError:
+                        continue
+        except StopIteration:
+            break
+        except OSError:
+            continue
+    return {"supported": True, "count": count, "samples": samples, "scan_limit": scan_limit, "truncated": truncated}
+
+
+def _docker_storage_summary() -> dict[str, Any]:
+    docker_path = shutil.which("docker")
+    summary: dict[str, Any] = {"docker_path": docker_path, "daemon_reachable": False}
+    if not docker_path:
+        summary["diagnosis"] = "Docker CLI was not found on PATH."
+        return summary
+    info = _docker_run(["docker", "info"], capture=True)
+    summary["daemon_reachable"] = info.returncode == 0
+    if info.returncode != 0:
+        summary["diagnosis"] = _redact_secret_text(info.stderr.strip() or info.stdout.strip() or "Docker daemon is unreachable")
+        return summary
+    root_dir = _docker_run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture=True)
+    if root_dir.returncode == 0:
+        summary["root_dir"] = root_dir.stdout.strip()
+    usage = _docker_run(["docker", "system", "df", "--format", "{{json .}}"], capture=True)
+    items: list[dict[str, Any]] = []
+    if usage.returncode == 0:
+        for line in usage.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                size_bytes = _bytes_from_docker_size(item.get("Size"))
+                reclaimable_bytes = _bytes_from_docker_size(str(item.get("Reclaimable", "")).split()[0])
+                if size_bytes is not None:
+                    item["size_bytes"] = size_bytes
+                if reclaimable_bytes is not None:
+                    item["reclaimable_bytes"] = reclaimable_bytes
+                items.append(item)
+    summary["usage"] = items
+    summary["kura_managed"] = _docker_managed_resources()
+    return summary
+
+
+def cmd_doctor_disk(_: argparse.Namespace) -> int:
+    try:
+        workspace_root = _require_workspace()
+        config = _workspace_config()
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"disk: configuration error: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+
+    paths = {
+        "workspace": workspace_root,
+        "cache": workspace_root / "cache",
+        "huggingface_cache": workspace_root / "cache" / "huggingface",
+        "model_cache": workspace_root / "cache" / "models",
+        "runs": workspace_root / "runs",
+        "datasets": workspace_root / "datasets",
+        "outputs": workspace_root / "outputs",
+        "downloads": workspace_root / "downloads",
+        "tmp": Path(os.environ.get("TMPDIR") or "/tmp"),
+    }
+    docker_mounts = config.get("docker", {}).get("mounts", []) if isinstance(config.get("docker"), dict) else []
+    mounted_hf = next(
+        (
+            _workspace_relative_path(item["source"])
+            for item in docker_mounts
+            if isinstance(item, dict)
+            and isinstance(item.get("source"), str)
+            and item.get("target") == "/root/.cache/huggingface"
+        ),
+        None,
+    )
+    if mounted_hf is not None:
+        paths["docker_hf_mount"] = mounted_hf
+
+    sizes = {name: {"path": str(path), "exists": path.exists(), "size_bytes": _path_size_bytes(path)} for name, path in paths.items()}
+    filesystems = {name: _disk_usage_for(path) for name, path in paths.items()}
+    docker_storage = _docker_storage_summary()
+    root_owned = _root_owned_files([paths["cache"], paths["runs"]])
+    env = {
+        name: os.environ.get(name)
+        for name in ("KURA_CACHE_DIR", "HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE", "TORCH_HOME", "XDG_CACHE_HOME")
+        if os.environ.get(name)
+    }
+
+    gib = 1024**3
+    warnings: list[str] = []
+    workspace_free = filesystems["workspace"].get("free_bytes")
+    if isinstance(workspace_free, int) and workspace_free < 100 * gib:
+        warnings.append("workspace filesystem has less than 100GiB free")
+    cache_runs = (sizes["cache"].get("size_bytes") or 0) + (sizes["runs"].get("size_bytes") or 0)
+    if cache_runs > 30 * gib:
+        warnings.append("workspace cache+runs exceed 30GiB")
+    for item in docker_storage.get("usage", []):
+        if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * gib:
+            warnings.append("Docker build cache exceeds 30GiB")
+        if str(item.get("Type", "")).lower() == "images" and (item.get("size_bytes") or 0) > 50 * gib:
+            warnings.append("Docker images exceed 50GiB")
+    if root_owned.get("count"):
+        warnings.append("cache/runs contain root-owned files; cleanup may require permission repair")
+
+    payload = {
+        "workspace_root": str(workspace_root),
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "wsl": "microsoft" in platform.uname().release.lower(),
+        },
+        "sizes": sizes,
+        "filesystems": filesystems,
+        "docker_storage": docker_storage,
+        "root_owned": root_owned,
+        "cache_environment": env,
+        "warnings": warnings,
+        "diagnosis": "Disk diagnostics completed. This command is read-only.",
+    }
+    print(json.dumps(_redact_secrets(payload), indent=2))
+    return 1 if warnings else 0
+
+
 def cmd_doctor_docker(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
