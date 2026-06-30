@@ -374,10 +374,16 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     storage_statuses = probe_storages(paths, storage_config)
+    backing_write_estimates: dict[tuple[str, str], int] = {}
+    for name, status in storage_statuses.items():
+        backing = (status.backing_kind, status.backing_id)
+        backing_write_estimates[backing] = backing_write_estimates.get(backing, 0) + write_estimates.get(name, 0)
+    backing_required_bytes = {backing: floor_bytes + estimated for backing, estimated in backing_write_estimates.items()}
     for name, path in paths.items():
         status = storage_statuses[name]
         estimated_write_bytes = write_estimates.get(name, 0)
-        required_bytes = floor_bytes + estimated_write_bytes
+        backing = (status.backing_kind, status.backing_id)
+        required_bytes = backing_required_bytes[backing]
         checked[name] = {
             "path": str(path),
             "probe": status.probe,
@@ -390,6 +396,7 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
             "required_bytes": required_bytes,
             "floor_bytes": floor_bytes,
             "estimated_write_bytes": estimated_write_bytes,
+            "backing_estimated_write_bytes": backing_write_estimates[backing],
         }
         required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
         if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:

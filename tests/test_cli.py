@@ -413,6 +413,52 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["storage"]["workspace"]["confidence"], "estimated")
             self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 290 * 1024**3)
 
+    def test_doctor_disk_warns_on_low_effective_backing_free_space(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
+
+            def fake_probe(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
+                return {
+                    name: StorageStatus(
+                        path=str(path),
+                        probe=str(path),
+                        backing_id="F:",
+                        backing_kind="wsl2_vhdx",
+                        linux_free_bytes=900 * 1024**3,
+                        linux_total_bytes=1000 * 1024**3,
+                        host_free_bytes=90 * 1024**3,
+                        effective_free_bytes=90 * 1024**3,
+                        confidence="estimated",
+                        mount={"available": True},
+                    )
+                    for name, path in paths.items()
+                }
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=0),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor.probe_storages", side_effect=fake_probe),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 90 * 1024**3)
+            self.assertIn("workspace backing store has less than 100GiB effective free (F:)", payload["warnings"])
+
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1797,6 +1843,22 @@ class MusubiBackendTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_model_validator_accepts_hf_model_id_but_rejects_missing_paths(self) -> None:
+        code = _safetensors_validator_code()
+        accepted = {"models": [{"role": "text_encoder", "path": "Qwen/Qwen2.5-VL-7B-Instruct", "expected_format": "hf_model_id_or_path"}]}
+        absolute = {"models": [{"role": "text_encoder", "path": "/models/missing.safetensors", "expected_format": "hf_model_id_or_path"}]}
+        relative = {"models": [{"role": "text_encoder", "path": "models/missing", "expected_format": "hf_model_id_or_path"}]}
+
+        accepted_result = subprocess.run([sys.executable, "-c", code, json.dumps(accepted)], text=True, capture_output=True, check=False)
+        absolute_result = subprocess.run([sys.executable, "-c", code, json.dumps(absolute)], text=True, capture_output=True, check=False)
+        relative_result = subprocess.run([sys.executable, "-c", code, json.dumps(relative)], text=True, capture_output=True, check=False)
+
+        self.assertEqual(accepted_result.returncode, 0, accepted_result.stderr)
+        self.assertNotEqual(absolute_result.returncode, 0)
+        self.assertIn("path does not exist", absolute_result.stderr)
+        self.assertNotEqual(relative_result.returncode, 0)
+        self.assertIn("path does not exist", relative_result.stderr)
+
     def test_safetensors_postflight_accepts_musubi_flux2_lora(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "example.safetensors"
@@ -1971,6 +2033,39 @@ class DockerLifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "requires at least 110 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
         self.assertEqual(_checkpoint_safety_preflight(run), None)
+
+    def test_local_launch_disk_preflight_sums_estimates_on_shared_backing(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "max_train_steps": 2000,
+                    "save_every_n_steps": 100,
+                    "model_downloads": {
+                        "dit": {"repo": "example/model", "filename": "dit.safetensors"},
+                    },
+                }
+            },
+            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+        }
+        mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands._hf_file_size_bytes", return_value=40 * 1024**3),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
+                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 10}, mounts)
+        self.assertEqual(payload["paths"]["workspace"]["estimated_write_bytes"], 40 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 40 * 1024**3)
+        self.assertEqual(payload["paths"]["workspace"]["backing_estimated_write_bytes"], 80 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["backing_estimated_write_bytes"], 80 * 1024**3)
 
     def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

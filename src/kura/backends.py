@@ -951,9 +951,19 @@ def has_fragment(keys, fragment):
 
 def validate_model(role, path, expected):
     if expected == "hf_model_id_or_path":
-        if "/" in path and not os.path.exists(path):
-            return
         if os.path.exists(path):
+            return
+        first_part = path.split("/", 1)[0]
+        if (
+            os.path.isabs(path)
+            or path.startswith("./")
+            or path.startswith("../")
+            or path.startswith("~")
+            or first_part in ("models", "weights", "checkpoints", "cache", "runs", "datasets", "data")
+            or path.endswith((".safetensors", ".pt", ".pth", ".bin"))
+        ):
+            die(f"{role} path does not exist: {path}")
+        if "/" in path:
             return
         die(f"{role} is neither a local path nor a Hugging Face model id: {path}")
     if expected == "file":

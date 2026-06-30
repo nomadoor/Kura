@@ -308,6 +308,11 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     workspace_free = filesystems["workspace"].get("free_bytes")
     if isinstance(workspace_free, int) and workspace_free < 100 * gib:
         warnings.append("workspace filesystem has less than 100GiB free")
+    workspace_storage = storage_statuses.get("workspace")
+    if workspace_storage is not None and workspace_storage.effective_free_bytes < 100 * gib:
+        warnings.append(
+            f"workspace backing store has less than 100GiB effective free ({workspace_storage.backing_id})"
+        )
     cache_runs = (sizes["cache"].get("size_bytes") or 0) + (sizes["runs"].get("size_bytes") or 0)
     if cache_runs > 30 * gib:
         warnings.append("workspace cache+runs exceed 30GiB")
