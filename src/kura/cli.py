@@ -412,6 +412,7 @@ def _docker_remove_workspace_paths(workspace: Path, targets: list[Path]) -> None
 
 
 def _remove_tree(workspace: Path, target: Path) -> None:
+    _workspace_relative_target(workspace, target)
     try:
         shutil.rmtree(target)
     except PermissionError:

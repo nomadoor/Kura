@@ -17,6 +17,8 @@ runtime configuration without guessing.
 | `docker.workspace_target` | Container path for the mounted workspace | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
+| `docker.min_free_gb` | Minimum free space required before local Docker launch | `100` |
+| `docker.build_cache_limit_gb` | Docker build cache limit checked before local Docker launch | `30` |
 
 Default Hugging Face cache mount:
 
@@ -62,6 +64,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |
 | `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |
+| `runpod.download_min_free_gb` | Minimum local free space required before RunPod download | `50` |
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_type` / `runpod.cloud_types` | RunPod cloud preference; `ANY` tries community then secure | `ANY` |

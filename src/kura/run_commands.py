@@ -194,6 +194,26 @@ def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> 
     return warnings
 
 
+def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    if safety.get("allow_many_checkpoints") is True:
+        return
+    important = _important_backend_overrides(run)
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    steps = _as_positive_int(params.get("steps"))
+    save_every = _as_positive_int(important.get("save_every_n_steps"))
+    prune_before = _as_positive_int(important.get("prune_checkpoints_before_step"))
+    if not steps or not save_every or prune_before:
+        return
+    expected = max(steps // save_every, 1)
+    if expected >= 10:
+        raise ValueError(
+            f"checkpoint policy may create about {expected} checkpoints without pruning; "
+            "set backend_overrides.<backend>.prune_checkpoints_before_step, reduce save frequency, "
+            "or set safety.allow_many_checkpoints: true if intentional"
+        )
+
+
 def _configured_gib(value: Any, *, default: int) -> int:
     if value in (None, ""):
         return default
@@ -231,7 +251,29 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
             errors.append(f"{path} has only {usage.free // 1024**3} GiB free; local Docker launch requires at least {required_gib} GiB")
     if errors:
         raise ValueError("; ".join(errors))
-    return {"required_gib": required_gib, "paths": checked}
+    docker_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
+    docker_system_df = subprocess.run(["docker", "system", "df", "--format", "{{json .}}"], text=True, capture_output=True, check=False)
+    docker_storage: list[dict[str, Any]] = []
+    if docker_system_df.returncode == 0:
+        for line in docker_system_df.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                docker_storage.append(item)
+                if str(item.get("Type", "")).lower() == "build cache":
+                    size_text = str(item.get("Size") or "0B")
+                    match = re.fullmatch(r"\s*([0-9.]+)\s*([KMGT]?B?)\s*", size_text, re.IGNORECASE)
+                    if match:
+                        amount = float(match.group(1))
+                        unit = match.group(2).lower().rstrip("b")
+                        scale = {"": 1, "k": 1000, "m": 1000**2, "g": 1000**3, "t": 1000**4}.get(unit, 1)
+                        if amount * scale > docker_cache_limit_gib * 1024**3:
+                            raise ValueError(f"Docker build cache exceeds {docker_cache_limit_gib} GiB; run `kura cleanup docker-cache --yes` before local launch")
+    return {"required_gib": required_gib, "paths": checked, "docker_storage": docker_storage}
 
 
 def _ensure_free_bytes(path: Path, required_bytes: int, *, context: str) -> dict[str, Any]:
@@ -240,6 +282,12 @@ def _ensure_free_bytes(path: Path, required_bytes: int, *, context: str) -> dict
     if usage.free < required_bytes:
         raise ValueError(f"{context} needs about {required_bytes // 1024**3} GiB free at {path}, but only {usage.free // 1024**3} GiB is available")
     return {"path": str(path), "free_bytes": usage.free, "required_bytes": required_bytes}
+
+
+def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    value = runpod.get("download_min_free_gb")
+    return _configured_gib(value, default=50) * 1024**3
 
 
 def _remote_path_size(details: dict[str, Any], path: str, *, timeout_sec: int = 60) -> int | None:
@@ -637,6 +685,8 @@ def download_run(run_id: str, *, force: bool = False) -> int:
         pod_id = status.get("pod_id")
         if not isinstance(pod_id, str):
             raise ValueError("run has no RunPod pod ID")
+        config = _workspace_config()
+        min_download_free = _configured_download_min_free_bytes(config)
         pod = subprocess.run(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, check=False)
         if pod.returncode:
             raise ValueError(_redact_secret_text(pod.stderr.strip() or pod.stdout.strip() or "runpodctl pod get failed"))
@@ -651,9 +701,9 @@ def download_run(run_id: str, *, force: bool = False) -> int:
         remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
         remote_size = _remote_path_size({"ip": ip, "port": port, "key": key}, remote_run_dir)
         if isinstance(remote_size, int) and remote_size > 0:
-            _ensure_free_bytes(destination, max(50 * 1024**3, remote_size * 2 + 5 * 1024**3), context="RunPod download")
+            _ensure_free_bytes(destination, max(min_download_free, remote_size * 2 + 5 * 1024**3), context="RunPod download")
         else:
-            _ensure_free_bytes(destination, 50 * 1024**3, context="RunPod download")
+            _ensure_free_bytes(destination, min_download_free, context="RunPod download")
         remote_archive = f"/tmp/kura-download-{run_id}.tar.gz"
         remote_script = (
             f"tar -C /workspace/runs "
@@ -773,10 +823,12 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
         selected = _select_remote_outputs(items, step=args.step, since_step=args.since_step, all_outputs=args.all)
         if not selected:
             raise ValueError("no matching remote .safetensors outputs found")
+        config = _workspace_config()
+        min_download_free = _configured_download_min_free_bytes(config)
         destination = run_dir / "pulled" / "outputs"
         destination.mkdir(parents=True, exist_ok=True)
         selected_size = sum(item.get("size") for item in selected if isinstance(item.get("size"), int))
-        _ensure_free_bytes(destination, max(10 * 1024**3, selected_size + 5 * 1024**3), context="RunPod output pull")
+        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), selected_size + 5 * 1024**3), context="RunPod output pull")
         pulled: list[dict[str, Any]] = []
         for item in selected:
             name = item.get("name")
@@ -1318,6 +1370,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             raise ValueError("run already has a running realization; reconcile or stop it first")
         if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):
             raise ValueError("run must be compiled before launch")
+        _checkpoint_safety_preflight(locked)
         spec = _command_for_backend(locked)
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)

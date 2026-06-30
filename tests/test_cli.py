@@ -23,7 +23,7 @@ from kura.cli import _docker_cleanup_image, _load_env_local, _notification_chann
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _ensure_free_bytes, _local_launch_disk_preflight, launch_run
+from kura.run_commands import _checkpoint_safety_preflight, _ensure_free_bytes, _local_launch_disk_preflight, launch_run
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -688,6 +688,28 @@ class RunPlanTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertIn("for train runs", stderr.getvalue())
+
+    def test_checkpoint_safety_preflight_rejects_many_unpruned_checkpoints(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 3000},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 100}},
+        }
+        with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
+            _checkpoint_safety_preflight(run)
+        run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
+        _checkpoint_safety_preflight(run)
+
+    def test_checkpoint_safety_preflight_can_be_explicitly_overridden(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 3000},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 100}},
+            "safety": {"allow_many_checkpoints": True},
+        }
+        _checkpoint_safety_preflight(run)
 
 
 class NotificationTests(unittest.TestCase):
@@ -1690,7 +1712,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
                     _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
                 payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
@@ -1704,7 +1726,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
                     _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
 
@@ -1817,7 +1839,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     self.assertEqual(launch_run("example", executor="docker", dry_run=False, wait=True), 0)
             finally:
                 os.chdir(previous)
-            wait.assert_called_once_with(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
+            wait.assert_any_call(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
             reconcile.assert_called_once_with(run_dir)
 
 
