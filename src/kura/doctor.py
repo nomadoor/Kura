@@ -18,6 +18,8 @@ import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
+from kura.storage import is_wsl as _is_wsl
+from kura.storage import probe_storages
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -176,69 +178,6 @@ def _disk_usage_for(path: Path) -> dict[str, Any]:
     }
 
 
-def _is_wsl() -> bool:
-    return "microsoft" in platform.uname().release.lower()
-
-
-def _findmnt_for(path: Path) -> dict[str, Any]:
-    findmnt = shutil.which("findmnt")
-    if not findmnt:
-        return {"path": str(path), "available": False, "reason": "findmnt not found"}
-    try:
-        result = subprocess.run(
-            [findmnt, "-T", str(path), "-J", "-o", "TARGET,SOURCE,FSTYPE,OPTIONS"],
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"path": str(path), "available": False, "reason": _safe_error(exc)}
-    if result.returncode != 0:
-        return {"path": str(path), "available": False, "reason": _safe_error(result.stderr.strip() or result.stdout.strip())}
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        return {"path": str(path), "available": False, "reason": _safe_error(exc)}
-    filesystems = payload.get("filesystems") if isinstance(payload, dict) else None
-    if not isinstance(filesystems, list) or not filesystems:
-        return {"path": str(path), "available": False, "reason": "findmnt returned no filesystem"}
-    item = filesystems[0] if isinstance(filesystems[0], dict) else {}
-    return {
-        "path": str(path),
-        "available": True,
-        "target": item.get("target"),
-        "source": item.get("source"),
-        "fstype": item.get("fstype"),
-        "options": item.get("options"),
-    }
-
-
-def _wsl_storage_diagnostics(workspace_root: Path, paths: dict[str, Path]) -> dict[str, Any]:
-    if not _is_wsl():
-        return {"wsl": False, "warnings": []}
-    inspected = {name: _findmnt_for(path) for name, path in paths.items()}
-    warnings: list[str] = []
-    for name, item in inspected.items():
-        fstype = str(item.get("fstype") or "").lower()
-        path_text = str(paths[name])
-        if fstype == "ext4" and not path_text.startswith("/mnt/"):
-            warnings.append(
-                f"{name} is on WSL Linux ext4; Linux free space may not reflect the Windows drive that stores the WSL virtual disk"
-            )
-            break
-    return {
-        "wsl": True,
-        "workspace_root": str(workspace_root),
-        "windows_interop": {
-            "powershell.exe": shutil.which("powershell.exe"),
-            "cmd.exe": shutil.which("cmd.exe"),
-        },
-        "mounts": inspected,
-        "warnings": warnings,
-    }
-
-
 def _root_owned_files(paths: list[Path], *, sample_limit: int = 20, scan_limit: int = 10000) -> dict[str, Any]:
     if os.name == "nt":
         return {"supported": False, "count": 0, "samples": []}
@@ -354,7 +293,8 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
 
     sizes = {name: {"path": str(path), "exists": path.exists(), "size_bytes": _path_size_bytes(path)} for name, path in paths.items()}
     filesystems = {name: _disk_usage_for(path) for name, path in paths.items()}
-    wsl_storage = _wsl_storage_diagnostics(workspace_root, paths)
+    storage_statuses = probe_storages(paths, config)
+    storage = {name: status.to_dict() for name, status in storage_statuses.items()}
     docker_storage = _docker_storage_summary()
     root_owned = _root_owned_files([paths["cache"], paths["runs"]])
     env = {
@@ -378,18 +318,26 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             warnings.append("Docker images exceed 50GiB")
     if root_owned.get("count"):
         warnings.append("cache/runs contain root-owned files; cleanup may require permission repair")
-    warnings.extend(wsl_storage.get("warnings", []))
+    warned_backings: set[tuple[str, str]] = set()
+    for status in storage_statuses.values():
+        if not status.warning:
+            continue
+        key = (status.backing_kind, status.backing_id)
+        if key in warned_backings:
+            continue
+        warned_backings.add(key)
+        warnings.append(status.warning)
 
     payload = {
         "workspace_root": str(workspace_root),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
-            "wsl": "microsoft" in platform.uname().release.lower(),
+            "wsl": _is_wsl(),
         },
         "sizes": sizes,
         "filesystems": filesystems,
-        "wsl_storage": wsl_storage,
+        "storage": storage,
         "docker_storage": docker_storage,
         "root_owned": root_owned,
         "cache_environment": env,

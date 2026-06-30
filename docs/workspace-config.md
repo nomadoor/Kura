@@ -6,6 +6,18 @@ created by `kura init`. Relative host paths are resolved from the workspace root
 This page is intentionally short: it is mostly for AI agents that need to adjust
 runtime configuration without guessing.
 
+## Storage
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `storage.host_drive` | Windows drive that backs the WSL2 workspace VHDX, for example `F:`. Leave empty outside WSL2 or when unknown. | `""` |
+| `storage.docker_data_drive` | Windows drive that backs Docker Desktop data, if different from `storage.host_drive`. Reserved for Docker backing accounting. | `""` |
+
+On native Linux and macOS, Kura trusts normal filesystem free space. On WSL2,
+large local Docker launches need the Windows backing drive as well as the Linux
+filesystem; otherwise `kura doctor disk` and launch preflight treat the storage
+confidence as unknown.
+
 ## Docker
 
 | Key | Purpose | Default |

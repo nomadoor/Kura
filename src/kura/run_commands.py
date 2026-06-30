@@ -30,6 +30,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
 from kura.render import launch_render
+from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -260,7 +261,7 @@ def _configured_gib(value: Any, *, default: int) -> int:
     return number
 
 
-def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]]) -> dict[str, Any]:
+def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]], storage_config: dict[str, Any] | None = None) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
     if safety.get("max_run_disk_gb") is not None:
@@ -275,14 +276,30 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
             paths[f"mount:{mount.get('target', mount['source'])}"] = source
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
+    storage_statuses = probe_storages(paths, storage_config)
     for name, path in paths.items():
-        probe = path
-        while not probe.exists() and probe != probe.parent:
-            probe = probe.parent
-        usage = shutil.disk_usage(probe)
-        checked[name] = {"path": str(path), "probe": str(probe), "free_bytes": usage.free, "required_bytes": required_bytes}
-        if usage.free < required_bytes:
-            errors.append(f"{path} has only {usage.free // 1024**3} GiB free; local Docker launch requires at least {required_gib} GiB")
+        status = storage_statuses[name]
+        checked[name] = {
+            "path": str(path),
+            "probe": status.probe,
+            "backing_id": status.backing_id,
+            "backing_kind": status.backing_kind,
+            "linux_free_bytes": status.linux_free_bytes,
+            "host_free_bytes": status.host_free_bytes,
+            "effective_free_bytes": status.effective_free_bytes,
+            "confidence": status.confidence,
+            "required_bytes": required_bytes,
+        }
+        if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:
+            errors.append(
+                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_gib} GiB. "
+                "Set storage.host_drive in workspace.yaml or set safety.allow_storage_risk: true if this is intentional"
+            )
+        elif status.effective_free_bytes < required_bytes:
+            errors.append(
+                f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
+                f"local Docker launch requires at least {required_gib} GiB"
+            )
     if errors:
         raise ValueError("; ".join(errors))
     docker_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
@@ -1420,7 +1437,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
-                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts)
+                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config)
             launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image or image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
             if wait and not dry_run:
                 return _wait_for_docker_run(run_dir)

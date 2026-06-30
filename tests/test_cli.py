@@ -24,6 +24,7 @@ from kura.executors import docker_command, docker_preflight, launch_runpod, reco
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _checkpoint_safety_preflight, _ensure_free_bytes, _local_launch_disk_preflight, launch_run
+from kura.storage import StorageStatus
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -366,8 +367,9 @@ class DoctorDockerTests(unittest.TestCase):
                     patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
-                    patch("kura.doctor._is_wsl", return_value=True),
-                    patch("kura.doctor._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
+                    patch("kura.storage.is_wsl", return_value=True),
+                    patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
+                    patch("kura.storage.shutil.which", return_value=None),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                 ):
                     code = cmd_doctor_disk(argparse.Namespace())
@@ -375,7 +377,7 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
-            self.assertTrue(payload["wsl_storage"]["wsl"])
+            self.assertEqual(payload["storage"]["workspace"]["confidence"], "unknown")
             self.assertTrue(any("WSL Linux ext4" in warning for warning in payload["warnings"]))
 
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
@@ -1737,6 +1739,27 @@ def _write_fake_safetensors(path: Path, keys: list[str], metadata: dict[str, str
 
 
 class DockerLifecycleTests(unittest.TestCase):
+    def _storage_probe(self, free_gib: int, *, confidence: str = "exact", host_free_gib: int | None = None, backing_kind: str = "native"):
+        def fake(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
+            result: dict[str, StorageStatus] = {}
+            for name, path in paths.items():
+                result[name] = StorageStatus(
+                    path=str(path),
+                    probe=str(path),
+                    backing_id="test-backing",
+                    backing_kind=backing_kind,
+                    linux_free_bytes=free_gib * 1024**3,
+                    linux_total_bytes=200 * 1024**3,
+                    host_free_bytes=None if host_free_gib is None else host_free_gib * 1024**3,
+                    effective_free_bytes=free_gib * 1024**3,
+                    confidence=confidence,
+                    mount={"available": True},
+                    warning=None if confidence != "unknown" else "unknown backing",
+                )
+            return result
+
+        return fake
+
     def _run_dir(self, root: Path) -> Path:
         run_dir = root / "runs" / "example"
         (run_dir / "realizations").mkdir(parents=True)
@@ -1796,30 +1819,29 @@ class DockerLifecycleTests(unittest.TestCase):
                     docker_preflight(root, [])
 
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
-        class Usage:
-            total = 200 * 1024**3
-            used = 140 * 1024**3
-            free = 60 * 1024**3
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(60)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
                     _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
                 payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
         self.assertEqual(payload["required_gib"], 50)
 
     def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
-        class Usage:
-            total = 200 * 1024**3
-            used = 60 * 1024**3
-            free = 140 * 1024**3
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(140)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
                     _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
+
+    def test_local_launch_disk_preflight_rejects_unknown_wsl_backing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(900, confidence="unknown", backing_kind="wsl2_vhdx")), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                with self.assertRaisesRegex(ValueError, "unknown physical backing free space"):
+                    _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
+                payload = _local_launch_disk_preflight(root, {"safety": {"allow_storage_risk": True}}, {}, [])
+        self.assertEqual(payload["paths"]["workspace"]["confidence"], "unknown")
 
     def test_download_disk_guard_rejects_when_free_space_is_too_low(self) -> None:
         class Usage:
