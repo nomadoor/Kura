@@ -112,6 +112,9 @@ or WSL/VHDX/Windows-side operations.
   variables.
 - Local Docker launch, Docker build cache, and RunPod download/pull checks use
   configurable disk gates. See `docs/workspace-config.md` for current defaults.
+- Local Docker launch adds known write estimates to the configured free-space
+  floor. Musubi Hugging Face downloads use HEAD metadata when available, and
+  explicitly allowed many-checkpoint runs add a conservative checkpoint budget.
 - On WSL2, Kura treats Linux `df` as only one signal. It tries to detect the
   Windows backing drive and uses effective free space. If backing confidence is
   unknown, local Docker launch fails safe unless the run explicitly sets
@@ -127,6 +130,8 @@ or WSL/VHDX/Windows-side operations.
 Think in terms of what can write bytes and where:
 
 - model downloads and local Docker runs write to workspace/cache backing storage
+- the configured local free-space floor is a margin after estimated writes, not
+  a budget to spend
 - Docker builds write to Docker build cache
 - checkpoints and samples write to run artifacts
 - RunPod downloads/pulls write back to local downloads or run directories

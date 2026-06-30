@@ -34,6 +34,12 @@ launch.
 - Local Docker launch refuses to start when the workspace or writable mounts have
   less effective free space than the configured floor, currently 100GiB by
   default.
+- For Musubi model downloads, local Docker launch estimates Hugging Face file
+  sizes before starting when metadata is reachable. The configured free-space
+  floor is treated as the post-write safety margin, so a run that may download
+  33GiB requires roughly `floor + 33GiB` free on the cache backing store.
+- When many checkpoints are explicitly allowed, local Docker launch adds a
+  conservative checkpoint write budget to the workspace requirement.
 - On WSL2, Kura auto-detects the distro backing drive from the WSL registry when
   Windows interop is available. If the backing drive cannot be resolved, local
   Docker launch fails safe unless the run explicitly sets
@@ -48,7 +54,7 @@ launch.
 | Operation | Check | Blocks on |
 | --- | --- | --- |
 | `kura doctor disk` | read-only inventory | exits non-zero on warnings |
-| local Docker launch | `StorageStatus.effective_free_bytes` for workspace and writable mounts | low effective free, unknown WSL2 backing, excessive Docker build cache |
+| local Docker launch | `StorageStatus.effective_free_bytes` plus estimated writes for workspace, cache, and writable mounts | low effective free, unknown WSL2 backing, excessive Docker build cache |
 | checkpoint-heavy train run | run plan / launch preflight | many unpruned checkpoints unless explicitly allowed |
 | RunPod download/pull | local destination free space | insufficient space for downloaded artifacts |
 | cleanup | dry-run by default | destructive action requires `--yes`; final artifacts require extra flag |
@@ -56,6 +62,6 @@ launch.
 
 ## Follow-up
 
-Future work may add cache indexing and more precise per-run write estimates,
-such as Hugging Face file sizes and checkpoint budgets. Those features should
-preserve the same principle: show where bytes live before deleting or launching.
+Future work may add cache indexing and better Docker Desktop backing-store
+accounting. Those features should preserve the same principle: show where bytes
+live before deleting or launching.

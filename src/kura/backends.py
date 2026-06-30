@@ -479,7 +479,7 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return downloads
 
 
-def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[list[str]], dict[str, str]]:
+def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[dict[str, str]], dict[str, str]]:
     override = run.get("backend_overrides", {}).get("musubi-tuner", {})
     existing_paths = existing_paths or {}
     resolved_downloads: dict[str, Any] = _known_musubi_bundle(run)
@@ -520,6 +520,11 @@ def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] 
                 item["repo_type"] = repo_type
             download_specs.append(item)
         paths[key] = _musubi_model_cache_path(repo_id, key, filename)
+    return download_specs, paths
+
+
+def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[list[str]], dict[str, str]]:
+    download_specs, paths = musubi_model_download_specs(run, existing_paths=existing_paths)
     if not download_specs:
         return [], {}
     code = r'''

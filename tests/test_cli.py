@@ -1885,6 +1885,52 @@ class DockerLifecycleTests(unittest.TestCase):
                 payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
         self.assertEqual(payload["required_gib"], 50)
 
+    def test_local_launch_disk_preflight_counts_estimated_hf_downloads(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "model": {"base": "custom"},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "model_downloads": {
+                        "dit": {"repo": "example/model", "filename": "dit.safetensors"},
+                    },
+                }
+            },
+        }
+        mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(60)),
+                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands._hf_file_size_bytes", return_value=20 * 1024**3),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 70 GiB"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
+                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 40}, mounts)
+        self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 20 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 20 * 1024**3)
+
+    def test_local_launch_disk_preflight_counts_allowed_checkpoint_budget(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {},
+            "backend_overrides": {"musubi-tuner": {"max_train_steps": 3000, "save_every_n_steps": 100}},
+            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 110 GiB"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+        self.assertEqual(_checkpoint_safety_preflight(run), None)
+
     def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

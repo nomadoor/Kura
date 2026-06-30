@@ -30,7 +30,7 @@ wrong or unavailable.
 | `docker.workspace_target` | Container path for the mounted workspace | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
-| `docker.min_free_gb` | Minimum free space required before local Docker launch | `100` |
+| `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch | `100` |
 | `docker.build_cache_limit_gb` | Docker build cache limit checked before local Docker launch | `30` |
 
 Default Hugging Face cache mount:
@@ -46,6 +46,11 @@ docker:
 `./cache/huggingface` stays outside Git and is reused across local Docker runs
 inside the same workspace. Advanced users can point `source` at a shared absolute
 path.
+
+For Musubi runs with automatic Hugging Face downloads, Kura tries to estimate
+the referenced file sizes before local launch. The estimate is added on top of
+`docker.min_free_gb`, so the configured value remains a safety margin instead
+of being consumed by the download.
 
 ## ComfyUI
 

@@ -18,13 +18,16 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from kura.backends import command_ai_toolkit, command_musubi_tuner
+from kura.backends import command_ai_toolkit, command_musubi_tuner, musubi_model_download_specs
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, reconcile_docker, stage_runpod, stop_docker, stop_runpod
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -262,24 +265,119 @@ def _configured_gib(value: Any, *, default: int) -> int:
     return number
 
 
+def _resolve_local_path(workspace: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    return path
+
+
+def _hf_cache_path(workspace: Path, mounts: list[dict[str, Any]]) -> Path:
+    for mount in mounts:
+        if not isinstance(mount, dict) or mount.get("mode") == "ro":
+            continue
+        if mount.get("target") == "/root/.cache/huggingface" and isinstance(mount.get("source"), str):
+            return _resolve_local_path(workspace, mount["source"])
+    return workspace / "cache" / "huggingface"
+
+
+def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int | None:
+    repo_id = item.get("repo_id")
+    filename = item.get("filename")
+    if not repo_id or not filename:
+        return None
+    revision = item.get("revision") or "main"
+    quoted_repo = "/".join(urllib.parse.quote(part, safe="") for part in repo_id.split("/"))
+    quoted_revision = urllib.parse.quote(revision, safe="")
+    quoted_filename = "/".join(urllib.parse.quote(part, safe="") for part in filename.split("/"))
+    url = f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
+    headers = {}
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, method="HEAD", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            length = response.headers.get("Content-Length")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return None
+    try:
+        return int(length) if length else None
+    except ValueError:
+        return None
+
+
+def _estimate_musubi_download_bytes(run: dict[str, Any]) -> dict[str, Any]:
+    backend = run.get("backend")
+    backend_name = backend.get("name") if isinstance(backend, dict) else None
+    if backend_name != "musubi-tuner":
+        return {"bytes": 0, "items": [], "unknown": []}
+    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    existing_paths = {}
+    if isinstance(override, dict):
+        paths = override.get("model_paths")
+        if isinstance(paths, dict):
+            existing_paths = {key: value for key, value in paths.items() if isinstance(key, str) and isinstance(value, str)}
+    try:
+        specs, _ = musubi_model_download_specs(run, existing_paths=existing_paths)
+    except ValueError:
+        return {"bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+    total = 0
+    items: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    for item in specs:
+        size = _hf_file_size_bytes(item)
+        record = {key: item.get(key) for key in ("key", "repo_id", "filename", "revision") if item.get(key)}
+        record["size_bytes"] = size
+        items.append(record)
+        if size is None:
+            unknown.append(f"{item.get('repo_id')}:{item.get('filename')}")
+        else:
+            total += size
+    return {"bytes": total, "items": items, "unknown": unknown}
+
+
+def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    if safety.get("allow_many_checkpoints") is not True:
+        return {"bytes": 0, "count": 0}
+    important = _important_backend_overrides(run)
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    save_every = _as_positive_int(important.get("save_every_n_steps"))
+    if not steps or not save_every or _checkpoint_retention_policy_present(important):
+        return {"bytes": 0, "count": 0}
+    count = max(steps // save_every, 1)
+    per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
+    return {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+
+
 def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]], storage_config: dict[str, Any] | None = None) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
     if safety.get("max_run_disk_gb") is not None:
         required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
-    required_bytes = required_gib * 1024**3
+    floor_bytes = required_gib * 1024**3
     paths = {"workspace": workspace}
     for mount in mounts:
         if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
-            source = Path(mount["source"]).expanduser()
-            if not source.is_absolute():
-                source = workspace / source
+            source = _resolve_local_path(workspace, mount["source"])
             paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    hf_cache_path = _hf_cache_path(workspace, mounts)
+    paths.setdefault("hf_cache", hf_cache_path)
+    download_estimate = _estimate_musubi_download_bytes(run)
+    checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
+    write_estimates = {
+        "hf_cache": int(download_estimate.get("bytes") or 0),
+        "workspace": int(checkpoint_estimate.get("bytes") or 0),
+    }
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     storage_statuses = probe_storages(paths, storage_config)
     for name, path in paths.items():
         status = storage_statuses[name]
+        estimated_write_bytes = write_estimates.get(name, 0)
+        required_bytes = floor_bytes + estimated_write_bytes
         checked[name] = {
             "path": str(path),
             "probe": status.probe,
@@ -290,16 +388,19 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
             "effective_free_bytes": status.effective_free_bytes,
             "confidence": status.confidence,
             "required_bytes": required_bytes,
+            "floor_bytes": floor_bytes,
+            "estimated_write_bytes": estimated_write_bytes,
         }
+        required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
         if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:
             errors.append(
-                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_gib} GiB. "
+                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB including estimated writes. "
                 "Set storage.host_drive in workspace.yaml or set safety.allow_storage_risk: true if this is intentional"
             )
         elif status.effective_free_bytes < required_bytes:
             errors.append(
                 f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
-                f"local Docker launch requires at least {required_gib} GiB"
+                f"local Docker launch requires at least {required_display_gib} GiB including estimated writes"
             )
     if errors:
         raise ValueError("; ".join(errors))
@@ -325,7 +426,13 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
                         scale = {"": 1, "k": 1000, "m": 1000**2, "g": 1000**3, "t": 1000**4}.get(unit, 1)
                         if amount * scale > docker_cache_limit_gib * 1024**3:
                             raise ValueError(f"Docker build cache exceeds {docker_cache_limit_gib} GiB; run `kura cleanup docker-cache --yes` before local launch")
-    return {"required_gib": required_gib, "paths": checked, "docker_storage": docker_storage}
+    return {
+        "required_gib": required_gib,
+        "floor_bytes": floor_bytes,
+        "estimates": {"musubi_downloads": download_estimate, "checkpoints": checkpoint_estimate},
+        "paths": checked,
+        "docker_storage": docker_storage,
+    }
 
 
 def _ensure_free_bytes(path: Path, required_bytes: int, *, context: str) -> dict[str, Any]:
