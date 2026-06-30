@@ -140,6 +140,7 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         "quantize_te",
         "blocks_to_swap",
         "extra_args",
+        "max_train_steps",
         "save_every_n_steps",
         "save_precision",
         "prune_checkpoints_before_step",
@@ -211,7 +212,7 @@ def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> 
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     warnings: list[str] = []
-    steps = _as_positive_int(params.get("steps"))
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important_overrides.get("max_train_steps"))
     save_every = _as_positive_int(important_overrides.get("save_every_n_steps"))
     has_retention_policy = _checkpoint_retention_policy_present(important_overrides)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
@@ -236,7 +237,7 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
         return
     important = _important_backend_overrides(run)
     params = run.get("params") if isinstance(run.get("params"), dict) else {}
-    steps = _as_positive_int(params.get("steps"))
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
         return
@@ -1438,7 +1439,18 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
                 _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config)
-            launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image or image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
+            launch_docker(
+                workspace=_workspace(),
+                run_dir=run_dir,
+                spec=spec,
+                image=image or image_config["local"],
+                dockerfile=image_config["dockerfile"],
+                mounts=mounts,
+                gpu=bool(docker.get("gpu", False)),
+                workspace_target=str(docker.get("workspace_target", "/workspace")),
+                dry_run=dry_run,
+                min_free_gb=_configured_gib(docker.get("min_free_gb"), default=100) if isinstance(docker, dict) else 100,
+            )
             if wait and not dry_run:
                 return _wait_for_docker_run(run_dir)
         else:

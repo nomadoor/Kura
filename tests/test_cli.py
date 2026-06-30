@@ -811,6 +811,16 @@ class RunPlanTests(unittest.TestCase):
         run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
         _checkpoint_safety_preflight(run)
 
+    def test_checkpoint_safety_preflight_counts_backend_max_train_steps(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {},
+            "backend_overrides": {"musubi-tuner": {"max_train_steps": 3000, "save_every_n_steps": 100}},
+        }
+        with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
+            _checkpoint_safety_preflight(run)
+
     def test_checkpoint_safety_preflight_accepts_musubi_keep_last_policy(self) -> None:
         run = {
             "type": "train",
@@ -1851,6 +1861,21 @@ class DockerLifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
                     docker_preflight(root, [])
 
+    def test_docker_preflight_honors_configured_disk_floor(self) -> None:
+        class Usage:
+            total = 100 * 1024**3
+            used = 80 * 1024**3
+            free = 20 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.shutil.disk_usage", return_value=Usage()),
+            ):
+                payload = docker_preflight(root, [], min_free_gb=10)
+        self.assertEqual(payload["disk"]["workspace"]["free_bytes"], 20 * 1024**3)
+
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2008,7 +2033,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "configured-local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                yaml.safe_dump({"docker": {"min_free_gb": 10, "images": {"ai-toolkit": {"local": "configured-local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
                 encoding="utf-8",
             )
             previous = Path.cwd()
@@ -2019,6 +2044,7 @@ class DockerLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(launch.call_args.kwargs["image"], "override-image:dev")
+            self.assertEqual(launch.call_args.kwargs["min_free_gb"], 10)
 
 
 class RunPruneTests(unittest.TestCase):
