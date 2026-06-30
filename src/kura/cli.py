@@ -949,6 +949,7 @@ def main() -> None:
     doctor_musubi.add_argument("--no-gpu", action="store_true", help="Do not pass --gpus all to the Docker smoke container")
     doctor_musubi.add_argument("--timeout", type=float, default=300.0, help="Overall Docker probe timeout in seconds")
     doctor_musubi.add_argument("--script-timeout", type=float, default=25.0, help="Per-script --help timeout in seconds")
+    doctor_musubi.add_argument("--image", help="Override the Musubi image to probe")
     doctor_musubi.set_defaults(func=cmd_doctor_musubi)
     doctor_runpod = doctor_sub.add_parser("runpod", help="Check RunPod API, Pods, and Network Volumes")
     doctor_runpod.set_defaults(func=cmd_doctor_runpod)

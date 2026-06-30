@@ -440,7 +440,7 @@ class DoctorDockerTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
-                    code = cmd_doctor_musubi(argparse.Namespace(skip_help=False, no_gpu=False, timeout=30.0, script_timeout=5.0))
+                    code = cmd_doctor_musubi(argparse.Namespace(skip_help=False, no_gpu=False, timeout=30.0, script_timeout=5.0, image=None))
             finally:
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
@@ -448,6 +448,51 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertTrue(payload["checks"]["adapter_scripts_exist"])
             self.assertTrue(payload["checks"]["adapter_help_smoke"])
             self.assertIn({"adapter": "flux2", "script": "flux_2_train_network.py", "exists": True, "help_returncode": 0}, payload["diagnostics"]["scripts"])
+
+    def test_doctor_musubi_accepts_image_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "musubi-tuner": {
+                                    "local": "configured/missing:test",
+                                    "remote": "remote",
+                                    "dockerfile": "Dockerfile",
+                                    "context": ".",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            seen: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                seen.append(command)
+                if command[:3] == ["/usr/bin/docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
+                if command[:3] == ["/usr/bin/docker", "run", "--rm"]:
+                    results = [
+                        {"adapter": adapter, "script": script, "exists": True}
+                        for adapter, scripts in MUSUBI_ADAPTER_SCRIPTS.items()
+                        for script in scripts
+                    ]
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"results": results}) + "\n", "")
+                raise AssertionError(command)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    self.assertEqual(cmd_doctor_musubi(argparse.Namespace(skip_help=True, no_gpu=True, timeout=30.0, script_timeout=5.0, image="override/musubi:test")), 0)
+            finally:
+                os.chdir(previous)
+            self.assertIn(["/usr/bin/docker", "image", "inspect", "override/musubi:test"], seen)
+            self.assertTrue(any("override/musubi:test" in command for command in seen if command[:3] == ["/usr/bin/docker", "run", "--rm"]))
 
 
 class MonitorCommandTests(unittest.TestCase):

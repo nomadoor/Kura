@@ -416,7 +416,7 @@ def _musubi_probe_items() -> list[tuple[str, str]]:
 def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
-        image = _image_config("musubi-tuner")["local"]
+        image = args.image or _image_config("musubi-tuner")["local"]
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"musubi: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
