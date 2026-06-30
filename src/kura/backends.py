@@ -1579,7 +1579,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         ]
         _append_flag(train_argv, override, "gradient_checkpointing")
         if _truthy(override.get("fp8_base")) or _truthy(override.get("fp8")):
-            train_argv.append("--fp8")
+            train_argv.append("--fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_t5")
         train_argv.extend(_extra_args(override))
@@ -1673,6 +1673,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--model_type", model_type,
             "--task", task,
             "--mixed_precision", "bf16",
+            "--sdpa",
             "--timestep_sampling", str(override.get("timestep_sampling") or "uniform"),
             "--weighting_scheme", str(override.get("weighting_scheme") or "none"),
             "--network_module", "networks.lora_hidream_o1",
@@ -1685,6 +1686,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if "noise_clip_std" in override:
             train_argv.extend(["--noise_clip_std", str(override["noise_clip_std"])])
         _append_flag(train_argv, override, "gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "flash_attn")
         _append_flag(train_argv, override, "skip_t2i_visual_dummy")
@@ -1701,6 +1703,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             text_argv = [
                 "python", "src/musubi_tuner/hidream_o1_cache_text_encoder_outputs.py",
                 "--dataset_config", dataset_config,
+                "--model_type", model_type,
                 "--batch_size", str(override.get("text_encoder_batch_size") or 16),
             ]
             if _truthy(override.get("fp8_te")):

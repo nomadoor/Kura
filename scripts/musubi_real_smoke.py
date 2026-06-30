@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -36,6 +37,144 @@ class SmokeSpec:
 
 
 SPECS: dict[str, SmokeSpec] = {
+    "flux_kontext": SmokeSpec(
+        architecture="flux_kontext",
+        model_base="black-forest-labs/FLUX.1-Kontext-dev",
+        dataset_id="flux-kontext-smoke",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "black-forest-labs/FLUX.1-Kontext-dev", "filename": "flux1-kontext-dev.safetensors"},
+            "vae": {"repo": "black-forest-labs/FLUX.1-Kontext-dev", "filename": "ae.safetensors"},
+            "text_encoder1": {"repo": "comfyanonymous/flux_text_encoders", "filename": "t5xxl_fp16.safetensors"},
+            "text_encoder2": {"repo": "comfyanonymous/flux_text_encoders", "filename": "clip_l.safetensors"},
+        },
+        extra_override={
+            "dataset_config": {
+                "general": {"resolution": [256, 256], "batch_size": 1},
+                "datasets": [
+                    {
+                        "image_directory": "/workspace/datasets/flux-kontext-smoke/pose/target",
+                        "control_directory": "/workspace/datasets/flux-kontext-smoke/pose/cond",
+                    }
+                ],
+            },
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "text_encoder_batch_size": 1,
+            "extra_args": ["--timestep_sampling", "flux_shift", "--weighting_scheme", "none", "--blocks_to_swap", "24"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="flux_kontext_train_network.py",
+        expected_outputs=2,
+    ),
+    "hidream_o1": SmokeSpec(
+        architecture="hidream_o1",
+        model_base="Comfy-Org/HiDream-O1-Image",
+        dataset_id="flux2-klein-tiny",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "Comfy-Org/HiDream-O1-Image", "filename": "checkpoints/hidream_o1_image_dev_bf16.safetensors"},
+        },
+        extra_override={
+            "model_type": "dev",
+            "task": "t2i",
+            "dataset_config": {"general": {"resolution": [256, 256], "batch_size": 1}},
+            "gradient_checkpointing": True,
+            "skip_t2i_visual_dummy": True,
+            "extra_args": ["--blocks_to_swap", "24"],
+            "noise_scale_start": 7.5,
+            "noise_scale_end": 7.5,
+            "noise_clip_std": 2.5,
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="hidream_o1_train_network.py",
+        expected_outputs=2,
+    ),
+    "ideogram4": SmokeSpec(
+        architecture="ideogram4",
+        model_base="Comfy-Org/Ideogram-4",
+        dataset_id="flux2-klein-tiny",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "Comfy-Org/Ideogram-4", "filename": "diffusion_models/ideogram4_fp8_scaled.safetensors"},
+            "vae": {"repo": "Comfy-Org/Ideogram-4", "filename": "vae/flux2-vae.safetensors"},
+            "text_encoder": {"repo": "Comfy-Org/Ideogram-4", "filename": "text_encoders/qwen3vl_8b_fp8_scaled.safetensors"},
+        },
+        extra_override={
+            "dataset_config": {"general": {"resolution": [256, 256], "batch_size": 1}},
+            "gradient_checkpointing": True,
+            "dit_dtype": "bfloat16",
+            "vae_dtype": "bfloat16",
+            "text_encoder_batch_size": 1,
+            "extra_args": ["--blocks_to_swap", "24"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="ideogram4_train_network.py",
+        expected_outputs=2,
+    ),
+    "zimage": SmokeSpec(
+        architecture="zimage",
+        model_base="Comfy-Org/z_image",
+        dataset_id="flux2-klein-tiny",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "Comfy-Org/z_image", "filename": "split_files/diffusion_models/z_image_bf16.safetensors"},
+            "vae": {"repo": "Comfy-Org/z_image", "filename": "split_files/vae/ae.safetensors"},
+            "text_encoder": {"repo": "Comfy-Org/z_image", "filename": "split_files/text_encoders/qwen_3_4b.safetensors"},
+        },
+        extra_override={
+            "dataset_config": {"general": {"resolution": [256, 256], "batch_size": 1}},
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "fp8_llm": True,
+            "extra_args": ["--blocks_to_swap", "24"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="zimage_train_network.py",
+        expected_outputs=2,
+    ),
     "krea2": SmokeSpec(
         architecture="krea2",
         model_base="krea/Krea-2-Raw",
@@ -129,6 +268,52 @@ SPECS: dict[str, SmokeSpec] = {
 }
 
 
+def ensure_generated_dataset(root: Path, dataset_id: str) -> None:
+    if dataset_id != "flux-kontext-smoke":
+        return
+    source_image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"
+    source_caption = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.txt"
+    if not source_image.is_file() or not source_caption.is_file():
+        raise SystemExit("flux-kontext-smoke requires datasets/flux2-klein-tiny/images/00001.png and 00001.txt")
+    dataset_root = root / "datasets" / dataset_id
+    target_dir = dataset_root / "pose" / "target"
+    control_dir = dataset_root / "pose" / "cond"
+    caption_dir = dataset_root / "pose" / "caption"
+    for directory in (target_dir, control_dir, caption_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_image, target_dir / "0001.png")
+    shutil.copy2(source_image, control_dir / "0001.png")
+    shutil.copy2(source_caption, target_dir / "0001.txt")
+    shutil.copy2(source_caption, caption_dir / "0001.txt")
+    (dataset_root / "dataset.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "id": dataset_id,
+                "modality": "image-pair",
+                "description": "Generated one-item smoke dataset for FLUX Kontext adapter verification.",
+                "source": [],
+                "caption": {"strategy": "manual", "version": 1},
+                "stats": {"count": 1},
+                "layout": {"root": "pose", "target_dir": "pose/target", "control_dir": "pose/cond", "caption_dir": "pose/caption"},
+                "digest": {"raw": None, "dataset": None},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    item = {
+        "id": "0001",
+        "path": "pose/target/0001.png",
+        "caption": source_caption.read_text(encoding="utf-8").strip(),
+        "role": "target",
+        "control_path": "pose/cond/0001.png",
+        "caption_path": "pose/caption/0001.txt",
+    }
+    (dataset_root / "items.jsonl").write_text(json.dumps(item, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def run(command: list[str], *, env: dict[str, str] | None = None, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, capture_output=True, check=False, env=env, timeout=timeout)
 
@@ -141,6 +326,7 @@ def workspace_root() -> Path:
 
 
 def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str) -> str:
+    ensure_generated_dataset(root, spec.dataset_id)
     run_id = f"{datetime.now():%Y%m%d-%H%M}_musubi-real-smoke-{spec.architecture}_{secrets.token_hex(2)}"
     run_dir = root / "runs" / run_id
     for relative in ("resolved", "logs", "metrics", "samples", "checkpoints", "outputs"):
