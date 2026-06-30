@@ -107,15 +107,34 @@ or WSL/VHDX/Windows-side operations.
 
 ## Current safety gates
 
-- `kura doctor disk` reports workspace sizes, filesystem free space, Docker
-  storage, root-owned Kura files, and cache-related environment variables.
+- `kura doctor disk` reports workspace sizes, storage backing/effective free
+  space, Docker storage, root-owned Kura files, and cache-related environment
+  variables.
 - Local Docker launch, Docker build cache, and RunPod download/pull checks use
   configurable disk gates. See `docs/workspace-config.md` for current defaults.
+- On WSL2, Kura treats Linux `df` as only one signal. It tries to detect the
+  Windows backing drive and uses effective free space. If backing confidence is
+  unknown, local Docker launch fails safe unless the run explicitly sets
+  `safety.allow_storage_risk: true`.
 - Lower those gates only when the user understands the trade-off.
 - Frequent unpruned checkpoints are blocked before launch unless:
   - `backend_overrides.<backend>.prune_checkpoints_before_step` is set, or
   - the backend has an explicit keep-last checkpoint policy, or
   - `safety.allow_many_checkpoints: true` is explicitly accepted
+
+## Safety map
+
+Think in terms of what can write bytes and where:
+
+- model downloads and local Docker runs write to workspace/cache backing storage
+- Docker builds write to Docker build cache
+- checkpoints and samples write to run artifacts
+- RunPod downloads/pulls write back to local downloads or run directories
+- cleanup and permission repair are separate: cleanup deletes only after
+  confirmation; permission repair only changes ownership
+
+Do not treat a large `df` value on WSL2 as a budget by itself. Use the effective
+free space reported by `kura doctor disk`.
 
 ## Incident recovery flow
 

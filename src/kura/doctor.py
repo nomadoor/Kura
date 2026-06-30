@@ -360,7 +360,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
     checks: dict[str, Any] = {"docker_command": bool(docker_path), "daemon_reachable": False, "local_image": False, "gpu_available": False}
     runtime: dict[str, Any] = {}
     docker_storage: dict[str, Any] = {}
-    diagnostics: dict[str, Any] = {"docker_path": docker_path, "docker_exe_path": docker_exe_path, "wsl": "microsoft" in platform.uname().release.lower()}
+    diagnostics: dict[str, Any] = {"docker_path": docker_path, "docker_exe_path": docker_exe_path, "wsl": _is_wsl()}
     diagnosis = ""
     if not checks["docker_command"]:
         diagnosis = "Docker CLI was not found on PATH."
