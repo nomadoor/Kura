@@ -794,13 +794,13 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         },
         "hunyuan_video": {
             "dit": "safetensors",
-            "vae": "safetensors",
+            "vae": "file",
             "text_encoder1": "hf_model_id_or_path",
             "text_encoder2": "hf_model_id_or_path",
         },
         "hunyuanvideo": {
             "dit": "safetensors",
-            "vae": "safetensors",
+            "vae": "file",
             "text_encoder1": "hf_model_id_or_path",
             "text_encoder2": "hf_model_id_or_path",
         },
@@ -813,14 +813,14 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         },
         "framepack": {
             "dit": "safetensors",
-            "vae": "safetensors",
+            "vae": "file",
             "text_encoder1": "hf_model_id_or_path",
             "text_encoder2": "hf_model_id_or_path",
             "image_encoder": "hf_model_id_or_path",
         },
         "frame_pack": {
             "dit": "safetensors",
-            "vae": "safetensors",
+            "vae": "file",
             "text_encoder1": "hf_model_id_or_path",
             "text_encoder2": "hf_model_id_or_path",
             "image_encoder": "hf_model_id_or_path",
@@ -1782,6 +1782,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "gradient_checkpointing")
         _append_flag(train_argv, override, "fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
+        _append_flag(train_argv, override, "fp8_vl")
         train_argv.extend(_extra_args(override))
         commands = [*download_commands]
         if override.get("validate_models", True):
@@ -1829,7 +1830,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             train_argv.append("--f1")
         _append_flag(train_argv, override, "gradient_checkpointing")
         if _truthy(override.get("fp8_base")) or _truthy(override.get("fp8")):
-            train_argv.append("--fp8")
+            train_argv.append("--fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_llm")
         train_argv.extend(_extra_args(override))
@@ -1841,8 +1842,11 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 "python", "src/musubi_tuner/fpack_cache_latents.py",
                 "--dataset_config", dataset_config,
                 "--vae", vae,
+                "--image_encoder", image_encoder,
                 "--skip_existing",
             ]
+            if _truthy(override.get("f1")):
+                latent_argv.append("--f1")
             if override.get("vae_chunk_size"):
                 latent_argv.extend(["--vae_chunk_size", str(override["vae_chunk_size"])])
             text_argv = [
@@ -1881,20 +1885,24 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         ]
         _append_flag(train_argv, override, "gradient_checkpointing")
         _append_flag(train_argv, override, "fp8_base")
+        _append_flag(train_argv, override, "fp8_scaled")
         train_argv.extend(_extra_args(override))
         commands = [*download_commands]
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
-            commands.extend([
-                [
+            text_argv = [
                     "python", "src/musubi_tuner/kandinsky5_cache_text_encoder_outputs.py",
                     "--dataset_config", dataset_config,
                     "--text_encoder_qwen", text_encoder_qwen,
                     "--text_encoder_clip", text_encoder_clip,
                     "--batch_size", str(override.get("text_encoder_batch_size") or 1),
                     "--skip_existing",
-                ],
+            ]
+            if _truthy(override.get("quantized_qwen")):
+                text_argv.append("--quantized_qwen")
+            commands.extend([
+                text_argv,
                 [
                     "python", "src/musubi_tuner/kandinsky5_cache_latents.py",
                     "--dataset_config", dataset_config,

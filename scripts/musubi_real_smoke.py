@@ -37,6 +37,193 @@ class SmokeSpec:
 
 
 SPECS: dict[str, SmokeSpec] = {
+    "hunyuan_video": SmokeSpec(
+        architecture="hunyuan_video",
+        model_base="hunyuanvideo-community/HunyuanVideo",
+        dataset_id="musubi-video-smoke",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "kohya-ss/HunyuanVideo-fp8_e4m3fn-unofficial", "filename": "mp_rank_00_model_states_fp8.safetensors"},
+            "vae": {"repo": "tencent/HunyuanVideo", "filename": "hunyuan-video-t2v-720p/vae/pytorch_model.pt"},
+            "text_encoder1": {"repo": "Comfy-Org/HunyuanVideo_repackaged", "filename": "split_files/text_encoders/llava_llama3_fp16.safetensors"},
+            "text_encoder2": {"repo": "Comfy-Org/HunyuanVideo_repackaged", "filename": "split_files/text_encoders/clip_l.safetensors"},
+        },
+        extra_override={
+            "dataset_config": {
+                "general": {"resolution": [256, 256], "batch_size": 1},
+                "datasets": [
+                    {
+                        "image_directory": None,
+                        "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
+                        "target_frames": [1],
+                        "frame_extraction": "head",
+                        "source_fps": 24.0,
+                    }
+                ],
+            },
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_llm": True,
+            "text_encoder_batch_size": 1,
+            "vae_chunk_size": 8,
+            "vae_tiling": True,
+            "extra_args": ["--blocks_to_swap", "36"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="hv_train_network.py",
+        expected_outputs=2,
+    ),
+    "hunyuan_video_1_5": SmokeSpec(
+        architecture="hunyuan_video_1_5",
+        model_base="Comfy-Org/HunyuanVideo_1.5_repackaged",
+        dataset_id="musubi-video-smoke",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "Comfy-Org/HunyuanVideo_1.5_repackaged", "filename": "split_files/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors"},
+            "vae": {"repo": "Comfy-Org/HunyuanVideo_1.5_repackaged", "filename": "split_files/vae/hunyuanvideo15_vae_fp16.safetensors"},
+            "text_encoder": {"repo": "Comfy-Org/HunyuanVideo_1.5_repackaged", "filename": "split_files/text_encoders/qwen_2.5_vl_7b.safetensors"},
+            "byt5": {"repo": "Comfy-Org/HunyuanVideo_1.5_repackaged", "filename": "split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors"},
+        },
+        extra_override={
+            "task": "t2v",
+            "dataset_config": {
+                "general": {"resolution": [256, 256], "batch_size": 1},
+                "datasets": [
+                    {
+                        "image_directory": None,
+                        "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
+                        "target_frames": [1],
+                        "frame_extraction": "head",
+                        "source_fps": 24.0,
+                    }
+                ],
+            },
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "fp8_vl": True,
+            "text_encoder_batch_size": 1,
+            "extra_args": ["--blocks_to_swap", "51", "--vae_sample_size", "128", "--vae_enable_patch_conv"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="hv_1_5_train_network.py",
+        expected_outputs=2,
+    ),
+    "framepack": SmokeSpec(
+        architecture="framepack",
+        model_base="Kijai/HunyuanVideo_comfy",
+        dataset_id="musubi-video-smoke",
+        model_paths=None,
+        model_downloads={
+            "dit": {"repo": "Kijai/HunyuanVideo_comfy", "filename": "FramePackI2V_HY_bf16.safetensors"},
+            "vae": {"repo": "tencent/HunyuanVideo", "filename": "hunyuan-video-t2v-720p/vae/pytorch_model.pt"},
+            "text_encoder1": {"repo": "Comfy-Org/HunyuanVideo_repackaged", "filename": "split_files/text_encoders/llava_llama3_fp16.safetensors"},
+            "text_encoder2": {"repo": "Comfy-Org/HunyuanVideo_repackaged", "filename": "split_files/text_encoders/clip_l.safetensors"},
+            "image_encoder": {"repo": "Comfy-Org/sigclip_vision_384", "filename": "sigclip_vision_patch14_384.safetensors"},
+        },
+        extra_override={
+            "dataset_config": {
+                "general": {"resolution": [256, 256], "batch_size": 1},
+                "datasets": [
+                    {
+                        "image_directory": None,
+                        "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
+                        "frame_extraction": "full",
+                        "max_frames": 37,
+                        "source_fps": 24.0,
+                        "fp_latent_window_size": 9,
+                    }
+                ],
+            },
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "fp8_llm": True,
+            "text_encoder_batch_size": 1,
+            "vae_chunk_size": 8,
+            "extra_args": ["--blocks_to_swap", "36", "--latent_window_size", "9"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="fpack_train_network.py",
+        expected_outputs=2,
+    ),
+    "kandinsky5": SmokeSpec(
+        architecture="kandinsky5",
+        model_base="kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s",
+        dataset_id="musubi-video-smoke",
+        model_paths={
+            "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct",
+            "text_encoder_clip": "openai/clip-vit-large-patch14",
+        },
+        model_downloads={
+            "dit": {"repo": "kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s", "filename": "model/kandinsky5lite_t2v_sft_5s.safetensors"},
+            "vae": {"repo": "hunyuanvideo-community/HunyuanVideo", "filename": "vae/diffusion_pytorch_model.safetensors"},
+        },
+        extra_override={
+            "task": "k5-lite-t2v-5s-sd",
+            "dataset_config": {
+                "general": {"resolution": [256, 256], "batch_size": 1},
+                "datasets": [
+                    {
+                        "image_directory": None,
+                        "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
+                        "target_frames": [1],
+                        "frame_extraction": "head",
+                        "source_fps": 24.0,
+                    }
+                ],
+            },
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "quantized_qwen": True,
+            "text_encoder_batch_size": 1,
+            "extra_args": ["--blocks_to_swap", "16"],
+            "save_every_n_steps": 1,
+        },
+        params={
+            "rank": 1,
+            "alpha": 1,
+            "lr": "1e-6",
+            "scheduler": None,
+            "steps": 1,
+            "batch_size": 1,
+            "resolution": [256, 256],
+            "seed": 1,
+        },
+        expected_script="kandinsky5_train_network.py",
+        expected_outputs=2,
+    ),
     "flux_kontext": SmokeSpec(
         architecture="flux_kontext",
         model_base="black-forest-labs/FLUX.1-Kontext-dev",
@@ -269,6 +456,82 @@ SPECS: dict[str, SmokeSpec] = {
 
 
 def ensure_generated_dataset(root: Path, dataset_id: str) -> None:
+    if dataset_id == "musubi-video-smoke":
+        dataset_root = root / "datasets" / dataset_id
+        video_dir = dataset_root / "videos"
+        video_path = video_dir / "0001.mp4"
+        caption_path = video_dir / "0001.txt"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        caption_path.write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
+        if not video_path.is_file():
+            image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"
+            if not image.is_file():
+                raise SystemExit("musubi-video-smoke requires datasets/flux2-klein-tiny/images/00001.png")
+            generator = r'''
+import cv2
+import numpy as np
+from pathlib import Path
+from PIL import Image, ImageDraw
+
+src = Path("/workspace/datasets/flux2-klein-tiny/images/00001.png")
+dst = Path("/workspace/datasets/musubi-video-smoke/videos/0001.mp4")
+base = Image.open(src).convert("RGB").resize((256, 256))
+fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+writer = cv2.VideoWriter(str(dst), fourcc, 24.0, (256, 256))
+if not writer.isOpened():
+    raise SystemExit("failed to open cv2 VideoWriter for smoke mp4")
+for i in range(37):
+    frame = base.copy()
+    draw = ImageDraw.Draw(frame)
+    draw.rectangle((i % 64, 220, 64 + i % 64, 236), fill=(255, 180, 0))
+    writer.write(cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR))
+writer.release()
+'''
+            docker = shutil.which("docker")
+            if docker is None:
+                raise SystemExit("docker is required to generate the musubi video smoke dataset")
+            result = run(
+                [
+                    docker,
+                    "run",
+                    "--rm",
+                    "--user",
+                    f"{os.getuid()}:{os.getgid()}",
+                    "-v",
+                    f"{root}:/workspace",
+                    "-w",
+                    "/workspace",
+                    "--entrypoint",
+                    "python",
+                    "nomadoor/kura-musubi-tuner:dev",
+                    "-c",
+                    generator,
+                ],
+                timeout=120,
+            )
+            if result.returncode != 0:
+                raise SystemExit(result.stderr or result.stdout or "failed to generate musubi video smoke dataset")
+        (dataset_root / "dataset.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "id": dataset_id,
+                    "modality": "video",
+                    "description": "Generated one-item smoke dataset for Musubi video adapter verification.",
+                    "source": [],
+                    "caption": {"strategy": "manual", "version": 1},
+                    "stats": {"count": 1},
+                    "layout": {"root": "videos", "video_dir": "videos"},
+                    "digest": {"raw": None, "dataset": None},
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        item = {"id": "0001", "path": "videos/0001.mp4", "caption": caption_path.read_text(encoding="utf-8").strip(), "role": "target"}
+        (dataset_root / "items.jsonl").write_text(json.dumps(item, ensure_ascii=False) + "\n", encoding="utf-8")
+        return
     if dataset_id != "flux-kontext-smoke":
         return
     source_image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"

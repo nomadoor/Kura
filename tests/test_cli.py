@@ -1540,6 +1540,47 @@ class MusubiBackendTests(unittest.TestCase):
                 self.assertIn("--max_train_steps 30", script)
                 self.assertIn("--save_precision bf16", script)
 
+    def test_command_musubi_framepack_uses_current_fp8_base_flag(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "framepack",
+                "model_paths": {
+                    "dit": "/models/framepack.safetensors",
+                    "vae": "/models/fpack-vae.safetensors",
+                    "text_encoder1": "hunyuanvideo-community/HunyuanVideo",
+                    "text_encoder2": "openai/clip-vit-large-patch14",
+                    "image_encoder": "/models/siglip.safetensors",
+                },
+                "fp8_base": True,
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--fp8_base", script)
+        self.assertNotIn("--fp8 ", script)
+
+    def test_command_musubi_kandinsky_can_quantize_qwen_cache(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "kandinsky5",
+                "model_paths": {
+                    "dit": "/models/k5-dit.safetensors",
+                    "vae": "/models/k5-vae.safetensors",
+                    "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "text_encoder_clip": "openai/clip-vit-large-patch14",
+                },
+                "quantized_qwen": True,
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("kandinsky5_cache_text_encoder_outputs.py", script)
+        self.assertIn("--quantized_qwen", script)
+
     def test_command_musubi_can_download_models_from_huggingface(self) -> None:
         run = self._run()
         run["backend_overrides"] = {

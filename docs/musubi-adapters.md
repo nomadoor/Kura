@@ -43,10 +43,10 @@ generator for it.
 | FLUX.1 Kontext | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py flux_kontext --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: flux_kontext` or `flux1_kontext`; requires paired/control dataset entries |
 | Ideogram 4 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py ideogram4 --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: ideogram4` or `ideogram_4` |
 | HiDream-O1-Image | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py hidream_o1 --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: hidream_o1` or `hidream`; use BF16 training checkpoint, not Comfy fp8-scaled checkpoint |
-| HunyuanVideo | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: hunyuan_video` or `hunyuanvideo` |
-| HunyuanVideo 1.5 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: hunyuan_video_1_5` |
-| FramePack | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: framepack` or `frame_pack` |
-| Kandinsky 5 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | unverified | `architecture: kandinsky5` or `kandinsky_5` |
+| HunyuanVideo | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py hunyuan_video --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: hunyuan_video` or `hunyuanvideo`; use a standard fp16 LLaMA text encoder with `fp8_llm` rather than Comfy fp8-scaled LLaMA weights |
+| HunyuanVideo 1.5 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py hunyuan_video_1_5 --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: hunyuan_video_1_5` |
+| FramePack | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py framepack --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: framepack` or `frame_pack` |
+| Kandinsky 5 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 with the Lite T2V model (`scripts/musubi_real_smoke.py kandinsky5 --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: kandinsky5` or `kandinsky_5`; Pro 19B checkpoints remain capacity-dependent |
 
 This list should be checked against the current upstream Musubi Tuner README
 before adding adapters.
