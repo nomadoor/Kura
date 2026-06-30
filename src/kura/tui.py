@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ FAIL = "#f7768e"
 QUEUE = "#6a719c"
 LOSS = "#bb9af7"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 DATASET_STATS_TTL = 30.0
 _DATASET_STATS_CACHE: dict[str, tuple[float, DatasetStats]] = {}
@@ -895,14 +896,14 @@ class MonitorScreen(Screen[None]):
     @property
     def active_runs(self) -> list[RunSummary]:
         active = [item for item in self.summaries if (item.state or "").lower() in ACTIVE_STATES]
-        active.sort(key=lambda item: item.last_updated or item.created or datetime.min, reverse=True)
+        active.sort(key=lambda item: item.last_updated or item.created or AWARE_MIN, reverse=True)
         return active
 
     @property
     def history_runs(self) -> list[RunSummary]:
         active_ids = {item.id for item in self.active_runs}
         history = [item for item in self.summaries if item.id not in active_ids]
-        history.sort(key=lambda item: item.last_updated or item.finished or item.created or datetime.min, reverse=True)
+        history.sort(key=lambda item: item.last_updated or item.finished or item.created or AWARE_MIN, reverse=True)
         return history[: max(self.app_ref.limit, 0)]
 
     @property
@@ -1277,7 +1278,7 @@ def _runs_using_dataset(summaries: list[RunSummary], dataset: RunDataset) -> lis
     for summary in summaries:
         if any(_dataset_key(item) == key or (item.id == dataset.id and item.digest == dataset.digest) for item in summary.datasets):
             matches.append(summary)
-    matches.sort(key=lambda item: item.last_updated or item.finished or item.created or datetime.min, reverse=True)
+    matches.sort(key=lambda item: item.last_updated or item.finished or item.created or AWARE_MIN, reverse=True)
     return matches
 
 

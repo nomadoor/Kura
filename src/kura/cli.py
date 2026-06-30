@@ -902,7 +902,7 @@ def main() -> None:
     launch.add_argument("run_id")
     launch.add_argument("--executor", default="docker", choices=("docker", "runpod"))
     launch.add_argument("--dry-run", action="store_true")
-    launch.add_argument("--image", help="Override the RunPod image for this run only")
+    launch.add_argument("--image", help="Override the runtime image for this run only")
     launch.add_argument("--wait", action="store_true", help="For local Docker runs, wait for the container to exit and reconcile status")
     launch.set_defaults(func=cmd_run_launch)
 

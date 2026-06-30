@@ -189,7 +189,8 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str) -> str:
 def validate_result(root: Path, run_id: str, spec: SmokeSpec) -> dict[str, Any]:
     run_dir = root / "runs" / run_id
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    log = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8", errors="replace")
+    stdout_log = run_dir / "logs" / "stdout.log"
+    log = stdout_log.read_text(encoding="utf-8", errors="replace") if stdout_log.is_file() else ""
     command_path = run_dir / "resolved" / "musubi" / "command.json"
     command_text = command_path.read_text(encoding="utf-8", errors="replace") if command_path.exists() else ""
     outputs = list((run_dir / "outputs").glob("*.safetensors"))
@@ -221,6 +222,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=1800.0, help="Launch timeout in seconds")
     parser.add_argument("--hold-for", default="0", help="RunPod review hold after successful download")
     parser.add_argument("--max-lease", default="4h", help="RunPod max lease safety fuse")
+    parser.add_argument("--image", help="Override the Docker/RunPod image for this smoke run")
     args = parser.parse_args()
 
     root = workspace_root()
@@ -242,6 +244,8 @@ def main() -> int:
         return 0
     if args.executor == "docker":
         command = ["uv", "run", "kura", "run", "launch", run_id, "--executor", "docker", "--wait"]
+        if args.image:
+            command.extend(["--image", args.image])
     else:
         command = [
             "uv", "run", "kura", "run", "remote", run_id,
@@ -252,6 +256,8 @@ def main() -> int:
             "--download-interval", "30",
             "--notify", "none",
         ]
+        if args.image:
+            command.extend(["--image", args.image])
     result = run(command, env=env, timeout=args.timeout + 600)
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)

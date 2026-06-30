@@ -1858,6 +1858,38 @@ class DockerLifecycleTests(unittest.TestCase):
             wait.assert_any_call(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
             reconcile.assert_called_once_with(run_dir)
 
+    def test_launch_docker_uses_image_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "realizations").mkdir()
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "configured-local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch_docker") as launch, patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")):
+                    self.assertEqual(launch_run("example", executor="docker", dry_run=False, image="override-image:dev"), 0)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(launch.call_args.kwargs["image"], "override-image:dev")
+
 
 class RunPruneTests(unittest.TestCase):
     def _make_run(self, root: Path, run_id: str, *, state: str, created: str) -> Path:

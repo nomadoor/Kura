@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,6 +18,7 @@ import yaml
 
 
 ACTIVE_STATES = {"queued", "staged", "launching", "running"}
+AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 TRAIN_STDOUT_PROGRESS_RE = re.compile(
     r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)",
@@ -814,7 +815,7 @@ def _split_for_monitor(summaries: list[RunSummary], *, limit: int) -> tuple[list
 
 
 def _recency_key(summary: RunSummary) -> datetime:
-    return summary.last_updated or summary.ended or summary.started or summary.created or datetime.min
+    return summary.last_updated or summary.ended or summary.started or summary.created or AWARE_MIN
 
 
 def _state_text(state: str | None) -> Any:
@@ -1147,7 +1148,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return _ensure_aware(datetime.fromisoformat(value.replace("Z", "+00:00")))
     except ValueError:
         pass
     # RunPod REST fields are sometimes Go-style timestamps, for example:
@@ -1155,10 +1156,16 @@ def _parse_datetime(value: Any) -> datetime | None:
     # deliberately narrow so unrelated free-form strings do not become dates.
     for fmt in ("%Y-%m-%d %H:%M:%S.%f %z UTC", "%Y-%m-%d %H:%M:%S %z UTC"):
         try:
-            return datetime.strptime(value, fmt)
+            return _ensure_aware(datetime.strptime(value, fmt))
         except ValueError:
             continue
     return None
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.astimezone()
+    return value
 
 
 def _duration(delta: Any) -> str:

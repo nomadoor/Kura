@@ -1421,7 +1421,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
                 _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts)
-            launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
+            launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image or image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
             if wait and not dry_run:
                 return _wait_for_docker_run(run_dir)
         else:
