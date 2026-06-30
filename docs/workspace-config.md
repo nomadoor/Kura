@@ -10,13 +10,14 @@ runtime configuration without guessing.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `storage.host_drive` | Windows drive that backs the WSL2 workspace VHDX, for example `F:`. Leave empty outside WSL2 or when unknown. | `""` |
-| `storage.docker_data_drive` | Windows drive that backs Docker Desktop data, if different from `storage.host_drive`. Reserved for Docker backing accounting. | `""` |
+| `storage.host_drive` | Optional override for the Windows drive that backs the WSL2 workspace VHDX, for example `F:`. Kura tries to auto-detect this from the WSL registry first. | `""` |
+| `storage.docker_data_drive` | Optional override for the Windows drive that backs Docker Desktop data, if different from `storage.host_drive`. Reserved for Docker backing accounting. | `""` |
 
 On native Linux and macOS, Kura trusts normal filesystem free space. On WSL2,
 large local Docker launches need the Windows backing drive as well as the Linux
-filesystem; otherwise `kura doctor disk` and launch preflight treat the storage
-confidence as unknown.
+filesystem. Kura auto-detects the current distro's backing drive when Windows
+interop is available; use `storage.host_drive` only when that detection is
+wrong or unavailable.
 
 ## Docker
 

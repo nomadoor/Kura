@@ -369,7 +369,7 @@ class DoctorDockerTests(unittest.TestCase):
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
                     patch("kura.storage.is_wsl", return_value=True),
                     patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
-                    patch("kura.storage.shutil.which", return_value=None),
+                    patch("kura.storage._auto_wsl_host_drive", return_value=None),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                 ):
                     code = cmd_doctor_disk(argparse.Namespace())
@@ -379,6 +379,39 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["storage"]["workspace"]["confidence"], "unknown")
             self.assertTrue(any("WSL Linux ext4" in warning for warning in payload["warnings"]))
+
+    def test_doctor_disk_uses_auto_detected_wsl_host_drive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=0),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("kura.storage.is_wsl", return_value=True),
+                    patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
+                    patch("kura.storage._auto_wsl_host_drive", return_value="F:"),
+                    patch("kura.storage._windows_drive_free_bytes", return_value=290 * 1024**3),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["storage"]["workspace"]["backing_id"], "F:")
+            self.assertEqual(payload["storage"]["workspace"]["confidence"], "estimated")
+            self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 290 * 1024**3)
 
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

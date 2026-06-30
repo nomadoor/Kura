@@ -9,10 +9,12 @@ actual Windows drive that grows the VHDX has much less room.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +94,19 @@ def _config_drive(config: dict[str, Any] | None, key: str) -> str | None:
     return drive
 
 
+def _normalize_drive(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    if len(text) >= 2 and text[0].isalpha() and text[1] == ":":
+        return f"{text[0].upper()}:"
+    if len(text) == 1 and text.isalpha():
+        return f"{text.upper()}:"
+    return None
+
+
 def _drive_from_mnt_path(path: Path) -> str | None:
     parts = path.resolve(strict=False).parts
     if len(parts) >= 3 and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha():
@@ -99,8 +114,75 @@ def _drive_from_mnt_path(path: Path) -> str | None:
     return None
 
 
+def _windows_executable(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    candidates = {
+        "powershell.exe": [
+            Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"),
+            Path("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.EXE"),
+        ],
+        "cmd.exe": [
+            Path("/mnt/c/Windows/System32/cmd.exe"),
+            Path("/mnt/c/Windows/System32/cmd.EXE"),
+        ],
+    }.get(name.lower(), [])
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+@lru_cache(maxsize=16)
+def _powershell_json(script: str) -> Any:
+    powershell = _windows_executable("powershell.exe")
+    if not powershell:
+        return None
+    try:
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-Command", script],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _auto_wsl_host_drive() -> str | None:
+    distro = os.environ.get("WSL_DISTRO_NAME")
+    if not distro:
+        return None
+    script = (
+        "$items = Get-ChildItem HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss | "
+        "ForEach-Object { Get-ItemProperty $_.PSPath | Select-Object DistributionName,BasePath }; "
+        "$items | ConvertTo-Json -Compress"
+    )
+    payload = _powershell_json(script)
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return None
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        if item.get("DistributionName") == distro:
+            return _normalize_drive(item.get("BasePath"))
+    return None
+
+
+@lru_cache(maxsize=16)
 def _windows_drive_free_bytes(drive: str) -> int | None:
-    powershell = shutil.which("powershell.exe")
+    powershell = _windows_executable("powershell.exe")
     if not powershell:
         return None
     safe_drive = drive.upper()
@@ -153,7 +235,7 @@ def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str
             confidence = "exact"
         elif fstype == "ext4":
             backing_kind = "wsl2_vhdx"
-            drive = _config_drive(config, "host_drive")
+            drive = _config_drive(config, "host_drive") or _auto_wsl_host_drive()
             backing_id = drive or str(mount.get("source") or "wsl2-vhdx")
             host_free = _windows_drive_free_bytes(drive) if drive else None
             if host_free is None:
@@ -185,4 +267,3 @@ def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str
 
 def probe_storages(paths: dict[str, Path], config: dict[str, Any] | None = None) -> dict[str, StorageStatus]:
     return {name: probe_storage(path, config, role=name) for name, path in paths.items()}
-
