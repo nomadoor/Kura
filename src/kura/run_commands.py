@@ -173,6 +173,7 @@ def _as_positive_int(value: Any) -> int | None:
 def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> list[str]:
     params = run.get("params") if isinstance(run.get("params"), dict) else {}
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     warnings: list[str] = []
     steps = _as_positive_int(params.get("steps"))
     save_every = _as_positive_int(important_overrides.get("save_every_n_steps"))
@@ -188,7 +189,49 @@ def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> 
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:
             warnings.append(f"sampling cadence may create about {expected_samples} sample batches")
+    if compute.get("executor") in (None, "docker"):
+        warnings.append("local Docker launch requires a disk preflight; default minimum free space is 100GiB unless docker.min_free_gb is configured")
     return warnings
+
+
+def _configured_gib(value: Any, *, default: int) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"disk budget must be an integer GiB value: {value}") from exc
+    if number <= 0:
+        raise ValueError(f"disk budget must be positive: {value}")
+    return number
+
+
+def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]]) -> dict[str, Any]:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
+    if safety.get("max_run_disk_gb") is not None:
+        required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
+    required_bytes = required_gib * 1024**3
+    paths = {"workspace": workspace}
+    for mount in mounts:
+        if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
+            source = Path(mount["source"]).expanduser()
+            if not source.is_absolute():
+                source = workspace / source
+            paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    checked: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    for name, path in paths.items():
+        probe = path
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        usage = shutil.disk_usage(probe)
+        checked[name] = {"path": str(path), "probe": str(probe), "free_bytes": usage.free, "required_bytes": required_bytes}
+        if usage.free < required_bytes:
+            errors.append(f"{path} has only {usage.free // 1024**3} GiB free; local Docker launch requires at least {required_gib} GiB")
+    if errors:
+        raise ValueError("; ".join(errors))
+    return {"required_gib": required_gib, "paths": checked}
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
@@ -1261,6 +1304,8 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             mounts = docker.get("mounts", [])
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
+            if not dry_run:
+                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts)
             launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
             if wait and not dry_run:
                 return _wait_for_docker_run(run_dir)

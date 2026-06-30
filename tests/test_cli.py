@@ -23,7 +23,7 @@ from kura.cli import _docker_cleanup_image, _load_env_local, _notification_chann
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import launch_run
+from kura.run_commands import _local_launch_disk_preflight, launch_run
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -671,7 +671,7 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
             self.assertEqual(payload["params"]["lr"], 0.00005)
-            self.assertEqual(payload["disk_warnings"], [])
+            self.assertIn("local Docker launch requires a disk preflight", payload["disk_warnings"][0])
 
     def test_run_plan_rejects_render_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1681,6 +1681,32 @@ class DockerLifecycleTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
                     docker_preflight(root, [])
+
+    def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
+        class Usage:
+            total = 200 * 1024**3
+            used = 140 * 1024**3
+            free = 60 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+                with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
+                    _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
+        self.assertEqual(payload["required_gib"], 50)
+
+    def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
+        class Usage:
+            total = 200 * 1024**3
+            used = 60 * 1024**3
+            free = 140 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+                with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
+                    _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
