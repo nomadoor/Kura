@@ -163,7 +163,7 @@ COPY docker/comfyui/kura_comfy_prepare.py /opt/kura_comfy_prepare.py
 
 WORKDIR /workspace
 EXPOSE 8188
-CMD ["python", "/opt/ComfyUI/main.py", "--listen", "0.0.0.0", "--port", "8188"]
+CMD ["python", "/opt/ComfyUI/main.py", "--listen", "127.0.0.1", "--port", "8188"]
 """
 
 

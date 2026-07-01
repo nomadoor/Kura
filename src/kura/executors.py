@@ -748,7 +748,7 @@ def launch_runpod_session(*, run_dir: Path, image: str, config: dict[str, Any], 
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
-    runtime_env = {"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/.cache/huggingface", "KURA_WORKSPACE": workspace_path, "KURA_RUN_ID": run_dir.name}
+    runtime_env = {"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/.cache/huggingface", "KURA_WORKSPACE": workspace_path, "KURA_RUN_ID": run_dir.name, "KURA_MAX_LEASE_SEC": str(12 * 3600)}
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
@@ -764,6 +764,17 @@ if [ -n "${PUBLIC_KEY:-}" ]; then
   chmod 600 /root/.ssh/authorized_keys
 fi
 /usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
+if [ "${KURA_MAX_LEASE_SEC:-0}" -gt 0 ] 2>/dev/null; then
+  (
+    sleep "$KURA_MAX_LEASE_SEC"
+    echo "Kura session max lease expired after ${KURA_MAX_LEASE_SEC} seconds; attempting to delete RunPod pod" >> "$KURA_LOG_PATH" 2>&1 || true
+    if command -v runpodctl >/dev/null 2>&1 && [ -n "${RUNPOD_POD_ID:-}" ]; then
+      runpodctl pod delete "$RUNPOD_POD_ID" >> "$KURA_LOG_PATH" 2>&1 || true
+    else
+      echo "Kura session max lease could not delete pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LOG_PATH" 2>&1 || true
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+fi
 echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
 sleep infinity
 '''.strip()

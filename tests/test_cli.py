@@ -22,11 +22,11 @@ import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, launch_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -1202,6 +1202,65 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertFalse(captured["staged_path"].exists())
             images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
             self.assertIn('"comfyui_lora_name":', images)
+
+    def test_render_failure_appends_to_existing_stdout_log(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            output_run = root / "runs" / "train-1" / "outputs"
+            for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  lora_dir: ''\n", encoding="utf-8")
+            checkpoint = output_run / "example.safetensors"
+            checkpoint.write_bytes(b"fake-lora")
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"inputs": {"seed": 0}},
+                    "6": {"inputs": {"text": ""}},
+                    "7": {"inputs": {"text": ""}},
+                    "12": {"inputs": {"lora_name": "old.safetensors"}},
+                }),
+                encoding="utf-8",
+            )
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}, "lora": {"node": "12", "field": "inputs.lora_name"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            class FailingClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    raise RuntimeError("render broke")
+
+            with patch("kura.render.ComfyUIClient", FailingClient):
+                code = launch_render(root, run_dir)
+            self.assertEqual(code, 1)
+            stdout = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8")
+            self.assertIn("render endpoint: http://127.0.0.1:8188", stdout)
+            self.assertIn("queued p1 seed=123 prompt_id=prompt-1", stdout)
+            self.assertIn("RuntimeError: render broke", stdout)
 
     def test_runpod_render_compile_requires_model_registry_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2853,6 +2912,19 @@ class RunPodLifecycleTests(unittest.TestCase):
             record = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual(record["container_cwd"], "/app/ai-toolkit")
 
+    def test_launch_runpod_session_bootstrap_includes_max_lease_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                    realization_id = launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=self._config(), purpose="comfyui-render")
+            self.assertIsNotNone(realization_id)
+            payload = request.call_args.args[3]
+            self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
+            self.assertIn("runpodctl pod delete", payload["dockerStartCmd"][2])
+            self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
+
     def test_launch_runpod_can_pin_availability_filters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3056,6 +3128,55 @@ class RunPodLifecycleTests(unittest.TestCase):
 
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
             self.assertNotIn("runpodctl pod delete", argv_text)
+
+    def test_runpod_render_session_starts_lease_guard_over_ssh(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+            _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
+        command = run.call_args.args[0]
+        command_text = "\n".join(map(str, command))
+        self.assertIn("sleep 60", command_text)
+        self.assertIn("runpodctl pod delete", command_text)
+        self.assertIn("pod-1", command_text)
+        self.assertIn("/workspace/runs/render-1/logs/stdout.log", command_text)
+
+    def test_runpod_comfyui_lease_guard_starts_before_model_prepare(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+            _start_runpod_comfyui(
+                details,
+                workspace="/workspace",
+                run_id="render-1",
+                workflow_remote="/workspace/runs/render-1/resolved/workflow_used.json",
+                registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
+                lora_remote_name=None,
+                lora_remote_path=None,
+                max_lease_sec=60,
+            )
+        script = run.call_args.args[0][-1]
+        self.assertLess(script.index("runpodctl pod delete"), script.index("kura_comfy_prepare.py"))
+        self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
+
+    def test_runpod_scp_is_non_interactive_and_bounded(self) -> None:
+        details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "workflow.json"
+            source.write_text("{}", encoding="utf-8")
+            with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["scp"], 0, "", "")) as run:
+                _scp_to_runpod(details, source, "/workspace/workflow.json")
+        command = run.call_args.args[0]
+        self.assertIn("BatchMode=yes", command)
+        self.assertIn("ConnectTimeout=20", command)
+        self.assertEqual(run.call_args.kwargs["timeout"], 600)
+
+    def test_runpod_scp_timeout_surfaces_as_value_error(self) -> None:
+        details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "workflow.json"
+            source.write_text("{}", encoding="utf-8")
+            with patch("kura.run_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(["scp"], 600)):
+                with self.assertRaisesRegex(ValueError, "scp upload timed out"):
+                    _scp_to_runpod(details, source, "/workspace/workflow.json")
 
     def test_reconcile_runpod_exited_is_unknown_without_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

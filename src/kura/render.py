@@ -334,7 +334,8 @@ def launch_render(
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
     details = {"endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if dry_run:
-        print(json.dumps(details, ensure_ascii=False, indent=2)); return 0
+        print(json.dumps(details, ensure_ascii=False, indent=2))
+        return 0
     workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
     output_dir = run_dir / frozen.get("render", {}).get("output_dir", "samples/images")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -373,7 +374,10 @@ def launch_render(
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
-        (run_dir / "logs" / "stdout.log").write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
+        stdout_log = run_dir / "logs" / "stdout.log"
+        stdout_log.parent.mkdir(parents=True, exist_ok=True)
+        with stdout_log.open("a", encoding="utf-8") as handle:
+            handle.write(f"{type(exc).__name__}: {exc}\n")
         status(run_dir, state="failed", ended=now(), exit_code=1)
         write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})

@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -1108,16 +1108,23 @@ def _ssh_base(details: dict[str, Any]) -> list[str]:
 def _scp_to_runpod(details: dict[str, Any], source: Path, target: str) -> None:
     command = [
         "scp",
+        "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=20",
         "-P", str(details["port"]),
         "-i", str(details["key"]),
         str(source),
         f"root@{details['ip']}:{target}",
     ]
-    result = subprocess.run(command, check=False)
+    try:
+        result = subprocess.run(command, text=True, capture_output=True, check=False, timeout=600)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"scp upload timed out after {exc.timeout} seconds") from exc
     if result.returncode:
-        raise ValueError(f"scp upload failed with exit code {result.returncode}")
+        detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip())
+        suffix = f": {detail}" if detail else ""
+        raise ValueError(f"scp upload failed with exit code {result.returncode}{suffix}")
 
 
 def _free_local_port() -> int:
@@ -1138,6 +1145,34 @@ def _wait_http_ready(endpoint: str, *, timeout_sec: int = 180) -> None:
             last_error = _safe_error(exc)
         time.sleep(2)
     raise ValueError(f"ComfyUI endpoint did not become ready before timeout: {last_error}")
+
+
+def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = 12 * 3600) -> None:
+    """Start the Pod-side lease fuse before any render setup or uploads."""
+
+    if max_lease_sec <= 0:
+        return
+    pod_id = details.get("pod_id")
+    pod_id_value = pod_id if isinstance(pod_id, str) else ""
+    log_path = f"{workspace.rstrip('/')}/runs/{run_id}/logs/stdout.log"
+    script = f"""
+set -euo pipefail
+mkdir -p {shlex.quote(str(PurePosixPath(log_path).parent))}
+touch {shlex.quote(log_path)}
+(
+  sleep {int(max_lease_sec)}
+  echo "Kura render max lease expired after {int(max_lease_sec)} seconds; attempting to delete RunPod pod" >> {shlex.quote(log_path)} 2>&1 || true
+  if command -v runpodctl >/dev/null 2>&1 && [ -n {shlex.quote(pod_id_value)} ]; then
+    runpodctl pod delete {shlex.quote(pod_id_value)} >> {shlex.quote(log_path)} 2>&1 || true
+  else
+    echo "Kura render max lease could not delete pod: runpodctl or pod id is unavailable" >> {shlex.quote(log_path)} 2>&1 || true
+  fi
+) </dev/null >/dev/null 2>&1 &
+""".strip()
+    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False)
+    if result.returncode:
+        detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "lease guard setup failed")
+        raise ValueError(f"remote lease guard setup failed with exit code {result.returncode}: {detail}")
 
 
 def _sync_runpod_remote_stdout(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> bool:
@@ -1627,10 +1662,10 @@ touch "$KURA_LOG_PATH"
 if [ -f {shlex.quote(remote_secret_path)} ]; then
   . {shlex.quote(remote_secret_path)}
 fi
+{lease_guard}
 python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --registry-json {shlex.quote(registry_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
 rm -f {shlex.quote(remote_secret_path)}
 {lora_line}
-{lease_guard}
 cd /opt/ComfyUI
 nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
 """.strip()
@@ -1684,6 +1719,7 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         ssh_details = details
         remote_workspace = str(runpod_config.get("workspace_path") or "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
+        _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name)
         prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp"], check=False)
         if prepared.returncode:
             raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
@@ -1697,7 +1733,7 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         if lora_source and lora_name:
             lora_remote_path = "/opt/ComfyUI/models/loras/" + lora_name
             _scp_to_runpod(details, lora_source, lora_remote_path)
-        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path)
+        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path, max_lease_sec=0)
         local_port = _free_local_port()
         tunnel = subprocess.Popen([
             "ssh",
