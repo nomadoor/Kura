@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import urllib.request
 from typing import Any
 
 from huggingface_hub import hf_hub_download
@@ -80,18 +83,48 @@ def _resolve(ref: dict[str, str], registry: dict[str, Any]) -> dict[str, str] | 
     if not isinstance(entry, dict):
         return None
     repo = entry.get("repo") or entry.get("repo_id")
+    url = entry.get("url") or entry.get("direct_url")
     filename = entry.get("filename") or entry.get("file") or ref["name"]
-    if not repo or not filename:
+    if (not repo and not url) or not filename:
         return None
-    return {
+    spec = {
         **ref,
-        "repo": repo,
         "filename": filename,
-        "target_dir": MODEL_DIRS.get(ref["type"], ref["type"]),
+        "target_dir": entry.get("target_dir") or MODEL_DIRS.get(ref["type"], ref["type"]),
         "target_name": entry.get("target_name") or ref["name"],
-        **({"revision": entry["revision"]} if entry.get("revision") else {}),
-        **({"subfolder": entry["subfolder"]} if entry.get("subfolder") else {}),
     }
+    if repo:
+        spec["repo"] = repo
+    if url:
+        spec["url"] = url
+    if entry.get("revision"):
+        spec["revision"] = entry["revision"]
+    if entry.get("subfolder"):
+        spec["subfolder"] = entry["subfolder"]
+    return spec
+
+
+def _download_model(spec: dict[str, str], cache_dir: Path | None) -> Path:
+    if spec.get("url"):
+        root = cache_dir or Path("/tmp/kura-comfyui-downloads")
+        digest = hashlib.sha256(spec["url"].encode("utf-8")).hexdigest()[:16]
+        target = root / "direct" / digest / Path(spec["filename"]).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.is_file():
+            return target
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        with urllib.request.urlopen(spec["url"], timeout=60) as response, temporary.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+        temporary.replace(target)
+        return target
+    return Path(hf_hub_download(
+        repo_id=spec["repo"],
+        filename=spec["filename"],
+        subfolder=spec.get("subfolder"),
+        revision=spec.get("revision"),
+        cache_dir=str(cache_dir) if cache_dir else None,
+        token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None,
+    ))
 
 
 def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None, registry: dict[str, Any]) -> list[dict[str, str]]:
@@ -107,18 +140,11 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
     if unknown:
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
     for spec in specs:
-        downloaded = hf_hub_download(
-            repo_id=spec["repo"],
-            filename=spec["filename"],
-            subfolder=spec.get("subfolder"),
-            revision=spec.get("revision"),
-            cache_dir=str(cache_dir) if cache_dir else None,
-            token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None,
-        )
+        downloaded = _download_model(spec, cache_dir)
         target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():
-            if target.is_symlink() and target.resolve() == Path(downloaded).resolve():
+            if target.is_symlink() and target.resolve() == downloaded.resolve():
                 continue
             target.unlink()
         os.symlink(downloaded, target)
