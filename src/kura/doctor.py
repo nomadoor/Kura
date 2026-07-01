@@ -26,6 +26,16 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import workspace_relative_path as _workspace_relative_path
 
 
+RECOMMENDED_LOCAL_IMAGES = {
+    "ai-toolkit": "nomadoor/kura-ai-toolkit:dev",
+    "musubi-tuner": "nomadoor/kura-musubi-tuner:dev",
+}
+LEGACY_LOCAL_IMAGES = {
+    "ai-toolkit": "kura/ai-toolkit:dev",
+    "musubi-tuner": "kura/musubi-tuner:dev",
+}
+
+
 def _image_config(name: str) -> dict[str, Any]:
     try:
         image = _workspace_config()["docker"]["images"][name]
@@ -694,12 +704,49 @@ def cmd_doctor_secrets(_: argparse.Namespace) -> int:
     return 0
 
 
+def _workspace_image_diagnostics(workspace: Path) -> tuple[dict[str, Any], list[str]]:
+    workspace_yaml = workspace / "workspace.yaml"
+    diagnostics: dict[str, Any] = {}
+    warnings: list[str] = []
+    try:
+        config = yaml.safe_load(workspace_yaml.read_text(encoding="utf-8")) if workspace_yaml.is_file() else {}
+    except (OSError, yaml.YAMLError) as exc:
+        return diagnostics, [f"workspace.yaml could not be read: {_safe_error(exc)}"]
+    if not isinstance(config, dict):
+        return diagnostics, ["workspace.yaml must contain a YAML mapping"]
+    images = config.get("docker", {}).get("images", {}) if isinstance(config.get("docker"), dict) else {}
+    if not isinstance(images, dict):
+        return diagnostics, []
+    for name, recommended in RECOMMENDED_LOCAL_IMAGES.items():
+        image = images.get(name)
+        if not isinstance(image, dict):
+            continue
+        local = image.get("local")
+        if not isinstance(local, str):
+            continue
+        legacy_default = local == LEGACY_LOCAL_IMAGES.get(name)
+        diagnostics[name] = {
+            "local": local,
+            "recommended_local": recommended,
+            "legacy_default": legacy_default,
+        }
+        if legacy_default:
+            warnings.append(
+                f"docker.images.{name}.local uses the old default {local}; "
+                f"use {recommended} or build/tag that image explicitly"
+            )
+    return diagnostics, warnings
+
+
 def cmd_doctor_workspace(_: argparse.Namespace) -> int:
     workspace = _workspace()
+    image_diagnostics, warnings = _workspace_image_diagnostics(workspace)
     subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets", "docker")}
     print(json.dumps({
         "workspace_root": str(workspace),
         "workspace_yaml": (workspace / "workspace.yaml").is_file(),
         "subdirs": subdirs,
+        "docker_images": image_diagnostics,
+        "warnings": warnings,
     }, indent=2))
-    return 0
+    return 1 if warnings else 0

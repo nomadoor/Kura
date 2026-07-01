@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import io
 import os
 import struct
 import subprocess
@@ -789,6 +791,67 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
             os.chdir(nested)
             try:
                 self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 0)
+            finally:
+                os.chdir(previous)
+
+    def test_doctor_workspace_warns_on_legacy_local_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "schema_version": 1,
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {"local": "kura/ai-toolkit:dev"},
+                                "musubi-tuner": {"local": "kura/musubi-tuner:dev"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 1)
+                payload = json.loads(stdout.getvalue())
+                self.assertTrue(payload["docker_images"]["ai-toolkit"]["legacy_default"])
+                self.assertTrue(payload["docker_images"]["musubi-tuner"]["legacy_default"])
+                self.assertIn("nomadoor/kura-ai-toolkit:dev", "\n".join(payload["warnings"]))
+                self.assertIn("nomadoor/kura-musubi-tuner:dev", "\n".join(payload["warnings"]))
+            finally:
+                os.chdir(previous)
+
+    def test_doctor_workspace_accepts_published_local_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "schema_version": 1,
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev"},
+                                "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 0)
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(payload["warnings"], [])
+                self.assertFalse(payload["docker_images"]["ai-toolkit"]["legacy_default"])
+                self.assertFalse(payload["docker_images"]["musubi-tuner"]["legacy_default"])
             finally:
                 os.chdir(previous)
 
