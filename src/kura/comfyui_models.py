@@ -36,15 +36,16 @@ DEFAULT_MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
-def merged_registry(registry: Any) -> dict[str, Any]:
+def merged_registry(*registries: Any) -> dict[str, Any]:
     merged: dict[str, Any] = deepcopy(DEFAULT_MODEL_REGISTRY)
-    sections = _registry_sections(registry)
-    for section_name, section in sections.items():
-        if not isinstance(section, dict):
-            continue
-        target = merged.setdefault(section_name, {})
-        if isinstance(target, dict):
-            target.update(deepcopy(section))
+    for registry in registries:
+        sections = _registry_sections(registry)
+        for section_name, section in sections.items():
+            if not isinstance(section, dict):
+                continue
+            target = merged.setdefault(section_name, {})
+            if isinstance(target, dict):
+                target.update(deepcopy(section))
     return merged
 
 

@@ -1326,6 +1326,90 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(specs[0]["target_dir"], "checkpoints")
             self.assertEqual(registry["checkpoints"]["toy.safetensors"]["revision"], "abc123")
 
+    def test_runpod_render_compile_merges_sample_sidecar_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_dir = root / "workflows" / "samples" / "toy"
+            (root / "promptsets").mkdir(parents=True)
+            sample_dir.mkdir(parents=True)
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (sample_dir / "toy-text2image-api.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
+            (sample_dir / "toy-text2image-api.kura.yaml").write_text(
+                "models:\n"
+                "  checkpoints:\n"
+                "    toy.safetensors:\n"
+                "      repo: curated/toy\n"
+                "      filename: curated/toy.safetensors\n",
+                encoding="utf-8",
+            )
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
+            registry = json.loads((run_dir / "resolved" / "comfyui_model_registry.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs[0]["repo"], "curated/toy")
+            self.assertEqual(specs[0]["filename"], "curated/toy.safetensors")
+            self.assertEqual(registry["checkpoints"]["toy.safetensors"]["repo"], "curated/toy")
+
+    def test_workspace_registry_overrides_sample_sidecar_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_dir = root / "workflows" / "samples" / "toy"
+            (root / "promptsets").mkdir(parents=True)
+            sample_dir.mkdir(parents=True)
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                "comfyui:\n"
+                "  model_registry:\n"
+                "    checkpoints:\n"
+                "      toy.safetensors:\n"
+                "        repo: local/toy\n"
+                "        filename: local/toy.safetensors\n",
+                encoding="utf-8",
+            )
+            (sample_dir / "toy-text2image-api.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
+            (sample_dir / "toy-text2image-api.kura.yaml").write_text(
+                "models:\n"
+                "  checkpoints:\n"
+                "    toy.safetensors:\n"
+                "      repo: curated/toy\n"
+                "      filename: curated/toy.safetensors\n",
+                encoding="utf-8",
+            )
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs[0]["repo"], "local/toy")
+            self.assertEqual(specs[0]["filename"], "local/toy.safetensors")
+
     def test_runpod_render_launch_dry_run_prints_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

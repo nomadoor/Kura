@@ -42,6 +42,13 @@ def load_optional_yaml(path: Path) -> dict[str, Any]:
     return load_yaml(path)
 
 
+def _workflow_sidecar(path: Path) -> dict[str, Any]:
+    sidecar = path.with_suffix(".kura.yaml")
+    if not sidecar.is_file():
+        return {}
+    return load_yaml(sidecar)
+
+
 def write_yaml(path: Path, value: Any) -> None:
     path.write_text(yaml.safe_dump(value, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
@@ -255,6 +262,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"workflow is not valid JSON: {exc}") from exc
+    sidecar = _workflow_sidecar(workflow_path)
     promptset(promptset_path)
     patch_workflow(
         workflow, run.get("workflow_patches", {}), prompt="", negative_prompt="", seed=0,
@@ -269,7 +277,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["comfyui"] = comfyui
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     if executor.get("name") == "runpod":
-        registry = merged_registry(comfyui.get("model_registry") if isinstance(comfyui, dict) else {})
+        sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
+        workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
+        registry = merged_registry(sidecar_models, workspace_models)
         specs, unknown = resolve_model_specs(workflow, registry)
         if unknown:
             labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown)
