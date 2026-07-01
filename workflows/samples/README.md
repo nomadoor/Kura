@@ -22,11 +22,14 @@ is committed.
     lora:   {node: "<id>", field: inputs.lora_name}
     prompt: {node: "<id>", field: inputs.text}
     seed:   {node: "<id>", field: inputs.seed}
-  # LoRA loader is present but bypassed by default; enabled + named when a LoRA is used.
+  # LoRA loader is present but bypassed by default (base generation works as-is).
+  # To apply a trained LoRA, the agent un-bypasses the loader and points it at the LoRA.
   ```
 
-- A **LoRA loader is pre-inserted and bypassed** so the workflow renders with or
-  without a trained LoRA. Kura enables it and sets `lora_name` when a run has a LoRA.
+- A **LoRA loader is pre-inserted and bypassed** by default, so the workflow does
+  plain base generation as-is. To apply a trained LoRA, the agent edits the
+  workflow: un-bypass the loader and set it to the LoRA. (Editing the workflow
+  JSON is the agent's job — no special Kura mechanism is needed.)
 - Reference only models known to the ComfyUI model registry, so on-demand
   Hugging Face download works on RunPod.
 
