@@ -25,7 +25,7 @@ from kura.cli import _docker_cleanup_image, _load_env_local, _notification_chann
 from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
-from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
+from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
@@ -1202,6 +1202,88 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertFalse(captured["staged_path"].exists())
             images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
             self.assertIn('"comfyui_lora_name":', images)
+
+    def test_render_inserts_sidecar_lora_loader_when_checkpoint_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "comfyui" / "models" / "loras"
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            output_run = root / "runs" / "train-1" / "outputs"
+            for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n", encoding="utf-8")
+            checkpoint = output_run / "example.safetensors"
+            checkpoint.write_bytes(b"fake-lora")
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"class_type": "KSampler", "inputs": {"seed": 0, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0]}},
+                    "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+                    "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 1]}},
+                    "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 1]}},
+                }),
+                encoding="utf-8",
+            )
+            (workflow_dir / "wf.kura.yaml").write_text(
+                "lora_insert:\n"
+                "  kind: model_clip\n"
+                "  model_node: '4'\n"
+                "  clip_node: '4'\n",
+                encoding="utf-8",
+            )
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+            manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["lora_insert"]["class_type"], "LoraLoader")
+            captured: dict[str, Any] = {}
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    captured["workflow"] = workflow
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "image.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"png"
+
+            with patch("kura.render.ComfyUIClient", FakeClient):
+                self.assertEqual(launch_render(root, run_dir), 0)
+            queued = captured["workflow"]
+            lora_node = queued["8"]
+            self.assertEqual(lora_node["class_type"], "LoraLoader")
+            self.assertTrue(lora_node["inputs"]["lora_name"].startswith("Kura_tmp/render-1-example-"))
+            self.assertEqual(lora_node["inputs"]["model"], ["4", 0])
+            self.assertEqual(lora_node["inputs"]["clip"], ["4", 1])
+            self.assertEqual(queued["3"]["inputs"]["model"], ["8", 0])
+            self.assertEqual(queued["6"]["inputs"]["clip"], ["8", 1])
+            self.assertEqual(queued["7"]["inputs"]["clip"], ["8", 1])
+
+    def test_insert_lora_loader_skips_empty_lora_name(self) -> None:
+        workflow = {"1": {"inputs": {"model": ["2", 0]}}, "2": {"inputs": {}}}
+        self.assertEqual(insert_lora_loader(workflow, {"class_type": "LoraLoaderModelOnly", "model_node": "2", "model_output": 0}, ""), workflow)
 
     def test_render_failure_appends_to_existing_stdout_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

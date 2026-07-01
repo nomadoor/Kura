@@ -100,6 +100,109 @@ def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt:
     return patched
 
 
+def _link(node: str, output: int) -> list[Any]:
+    return [node, output]
+
+
+def _as_node_id(value: Any, *, context: str) -> str:
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, int):
+        return str(value)
+    raise ValueError(f"{context} requires node")
+
+
+def _as_output_index(value: Any, default: int, *, context: str) -> int:
+    if value is None:
+        return default
+    if isinstance(value, int) and value >= 0:
+        return value
+    raise ValueError(f"{context} output must be a non-negative integer")
+
+
+def _lora_insert_from_sidecar(sidecar: dict[str, Any]) -> dict[str, Any] | None:
+    raw = sidecar.get("lora_insert")
+    if raw is None and isinstance(sidecar.get("lora"), dict):
+        raw = sidecar["lora"].get("insert")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("lora_insert must be a mapping")
+    kind = str(raw.get("kind") or raw.get("type") or "model_clip").strip()
+    class_type = "LoraLoaderModelOnly" if kind in ("model_only", "LoraLoaderModelOnly") else "LoraLoader"
+    if kind not in ("model_only", "model_clip", "full", "LoraLoaderModelOnly", "LoraLoader"):
+        raise ValueError("lora_insert.kind must be model_only or model_clip")
+    model = raw.get("model") if isinstance(raw.get("model"), dict) else {}
+    clip = raw.get("clip") if isinstance(raw.get("clip"), dict) else {}
+    model_node = _as_node_id(raw.get("model_node", model.get("node")), context="lora_insert.model")
+    spec: dict[str, Any] = {
+        "class_type": class_type,
+        "model_node": model_node,
+        "model_output": _as_output_index(raw.get("model_output", model.get("output")), 0, context="lora_insert.model"),
+        "strength_model": float(raw.get("strength_model", 0.8)),
+    }
+    if class_type == "LoraLoader":
+        spec["clip_node"] = _as_node_id(raw.get("clip_node", clip.get("node", model_node)), context="lora_insert.clip")
+        spec["clip_output"] = _as_output_index(raw.get("clip_output", clip.get("output")), 1, context="lora_insert.clip")
+        spec["strength_clip"] = float(raw.get("strength_clip", 0.8))
+    return spec
+
+
+def insert_lora_loader(workflow: dict[str, Any], spec: dict[str, Any] | None, lora_name: str) -> dict[str, Any]:
+    if not spec or not lora_name:
+        return workflow
+    patched = deepcopy(workflow)
+    model_node = spec["model_node"]
+    if model_node not in patched:
+        raise ValueError(f"lora_insert model node does not exist: {model_node}")
+    class_type = spec["class_type"]
+    model_link = _link(model_node, int(spec.get("model_output", 0)))
+    if class_type == "LoraLoader":
+        clip_node = spec["clip_node"]
+        if clip_node not in patched:
+            raise ValueError(f"lora_insert clip node does not exist: {clip_node}")
+        clip_link = _link(clip_node, int(spec.get("clip_output", 1)))
+    else:
+        clip_link = None
+    node_id = _next_workflow_node_id(patched)
+    inputs: dict[str, Any] = {
+        "model": model_link,
+        "lora_name": lora_name,
+        "strength_model": float(spec.get("strength_model", 0.8)),
+    }
+    if class_type == "LoraLoader":
+        inputs["clip"] = clip_link
+        inputs["strength_clip"] = float(spec.get("strength_clip", 0.8))
+    patched[node_id] = {"class_type": class_type, "inputs": inputs}
+    _replace_links(patched, model_link, _link(node_id, 0), skip_node=node_id)
+    if clip_link is not None:
+        _replace_links(patched, clip_link, _link(node_id, 1), skip_node=node_id)
+    return patched
+
+
+def _next_workflow_node_id(workflow: dict[str, Any]) -> str:
+    numeric = [int(node_id) for node_id in workflow if isinstance(node_id, str) and node_id.isdigit()]
+    return str(max(numeric, default=0) + 1)
+
+
+def _replace_links(value: Any, old: list[Any], new: list[Any], *, skip_node: str | None = None, node_id: str | None = None) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            next_node_id = key if node_id is None and isinstance(key, str) else node_id
+            if next_node_id == skip_node:
+                continue
+            if isinstance(child, list) and child == old:
+                value[key] = list(new)
+            else:
+                _replace_links(child, old, new, skip_node=skip_node, node_id=next_node_id)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            if isinstance(child, list) and child == old:
+                value[index] = list(new)
+            else:
+                _replace_links(child, old, new, skip_node=skip_node, node_id=node_id)
+
+
 def _workspace_path(workspace: Path, value: Any) -> Path | None:
     if not isinstance(value, str) or not value:
         return None
@@ -122,7 +225,7 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
 
 
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
-    if "lora" not in frozen.get("workflow_patches", {}):
+    if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
         return None
     if str(frozen.get("render", {}).get("lora_stage", "auto")).strip().lower() in ("0", "false", "off", "none", "no"):
         return None
@@ -263,6 +366,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     except json.JSONDecodeError as exc:
         raise ValueError(f"workflow is not valid JSON: {exc}") from exc
     sidecar = _workflow_sidecar(workflow_path)
+    lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
     promptset(promptset_path)
     patch_workflow(
         workflow, run.get("workflow_patches", {}), prompt="", negative_prompt="", seed=0,
@@ -270,6 +374,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     )
     resolved = run_dir / "resolved"; resolved.mkdir(exist_ok=True)
     frozen = deepcopy(run)
+    if lora_insert:
+        insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
+        frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"))
@@ -365,6 +472,7 @@ def launch_render(
         generated = 0
         for item, seed in pairs:
             patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name)
+            patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
                 handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
