@@ -69,13 +69,14 @@ cp .env.example .env.local
 あなた（🧑）が方針を決め、AI（🤖）が手を動かす、という共同作業です。
 
 1. 🧑 `datasets/` にデータセットを置く
-2. 🧑 目的を伝える — 例：`このデータセットで Krea 2 のキャラクターLoRAを作りたい`
-3. 🧑 パラメータを伝える — 例：`rank 16、alpha 16、lr 5e-5、batch 2、768px、1500step、100stepごと保存`
-4. 🤖 local smoke（お試し実行）を作って試す
-5. 🤖 問題なければ、ローカル or RunPod で本番を回す
-6. 🧑 `uv run kura monitor` で様子を見る（🤖 に進捗を報告させてもOK）
-7. 🤖 （任意）途中の checkpoint を取り出し、ComfyUI で比較画像を作る
-8. 🧑 結果を見て、終了するか追加学習するかを判断（指示すれば 🤖 が実行）
+2. 🧑 目的を伝える — 例：`このデータセットで Krea 2 のキャラクターLoRAを作りたい`（`rank 16、lr 5e-5…` のように細かく指定してもOK）
+3. 🤖 パラメータを提案し、「この設定でいいですか？」と確認（曖昧な所は妥当な値を埋める）
+4. 🧑 設定に問題なければOK、変えたい点があれば伝える
+5. 🤖 local smoke（お試し実行）を作って試す
+6. 🤖 問題なければ、ローカル or RunPod で本番を回す
+7. 🧑 `uv run kura monitor` で様子を見る（🤖 に進捗を報告させてもOK）
+8. 🤖 （任意）途中の checkpoint を取り出し、ComfyUI で比較画像を作る
+9. 🧑 結果を見て、終了するか追加学習するかを判断（指示すれば 🤖 が実行）
 
 > 💡 データセットの基本的な作り方は、[AI Toolkit で SDXL（Illustrious）LoRA を学習する](https://comfyui.nomadoor.net/ja/notes/ai-toolkit-sdxl-lora-training/) が参考になるかもしれません（SDXL向けですが、考え方は同じです）。
 

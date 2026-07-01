@@ -69,13 +69,14 @@ Local Docker runs reuse Hugging Face downloads through `cache/huggingface/` by d
 You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 
 1. 🧑 Put your dataset under `datasets/`.
-2. 🧑 Tell the agent the goal — e.g. `Train a Krea 2 character LoRA with this dataset.`
-3. 🧑 Tell the agent the parameters — e.g. `rank 16, alpha 16, lr 5e-5, batch 2, 768px, 1500 steps, save every 100 steps.`
-4. 🤖 Create and try a local smoke run.
-5. 🤖 If it passes, run locally or on RunPod.
-6. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
-7. 🤖 (Optional) Pull intermediate checkpoints and generate ComfyUI comparison images.
-8. 🧑 Review the results and decide whether to stop or keep training (🤖 carries out the instruction).
+2. 🧑 Tell the agent the goal — e.g. `Train a Krea 2 character LoRA with this dataset.` (You can also spell out exact parameters like `rank 16, lr 5e-5, ...` if you want.)
+3. 🤖 Propose the parameters and ask "does this config look right?" (filling in sensible values where you were vague).
+4. 🧑 Approve if it looks good, or tell the agent what to change.
+5. 🤖 Create and try a local smoke run.
+6. 🤖 If it passes, run locally or on RunPod.
+7. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
+8. 🤖 (Optional) Pull intermediate checkpoints and generate ComfyUI comparison images.
+9. 🧑 Review the results and decide whether to stop or keep training (🤖 carries out the instruction).
 
 > 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
 
