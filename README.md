@@ -92,6 +92,8 @@ uv run kura run watch <run-id> # one run in detail
 
 Start ComfyUI and drop an **API-format** workflow into `workflows/`, and the agent can generate images with your trained LoRA — test renders, step/strength comparison grids, promptset batches, and so on, depending on the workflow you provide.
 
+No local GPU? `uv run kura render launch <run-id> --executor runpod` runs the same on a disposable RunPod ComfyUI Pod (models are pulled from Hugging Face, only the LoRA is uploaded, and the Pod stops automatically when done).
+
 > Export the workflow with ComfyUI's "File → Export (API)" (the regular UI export is not accepted by `/prompt`). See [Using ComfyUI from an AI agent](https://comfyui.nomadoor.net/en/data-utilities/ai-agent-api/) for details.
 
 ## RunPod safety
