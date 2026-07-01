@@ -166,7 +166,9 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _as_positive_int(value: Any) -> int | None:
-    if value in (None, "", False):
+    if isinstance(value, bool):
+        return None
+    if value in (None, ""):
         return None
     try:
         number = int(value)
@@ -256,6 +258,8 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
 def _configured_gib(value: Any, *, default: int) -> int:
     if value in (None, ""):
         return default
+    if isinstance(value, bool):
+        raise ValueError(f"disk budget must be an integer GiB value: {value}")
     try:
         number = int(value)
     except (TypeError, ValueError) as exc:
@@ -312,7 +316,10 @@ def _estimate_musubi_download_bytes(run: dict[str, Any]) -> dict[str, Any]:
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if backend_name != "musubi-tuner":
         return {"bytes": 0, "items": [], "unknown": []}
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    overrides = run.get("backend_overrides")
+    if overrides is not None and not isinstance(overrides, dict):
+        return {"bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+    override = overrides.get("musubi-tuner", {}) if isinstance(overrides, dict) else {}
     existing_paths = {}
     if isinstance(override, dict):
         paths = override.get("model_paths")

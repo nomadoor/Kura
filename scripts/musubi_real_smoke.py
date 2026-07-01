@@ -454,8 +454,10 @@ SPECS: dict[str, SmokeSpec] = {
     ),
 }
 
+DEFAULT_MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 
-def ensure_generated_dataset(root: Path, dataset_id: str) -> None:
+
+def ensure_generated_dataset(root: Path, dataset_id: str, *, image: str = DEFAULT_MUSUBI_IMAGE) -> None:
     if dataset_id == "musubi-video-smoke":
         dataset_root = root / "datasets" / dataset_id
         video_dir = dataset_root / "videos"
@@ -503,7 +505,7 @@ writer.release()
                     "/workspace",
                     "--entrypoint",
                     "python",
-                    "nomadoor/kura-musubi-tuner:dev",
+                    image,
                     "-c",
                     generator,
                 ],
@@ -581,6 +583,31 @@ def run(command: list[str], *, env: dict[str, str] | None = None, timeout: float
     return subprocess.run(command, text=True, capture_output=True, check=False, env=env, timeout=timeout)
 
 
+def run_disk_safety_gate(*, env: dict[str, str], allow_warnings: bool) -> int:
+    result = run(["uv", "run", "kura", "doctor", "disk"], env=env, timeout=180)
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    if result.returncode == 0:
+        return 0
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        payload = {}
+    warnings = payload.get("warnings") if isinstance(payload, dict) else None
+    if allow_warnings and isinstance(warnings, list) and warnings:
+        print(
+            "warning: continuing despite `kura doctor disk` warnings because --allow-disk-warnings was passed",
+            file=sys.stderr,
+        )
+        return 0
+    print(
+        "real smoke aborted because `kura doctor disk` reported warnings; "
+        "fix disk/cache/permission issues first, or pass --allow-disk-warnings after explicit review",
+        file=sys.stderr,
+    )
+    return result.returncode or 1
+
+
 def workspace_root() -> Path:
     root = Path.cwd()
     if not (root / "workspace.yaml").is_file():
@@ -588,8 +615,8 @@ def workspace_root() -> Path:
     return root
 
 
-def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str) -> str:
-    ensure_generated_dataset(root, spec.dataset_id)
+def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: str = DEFAULT_MUSUBI_IMAGE) -> str:
+    ensure_generated_dataset(root, spec.dataset_id, image=image)
     run_id = f"{datetime.now():%Y%m%d-%H%M}_musubi-real-smoke-{spec.architecture}_{secrets.token_hex(2)}"
     run_dir = root / "runs" / run_id
     for relative in ("resolved", "logs", "metrics", "samples", "checkpoints", "outputs"):
@@ -668,13 +695,17 @@ def main() -> int:
     parser.add_argument("--hold-for", default="0", help="RunPod review hold after successful download")
     parser.add_argument("--max-lease", default="4h", help="RunPod max lease safety fuse")
     parser.add_argument("--image", help="Override the Docker/RunPod image for this smoke run")
+    parser.add_argument("--allow-disk-warnings", action="store_true", help="Continue after reviewing non-zero `kura doctor disk` warnings")
     args = parser.parse_args()
 
     root = workspace_root()
     spec = SPECS[args.architecture]
-    run_id = write_run(root, spec, executor=args.executor, gpu=args.gpu)
     env = dict(os.environ)
     env["KURA_NOTIFY"] = "none"
+    disk_gate = run_disk_safety_gate(env=env, allow_warnings=args.allow_disk_warnings)
+    if disk_gate != 0:
+        return disk_gate
+    run_id = write_run(root, spec, executor=args.executor, gpu=args.gpu, image=args.image or DEFAULT_MUSUBI_IMAGE)
     for command in (
         ["uv", "run", "kura", "run", "compile", run_id],
         ["uv", "run", "kura", "run", "plan", run_id],

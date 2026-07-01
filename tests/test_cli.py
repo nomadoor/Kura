@@ -26,8 +26,8 @@ from kura.executors import docker_command, docker_preflight, launch_runpod, reco
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _checkpoint_safety_preflight, _ensure_free_bytes, _local_launch_disk_preflight, launch_run
-from kura.storage import StorageStatus
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, launch_run
+from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -382,6 +382,18 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["storage"]["workspace"]["confidence"], "unknown")
             self.assertTrue(any("WSL Linux ext4" in warning for warning in payload["warnings"]))
+
+    def test_wsl_storage_probe_treats_unknown_backing_as_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.storage.is_wsl", return_value=True),
+                patch("kura.storage._findmnt_for", return_value={"available": False, "reason": "findmnt not found"}),
+            ):
+                status = probe_storage(root, role="workspace")
+        self.assertEqual(status.backing_kind, "wsl2")
+        self.assertEqual(status.confidence, "unknown")
+        self.assertIn("could not identify the physical backing store", status.warning or "")
 
     def test_doctor_disk_uses_auto_detected_wsl_host_drive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -957,6 +969,26 @@ class RunPlanTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertIn("for train runs", stderr.getvalue())
 
+    def test_positive_integer_parsing_rejects_boolean_values(self) -> None:
+        self.assertIsNone(_as_positive_int(True))
+        self.assertIsNone(_as_positive_int(False))
+        self.assertEqual(_as_positive_int("2"), 2)
+        with self.assertRaisesRegex(ValueError, "integer GiB"):
+            _configured_gib(True, default=50)
+        with self.assertRaisesRegex(ValueError, "integer GiB"):
+            _configured_gib(False, default=50)
+
+    def test_musubi_download_estimate_handles_malformed_overrides(self) -> None:
+        payload = _estimate_musubi_download_bytes(
+            {
+                "type": "train",
+                "backend": {"name": "musubi-tuner"},
+                "backend_overrides": True,
+            }
+        )
+        self.assertEqual(payload["bytes"], 0)
+        self.assertIn("invalid musubi model download spec", payload["unknown"])
+
     def test_checkpoint_safety_preflight_rejects_many_unpruned_checkpoints(self) -> None:
         run = {
             "type": "train",
@@ -1313,6 +1345,17 @@ class AiToolkitBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "backend_overrides.ai-toolkit.config"):
                 compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+
+    def test_malformed_backend_overrides_do_not_crash_ai_toolkit(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            compile_ai_toolkit(run, destination)
+            config = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))
+        command = command_ai_toolkit(run)
+        self.assertEqual(config["config"]["name"], "ai-toolkit-example")
+        self.assertEqual(command["cwd"], "/opt/ai-toolkit")
 
 
 class MusubiBackendTests(unittest.TestCase):
@@ -2300,7 +2343,7 @@ class DockerLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch("kura.run_commands.launch_docker", side_effect=fake_launch), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
+                with patch("kura.run_commands.launch_docker", side_effect=fake_launch), patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
                     self.assertEqual(launch_run("example", executor="docker", dry_run=False, wait=True), 0)
             finally:
                 os.chdir(previous)
@@ -2333,7 +2376,7 @@ class DockerLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch("kura.run_commands.launch_docker") as launch, patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")):
+                with patch("kura.run_commands.launch_docker") as launch, patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")):
                     self.assertEqual(launch_run("example", executor="docker", dry_run=False, image="override-image:dev"), 0)
             finally:
                 os.chdir(previous)

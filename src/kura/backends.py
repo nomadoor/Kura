@@ -94,9 +94,17 @@ def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, r
     return entries
 
 
+def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
+    overrides = run.get("backend_overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    override = overrides.get("ai-toolkit")
+    return override if isinstance(override, dict) else {}
+
+
 def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
     """Write AI-Toolkit native YAML for configured training runs."""
-    override = run.get("backend_overrides", {}).get("ai-toolkit", {})
+    override = _ai_toolkit_backend_override(run)
     params = run.get("params", {})
     model = run.get("model", {})
     datasets = _datasets(run)
@@ -131,7 +139,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
 
 def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Return a container-native command spec, without executing it."""
-    command = run.get("backend_overrides", {}).get("ai-toolkit", {}).get("command")
+    command = _ai_toolkit_backend_override(run).get("command")
     if command is None:
         return {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}
     if not isinstance(command, dict):
@@ -161,7 +169,7 @@ def _toml_scalar(value: Any) -> str:
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path) -> None:
     params = run.get("params", {})
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     datasets = _datasets(run)
     if not datasets:
         raise ValueError("Musubi Tuner requires datasets[]")
@@ -364,8 +372,16 @@ def compile_musubi_tuner(run: dict[str, Any], destination: Path) -> None:
     )
 
 
+def _musubi_backend_override(run: dict[str, Any]) -> dict[str, Any]:
+    overrides = run.get("backend_overrides")
+    if not isinstance(overrides, dict):
+        return {}
+    override = overrides.get("musubi-tuner")
+    return override if isinstance(override, dict) else {}
+
+
 def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     clean = _musubi_explicit_model_paths(override)
     downloads = _musubi_model_downloads(run, existing_paths=clean)
     clean.update(downloads[1])
@@ -407,7 +423,7 @@ def _musubi_model_cache_path(repo_id: str, key: str, filename: str) -> str:
 def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     model = run.get("model", {})
     base = str(model.get("base") or "").lower().replace("_", "-")
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     architecture = _musubi_architecture(run)
     if architecture not in ("flux2", "flux_2"):
         return {}
@@ -456,7 +472,7 @@ def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _krea2_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     architecture = _musubi_architecture(run)
     if architecture not in ("krea2", "krea_2"):
         return {}
@@ -480,7 +496,7 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[dict[str, str]], dict[str, str]]:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     existing_paths = existing_paths or {}
     resolved_downloads: dict[str, Any] = _known_musubi_bundle(run)
     downloads = override.get("model_downloads")
@@ -674,7 +690,7 @@ for item in json.loads(sys.argv[1]):
 
 
 def _musubi_architecture(run: dict[str, Any]) -> str:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     return str(override.get("architecture") or override.get("model_arch") or "flux2").lower().replace("-", "_")
 
 
@@ -689,7 +705,7 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
 
 
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     model_version = str(override.get("model_version") or "").lower().replace("_", "-")
     if model_version:
         return model_version
@@ -711,7 +727,7 @@ def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
 
 def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     architecture = _musubi_architecture(run)
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     model_version = str(override.get("model_version") or "").lower().replace("_", "-")
     model_base = str(run.get("model", {}).get("base") or "").lower().replace("_", "-")
     text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version or "9b" in model_base else "qwen3_4b_text_encoder"
@@ -848,7 +864,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
 
 
 def _musubi_model_sources(run: dict[str, Any], paths: dict[str, str]) -> dict[str, dict[str, str]]:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     explicit_paths = _musubi_explicit_model_paths(override)
     downloads = _known_musubi_bundle(run)
     user_downloads = override.get("model_downloads")
@@ -898,7 +914,7 @@ def _musubi_model_lock(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _musubi_output_compatibility(run: dict[str, Any]) -> dict[str, str]:
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     value = override.get("output_compatibility") or override.get("output_format") or "comfyui"
     return {"lora_format": str(value)}
 
@@ -1279,7 +1295,7 @@ def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
 
 def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Return a Musubi Tuner command spec without executing it."""
-    override = run.get("backend_overrides", {}).get("musubi-tuner", {})
+    override = _musubi_backend_override(run)
     explicit = override.get("command")
     if explicit is not None:
         if not isinstance(explicit, dict):

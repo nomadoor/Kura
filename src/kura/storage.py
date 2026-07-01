@@ -249,6 +249,11 @@ def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str
                 effective_free = min(linux_free, host_free)
         else:
             backing_kind = "wsl2"
+            confidence = "unknown"
+            warning = (
+                f"{role or path} is on WSL, but Kura could not identify the physical backing store; "
+                "Linux free space may not reflect the host drive that stores Docker/WSL data"
+            )
 
     return StorageStatus(
         path=str(path),
