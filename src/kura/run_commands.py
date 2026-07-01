@@ -1169,7 +1169,10 @@ touch {shlex.quote(log_path)}
   fi
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
-    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"remote lease guard setup timed out after {exc.timeout} seconds") from exc
     if result.returncode:
         detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "lease guard setup failed")
         raise ValueError(f"remote lease guard setup failed with exit code {result.returncode}: {detail}")

@@ -3139,6 +3139,13 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertIn("runpodctl pod delete", command_text)
         self.assertIn("pod-1", command_text)
         self.assertIn("/workspace/runs/render-1/logs/stdout.log", command_text)
+        self.assertEqual(run.call_args.kwargs["timeout"], 60)
+
+    def test_runpod_render_session_lease_guard_timeout_surfaces_as_value_error(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(["ssh"], 60)):
+            with self.assertRaisesRegex(ValueError, "remote lease guard setup timed out"):
+                _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
 
     def test_runpod_comfyui_lease_guard_starts_before_model_prepare(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
