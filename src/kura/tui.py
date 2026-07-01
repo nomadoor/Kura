@@ -348,21 +348,18 @@ class RunRow(Static):
             width = max(int(self.size.width or 0), 0)
         except RuntimeError:
             width = 0
-        middle_width = 5 if width == 0 or width >= 18 else 0
+        middle_width = 5 if (summary.state or "").lower() in ACTIVE_STATES and (width == 0 or width >= 18) else 0
         name_width = max((width - middle_width - 5) if width else 13, 6)
         name = _fit_plain(_short_run_label(summary), name_width).ljust(name_width)
-        sparkline = loss_sparkline(summary.losses, width=5)
         activity_percent = _activity_percent(summary.activity)
         if middle_width == 0:
             middle = None
         elif activity_percent and (summary.state or "").lower() in ACTIVE_STATES:
             middle = (_fit_plain(activity_percent, middle_width).rjust(middle_width), FG_MUTED)
-        elif sparkline:
-            middle = (_fit_plain(sparkline, middle_width).rjust(middle_width), LOSS)
         elif summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
             middle = (_fit_plain(summary.activity, middle_width).rjust(middle_width), FG_MUTED)
         else:
-            middle = (" " * middle_width, LOSS)
+            middle = (" " * middle_width, FG_MUTED)
         if middle is None:
             return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), (dot, _state_style(summary)))
         return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), middle, (" "), (dot, _state_style(summary)))
