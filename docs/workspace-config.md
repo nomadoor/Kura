@@ -61,6 +61,8 @@ of being consumed by the download.
 | `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
 | `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI | `symlink` |
 | `comfyui.lora_stage_cleanup` | Whether temporary staged LoRAs are removed after render | `remove_after_render` |
+| `comfyui.model_registry` | Explicit ComfyUI model name to Hugging Face repo/file mappings for RunPod render | `{}` |
+| `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods | created by `kura init` |
 
 If `comfyui.lora_dir` is changed after a render run was compiled, re-run:
 
@@ -76,6 +78,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | --- | --- | --- |
 | `runpod.default_image.ai-toolkit` | Default AI-Toolkit remote image/template image | `ostris/aitoolkit:latest` |
 | `runpod.default_image.musubi-tuner` | Default Musubi remote image | `nomadoor/kura-musubi-tuner:dev` |
+| `runpod.default_image.comfyui` | Default ComfyUI remote render image | `nomadoor/kura-comfyui:dev` |
 | `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
 | `runpod.api_key_env` | Environment variable that holds the RunPod API key | `RUNPOD_API_KEY` |
 | `runpod.storage_mode` | Remote staging mode | `upload` |

@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from kura import __version__
+from kura.comfyui_models import resolve_model_specs
 
 
 def now() -> str:
@@ -151,7 +152,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
 def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
-    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup")
+    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_registry", "runpod")
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
 
 
@@ -266,6 +267,13 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"))
     if comfyui:
         frozen["comfyui"] = comfyui
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    if executor.get("name") == "runpod":
+        specs, unknown = resolve_model_specs(workflow, comfyui.get("model_registry") if isinstance(comfyui, dict) else {})
+        if unknown:
+            labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown)
+            raise ValueError("runpod ComfyUI render has unknown model loader entries; add comfyui.model_registry mappings for: " + labels)
+        frozen["comfyui_models"] = specs
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
     if checkpoint_path:
         candidate = workspace / checkpoint_path
@@ -276,21 +284,34 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
     write_yaml(resolved / "manifest.lock.yaml", frozen)
     (resolved / "workflow_used.json").write_text(json.dumps(workflow, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if "comfyui_models" in frozen:
+        (resolved / "comfyui_models.json").write_text(json.dumps(frozen["comfyui_models"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
     write_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled")
 
 
-def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
+def launch_render(
+    workspace: Path,
+    run_dir: Path,
+    dry_run: bool = False,
+    *,
+    endpoint_override: str | None = None,
+    lora_name_override: str | None = None,
+    executor_name: str | None = None,
+    manage_lora_stage: bool = True,
+) -> int:
     manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
     workflow_used_path = run_dir / "resolved" / "workflow_used.json"
     if not manifest_path.is_file() or not workflow_used_path.is_file():
         raise ValueError("render is not compiled; run kura render compile first")
     frozen = load_yaml(manifest_path)
-    if frozen.get("generator", {}).get("name") != "comfyui" or frozen.get("executor", {}).get("name") != "local":
-        raise ValueError("render runs currently require generator.name=comfyui and executor.name=local")
+    resolved_executor = executor_name or frozen.get("executor", {}).get("name")
+    if frozen.get("generator", {}).get("name") != "comfyui" or resolved_executor not in ("local", "runpod"):
+        raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
     current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    if current_status.get("state") != "compiled":
+    allowed_states = {"compiled"} if resolved_executor == "local" else {"compiled", "running"}
+    if current_status.get("state") not in allowed_states:
         raise ValueError("render must be compiled and has already been launched or finalized")
     inputs = frozen.get("inputs", {})
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
@@ -304,9 +325,10 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
     pairs = [(item, seed) for item in prompts for seed in item.get("seeds", [default_seed]) if seed is not None]
     if not pairs:
         raise ValueError("promptset has no seeds and render.default_seed is not set")
-    lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint)
-    lora_name = lora_stage["lora_name"] if lora_stage else checkpoint.get("path", "")
-    details = {"endpoint": frozen["generator"].get("endpoint"), "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    endpoint = endpoint_override or frozen["generator"].get("endpoint")
+    lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+    lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
+    details = {"endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if dry_run:
         print(json.dumps(details, ensure_ascii=False, indent=2)); return 0
     workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
@@ -314,15 +336,17 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     images_log = run_dir / "samples" / "images.jsonl"
     images_log.parent.mkdir(parents=True, exist_ok=True)
-    client = ComfyUIClient(frozen["generator"]["endpoint"], int(frozen.get("render", {}).get("timeout_sec", 600)))
+    if not isinstance(endpoint, str) or not endpoint:
+        raise ValueError("render generator endpoint is empty")
+    client = ComfyUIClient(endpoint, int(frozen.get("render", {}).get("timeout_sec", 600)))
     stdout_log = run_dir / "logs" / "stdout.log"
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
-    stdout_log.write_text(f"render endpoint: {frozen['generator']['endpoint']}\n", encoding="utf-8")
+    stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     status(run_dir, state="running", started=now(), ended=None, exit_code=None)
     try:
         if lora_stage:
             _materialize_lora_stage(lora_stage)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "generator": "comfyui", "endpoint": frozen["generator"]["endpoint"], "lora_stage": lora_stage})
+        event(run_dir, {"event": "render_started", "timestamp": now(), "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage})
         generated = 0
         for item, seed in pairs:
             patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name)
@@ -341,13 +365,13 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
                 generated += 1
         status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, executor="local", generator="comfyui", state="completed", endpoint=frozen["generator"]["endpoint"], workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
+        write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
         (run_dir / "logs" / "stdout.log").write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
         status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, executor="local", generator="comfyui", state="failed", endpoint=frozen["generator"]["endpoint"], workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
+        write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:
