@@ -39,7 +39,7 @@ class TuiMetricsTests(unittest.TestCase):
         self.assertIsNone(_runpod_pod_url(None))
 
     def test_open_url_uses_windows_browser_bridge_on_wsl(self) -> None:
-        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui.shutil.which", side_effect=lambda name: name == "cmd.exe"), patch("kura.tui.subprocess.Popen") as popen:
+        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui._windows_command", side_effect=lambda name: name if name == "cmd.exe" else None), patch("kura.tui.subprocess.Popen") as popen:
             opened = _open_url("https://console.runpod.io/pods?id=pod-1")
 
         self.assertTrue(opened)
@@ -47,7 +47,7 @@ class TuiMetricsTests(unittest.TestCase):
         self.assertEqual(popen.call_args.args[0][:4], ["cmd.exe", "/c", "start", ""])
 
     def test_open_path_missing_wsl_bridge_returns_false(self) -> None:
-        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui.shutil.which", return_value=None), patch("kura.tui.subprocess.run") as run, patch("kura.tui.subprocess.Popen") as popen:
+        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui._windows_command", return_value=None), patch("kura.tui.subprocess.run") as run, patch("kura.tui.subprocess.Popen") as popen:
             run.return_value.returncode = 0
             run.return_value.stdout = r"\\wsl.localhost\\Ubuntu\\tmp" + "\n"
             opened = _open_path(Path("/tmp"))

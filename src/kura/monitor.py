@@ -874,6 +874,9 @@ def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
     primary = run_dir / "outputs"
     if primary.exists() and any(primary.iterdir()):
         return primary
+    render_images = run_dir / "samples" / "images"
+    if render_images.exists() and any(render_images.iterdir()):
+        return render_images
     downloaded_dir = _downloaded_run_dir(run_dir, status)
     if downloaded_dir is not None:
         candidate = downloaded_dir / "outputs"

@@ -1571,10 +1571,12 @@ def _open_path(path: Path) -> bool:
         converted_path = converted.stdout.strip()
         if converted.returncode or not converted_path:
             return False
-        if shutil.which("explorer.exe"):
-            command = ["explorer.exe", converted_path]
-        elif shutil.which("cmd.exe"):
-            command = ["cmd.exe", "/c", "start", "", converted_path]
+        explorer = _windows_command("explorer.exe")
+        cmd = _windows_command("cmd.exe")
+        if explorer:
+            command = [explorer, converted_path]
+        elif cmd:
+            command = [cmd, "/c", "start", "", converted_path]
         else:
             return False
     elif platform.system() == "Darwin":
@@ -1592,10 +1594,12 @@ def _open_path(path: Path) -> bool:
 
 def _open_url(url: str) -> bool:
     if _is_wsl():
-        if shutil.which("cmd.exe"):
-            command = ["cmd.exe", "/c", "start", "", url]
-        elif shutil.which("explorer.exe"):
-            command = ["explorer.exe", url]
+        cmd = _windows_command("cmd.exe")
+        explorer = _windows_command("explorer.exe")
+        if cmd:
+            command = [cmd, "/c", "start", "", url]
+        elif explorer:
+            command = [explorer, url]
         else:
             return False
     elif platform.system() == "Darwin":
@@ -1609,6 +1613,20 @@ def _open_url(url: str) -> bool:
     except OSError:
         return False
     return True
+
+
+def _windows_command(name: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    candidates = {
+        "explorer.exe": ("/mnt/c/Windows/explorer.exe",),
+        "cmd.exe": ("/mnt/c/Windows/System32/cmd.exe",),
+    }.get(name, ())
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return None
 
 
 def _runpod_pod_url(pod_id: str | None) -> str | None:
