@@ -72,10 +72,12 @@ def _required_models(workflow: dict[str, Any]) -> list[dict[str, str]]:
     return refs
 
 
-def _resolve(ref: dict[str, str]) -> dict[str, str] | None:
-    section = MODEL_REGISTRY.get(ref["type"], {})
+def _resolve(ref: dict[str, str], registry: dict[str, Any]) -> dict[str, str] | None:
+    section = registry.get(ref["type"], {})
+    if not isinstance(section, dict):
+        return None
     entry = section.get(ref["name"])
-    if not entry:
+    if not isinstance(entry, dict):
         return None
     repo = entry.get("repo") or entry.get("repo_id")
     filename = entry.get("filename") or entry.get("file") or ref["name"]
@@ -92,12 +94,12 @@ def _resolve(ref: dict[str, str]) -> dict[str, str] | None:
     }
 
 
-def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None) -> list[dict[str, str]]:
+def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None, registry: dict[str, Any]) -> list[dict[str, str]]:
     models_root = comfyui_root / "models"
     specs: list[dict[str, str]] = []
     unknown: list[dict[str, str]] = []
     for ref in _required_models(workflow):
-        spec = _resolve(ref)
+        spec = _resolve(ref, registry)
         if spec is None:
             unknown.append(ref)
         else:
@@ -127,13 +129,20 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("workflow_json")
+    parser.add_argument("--registry-json")
     parser.add_argument("--comfyui-root", default=os.environ.get("COMFYUI_ROOT", "/opt/ComfyUI"))
     parser.add_argument("--cache-dir", default=os.environ.get("HF_HOME"))
     args = parser.parse_args()
     workflow = json.loads(Path(args.workflow_json).read_text(encoding="utf-8"))
     if not isinstance(workflow, dict):
         raise ValueError("workflow_json must contain a ComfyUI API workflow object")
-    specs = prepare(workflow, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None)
+    registry: dict[str, Any] = MODEL_REGISTRY
+    if args.registry_json:
+        loaded = json.loads(Path(args.registry_json).read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("registry_json must contain a model registry object")
+        registry = loaded
+    specs = prepare(workflow, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None, registry=registry)
     print(json.dumps({"event": "models_prepared", "count": len(specs), "models": specs}, ensure_ascii=False), flush=True)
     return 0
 

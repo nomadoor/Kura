@@ -1586,7 +1586,7 @@ def _render_runpod_lora(workspace: Path, run_dir: Path, frozen: dict[str, Any]) 
     return source, "Kura_tmp/" + _safe_stage_name(run_dir.name, source)
 
 
-def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, max_lease_sec: int = 12 * 3600) -> None:
+def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, registry_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, max_lease_sec: int = 12 * 3600) -> None:
     secret_payload = _runpod_secret_env_payload(remote_notify=False)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
     if secret_payload is not None:
@@ -1627,7 +1627,7 @@ touch "$KURA_LOG_PATH"
 if [ -f {shlex.quote(remote_secret_path)} ]; then
   . {shlex.quote(remote_secret_path)}
 fi
-python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
+python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --registry-json {shlex.quote(registry_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
 rm -f {shlex.quote(remote_secret_path)}
 {lora_line}
 {lease_guard}
@@ -1670,8 +1670,9 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
             runpod_config["gpu_type_ids"] = [gpu_override]
             runpod_config["gpu_type_priority"] = "custom"
         model_specs = frozen.get("comfyui_models")
-        if not isinstance(model_specs, list):
-            model_specs = []
+        model_registry = frozen.get("comfyui_model_registry")
+        if not isinstance(model_specs, list) or not isinstance(model_registry, dict):
+            raise ValueError("runpod render requires a manifest compiled for executor.name=runpod; set executor.name=runpod in run.yaml and recompile before launching on RunPod")
         lora_source, lora_name = _render_runpod_lora(workspace, run_dir, frozen)
         plan = {"executor": "runpod", "image": remote_image, "models": model_specs, "lora_name": lora_name, "ports": runpod_config.get("ports"), "gpu_type_ids": runpod_config.get("gpu_type_ids")}
         if dry_run:
@@ -1689,11 +1690,14 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         workflow_path = run_dir / "resolved" / "workflow_used.json"
         remote_workflow = f"{remote_run_dir}/resolved/workflow_used.json"
         _scp_to_runpod(details, workflow_path, remote_workflow)
+        registry_path = run_dir / "resolved" / "comfyui_model_registry.json"
+        remote_registry = f"{remote_run_dir}/resolved/comfyui_model_registry.json"
+        _scp_to_runpod(details, registry_path, remote_registry)
         lora_remote_path = None
         if lora_source and lora_name:
             lora_remote_path = "/opt/ComfyUI/models/loras/" + lora_name
             _scp_to_runpod(details, lora_source, lora_remote_path)
-        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, lora_remote_name=lora_name, lora_remote_path=lora_remote_path)
+        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path)
         local_port = _free_local_port()
         tunnel = subprocess.Popen([
             "ssh",

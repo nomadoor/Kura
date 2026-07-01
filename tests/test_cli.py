@@ -1228,15 +1228,24 @@ class RenderNotificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown model loader"):
                 compile_render(root, run_dir)
 
-    def test_runpod_render_compile_freezes_image_registry_model_specs(self) -> None:
+    def test_runpod_render_compile_freezes_workspace_registry_model_specs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workflows").mkdir()
             (root / "promptsets").mkdir()
             run_dir = root / "runs" / "render-1"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
-            (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5-pruned-emaonly-fp16.safetensors"}}}), encoding="utf-8")
+            (root / "workspace.yaml").write_text(
+                "comfyui:\n"
+                "  model_registry:\n"
+                "    checkpoints:\n"
+                "      toy.safetensors:\n"
+                "        repo: owner/toy\n"
+                "        filename: weights/toy.safetensors\n"
+                "        revision: abc123\n",
+                encoding="utf-8",
+            )
+            (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
             (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
@@ -1252,9 +1261,11 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
             compile_render(root, run_dir)
             specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
-            self.assertEqual(specs[0]["repo"], "Comfy-Org/stable-diffusion-v1-5-archive")
-            self.assertEqual(specs[0]["filename"], "v1-5-pruned-emaonly-fp16.safetensors")
+            registry = json.loads((run_dir / "resolved" / "comfyui_model_registry.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs[0]["repo"], "owner/toy")
+            self.assertEqual(specs[0]["filename"], "weights/toy.safetensors")
             self.assertEqual(specs[0]["target_dir"], "checkpoints")
+            self.assertEqual(registry["checkpoints"]["toy.safetensors"]["revision"], "abc123")
 
     def test_runpod_render_launch_dry_run_prints_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1291,6 +1302,7 @@ class RenderNotificationTests(unittest.TestCase):
                         "executor": {"name": "runpod"},
                         "workflow_patches": {},
                         "render": {"default_seed": 1},
+                        "comfyui_model_registry": {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}},
                         "comfyui_models": [{"name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints"}],
                     }),
                     encoding="utf-8",
@@ -1305,6 +1317,49 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(plan["image"], "remote/default-comfy")
             self.assertEqual(plan["executor"], "runpod")
             self.assertEqual(plan["models"][0]["repo"], "owner/toy")
+
+    def test_runpod_render_launch_requires_runpod_compiled_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                (root / "runs" / "render-1" / "resolved").mkdir(parents=True)
+                run_dir = root / "runs" / "render-1"
+                (root / "workspace.yaml").write_text(
+                    "docker:\n"
+                    "  images:\n"
+                    "    comfyui:\n"
+                    "      local: local/comfy\n"
+                    "      remote: remote/comfy\n"
+                    "      dockerfile: docker/comfyui/Dockerfile\n"
+                    "      context: .\n"
+                    "runpod:\n"
+                    "  storage_mode: upload\n"
+                    "comfyui:\n"
+                    "  runpod:\n"
+                    "    ports: [22/tcp]\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                    yaml.safe_dump({
+                        "type": "render",
+                        "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                        "executor": {"name": "local"},
+                        "workflow_patches": {},
+                        "render": {"default_seed": 1},
+                    }),
+                    encoding="utf-8",
+                )
+                buffer = io.StringIO()
+                with contextlib.redirect_stderr(buffer):
+                    code = launch_run("render-1", executor="runpod", dry_run=False)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            self.assertIn("compiled for executor.name=runpod", buffer.getvalue())
 
     def test_render_cleanup_keeps_preexisting_stage_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
