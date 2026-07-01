@@ -151,7 +151,7 @@ ENV PIP_RETRIES=5
 ENV COMFYUI_ROOT=/opt/ComfyUI
 
 RUN apt-get update \\
-    && apt-get install -y --no-install-recommends git openssh-server libgl1 libglib2.0-0 \\
+    && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \\
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git "$COMFYUI_ROOT" \\
@@ -178,54 +178,99 @@ from typing import Any
 
 from huggingface_hub import hf_hub_download
 
+MODEL_INPUTS = {
+    "CheckpointLoaderSimple": (("checkpoints", "ckpt_name"),),
+    "VAELoader": (("vae", "vae_name"),),
+    "CLIPLoader": (("clip", "clip_name"),),
+    "DualCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2")),
+    "TripleCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2"), ("clip", "clip_name3")),
+    "UNETLoader": (("diffusion_models", "unet_name"),),
+    "ControlNetLoader": (("controlnet", "control_net_name"),),
+}
+MODEL_DIRS = {"checkpoints": "checkpoints", "vae": "vae", "clip": "clip", "diffusion_models": "diffusion_models", "controlnet": "controlnet"}
+MODEL_REGISTRY = {"checkpoints": {"v1-5-pruned-emaonly-fp16.safetensors": {"repo": "Comfy-Org/stable-diffusion-v1-5-archive", "filename": "v1-5-pruned-emaonly-fp16.safetensors"}}}
+
 
 def _safe_child(root: Path, relative: str) -> Path:
     candidate = (root / relative).resolve()
-    root_resolved = root.resolve()
     try:
-        candidate.relative_to(root_resolved)
+        candidate.relative_to(root.resolve())
     except ValueError as exc:
         raise ValueError(f"refusing unsafe model target: {relative}") from exc
     return candidate
 
 
-def prepare(specs: list[dict[str, Any]], *, comfyui_root: Path, cache_dir: Path | None) -> None:
+def _required_models(workflow: dict[str, Any]) -> list[dict[str, str]]:
+    refs, seen = [], set()
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type, inputs = node.get("class_type"), node.get("inputs")
+        if not isinstance(class_type, str) or not isinstance(inputs, dict):
+            continue
+        for model_type, input_name in MODEL_INPUTS.get(class_type, ()):
+            value = inputs.get(input_name)
+            if not isinstance(value, str) or not value:
+                continue
+            key = (model_type, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            refs.append({"node": str(node_id), "class_type": class_type, "input": input_name, "type": model_type, "name": value})
+    return refs
+
+
+def _resolve(ref: dict[str, str]) -> dict[str, str] | None:
+    entry = MODEL_REGISTRY.get(ref["type"], {}).get(ref["name"])
+    if not entry:
+        return None
+    repo = entry.get("repo") or entry.get("repo_id")
+    filename = entry.get("filename") or entry.get("file") or ref["name"]
+    if not repo or not filename:
+        return None
+    spec = {**ref, "repo": repo, "filename": filename, "target_dir": MODEL_DIRS.get(ref["type"], ref["type"]), "target_name": entry.get("target_name") or ref["name"]}
+    if entry.get("revision"):
+        spec["revision"] = entry["revision"]
+    if entry.get("subfolder"):
+        spec["subfolder"] = entry["subfolder"]
+    return spec
+
+
+def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None) -> list[dict[str, str]]:
     models_root = comfyui_root / "models"
+    specs, unknown = [], []
+    for ref in _required_models(workflow):
+        spec = _resolve(ref)
+        if spec is None:
+            unknown.append(ref)
+        else:
+            specs.append(spec)
+    if unknown:
+        raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
     for spec in specs:
-        repo = spec.get("repo")
-        filename = spec.get("filename")
-        target_dir = spec.get("target_dir")
-        target_name = spec.get("target_name") or filename
-        if not all(isinstance(value, str) and value for value in (repo, filename, target_dir, target_name)):
-            raise ValueError(f"invalid model spec: {spec}")
-        downloaded = hf_hub_download(
-            repo_id=repo,
-            filename=filename,
-            subfolder=spec.get("subfolder") if isinstance(spec.get("subfolder"), str) else None,
-            revision=spec.get("revision") if isinstance(spec.get("revision"), str) else None,
-            cache_dir=str(cache_dir) if cache_dir else None,
-            token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None,
-        )
-        target = _safe_child(models_root, f"{target_dir}/{target_name}")
+        downloaded = hf_hub_download(repo_id=spec["repo"], filename=spec["filename"], subfolder=spec.get("subfolder"), revision=spec.get("revision"), cache_dir=str(cache_dir) if cache_dir else None, token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None)
+        target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():
             if target.is_symlink() and target.resolve() == Path(downloaded).resolve():
                 continue
             target.unlink()
         os.symlink(downloaded, target)
-        print(json.dumps({"model": spec.get("name"), "target": str(target), "source": downloaded}, ensure_ascii=False), flush=True)
+        print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": downloaded}, ensure_ascii=False), flush=True)
+    return specs
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("specs_json")
+    parser.add_argument("workflow_json")
     parser.add_argument("--comfyui-root", default=os.environ.get("COMFYUI_ROOT", "/opt/ComfyUI"))
     parser.add_argument("--cache-dir", default=os.environ.get("HF_HOME"))
     args = parser.parse_args()
-    data = json.loads(Path(args.specs_json).read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError("specs_json must contain a list")
-    prepare(data, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None)
+    workflow = json.loads(Path(args.workflow_json).read_text(encoding="utf-8"))
+    if not isinstance(workflow, dict):
+        raise ValueError("workflow_json must contain a ComfyUI API workflow object")
+    specs = prepare(workflow, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None)
+    print(json.dumps({"event": "models_prepared", "count": len(specs), "models": specs}, ensure_ascii=False), flush=True)
     return 0
 
 

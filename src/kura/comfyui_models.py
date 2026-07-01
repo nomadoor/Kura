@@ -26,6 +26,28 @@ COMFYUI_MODEL_DIRS = {
 }
 
 
+DEFAULT_MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
+    "checkpoints": {
+        "v1-5-pruned-emaonly-fp16.safetensors": {
+            "repo": "Comfy-Org/stable-diffusion-v1-5-archive",
+            "filename": "v1-5-pruned-emaonly-fp16.safetensors",
+        }
+    }
+}
+
+
+def merged_registry(registry: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = deepcopy(DEFAULT_MODEL_REGISTRY)
+    sections = _registry_sections(registry)
+    for section_name, section in sections.items():
+        if not isinstance(section, dict):
+            continue
+        target = merged.setdefault(section_name, {})
+        if isinstance(target, dict):
+            target.update(deepcopy(section))
+    return merged
+
+
 def _registry_sections(registry: Any) -> dict[str, Any]:
     if not isinstance(registry, dict):
         return {}

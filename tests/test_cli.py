@@ -1228,24 +1228,15 @@ class RenderNotificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown model loader"):
                 compile_render(root, run_dir)
 
-    def test_runpod_render_compile_freezes_model_specs(self) -> None:
+    def test_runpod_render_compile_freezes_image_registry_model_specs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workflows").mkdir()
             (root / "promptsets").mkdir()
             run_dir = root / "runs" / "render-1"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text(
-                "comfyui:\n"
-                "  model_registry:\n"
-                "    checkpoints:\n"
-                "      toy.safetensors:\n"
-                "        repo: owner/toy\n"
-                "        filename: weights/toy.safetensors\n"
-                "        revision: abc123\n",
-                encoding="utf-8",
-            )
-            (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5-pruned-emaonly-fp16.safetensors"}}}), encoding="utf-8")
             (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
@@ -1261,8 +1252,8 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
             compile_render(root, run_dir)
             specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
-            self.assertEqual(specs[0]["repo"], "owner/toy")
-            self.assertEqual(specs[0]["filename"], "weights/toy.safetensors")
+            self.assertEqual(specs[0]["repo"], "Comfy-Org/stable-diffusion-v1-5-archive")
+            self.assertEqual(specs[0]["filename"], "v1-5-pruned-emaonly-fp16.safetensors")
             self.assertEqual(specs[0]["target_dir"], "checkpoints")
 
     def test_runpod_render_launch_dry_run_prints_plan(self) -> None:
@@ -2978,7 +2969,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("sleep 43200", argv_text)
             self.assertIn("KURA_LEASE_LOG_PATH=/workspace/runs/example/logs/stdout.log", argv_text)
             self.assertIn("RUNPOD_POD_ID=pod-1", argv_text)
-            self.assertIn("runpodctl pod stop", argv_text)
+            self.assertIn("runpodctl pod delete", argv_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
 
     def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
@@ -3009,7 +3000,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=0), 0)
 
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
-            self.assertNotIn("runpodctl pod stop", argv_text)
+            self.assertNotIn("runpodctl pod delete", argv_text)
 
     def test_reconcile_runpod_exited_is_unknown_without_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

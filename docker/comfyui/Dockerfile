@@ -8,7 +8,7 @@ ENV PIP_RETRIES=5
 ENV COMFYUI_ROOT=/opt/ComfyUI
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git openssh-server libgl1 libglib2.0-0 \
+    && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone https://github.com/Comfy-Org/ComfyUI.git "$COMFYUI_ROOT" \

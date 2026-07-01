@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from kura import __version__
-from kura.comfyui_models import resolve_model_specs
+from kura.comfyui_models import DEFAULT_MODEL_REGISTRY, resolve_model_specs
 
 
 def now() -> str:
@@ -269,10 +269,10 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["comfyui"] = comfyui
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     if executor.get("name") == "runpod":
-        specs, unknown = resolve_model_specs(workflow, comfyui.get("model_registry") if isinstance(comfyui, dict) else {})
+        specs, unknown = resolve_model_specs(workflow, DEFAULT_MODEL_REGISTRY)
         if unknown:
             labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown)
-            raise ValueError("runpod ComfyUI render has unknown model loader entries; add comfyui.model_registry mappings for: " + labels)
+            raise ValueError("runpod ComfyUI render has unknown model loader entries in the Kura ComfyUI image registry: " + labels)
         frozen["comfyui_models"] = specs
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
     if checkpoint_path:

@@ -29,7 +29,7 @@ from typing import Any
 import yaml
 
 from kura.backends import command_ai_toolkit, command_musubi_tuner, musubi_model_download_specs
-from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, reconcile_docker, stage_runpod, stop_docker, stop_runpod
+from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, launch_runpod_session, reconcile_docker, stage_runpod, stop_docker, stop_runpod
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
@@ -1381,11 +1381,11 @@ exit "$exit_code"
   RUNPOD_POD_ID={shlex.quote(pod_id_value)}
   sleep {int(max_lease_sec)}
   mkdir -p "$(dirname "$KURA_LEASE_LOG_PATH")" || true
-  echo "Kura max lease expired after {int(max_lease_sec)} seconds; attempting to stop RunPod pod" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
+  echo "Kura max lease expired after {int(max_lease_sec)} seconds; attempting to delete RunPod pod" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
   if command -v runpodctl >/dev/null 2>&1 && [ -n "$RUNPOD_POD_ID" ]; then
-    runpodctl pod stop "$RUNPOD_POD_ID" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
+    runpodctl pod delete "$RUNPOD_POD_ID" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
   else
-    echo "Kura max lease could not stop pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
+    echo "Kura max lease could not delete pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
   fi
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
@@ -1586,7 +1586,7 @@ def _render_runpod_lora(workspace: Path, run_dir: Path, frozen: dict[str, Any]) 
     return source, "Kura_tmp/" + _safe_stage_name(run_dir.name, source)
 
 
-def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, model_specs_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, max_lease_sec: int = 12 * 3600) -> None:
+def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, max_lease_sec: int = 12 * 3600) -> None:
     secret_payload = _runpod_secret_env_payload(remote_notify=False)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
     if secret_payload is not None:
@@ -1607,9 +1607,9 @@ chmod 600 {shlex.quote(remote_secret_path)}
         lease_guard = f"""
 (
   sleep {int(max_lease_sec)}
-  echo "Kura render max lease expired after {int(max_lease_sec)} seconds; attempting to stop RunPod pod" >> "$KURA_LOG_PATH" 2>&1 || true
+  echo "Kura render max lease expired after {int(max_lease_sec)} seconds; attempting to delete RunPod pod" >> "$KURA_LOG_PATH" 2>&1 || true
   if command -v runpodctl >/dev/null 2>&1 && [ -n {shlex.quote(pod_id_value)} ]; then
-    runpodctl pod stop {shlex.quote(pod_id_value)} >> "$KURA_LOG_PATH" 2>&1 || true
+    runpodctl pod delete {shlex.quote(pod_id_value)} >> "$KURA_LOG_PATH" 2>&1 || true
   fi
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
@@ -1627,14 +1627,12 @@ touch "$KURA_LOG_PATH"
 if [ -f {shlex.quote(remote_secret_path)} ]; then
   . {shlex.quote(remote_secret_path)}
 fi
-python /opt/kura_comfy_prepare.py {shlex.quote(model_specs_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
+python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
 rm -f {shlex.quote(remote_secret_path)}
 {lora_line}
 {lease_guard}
 cd /opt/ComfyUI
-if ! pgrep -f 'ComfyUI/main.py' >/dev/null 2>&1; then
-  nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
-fi
+nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
 """.strip()
     result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False)
     if result.returncode:
@@ -1646,6 +1644,8 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
     workspace = _workspace()
     run_dir = _run_path(run_id)
     launched = False
+    ssh_details: dict[str, Any] | None = None
+    remote_workspace = "/workspace"
     try:
         frozen = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
         if frozen.get("type") != "render":
@@ -1677,28 +1677,23 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         if dry_run:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
-        stage_runpod(workspace=workspace, run_dir=run_dir, dataset_ids=[], config=runpod_config)
-        launch_runpod(run_dir=run_dir, spec={"cwd": "/workspace", "argv": ["sleep", "infinity"], "env": {}}, image=remote_image, config=runpod_config, dry_run=False)
+        launch_runpod_session(run_dir=run_dir, image=remote_image, config=runpod_config, purpose="comfyui-render", dry_run=False)
         launched = True
         details = _runpod_ssh_details(run_dir, timeout_sec=300, interval_sec=5)
+        ssh_details = details
         remote_workspace = str(runpod_config.get("workspace_path") or "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
         prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp"], check=False)
         if prepared.returncode:
             raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
-        specs_path = run_dir / "resolved" / "comfyui_models.json"
-        if not specs_path.is_file():
-            transfer_dir = run_dir / "transfer"
-            transfer_dir.mkdir(exist_ok=True)
-            specs_path = transfer_dir / "comfyui_models.json"
-            specs_path.write_text(json.dumps(model_specs, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        remote_specs = f"{remote_run_dir}/resolved/comfyui_models.json"
-        _scp_to_runpod(details, specs_path, remote_specs)
+        workflow_path = run_dir / "resolved" / "workflow_used.json"
+        remote_workflow = f"{remote_run_dir}/resolved/workflow_used.json"
+        _scp_to_runpod(details, workflow_path, remote_workflow)
         lora_remote_path = None
         if lora_source and lora_name:
             lora_remote_path = "/opt/ComfyUI/models/loras/" + lora_name
             _scp_to_runpod(details, lora_source, lora_remote_path)
-        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, model_specs_remote=remote_specs, lora_remote_name=lora_name, lora_remote_path=lora_remote_path)
+        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, lora_remote_name=lora_name, lora_remote_path=lora_remote_path)
         local_port = _free_local_port()
         tunnel = subprocess.Popen([
             "ssh",
@@ -1713,7 +1708,8 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             endpoint = f"http://127.0.0.1:{local_port}"
-            _wait_http_ready(endpoint, timeout_sec=180)
+            ready_timeout = int(frozen.get("render", {}).get("timeout_sec", 600) or 600)
+            _wait_http_ready(endpoint, timeout_sec=max(ready_timeout, 180))
             code = launch_render(workspace, run_dir, endpoint_override=endpoint, lora_name_override=lora_name, executor_name="runpod", manage_lora_stage=False)
             state_word = "completed" if code == 0 else "failed"
             _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"RunPod render {run_id} {state_word} with exit code {code}.")
@@ -1724,13 +1720,28 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
                 tunnel.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 tunnel.kill()
+    except KeyboardInterrupt:
+        if ssh_details is not None:
+            try:
+                _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
+            except BaseException:
+                pass
+        print("runpod render interrupted; stopping pod now", file=sys.stderr)
+        return 130
     except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, subprocess.TimeoutExpired) as exc:
+        if ssh_details is not None:
+            _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
         message = _safe_error(exc)
         print(f"cannot launch runpod render: {message}", file=sys.stderr)
         _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"RunPod render {run_id} failed before completion:\n{message}")
         return 1
     finally:
         if launched:
+            if ssh_details is not None:
+                try:
+                    _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
+                except BaseException:
+                    pass
             try:
                 stop_run(run_id)
             except Exception as exc:
