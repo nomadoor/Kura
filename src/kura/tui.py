@@ -445,8 +445,10 @@ class UrlRow(Static):
             _copy_text(self.url, self.screen)
             self.notify("copied RunPod URL")
         else:
-            _open_url(self.url)
-            self.notify("opened RunPod pod")
+            if _open_url(self.url):
+                self.notify("opened RunPod pod")
+            else:
+                self.notify("could not open RunPod URL", severity="warning")
 
 
 class MetricGrid(Static):
@@ -911,14 +913,14 @@ class MonitorScreen(Screen[None]):
     @property
     def active_runs(self) -> list[RunSummary]:
         active = [item for item in self.summaries if (item.state or "").lower() in ACTIVE_STATES]
-        active.sort(key=lambda item: item.last_updated or item.created or AWARE_MIN, reverse=True)
+        active.sort(key=lambda item: _aware_datetime(item.last_updated or item.created) or AWARE_MIN, reverse=True)
         return active
 
     @property
     def history_runs(self) -> list[RunSummary]:
         active_ids = {item.id for item in self.active_runs}
         history = [item for item in self.summaries if item.id not in active_ids]
-        history.sort(key=lambda item: item.last_updated or item.finished or item.created or AWARE_MIN, reverse=True)
+        history.sort(key=lambda item: _aware_datetime(item.last_updated or item.finished or item.created) or AWARE_MIN, reverse=True)
         return history[: max(self.app_ref.limit, 0)]
 
     @property
@@ -1014,8 +1016,10 @@ class MonitorScreen(Screen[None]):
             _copy_text(str(path), self)
             self.notify(f"copied {path.name}")
         else:
-            _open_path(path)
-            self.notify(f"opened {path.name}")
+            if _open_path(path):
+                self.notify(f"opened {path.name}")
+            else:
+                self.notify(f"could not open {path.name}", severity="warning")
 
     def action_cursor_up(self) -> None:
         self._move_selection(-1)
@@ -1044,8 +1048,11 @@ class MonitorScreen(Screen[None]):
 
     def action_open_path(self) -> None:
         if self.path_targets:
-            _open_path(self.path_targets[self.path_index].path)
-            self.notify(f"opened {self.path_targets[self.path_index].label}")
+            target = self.path_targets[self.path_index]
+            if _open_path(target.path):
+                self.notify(f"opened {target.label}")
+            else:
+                self.notify(f"could not open {target.label}", severity="warning")
 
     def action_copy_path(self) -> None:
         if self.path_targets:
@@ -1123,8 +1130,10 @@ class WatchScreen(Screen[None]):
             _copy_text(str(message.target.path), self)
             self.notify(f"copied {message.target.path.name}")
         else:
-            _open_path(message.target.path)
-            self.notify(f"opened {message.target.path.name}")
+            if _open_path(message.target.path):
+                self.notify(f"opened {message.target.path.name}")
+            else:
+                self.notify(f"could not open {message.target.path.name}", severity="warning")
 
     def action_cycle_path(self) -> None:
         if self.path_targets:
@@ -1133,8 +1142,11 @@ class WatchScreen(Screen[None]):
 
     def action_open_path(self) -> None:
         if self.path_targets:
-            _open_path(self.path_targets[self.path_index].path)
-            self.notify(f"opened {self.path_targets[self.path_index].label}")
+            target = self.path_targets[self.path_index]
+            if _open_path(target.path):
+                self.notify(f"opened {target.label}")
+            else:
+                self.notify(f"could not open {target.label}", severity="warning")
 
     def action_copy_path(self) -> None:
         if self.path_targets:
@@ -1293,7 +1305,7 @@ def _runs_using_dataset(summaries: list[RunSummary], dataset: RunDataset) -> lis
     for summary in summaries:
         if any(_dataset_key(item) == key or (item.id == dataset.id and item.digest == dataset.digest) for item in summary.datasets):
             matches.append(summary)
-    matches.sort(key=lambda item: item.last_updated or item.finished or item.created or AWARE_MIN, reverse=True)
+    matches.sort(key=lambda item: _aware_datetime(item.last_updated or item.finished or item.created) or AWARE_MIN, reverse=True)
     return matches
 
 
@@ -1551,30 +1563,52 @@ def _run_fingerprint(run_dir: Path) -> tuple[tuple[str, int, int], ...]:
     return tuple(values)
 
 
-def _open_path(path: Path) -> None:
+def _open_path(path: Path) -> bool:
     if not path.exists():
-        return
+        return False
     if _is_wsl():
         converted = subprocess.run(["wslpath", "-w", str(path)], text=True, capture_output=True, check=False)
         converted_path = converted.stdout.strip()
         if converted.returncode or not converted_path:
-            return
-        command = ["explorer.exe", converted_path]
+            return False
+        if shutil.which("explorer.exe"):
+            command = ["explorer.exe", converted_path]
+        elif shutil.which("cmd.exe"):
+            command = ["cmd.exe", "/c", "start", "", converted_path]
+        else:
+            return False
     elif platform.system() == "Darwin":
         command = ["open", str(path)]
     else:
+        if not shutil.which("xdg-open"):
+            return False
         command = ["xdg-open", str(path)]
-    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return True
 
 
-def _open_url(url: str) -> None:
+def _open_url(url: str) -> bool:
     if _is_wsl():
-        command = ["cmd.exe", "/c", "start", "", url]
+        if shutil.which("cmd.exe"):
+            command = ["cmd.exe", "/c", "start", "", url]
+        elif shutil.which("explorer.exe"):
+            command = ["explorer.exe", url]
+        else:
+            return False
     elif platform.system() == "Darwin":
         command = ["open", url]
     else:
+        if not shutil.which("xdg-open"):
+            return False
         command = ["xdg-open", url]
-    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return True
 
 
 def _runpod_pod_url(pod_id: str | None) -> str | None:
@@ -1793,17 +1827,28 @@ def _age(value: datetime | None) -> str:
 
 
 def _elapsed(summary: RunSummary) -> str:
-    if summary.started and summary.finished:
-        return _short_duration((summary.finished - summary.started).total_seconds())
-    if summary.started:
-        return _duration_since(summary.started)
+    started = _aware_datetime(summary.started)
+    finished = _aware_datetime(summary.finished)
+    if started and finished:
+        return _short_duration((finished - started).total_seconds())
+    if started:
+        return _duration_since(started)
     return "-"
 
 
 def _duration_since(value: datetime | None) -> str:
+    value = _aware_datetime(value)
     if not value:
         return "-"
     return _short_duration((datetime.now().astimezone() - value).total_seconds())
+
+
+def _aware_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.astimezone()
+    return value
 
 
 def _short_duration(seconds: float) -> str:
