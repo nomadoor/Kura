@@ -743,7 +743,8 @@ class ComputePane(Vertical):
             self._mount_host_metrics()
             return
         info = summary.executor_info
-        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), ("● pod up" if info.pod else "", RUN))))
+        pod_status = "● pod up" if info.kind == "remote" and info.pod else ""
+        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, RUN))))
         if info.kind == "remote":
             table = Table.grid(padding=(0, 3))
             table.add_column(style=FG_MUTED, width=7)
