@@ -22,6 +22,7 @@ from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, c
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
+from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _checkpoint_safety_preflight, _ensure_free_bytes, _local_launch_disk_preflight, launch_run
 from kura.storage import StorageStatus
@@ -628,6 +629,54 @@ class TuiPathDisplayTests(unittest.TestCase):
         self.assertEqual(_compact_path(path, max_len=1), "…")
         self.assertEqual(len(_compact_path(path, max_len=12)), 12)
         self.assertTrue(_compact_path(path, max_len=12).endswith("outputs"))
+
+    def test_download_activity_shows_item_progress_percent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "stdout.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "[kura] hf download start dit:raw.safetensors attempt 1/4",
+                        "[kura] hf download progress dit:raw.safetensors files=10 bytes=1000",
+                        "[kura] downloaded dit -> /cache/raw.safetensors",
+                        "[kura] downloaded vae -> /cache/vae.safetensors",
+                        "[kura] hf download progress text_encoder:qwen.safetensors files=20 bytes=2000",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            activity = _read_activity_from_stdout(log, download_keys=["dit", "vae", "text_encoder"])
+        self.assertEqual(activity, "downloading text_encoder qwen.safetensors · 2/3 · 67% · 2.0KB")
+
+    def test_monitor_summary_extracts_download_keys_from_command_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved" / "musubi").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
+            (run_dir / "resolved" / "musubi" / "command.json").write_text(
+                json.dumps(
+                    {
+                        "argv": [
+                            "bash",
+                            "-lc",
+                            "python -c 'pass' '[{\"key\":\"dit\",\"repo_id\":\"r/a\",\"filename\":\"a.safetensors\",\"link_path\":\"/workspace/cache/a\"},{\"key\":\"vae\",\"repo_id\":\"r/b\",\"filename\":\"b.safetensors\",\"link_path\":\"/workspace/cache/b\"}]'",
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "logs" / "stdout.log").write_text(
+                "[kura] downloaded dit -> /cache/a\n[kura] hf download progress vae:b.safetensors files=2 bytes=2048\n",
+                encoding="utf-8",
+            )
+            summaries = collect_run_summaries(root)
+        self.assertEqual(summaries[0].activity, "downloading vae b.safetensors · 1/2 · 50% · 2.0KB")
 
     def test_monitor_app_reuses_completed_summary_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
