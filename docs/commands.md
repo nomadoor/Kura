@@ -12,8 +12,13 @@ for the complete, authoritative, up-to-date list of commands and options.
 | --- | --- |
 | `uv sync` | Install Kura and its dependencies into `.venv` |
 | `uv run kura init` | Create the workspace folders and default config |
+| `uv run kura cleanup all` | Preview local cache, run, and Docker cleanup targets |
+| `uv run kura cleanup cache --yes` | Delete Kura-managed local model/cache data after previewing it |
+| `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
 | `uv run kura --version` | Print the installed Kura version |
 | `uv run kura doctor docker` | Check Docker / GPU / cache readiness |
+| `uv run kura doctor disk` | Report local disk, cache, Docker storage, and permission risks |
+| `uv run kura doctor musubi` | Smoke-test Musubi adapter scripts in the configured image |
 | `uv run kura doctor runpod` | Check RunPod API, Pods, and Network Volumes |
 | `uv run kura doctor comfyui` | Check local ComfyUI endpoint and LoRA staging config |
 | `uv run kura doctor workspace` | Show which Kura workspace this command sees |

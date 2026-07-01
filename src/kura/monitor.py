@@ -7,10 +7,11 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,6 +19,7 @@ import yaml
 
 
 ACTIVE_STATES = {"queued", "staged", "launching", "running"}
+AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 TRAIN_STDOUT_PROGRESS_RE = re.compile(
     r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)",
@@ -261,7 +263,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     losses = tuple(_read_losses_from_candidates(metrics_paths, limit=loss_tail))
     run_type = _string(config.get("type") or run.get("type"))
     stdout_progress, stdout_losses = _read_training_stdout_from_candidates(stdout_paths, loss_tail=loss_tail)
-    stdout_activity = _read_activity_from_stdout_candidates(stdout_paths)
+    stdout_activity = _read_activity_from_stdout_candidates(stdout_paths, run_dir=run_dir)
     if not losses and stdout_losses:
         losses = tuple(stdout_losses)
     progress = _progress(status, config, stdout_progress=stdout_progress)
@@ -619,23 +621,67 @@ def _read_training_stdout_from_candidates(paths: Iterable[Path], *, loss_tail: i
     return None, []
 
 
-def _read_activity_from_stdout_candidates(paths: Iterable[Path]) -> str | None:
+def _read_activity_from_stdout_candidates(paths: Iterable[Path], *, run_dir: Path | None = None) -> str | None:
+    download_keys = _download_keys_from_command(run_dir) if run_dir is not None else []
     for path in paths:
-        activity = _read_activity_from_stdout(path)
+        activity = _read_activity_from_stdout(path, download_keys=download_keys)
         if activity:
             return activity
     return None
 
 
-def _read_activity_from_stdout(path: Path) -> str | None:
+def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = None) -> str | None:
     try:
         text = _read_text_tail(path, max_bytes=64 * 1024)
     except OSError:
         return None
-    for raw_line in reversed(text.replace("\r", "\n").splitlines()):
-        line = raw_line.strip()
-        if not line:
+    lines = [line.strip() for line in text.replace("\r", "\n").splitlines() if line.strip()]
+    download_keys = download_keys or []
+    completed_downloads: set[str] = set()
+    latest_download_activity: str | None = None
+    latest_other_activity: str | None = None
+    for line in lines:
+        downloaded = KURA_DOWNLOADED_RE.search(line)
+        if downloaded:
+            key = downloaded.group("key")
+            completed_downloads.add(key)
+            latest_download_activity = _download_activity(f"downloaded {key}", key, completed_downloads, download_keys, complete=True)
             continue
+        download = HF_DOWNLOAD_RE.search(line)
+        if download:
+            key = _download_key(download.group("label"))
+            kind = download.group("kind").lower()
+            rest = download.group("rest")
+            bytes_value = _int_from_pattern(rest, r"\bbytes=(\d+)")
+            label = _download_label(download.group("label"))
+            if kind == "start":
+                attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
+                base = f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
+            elif kind == "progress":
+                base = f"downloading {label}"
+            else:
+                idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
+                base = f"download idle {idle}s · {label}" if idle is not None else f"download idle · {label}"
+            latest_download_activity = _download_activity(base, key, completed_downloads, download_keys, bytes_value=bytes_value)
+            continue
+        stalled = HF_DOWNLOAD_STALLED_RE.search(line)
+        if stalled:
+            key = _download_key(stalled.group("label"))
+            latest_download_activity = _download_activity(f"download stalled · {_download_label(stalled.group('label'))}", key, completed_downloads, download_keys)
+            continue
+        other = _activity_from_stdout_line(line)
+        if other:
+            latest_other_activity = other
+    if latest_download_activity and not download_keys:
+        return latest_download_activity
+    if latest_download_activity and len(completed_downloads) < len(download_keys):
+        return latest_download_activity
+    if latest_other_activity:
+        return latest_other_activity
+    if latest_download_activity:
+        return latest_download_activity
+    for raw_line in reversed(lines):
+        line = raw_line.strip()
         activity = _activity_from_stdout_line(line)
         if activity:
             return activity
@@ -678,6 +724,53 @@ def _activity_from_stdout_line(line: str) -> str | None:
             label = name
         return f"{label} · step {step.group('step')}/{step.group('total')}"
     return None
+
+
+def _download_keys_from_command(run_dir: Path | None) -> list[str]:
+    if run_dir is None:
+        return []
+    command = _read_mapping(run_dir / "resolved" / "musubi" / "command.json")
+    argv = command.get("argv") if isinstance(command.get("argv"), list) else []
+    for part in argv:
+        if not isinstance(part, str) or '"link_path"' not in part or '"repo_id"' not in part:
+            continue
+        try:
+            tokens = shlex.split(part)
+        except ValueError:
+            continue
+        for token in tokens:
+            stripped = token.strip()
+            if not stripped.startswith("[") or '"link_path"' not in stripped:
+                continue
+            try:
+                items = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(items, list):
+                continue
+            keys = [item.get("key") for item in items if isinstance(item, dict) and isinstance(item.get("key"), str)]
+            if keys:
+                return keys
+    return []
+
+
+def _download_key(label: str) -> str:
+    return label.strip().partition(":")[0]
+
+
+def _download_activity(base: str, key: str, completed: set[str], keys: list[str], *, bytes_value: int | None = None, complete: bool = False) -> str:
+    parts = [base]
+    if keys:
+        done = len({item for item in completed if item in keys})
+        if complete and key in keys:
+            done = max(done, keys.index(key) + 1)
+        total = len(keys)
+        percent = min(100, round(done / total * 100)) if total else 0
+        parts.append(f"{done}/{total}")
+        parts.append(f"{percent}%")
+    if bytes_value is not None:
+        parts.append(_format_bytes(bytes_value))
+    return " · ".join(parts)
 
 
 def _download_label(label: str) -> str:
@@ -814,7 +907,7 @@ def _split_for_monitor(summaries: list[RunSummary], *, limit: int) -> tuple[list
 
 
 def _recency_key(summary: RunSummary) -> datetime:
-    return summary.last_updated or summary.ended or summary.started or summary.created or datetime.min
+    return summary.last_updated or summary.ended or summary.started or summary.created or AWARE_MIN
 
 
 def _state_text(state: str | None) -> Any:
@@ -1147,7 +1240,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return _ensure_aware(datetime.fromisoformat(value.replace("Z", "+00:00")))
     except ValueError:
         pass
     # RunPod REST fields are sometimes Go-style timestamps, for example:
@@ -1155,10 +1248,16 @@ def _parse_datetime(value: Any) -> datetime | None:
     # deliberately narrow so unrelated free-form strings do not become dates.
     for fmt in ("%Y-%m-%d %H:%M:%S.%f %z UTC", "%Y-%m-%d %H:%M:%S %z UTC"):
         try:
-            return datetime.strptime(value, fmt)
+            return _ensure_aware(datetime.strptime(value, fmt))
         except ValueError:
             continue
     return None
+
+
+def _ensure_aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.astimezone()
+    return value
 
 
 def _duration(delta: Any) -> str:

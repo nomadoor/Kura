@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ FAIL = "#f7768e"
 QUEUE = "#6a719c"
 LOSS = "#bb9af7"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 DATASET_STATS_TTL = 30.0
 _DATASET_STATS_CACHE: dict[str, tuple[float, DatasetStats]] = {}
@@ -159,6 +160,10 @@ class KuraMonitorApp(App[None]):
     #watch-main {
         height: 1fr;
         overflow-y: auto;
+    }
+    VerticalScroll {
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
     }
     #nav-body {
         height: 1fr;
@@ -339,14 +344,24 @@ class RunRow(Static):
         dot = _state_dot(summary)
         loc = "☁" if summary.executor_info.kind == "remote" else "⌂"
         loc_style = DONE if summary.executor_info.kind == "remote" else MUTED
-        name = _fit_plain(_short_run_label(summary), 13).ljust(13)
-        sparkline = loss_sparkline(summary.losses, width=5)
-        if sparkline:
-            middle = (_fit_plain(sparkline, 5).rjust(5), LOSS)
+        try:
+            width = max(int(self.size.width or 0), 0)
+        except RuntimeError:
+            width = 0
+        middle_width = 5 if (summary.state or "").lower() in ACTIVE_STATES and (width == 0 or width >= 18) else 0
+        name_width = max((width - middle_width - 5) if width else 13, 6)
+        name = _fit_plain(_short_run_label(summary), name_width).ljust(name_width)
+        activity_percent = _activity_percent(summary.activity)
+        if middle_width == 0:
+            middle = None
+        elif activity_percent and (summary.state or "").lower() in ACTIVE_STATES:
+            middle = (_fit_plain(activity_percent, middle_width).rjust(middle_width), FG_MUTED)
         elif summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
-            middle = (_fit_plain(summary.activity, 5).rjust(5), FG_MUTED)
+            middle = (_fit_plain(summary.activity, middle_width).rjust(middle_width), FG_MUTED)
         else:
-            middle = (" " * 5, LOSS)
+            middle = (" " * middle_width, FG_MUTED)
+        if middle is None:
+            return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), (dot, _state_style(summary)))
         return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), middle, (" "), (dot, _state_style(summary)))
 
     def on_click(self) -> None:
@@ -728,7 +743,8 @@ class ComputePane(Vertical):
             self._mount_host_metrics()
             return
         info = summary.executor_info
-        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), ("● pod up" if info.pod else "", RUN))))
+        pod_status = "● pod up" if info.kind == "remote" and info.pod else ""
+        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, RUN))))
         if info.kind == "remote":
             table = Table.grid(padding=(0, 3))
             table.add_column(style=FG_MUTED, width=7)
@@ -895,14 +911,14 @@ class MonitorScreen(Screen[None]):
     @property
     def active_runs(self) -> list[RunSummary]:
         active = [item for item in self.summaries if (item.state or "").lower() in ACTIVE_STATES]
-        active.sort(key=lambda item: item.last_updated or item.created or datetime.min, reverse=True)
+        active.sort(key=lambda item: item.last_updated or item.created or AWARE_MIN, reverse=True)
         return active
 
     @property
     def history_runs(self) -> list[RunSummary]:
         active_ids = {item.id for item in self.active_runs}
         history = [item for item in self.summaries if item.id not in active_ids]
-        history.sort(key=lambda item: item.last_updated or item.finished or item.created or datetime.min, reverse=True)
+        history.sort(key=lambda item: item.last_updated or item.finished or item.created or AWARE_MIN, reverse=True)
         return history[: max(self.app_ref.limit, 0)]
 
     @property
@@ -1277,7 +1293,7 @@ def _runs_using_dataset(summaries: list[RunSummary], dataset: RunDataset) -> lis
     for summary in summaries:
         if any(_dataset_key(item) == key or (item.id == dataset.id and item.digest == dataset.digest) for item in summary.datasets):
             matches.append(summary)
-    matches.sort(key=lambda item: item.last_updated or item.finished or item.created or datetime.min, reverse=True)
+    matches.sort(key=lambda item: item.last_updated or item.finished or item.created or AWARE_MIN, reverse=True)
     return matches
 
 
@@ -1819,6 +1835,16 @@ def _digest_short(value: str | None) -> str:
     if not value:
         return "-"
     return value[:12] + "…" if len(value) > 13 else value
+
+
+def _activity_percent(value: str | None) -> str | None:
+    if not value:
+        return None
+    matches = re.findall(r"\b(\d{1,3})%", value)
+    if not matches:
+        return None
+    percent = max(0, min(100, int(matches[-1])))
+    return f"{percent}%"
 
 
 def _plot_loss(values: tuple[float, ...], *, width: int, height: int) -> str:

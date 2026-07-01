@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
+import io
 import os
 import struct
 import subprocess
@@ -18,12 +20,14 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.backends import _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_doctor_comfyui, cmd_doctor_docker, cmd_doctor_runpod, cmd_doctor_workspace, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
+from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import launch_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, launch_run
+from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
 
@@ -45,7 +49,9 @@ class InitCommandTests(unittest.TestCase):
 
         doctor_help = subprocess.run([*command, "doctor", "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(doctor_help.returncode, 0)
+        self.assertIn("Report local disk, cache, Docker storage", doctor_help.stdout)
         self.assertIn("Check RunPod API, Pods, and Network Volumes", doctor_help.stdout)
+        self.assertIn("Smoke-test Musubi adapter scripts", doctor_help.stdout)
 
     def test_init_creates_required_files_and_is_idempotent(self) -> None:
         previous = Path.cwd()
@@ -139,7 +145,7 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(nested)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None)), 0)
             finally:
                 os.chdir(previous)
@@ -149,8 +155,325 @@ class ImageCommandTests(unittest.TestCase):
             self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
             self.assertEqual(build[-1], str(root))
 
+    def test_image_build_rejects_large_build_cache_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({
+                    "docker": {
+                        "images": {
+                            "ai-toolkit": {
+                                "local": "kura/ai-toolkit:test",
+                                "remote": "registry.example/kura/ai-toolkit:test",
+                                "dockerfile": "docker/ai-toolkit/Dockerfile",
+                                "context": ".",
+                            },
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._docker_storage_summary", return_value={"usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}]}),
+                    patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
+                ):
+                    code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None, allow_large_build_cache=False))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            self.assertIn("Docker build cache exceeds 30GiB", stderr.getvalue())
+
 
 class DoctorDockerTests(unittest.TestCase):
+    def test_cleanup_all_is_dry_run_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "cache" / "huggingface").mkdir(parents=True)
+            (root / "cache" / "models").mkdir(parents=True, exist_ok=True)
+            (root / "runs" / "example").mkdir(parents=True)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=123),
+                    patch("kura.cli._docker_storage_summary", return_value={"daemon_reachable": True, "usage": []}),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_cleanup(argparse.Namespace(target="all", keep_last=30, delete_final_artifacts=False, yes=False))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["workspace_root"], str(root))
+            self.assertIn("cache/huggingface", {item.get("target") for item in payload["actions"]})
+            self.assertIn("docker system", {item.get("target") for item in payload["actions"]})
+
+    def test_cleanup_image_uses_available_remote_name_when_local_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {
+                                    "local": "kura/ai-toolkit:test",
+                                    "remote": "registry.example/kura/ai-toolkit:test",
+                                    "dockerfile": "Dockerfile",
+                                    "context": ".",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli._docker_image_exists", side_effect=lambda image: image == "registry.example/kura/ai-toolkit:test"):
+                    self.assertEqual(_docker_cleanup_image(), "registry.example/kura/ai-toolkit:test")
+            finally:
+                os.chdir(previous)
+
+    def test_cleanup_runs_keeps_outputs_without_explicit_final_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "runs" / "old"
+            (run / "cache").mkdir(parents=True)
+            (run / "outputs").mkdir()
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
+            (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_cleanup(argparse.Namespace(target="runs", keep_last=0, delete_final_artifacts=False, yes=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertFalse((run / "cache").exists())
+            self.assertTrue((run / "outputs").exists())
+            self.assertFalse(payload["dry_run"])
+
+    def test_cleanup_runs_requires_explicit_final_delete_for_whole_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "runs" / "old"
+            (run / "outputs").mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
+            (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO),
+                ):
+                    self.assertEqual(cmd_cleanup(argparse.Namespace(target="runs", keep_last=0, delete_final_artifacts=True, yes=True)), 0)
+            finally:
+                os.chdir(previous)
+            self.assertFalse(run.exists())
+
+    def test_fix_permissions_dry_run_reports_root_owned_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 1, "samples": ["cache/root"]}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_fix_permissions(argparse.Namespace(target="all", yes=False))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["root_owned"]["count"], 1)
+
+    def test_doctor_disk_reports_workspace_storage_and_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "mounts": [
+                                {"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}
+                            ]
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "cache" / "huggingface").mkdir(parents=True)
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 200 * 1024**3, "used_bytes": 150 * 1024**3, "free_bytes": 50 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=20),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 2, "samples": ["cache/root-owned"], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["workspace_root"], str(root))
+            self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
+            self.assertIn("workspace filesystem has less than 100GiB free", payload["warnings"])
+            self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
+            self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
+
+    def test_doctor_disk_warns_about_wsl_ext4_virtual_free_space(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=0),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("kura.storage.is_wsl", return_value=True),
+                    patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
+                    patch("kura.storage._auto_wsl_host_drive", return_value=None),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["storage"]["workspace"]["confidence"], "unknown")
+            self.assertTrue(any("WSL Linux ext4" in warning for warning in payload["warnings"]))
+
+    def test_wsl_storage_probe_treats_unknown_backing_as_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.storage.is_wsl", return_value=True),
+                patch("kura.storage._findmnt_for", return_value={"available": False, "reason": "findmnt not found"}),
+            ):
+                status = probe_storage(root, role="workspace")
+        self.assertEqual(status.backing_kind, "wsl2")
+        self.assertEqual(status.confidence, "unknown")
+        self.assertIn("could not identify the physical backing store", status.warning or "")
+
+    def test_doctor_disk_uses_auto_detected_wsl_host_drive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=0),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("kura.storage.is_wsl", return_value=True),
+                    patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
+                    patch("kura.storage._auto_wsl_host_drive", return_value="F:"),
+                    patch("kura.storage._windows_drive_free_bytes", return_value=290 * 1024**3),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["storage"]["workspace"]["backing_id"], "F:")
+            self.assertEqual(payload["storage"]["workspace"]["confidence"], "estimated")
+            self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 290 * 1024**3)
+
+    def test_doctor_disk_warns_on_low_effective_backing_free_space(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 1000 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 900 * 1024**3}
+
+            def fake_probe(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
+                return {
+                    name: StorageStatus(
+                        path=str(path),
+                        probe=str(path),
+                        backing_id="F:",
+                        backing_kind="wsl2_vhdx",
+                        linux_free_bytes=900 * 1024**3,
+                        linux_total_bytes=1000 * 1024**3,
+                        host_free_bytes=90 * 1024**3,
+                        effective_free_bytes=90 * 1024**3,
+                        confidence="estimated",
+                        mount={"available": True},
+                    )
+                    for name, path in paths.items()
+                }
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=0),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor.probe_storages", side_effect=fake_probe),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 90 * 1024**3)
+            self.assertIn("workspace backing store has less than 100GiB effective free (F:)", payload["warnings"])
+
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -206,6 +529,97 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(managed["stopped_containers"][0]["ID"], "abc")
             self.assertEqual(managed["volumes"][0]["Name"], "kura-cache")
 
+    def test_doctor_musubi_reports_adapter_script_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "musubi-tuner": {
+                                    "local": "kura/musubi-tuner:test",
+                                    "remote": "registry.example/kura/musubi-tuner:test",
+                                    "dockerfile": "docker/musubi-tuner/Dockerfile",
+                                    "context": ".",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["/usr/bin/docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
+                if command[:3] == ["/usr/bin/docker", "run", "--rm"] and "--entrypoint" in command:
+                    results = [
+                        {"adapter": adapter, "script": script, "exists": True, "help_returncode": 0}
+                        for adapter, scripts in MUSUBI_ADAPTER_SCRIPTS.items()
+                        for script in scripts
+                    ]
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"results": results}) + "\n", "")
+                raise AssertionError(command)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_musubi(argparse.Namespace(skip_help=False, no_gpu=False, timeout=30.0, script_timeout=5.0, image=None))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["checks"]["adapter_scripts_exist"])
+            self.assertTrue(payload["checks"]["adapter_help_smoke"])
+            self.assertIn({"adapter": "flux2", "script": "flux_2_train_network.py", "exists": True, "help_returncode": 0}, payload["diagnostics"]["scripts"])
+
+    def test_doctor_musubi_accepts_image_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "docker": {
+                            "images": {
+                                "musubi-tuner": {
+                                    "local": "configured/missing:test",
+                                    "remote": "remote",
+                                    "dockerfile": "Dockerfile",
+                                    "context": ".",
+                                }
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            seen: list[list[str]] = []
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                seen.append(command)
+                if command[:3] == ["/usr/bin/docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
+                if command[:3] == ["/usr/bin/docker", "run", "--rm"]:
+                    results = [
+                        {"adapter": adapter, "script": script, "exists": True}
+                        for adapter, scripts in MUSUBI_ADAPTER_SCRIPTS.items()
+                        for script in scripts
+                    ]
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"results": results}) + "\n", "")
+                raise AssertionError(command)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=__import__("io").StringIO):
+                    self.assertEqual(cmd_doctor_musubi(argparse.Namespace(skip_help=True, no_gpu=True, timeout=30.0, script_timeout=5.0, image="override/musubi:test")), 0)
+            finally:
+                os.chdir(previous)
+            self.assertIn(["/usr/bin/docker", "image", "inspect", "override/musubi:test"], seen)
+            self.assertTrue(any("override/musubi:test" in command for command in seen if command[:3] == ["/usr/bin/docker", "run", "--rm"]))
+
 
 class MonitorCommandTests(unittest.TestCase):
     def test_monitor_passes_limit_to_textual_app(self) -> None:
@@ -229,6 +643,54 @@ class TuiPathDisplayTests(unittest.TestCase):
         self.assertEqual(_compact_path(path, max_len=1), "…")
         self.assertEqual(len(_compact_path(path, max_len=12)), 12)
         self.assertTrue(_compact_path(path, max_len=12).endswith("outputs"))
+
+    def test_download_activity_shows_item_progress_percent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "stdout.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "[kura] hf download start dit:raw.safetensors attempt 1/4",
+                        "[kura] hf download progress dit:raw.safetensors files=10 bytes=1000",
+                        "[kura] downloaded dit -> /cache/raw.safetensors",
+                        "[kura] downloaded vae -> /cache/vae.safetensors",
+                        "[kura] hf download progress text_encoder:qwen.safetensors files=20 bytes=2000",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            activity = _read_activity_from_stdout(log, download_keys=["dit", "vae", "text_encoder"])
+        self.assertEqual(activity, "downloading text_encoder qwen.safetensors · 2/3 · 67% · 2.0KB")
+
+    def test_monitor_summary_extracts_download_keys_from_command_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved" / "musubi").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
+            (run_dir / "resolved" / "musubi" / "command.json").write_text(
+                json.dumps(
+                    {
+                        "argv": [
+                            "bash",
+                            "-lc",
+                            "python -c 'pass' '[{\"key\":\"dit\",\"repo_id\":\"r/a\",\"filename\":\"a.safetensors\",\"link_path\":\"/workspace/cache/a\"},{\"key\":\"vae\",\"repo_id\":\"r/b\",\"filename\":\"b.safetensors\",\"link_path\":\"/workspace/cache/b\"}]'",
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "logs" / "stdout.log").write_text(
+                "[kura] downloaded dit -> /cache/a\n[kura] hf download progress vae:b.safetensors files=2 bytes=2048\n",
+                encoding="utf-8",
+            )
+            summaries = collect_run_summaries(root)
+        self.assertEqual(summaries[0].activity, "downloading vae b.safetensors · 1/2 · 50% · 2.0KB")
 
     def test_monitor_app_reuses_completed_summary_cache(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -344,6 +806,67 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
+    def test_doctor_workspace_warns_on_legacy_local_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "schema_version": 1,
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {"local": "kura/ai-toolkit:dev"},
+                                "musubi-tuner": {"local": "kura/musubi-tuner:dev"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 1)
+                payload = json.loads(stdout.getvalue())
+                self.assertTrue(payload["docker_images"]["ai-toolkit"]["legacy_default"])
+                self.assertTrue(payload["docker_images"]["musubi-tuner"]["legacy_default"])
+                self.assertIn("nomadoor/kura-ai-toolkit:dev", "\n".join(payload["warnings"]))
+                self.assertIn("nomadoor/kura-musubi-tuner:dev", "\n".join(payload["warnings"]))
+            finally:
+                os.chdir(previous)
+
+    def test_doctor_workspace_accepts_published_local_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "schema_version": 1,
+                        "docker": {
+                            "images": {
+                                "ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev"},
+                                "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 0)
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(payload["warnings"], [])
+                self.assertFalse(payload["docker_images"]["ai-toolkit"]["legacy_default"])
+                self.assertFalse(payload["docker_images"]["musubi-tuner"]["legacy_default"])
+            finally:
+                os.chdir(previous)
+
 
 class RunPlanTests(unittest.TestCase):
     def test_run_plan_prints_uncompiled_train_settings_from_run_yaml(self) -> None:
@@ -377,11 +900,12 @@ class RunPlanTests(unittest.TestCase):
                         "sampling": {"cadence_steps": 100},
                         "backend_overrides": {
                             "musubi-tuner": {
-                                "fp8_base": True,
-                                "gradient_checkpointing": True,
-                                "extra_args": ["--blocks_to_swap", "3"],
-                            }
-                        },
+                            "fp8_base": True,
+                            "gradient_checkpointing": True,
+                            "save_every_n_steps": 100,
+                            "extra_args": ["--blocks_to_swap", "3"],
+                        }
+                    },
                     },
                     sort_keys=False,
                 ),
@@ -402,6 +926,8 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("items        2", output)
             self.assertIn("lr           0.00005", output)
             self.assertIn("extra_args   --blocks_to_swap, 3", output)
+            self.assertIn("Disk warnings", output)
+            self.assertIn("checkpoint cadence may create about 15 checkpoints", output)
 
     def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -425,6 +951,7 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
             self.assertEqual(payload["params"]["lr"], 0.00005)
+            self.assertIn("local Docker launch requires a disk preflight", payload["disk_warnings"][0])
 
     def test_run_plan_rejects_render_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -441,6 +968,74 @@ class RunPlanTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertIn("for train runs", stderr.getvalue())
+
+    def test_positive_integer_parsing_rejects_boolean_values(self) -> None:
+        self.assertIsNone(_as_positive_int(True))
+        self.assertIsNone(_as_positive_int(False))
+        self.assertEqual(_as_positive_int("2"), 2)
+        with self.assertRaisesRegex(ValueError, "integer GiB"):
+            _configured_gib(True, default=50)
+        with self.assertRaisesRegex(ValueError, "integer GiB"):
+            _configured_gib(False, default=50)
+
+    def test_musubi_download_estimate_handles_malformed_overrides(self) -> None:
+        payload = _estimate_musubi_download_bytes(
+            {
+                "type": "train",
+                "backend": {"name": "musubi-tuner"},
+                "backend_overrides": True,
+            }
+        )
+        self.assertEqual(payload["bytes"], 0)
+        self.assertIn("invalid musubi model download spec", payload["unknown"])
+
+    def test_checkpoint_safety_preflight_rejects_many_unpruned_checkpoints(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 3000},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 100}},
+        }
+        with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
+            _checkpoint_safety_preflight(run)
+        run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
+        _checkpoint_safety_preflight(run)
+
+    def test_checkpoint_safety_preflight_counts_backend_max_train_steps(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {},
+            "backend_overrides": {"musubi-tuner": {"max_train_steps": 3000, "save_every_n_steps": 100}},
+        }
+        with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
+            _checkpoint_safety_preflight(run)
+
+    def test_checkpoint_safety_preflight_accepts_musubi_keep_last_policy(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 3000},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "save_every_n_steps": 100,
+                    "extra_args": ["--save_last_n_steps", "300"],
+                }
+            },
+        }
+        _checkpoint_safety_preflight(run)
+        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--save_last_n_epochs=2"]
+        _checkpoint_safety_preflight(run)
+
+    def test_checkpoint_safety_preflight_can_be_explicitly_overridden(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 3000},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 100}},
+            "safety": {"allow_many_checkpoints": True},
+        }
+        _checkpoint_safety_preflight(run)
 
 
 class NotificationTests(unittest.TestCase):
@@ -751,6 +1346,17 @@ class AiToolkitBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "backend_overrides.ai-toolkit.config"):
                 compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
 
+    def test_malformed_backend_overrides_do_not_crash_ai_toolkit(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            compile_ai_toolkit(run, destination)
+            config = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))
+        command = command_ai_toolkit(run)
+        self.assertEqual(config["config"]["name"], "ai-toolkit-example")
+        self.assertEqual(command["cwd"], "/opt/ai-toolkit")
+
 
 class MusubiBackendTests(unittest.TestCase):
     def _run(self) -> dict[str, object]:
@@ -1053,6 +1659,129 @@ class MusubiBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "model_paths, model_downloads, or a known model.base bundle"):
             command_musubi_tuner(run)
 
+    def test_command_musubi_unknown_architecture_names_kura_adapter_layer(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "sdxl",
+                "model_paths": {"unet": "/models/sdxl.safetensors"},
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported Kura built-in Musubi adapter"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_generates_image_architecture_adapters(self) -> None:
+        cases = [
+            (
+                "qwen_image",
+                {"dit": "/models/qwen-dit.safetensors", "vae": "/models/qwen-vae.safetensors", "text_encoder": "/models/qwen-vl.safetensors"},
+                ("qwen_image_cache_latents.py", "qwen_image_cache_text_encoder_outputs.py", "qwen_image_train_network.py", "networks.lora_qwen_image", "--model_version original"),
+            ),
+            (
+                "zimage",
+                {"dit": "/models/zimage-dit.safetensors", "vae": "/models/zimage-vae.safetensors", "text_encoder": "/models/zimage-qwen3.safetensors"},
+                ("zimage_cache_latents.py", "zimage_cache_text_encoder_outputs.py", "zimage_train_network.py", "networks.lora_zimage", "--dit /models/zimage-dit.safetensors"),
+            ),
+            (
+                "flux_kontext",
+                {"dit": "/models/kontext-dit.safetensors", "vae": "/models/kontext-vae.safetensors", "text_encoder1": "/models/t5.safetensors", "text_encoder2": "/models/clip.safetensors"},
+                ("flux_kontext_cache_latents.py", "flux_kontext_cache_text_encoder_outputs.py", "flux_kontext_train_network.py", "networks.lora_flux", "--text_encoder2 /models/clip.safetensors"),
+            ),
+            (
+                "ideogram4",
+                {"dit": "/models/ideogram4.safetensors", "vae": "/models/flux2-vae.safetensors", "text_encoder": "/models/qwen3vl.safetensors"},
+                ("ideogram4_cache_latents.py", "ideogram4_cache_text_encoder_outputs.py", "ideogram4_train_network.py", "networks.lora_ideogram4", "--dit /models/ideogram4.safetensors"),
+            ),
+            (
+                "hidream_o1",
+                {"dit": "/models/hidream-o1.safetensors"},
+                ("hidream_o1_cache_pixel.py", "hidream_o1_cache_text_encoder_outputs.py", "hidream_o1_train_network.py", "networks.lora_hidream_o1", "--model_type full", "--task t2i"),
+            ),
+        ]
+        for architecture, model_paths, expected in cases:
+            with self.subTest(architecture=architecture):
+                run = self._run()
+                run["backend_overrides"] = {"musubi-tuner": {"architecture": architecture, "model_paths": model_paths}}
+                script = command_musubi_tuner(run)["argv"][2]
+                for text in expected:
+                    self.assertIn(text, script)
+                self.assertIn("--max_train_steps 30", script)
+                self.assertIn("--save_precision bf16", script)
+
+    def test_command_musubi_generates_video_architecture_adapters(self) -> None:
+        cases = [
+            (
+                "hunyuan_video",
+                {"dit": "/models/hv-dit.safetensors", "vae": "/models/hv-vae.safetensors", "text_encoder1": "hunyuanvideo-community/HunyuanVideo", "text_encoder2": "openai/clip-vit-large-patch14"},
+                ("cache_latents.py", "cache_text_encoder_outputs.py", "hv_train_network.py", "networks.lora", "--text_encoder1 hunyuanvideo-community/HunyuanVideo"),
+            ),
+            (
+                "hunyuan_video_1_5",
+                {"dit": "/models/hv15-dit.safetensors", "vae": "/models/hv15-vae.safetensors", "text_encoder": "Qwen/Qwen2.5-VL-7B-Instruct", "byt5": "google/byt5-small"},
+                ("hv_1_5_cache_latents.py", "hv_1_5_cache_text_encoder_outputs.py", "hv_1_5_train_network.py", "networks.lora_hv_1_5", "--task t2v"),
+            ),
+            (
+                "framepack",
+                {"dit": "/models/framepack.safetensors", "vae": "/models/fpack-vae.safetensors", "text_encoder1": "hunyuanvideo-community/HunyuanVideo", "text_encoder2": "openai/clip-vit-large-patch14", "image_encoder": "/models/siglip.safetensors"},
+                ("fpack_cache_latents.py", "fpack_cache_text_encoder_outputs.py", "fpack_train_network.py", "networks.lora_framepack", "--image_encoder /models/siglip.safetensors"),
+            ),
+            (
+                "kandinsky5",
+                {"dit": "/models/k5-dit.safetensors", "vae": "/models/k5-vae.safetensors", "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct", "text_encoder_clip": "openai/clip-vit-large-patch14"},
+                ("kandinsky5_cache_text_encoder_outputs.py", "kandinsky5_cache_latents.py", "kandinsky5_train_network.py", "networks.lora_kandinsky", "--task k5-pro-t2v-5s-sd"),
+            ),
+        ]
+        for architecture, model_paths, expected in cases:
+            with self.subTest(architecture=architecture):
+                run = self._run()
+                run["backend_overrides"] = {"musubi-tuner": {"architecture": architecture, "model_paths": model_paths}}
+                script = command_musubi_tuner(run)["argv"][2]
+                for text in expected:
+                    self.assertIn(text, script)
+                self.assertIn("--max_train_steps 30", script)
+                self.assertIn("--save_precision bf16", script)
+
+    def test_command_musubi_framepack_uses_current_fp8_base_flag(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "framepack",
+                "model_paths": {
+                    "dit": "/models/framepack.safetensors",
+                    "vae": "/models/fpack-vae.safetensors",
+                    "text_encoder1": "hunyuanvideo-community/HunyuanVideo",
+                    "text_encoder2": "openai/clip-vit-large-patch14",
+                    "image_encoder": "/models/siglip.safetensors",
+                },
+                "fp8_base": True,
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--fp8_base", script)
+        self.assertNotIn("--fp8 ", script)
+
+    def test_command_musubi_kandinsky_can_quantize_qwen_cache(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "kandinsky5",
+                "model_paths": {
+                    "dit": "/models/k5-dit.safetensors",
+                    "vae": "/models/k5-vae.safetensors",
+                    "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "text_encoder_clip": "openai/clip-vit-large-patch14",
+                },
+                "quantized_qwen": True,
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("kandinsky5_cache_text_encoder_outputs.py", script)
+        self.assertIn("--quantized_qwen", script)
+
     def test_command_musubi_can_download_models_from_huggingface(self) -> None:
         run = self._run()
         run["backend_overrides"] = {
@@ -1269,6 +1998,22 @@ class MusubiBackendTests(unittest.TestCase):
             result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_model_validator_accepts_hf_model_id_but_rejects_missing_paths(self) -> None:
+        code = _safetensors_validator_code()
+        accepted = {"models": [{"role": "text_encoder", "path": "Qwen/Qwen2.5-VL-7B-Instruct", "expected_format": "hf_model_id_or_path"}]}
+        absolute = {"models": [{"role": "text_encoder", "path": "/models/missing.safetensors", "expected_format": "hf_model_id_or_path"}]}
+        relative = {"models": [{"role": "text_encoder", "path": "models/missing", "expected_format": "hf_model_id_or_path"}]}
+
+        accepted_result = subprocess.run([sys.executable, "-c", code, json.dumps(accepted)], text=True, capture_output=True, check=False)
+        absolute_result = subprocess.run([sys.executable, "-c", code, json.dumps(absolute)], text=True, capture_output=True, check=False)
+        relative_result = subprocess.run([sys.executable, "-c", code, json.dumps(relative)], text=True, capture_output=True, check=False)
+
+        self.assertEqual(accepted_result.returncode, 0, accepted_result.stderr)
+        self.assertNotEqual(absolute_result.returncode, 0)
+        self.assertIn("path does not exist", absolute_result.stderr)
+        self.assertNotEqual(relative_result.returncode, 0)
+        self.assertIn("path does not exist", relative_result.stderr)
+
     def test_safetensors_postflight_accepts_musubi_flux2_lora(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "example.safetensors"
@@ -1295,6 +2040,27 @@ def _write_fake_safetensors(path: Path, keys: list[str], metadata: dict[str, str
 
 
 class DockerLifecycleTests(unittest.TestCase):
+    def _storage_probe(self, free_gib: int, *, confidence: str = "exact", host_free_gib: int | None = None, backing_kind: str = "native"):
+        def fake(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
+            result: dict[str, StorageStatus] = {}
+            for name, path in paths.items():
+                result[name] = StorageStatus(
+                    path=str(path),
+                    probe=str(path),
+                    backing_id="test-backing",
+                    backing_kind=backing_kind,
+                    linux_free_bytes=free_gib * 1024**3,
+                    linux_total_bytes=200 * 1024**3,
+                    host_free_bytes=None if host_free_gib is None else host_free_gib * 1024**3,
+                    effective_free_bytes=free_gib * 1024**3,
+                    confidence=confidence,
+                    mount={"available": True},
+                    warning=None if confidence != "unknown" else "unknown backing",
+                )
+            return result
+
+        return fake
+
     def _run_dir(self, root: Path) -> Path:
         run_dir = root / "runs" / "example"
         (run_dir / "realizations").mkdir(parents=True)
@@ -1337,6 +2103,152 @@ class DockerLifecycleTests(unittest.TestCase):
             with patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 docker_preflight(root, mounts)
             self.assertTrue((root / "cache" / "huggingface").is_dir())
+
+    def test_docker_preflight_rejects_low_disk_space(self) -> None:
+        class Usage:
+            total = 100 * 1024**3
+            used = 80 * 1024**3
+            free = 20 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.shutil.disk_usage", return_value=Usage()),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
+                    docker_preflight(root, [])
+
+    def test_docker_preflight_honors_configured_disk_floor(self) -> None:
+        class Usage:
+            total = 100 * 1024**3
+            used = 80 * 1024**3
+            free = 20 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.shutil.disk_usage", return_value=Usage()),
+            ):
+                payload = docker_preflight(root, [], min_free_gb=10)
+        self.assertEqual(payload["disk"]["workspace"]["free_bytes"], 20 * 1024**3)
+
+    def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(60)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
+                    _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
+        self.assertEqual(payload["required_gib"], 50)
+
+    def test_local_launch_disk_preflight_counts_estimated_hf_downloads(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "model": {"base": "custom"},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "model_downloads": {
+                        "dit": {"repo": "example/model", "filename": "dit.safetensors"},
+                    },
+                }
+            },
+        }
+        mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(60)),
+                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands._hf_file_size_bytes", return_value=20 * 1024**3),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 70 GiB"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
+                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 40}, mounts)
+        self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 20 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 20 * 1024**3)
+
+    def test_local_launch_disk_preflight_counts_allowed_checkpoint_budget(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {},
+            "backend_overrides": {"musubi-tuner": {"max_train_steps": 3000, "save_every_n_steps": 100}},
+            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 110 GiB"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+        self.assertEqual(_checkpoint_safety_preflight(run), None)
+
+    def test_local_launch_disk_preflight_sums_estimates_on_shared_backing(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "max_train_steps": 2000,
+                    "save_every_n_steps": 100,
+                    "model_downloads": {
+                        "dit": {"repo": "example/model", "filename": "dit.safetensors"},
+                    },
+                }
+            },
+            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+        }
+        mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands._hf_file_size_bytes", return_value=40 * 1024**3),
+            ):
+                with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
+                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 10}, mounts)
+        self.assertEqual(payload["paths"]["workspace"]["estimated_write_bytes"], 40 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 40 * 1024**3)
+        self.assertEqual(payload["paths"]["workspace"]["backing_estimated_write_bytes"], 80 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["backing_estimated_write_bytes"], 80 * 1024**3)
+
+    def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(140)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
+                    _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
+
+    def test_local_launch_disk_preflight_rejects_unknown_wsl_backing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(900, confidence="unknown", backing_kind="wsl2_vhdx")), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                with self.assertRaisesRegex(ValueError, "unknown physical backing free space"):
+                    _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
+                payload = _local_launch_disk_preflight(root, {"safety": {"allow_storage_risk": True}}, {}, [])
+        self.assertEqual(payload["paths"]["workspace"]["confidence"], "unknown")
+
+    def test_download_disk_guard_rejects_when_free_space_is_too_low(self) -> None:
+        class Usage:
+            total = 100 * 1024**3
+            used = 95 * 1024**3
+            free = 5 * 1024**3
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+                with self.assertRaisesRegex(ValueError, "needs about 10 GiB free"):
+                    _ensure_free_bytes(target, 10 * 1024**3, context="test download")
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1431,12 +2343,45 @@ class DockerLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch("kura.run_commands.launch_docker", side_effect=fake_launch), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
+                with patch("kura.run_commands.launch_docker", side_effect=fake_launch), patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
                     self.assertEqual(launch_run("example", executor="docker", dry_run=False, wait=True), 0)
             finally:
                 os.chdir(previous)
-            wait.assert_called_once_with(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
+            wait.assert_any_call(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
             reconcile.assert_called_once_with(run_dir)
+
+    def test_launch_docker_uses_image_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "realizations").mkdir()
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"min_free_gb": 10, "images": {"ai-toolkit": {"local": "configured-local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch_docker") as launch, patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")):
+                    self.assertEqual(launch_run("example", executor="docker", dry_run=False, image="override-image:dev"), 0)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(launch.call_args.kwargs["image"], "override-image:dev")
+            self.assertEqual(launch.call_args.kwargs["min_free_gb"], 10)
 
 
 class RunPruneTests(unittest.TestCase):
@@ -1622,8 +2567,9 @@ class RunPruneTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(status, 0)
-        self.assertEqual(docker_calls[0][:7], ["docker", "run", "--rm", "--volume", f"{root.resolve()}:/workspace", "--entrypoint", "sh"])
-        self.assertIn("/workspace/runs/old", docker_calls[0])
+        docker_run = next(call for call in docker_calls if call[:2] == ["docker", "run"])
+        self.assertEqual(docker_run[:7], ["docker", "run", "--rm", "--volume", f"{root.resolve()}:/workspace", "--entrypoint", "sh"])
+        self.assertIn("/workspace/runs/old", docker_run)
 
     def test_run_prune_reports_artifact_delete_failure(self) -> None:
         previous = Path.cwd()
@@ -1642,6 +2588,8 @@ class RunPruneTests(unittest.TestCase):
                 shutil.rmtree(path)
 
             def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
                 return subprocess.CompletedProcess(command, 1, "", "docker cleanup failed")
 
             os.chdir(root)

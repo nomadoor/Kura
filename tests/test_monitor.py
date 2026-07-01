@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kura.monitor import collect_run_summaries, loss_sparkline
+from kura.monitor import _split_for_monitor, collect_run_summaries, loss_sparkline
 
 
 class MonitorProjectionTests(unittest.TestCase):
@@ -74,6 +74,24 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.losses, (0.7, 0.8))
             self.assertEqual(summary.latest_loss, 0.8)
             self.assertEqual(summary.best_loss, 0.7)
+
+    def test_monitor_sort_tolerates_mixed_timezone_datetimes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            aware = root / "runs" / "aware"
+            naive = root / "runs" / "naive"
+            aware.mkdir(parents=True)
+            naive.mkdir(parents=True)
+            (aware / "run.yaml").write_text("id: aware\ntype: train\ncreated: '2026-06-21T10:00:00+09:00'\n", encoding="utf-8")
+            (aware / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+            (naive / "run.yaml").write_text("id: naive\ntype: train\ncreated: '2026-06-21T10:00:00'\n", encoding="utf-8")
+            (naive / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+
+            summaries = collect_run_summaries(root)
+            active, history = _split_for_monitor(summaries, limit=10)
+
+            self.assertEqual(active, [])
+            self.assertEqual({summary.id for summary in history}, {"aware", "naive"})
 
     def test_collect_run_summaries_overlays_finished_local_docker_state_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -18,18 +18,22 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from kura.backends import command_ai_toolkit, command_musubi_tuner
+from kura.backends import command_ai_toolkit, command_musubi_tuner, musubi_model_download_specs
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, reconcile_docker, stage_runpod, stop_docker, stop_runpod
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
 from kura.render import launch_render
+from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -139,6 +143,10 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         "quantize_te",
         "blocks_to_swap",
         "extra_args",
+        "max_train_steps",
+        "save_every_n_steps",
+        "save_precision",
+        "prune_checkpoints_before_step",
     )
     for key in direct_keys:
         if key in backend_overrides:
@@ -155,6 +163,315 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             important[label] = value
     return important
+
+
+def _as_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if value in (None, ""):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _extra_args_has_keep_last_policy(extra_args: Any) -> bool:
+    if not isinstance(extra_args, list):
+        return False
+    keep_last_flags = {
+        "--save_last_n_steps",
+        "--save_last_n_epochs",
+        "--save_last_n_steps_state",
+        "--save_last_n_epochs_state",
+    }
+    index = 0
+    while index < len(extra_args):
+        item = extra_args[index]
+        if not isinstance(item, str):
+            index += 1
+            continue
+        flag, sep, inline_value = item.partition("=")
+        if flag not in keep_last_flags:
+            index += 1
+            continue
+        if sep:
+            if _as_positive_int(inline_value):
+                return True
+        elif index + 1 < len(extra_args) and _as_positive_int(extra_args[index + 1]):
+            return True
+        index += 1
+    return False
+
+
+def _checkpoint_retention_policy_present(important_overrides: dict[str, Any]) -> bool:
+    return bool(
+        _as_positive_int(important_overrides.get("prune_checkpoints_before_step"))
+        or _extra_args_has_keep_last_policy(important_overrides.get("extra_args"))
+    )
+
+
+def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> list[str]:
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    warnings: list[str] = []
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important_overrides.get("max_train_steps"))
+    save_every = _as_positive_int(important_overrides.get("save_every_n_steps"))
+    has_retention_policy = _checkpoint_retention_policy_present(important_overrides)
+    cadence = _as_positive_int(sampling.get("cadence_steps"))
+    if steps and save_every:
+        expected_checkpoints = max(steps // save_every, 1)
+        if expected_checkpoints >= 10 and not has_retention_policy:
+            warnings.append(f"checkpoint cadence may create about {expected_checkpoints} checkpoints; set prune_checkpoints_before_step or keep-last policy if this is not intentional")
+        elif save_every <= 100 and not has_retention_policy:
+            warnings.append("checkpoint save_every_n_steps is 100 or less with no prune policy")
+    if steps and cadence:
+        expected_samples = max(steps // cadence, 1)
+        if expected_samples >= 20:
+            warnings.append(f"sampling cadence may create about {expected_samples} sample batches")
+    if compute.get("executor") in (None, "docker"):
+        warnings.append("local Docker launch requires a disk preflight; default minimum free space is 100GiB unless docker.min_free_gb is configured")
+    return warnings
+
+
+def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    if safety.get("allow_many_checkpoints") is True:
+        return
+    important = _important_backend_overrides(run)
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    save_every = _as_positive_int(important.get("save_every_n_steps"))
+    if not steps or not save_every or _checkpoint_retention_policy_present(important):
+        return
+    expected = max(steps // save_every, 1)
+    if expected >= 10:
+        raise ValueError(
+            f"checkpoint policy may create about {expected} checkpoints without pruning; "
+            "set backend_overrides.<backend>.prune_checkpoints_before_step, reduce save frequency, "
+            "or set safety.allow_many_checkpoints: true if intentional"
+        )
+
+
+def _configured_gib(value: Any, *, default: int) -> int:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"disk budget must be an integer GiB value: {value}")
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"disk budget must be an integer GiB value: {value}") from exc
+    if number <= 0:
+        raise ValueError(f"disk budget must be positive: {value}")
+    return number
+
+
+def _resolve_local_path(workspace: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    return path
+
+
+def _hf_cache_path(workspace: Path, mounts: list[dict[str, Any]]) -> Path:
+    for mount in mounts:
+        if not isinstance(mount, dict) or mount.get("mode") == "ro":
+            continue
+        if mount.get("target") == "/root/.cache/huggingface" and isinstance(mount.get("source"), str):
+            return _resolve_local_path(workspace, mount["source"])
+    return workspace / "cache" / "huggingface"
+
+
+def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int | None:
+    repo_id = item.get("repo_id")
+    filename = item.get("filename")
+    if not repo_id or not filename:
+        return None
+    revision = item.get("revision") or "main"
+    quoted_repo = "/".join(urllib.parse.quote(part, safe="") for part in repo_id.split("/"))
+    quoted_revision = urllib.parse.quote(revision, safe="")
+    quoted_filename = "/".join(urllib.parse.quote(part, safe="") for part in filename.split("/"))
+    url = f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
+    headers = {}
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, method="HEAD", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_sec) as response:
+            length = response.headers.get("Content-Length")
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return None
+    try:
+        return int(length) if length else None
+    except ValueError:
+        return None
+
+
+def _estimate_musubi_download_bytes(run: dict[str, Any]) -> dict[str, Any]:
+    backend = run.get("backend")
+    backend_name = backend.get("name") if isinstance(backend, dict) else None
+    if backend_name != "musubi-tuner":
+        return {"bytes": 0, "items": [], "unknown": []}
+    overrides = run.get("backend_overrides")
+    if overrides is not None and not isinstance(overrides, dict):
+        return {"bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+    override = overrides.get("musubi-tuner", {}) if isinstance(overrides, dict) else {}
+    existing_paths = {}
+    if isinstance(override, dict):
+        paths = override.get("model_paths")
+        if isinstance(paths, dict):
+            existing_paths = {key: value for key, value in paths.items() if isinstance(key, str) and isinstance(value, str)}
+    try:
+        specs, _ = musubi_model_download_specs(run, existing_paths=existing_paths)
+    except ValueError:
+        return {"bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+    total = 0
+    items: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    for item in specs:
+        size = _hf_file_size_bytes(item)
+        record = {key: item.get(key) for key in ("key", "repo_id", "filename", "revision") if item.get(key)}
+        record["size_bytes"] = size
+        items.append(record)
+        if size is None:
+            unknown.append(f"{item.get('repo_id')}:{item.get('filename')}")
+        else:
+            total += size
+    return {"bytes": total, "items": items, "unknown": unknown}
+
+
+def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    if safety.get("allow_many_checkpoints") is not True:
+        return {"bytes": 0, "count": 0}
+    important = _important_backend_overrides(run)
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    save_every = _as_positive_int(important.get("save_every_n_steps"))
+    if not steps or not save_every or _checkpoint_retention_policy_present(important):
+        return {"bytes": 0, "count": 0}
+    count = max(steps // save_every, 1)
+    per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
+    return {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+
+
+def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]], storage_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
+    if safety.get("max_run_disk_gb") is not None:
+        required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
+    floor_bytes = required_gib * 1024**3
+    paths = {"workspace": workspace}
+    for mount in mounts:
+        if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
+            source = _resolve_local_path(workspace, mount["source"])
+            paths[f"mount:{mount.get('target', mount['source'])}"] = source
+    hf_cache_path = _hf_cache_path(workspace, mounts)
+    paths.setdefault("hf_cache", hf_cache_path)
+    download_estimate = _estimate_musubi_download_bytes(run)
+    checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
+    write_estimates = {
+        "hf_cache": int(download_estimate.get("bytes") or 0),
+        "workspace": int(checkpoint_estimate.get("bytes") or 0),
+    }
+    checked: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    storage_statuses = probe_storages(paths, storage_config)
+    backing_write_estimates: dict[tuple[str, str], int] = {}
+    for name, status in storage_statuses.items():
+        backing = (status.backing_kind, status.backing_id)
+        backing_write_estimates[backing] = backing_write_estimates.get(backing, 0) + write_estimates.get(name, 0)
+    backing_required_bytes = {backing: floor_bytes + estimated for backing, estimated in backing_write_estimates.items()}
+    for name, path in paths.items():
+        status = storage_statuses[name]
+        estimated_write_bytes = write_estimates.get(name, 0)
+        backing = (status.backing_kind, status.backing_id)
+        required_bytes = backing_required_bytes[backing]
+        checked[name] = {
+            "path": str(path),
+            "probe": status.probe,
+            "backing_id": status.backing_id,
+            "backing_kind": status.backing_kind,
+            "linux_free_bytes": status.linux_free_bytes,
+            "host_free_bytes": status.host_free_bytes,
+            "effective_free_bytes": status.effective_free_bytes,
+            "confidence": status.confidence,
+            "required_bytes": required_bytes,
+            "floor_bytes": floor_bytes,
+            "estimated_write_bytes": estimated_write_bytes,
+            "backing_estimated_write_bytes": backing_write_estimates[backing],
+        }
+        required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
+        if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:
+            errors.append(
+                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB including estimated writes. "
+                "Set storage.host_drive in workspace.yaml or set safety.allow_storage_risk: true if this is intentional"
+            )
+        elif status.effective_free_bytes < required_bytes:
+            errors.append(
+                f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
+                f"local Docker launch requires at least {required_display_gib} GiB including estimated writes"
+            )
+    if errors:
+        raise ValueError("; ".join(errors))
+    docker_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
+    docker_system_df = subprocess.run(["docker", "system", "df", "--format", "{{json .}}"], text=True, capture_output=True, check=False)
+    docker_storage: list[dict[str, Any]] = []
+    if docker_system_df.returncode == 0:
+        for line in docker_system_df.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                docker_storage.append(item)
+                if str(item.get("Type", "")).lower() == "build cache":
+                    size_text = str(item.get("Size") or "0B")
+                    match = re.fullmatch(r"\s*([0-9.]+)\s*([KMGT]?B?)\s*", size_text, re.IGNORECASE)
+                    if match:
+                        amount = float(match.group(1))
+                        unit = match.group(2).lower().rstrip("b")
+                        scale = {"": 1, "k": 1000, "m": 1000**2, "g": 1000**3, "t": 1000**4}.get(unit, 1)
+                        if amount * scale > docker_cache_limit_gib * 1024**3:
+                            raise ValueError(f"Docker build cache exceeds {docker_cache_limit_gib} GiB; run `kura cleanup docker-cache --yes` before local launch")
+    return {
+        "required_gib": required_gib,
+        "floor_bytes": floor_bytes,
+        "estimates": {"musubi_downloads": download_estimate, "checkpoints": checkpoint_estimate},
+        "paths": checked,
+        "docker_storage": docker_storage,
+    }
+
+
+def _ensure_free_bytes(path: Path, required_bytes: int, *, context: str) -> dict[str, Any]:
+    path.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(path)
+    if usage.free < required_bytes:
+        raise ValueError(f"{context} needs about {required_bytes // 1024**3} GiB free at {path}, but only {usage.free // 1024**3} GiB is available")
+    return {"path": str(path), "free_bytes": usage.free, "required_bytes": required_bytes}
+
+
+def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    value = runpod.get("download_min_free_gb")
+    return _configured_gib(value, default=50) * 1024**3
+
+
+def _remote_path_size(details: dict[str, Any], path: str, *, timeout_sec: int = 60) -> int | None:
+    script = f"du -sb {shlex.quote(path)} 2>/dev/null | awk '{{print $1}}'"
+    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=timeout_sec)
+    if result.returncode:
+        return None
+    try:
+        return int(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return None
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
@@ -206,6 +523,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     if sampling.get("cadence_steps") is not None:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
+    important_overrides = _important_backend_overrides(run)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -227,7 +545,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "datasets": datasets,
         "params": {key: value for key, value in plan_params.items() if value is not None},
         "sampling": sampling_payload,
-        "backend_overrides": _important_backend_overrides(run),
+        "backend_overrides": important_overrides,
+        "disk_warnings": _disk_warnings(run, important_overrides),
     }
 
 
@@ -308,6 +627,12 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("Backend overrides")
         for key, value in overrides.items():
             _append_kv(lines, key, value)
+    disk_warnings = payload.get("disk_warnings") if isinstance(payload.get("disk_warnings"), list) else []
+    if disk_warnings:
+        lines.append("")
+        lines.append("Disk warnings")
+        for warning in disk_warnings:
+            lines.append(f"  - {warning}")
     return "\n".join(lines)
 
 
@@ -533,6 +858,8 @@ def download_run(run_id: str, *, force: bool = False) -> int:
         pod_id = status.get("pod_id")
         if not isinstance(pod_id, str):
             raise ValueError("run has no RunPod pod ID")
+        config = _workspace_config()
+        min_download_free = _configured_download_min_free_bytes(config)
         pod = subprocess.run(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, check=False)
         if pod.returncode:
             raise ValueError(_redact_secret_text(pod.stderr.strip() or pod.stdout.strip() or "runpodctl pod get failed"))
@@ -543,6 +870,13 @@ def download_run(run_id: str, *, force: bool = False) -> int:
         if not isinstance(ip, str) or not isinstance(port, int) or not isinstance(key, str):
             raise ValueError("pod SSH is not ready")
         destination.mkdir(exist_ok=True)
+        workspace = _runpod_workspace_for_run(run_dir)
+        remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
+        remote_size = _remote_path_size({"ip": ip, "port": port, "key": key}, remote_run_dir)
+        if isinstance(remote_size, int) and remote_size > 0:
+            _ensure_free_bytes(destination, max(min_download_free, remote_size * 2 + 5 * 1024**3), context="RunPod download")
+        else:
+            _ensure_free_bytes(destination, min_download_free, context="RunPod download")
         remote_archive = f"/tmp/kura-download-{run_id}.tar.gz"
         remote_script = (
             f"tar -C /workspace/runs "
@@ -662,8 +996,12 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
         selected = _select_remote_outputs(items, step=args.step, since_step=args.since_step, all_outputs=args.all)
         if not selected:
             raise ValueError("no matching remote .safetensors outputs found")
+        config = _workspace_config()
+        min_download_free = _configured_download_min_free_bytes(config)
         destination = run_dir / "pulled" / "outputs"
         destination.mkdir(parents=True, exist_ok=True)
+        selected_size = sum(item.get("size") for item in selected if isinstance(item.get("size"), int))
+        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), selected_size + 5 * 1024**3), context="RunPod output pull")
         pulled: list[dict[str, Any]] = []
         for item in selected:
             name = item.get("name")
@@ -1205,6 +1543,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             raise ValueError("run already has a running realization; reconcile or stop it first")
         if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):
             raise ValueError("run must be compiled before launch")
+        _checkpoint_safety_preflight(locked)
         spec = _command_for_backend(locked)
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
@@ -1219,7 +1558,20 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             mounts = docker.get("mounts", [])
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
-            launch_docker(workspace=_workspace(), run_dir=run_dir, spec=spec, image=image_config["local"], dockerfile=image_config["dockerfile"], mounts=mounts, gpu=bool(docker.get("gpu", False)), workspace_target=str(docker.get("workspace_target", "/workspace")), dry_run=dry_run)
+            if not dry_run:
+                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config)
+            launch_docker(
+                workspace=_workspace(),
+                run_dir=run_dir,
+                spec=spec,
+                image=image or image_config["local"],
+                dockerfile=image_config["dockerfile"],
+                mounts=mounts,
+                gpu=bool(docker.get("gpu", False)),
+                workspace_target=str(docker.get("workspace_target", "/workspace")),
+                dry_run=dry_run,
+                min_free_gb=_configured_gib(docker.get("min_free_gb"), default=100) if isinstance(docker, dict) else 100,
+            )
             if wait and not dry_run:
                 return _wait_for_docker_run(run_dir)
         else:

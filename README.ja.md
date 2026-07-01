@@ -113,11 +113,13 @@ Kura はすべてをワークスペース内のファイルとして置きます
 | `runs/<run-id>/outputs/` | 学習済み LoRA などの成果物 |
 | `cache/huggingface/` | ダウンロードしたモデル本体（数十GBになります） |
 
-いずれも Git には入りません。不要になったら：
+いずれも Git には入りません。ディスクが気になったら、まず読み取り専用で状況を確認できます：
 
 ```sh
-uv run kura run prune                                              # 古いrunを掃除（--yes で実行）
-uv run kura run prune --docker-containers --docker-volumes --yes   # Kura管理の停止コンテナ/volumeも片付ける
+uv run kura doctor disk                                           # 何にどれだけ使っているか・空きを確認（読み取り専用）
+uv run kura cleanup all                                           # 削除候補をプレビュー（dry-run。--yes で実行）
+uv run kura run prune                                             # 古いrunを掃除（--yes で実行）
+uv run kura run prune --docker-containers --docker-volumes --yes  # Kura管理の停止コンテナ/volumeも片付ける
 ```
 
 モデルキャッシュ自体を空けたいときは `cache/huggingface/` を削除（必要になれば自動で再ダウンロードされます）。

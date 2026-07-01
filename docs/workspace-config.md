@@ -6,17 +6,32 @@ created by `kura init`. Relative host paths are resolved from the workspace root
 This page is intentionally short: it is mostly for AI agents that need to adjust
 runtime configuration without guessing.
 
+## Storage
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `storage.host_drive` | Optional override for the Windows drive that backs the WSL2 workspace VHDX, for example `F:`. Kura tries to auto-detect this from the WSL registry first. | `""` |
+| `storage.docker_data_drive` | Optional override for the Windows drive that backs Docker Desktop data, if different from `storage.host_drive`. Reserved for Docker backing accounting. | `""` |
+
+On native Linux and macOS, Kura trusts normal filesystem free space. On WSL2,
+large local Docker launches need the Windows backing drive as well as the Linux
+filesystem. Kura auto-detects the current distro's backing drive when Windows
+interop is available; use `storage.host_drive` only when that detection is
+wrong or unavailable.
+
 ## Docker
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `docker.images.ai-toolkit.local` | Local Docker image used for AI-Toolkit runs | `kura/ai-toolkit:dev` |
+| `docker.images.ai-toolkit.local` | Local Docker image used for AI-Toolkit runs | `nomadoor/kura-ai-toolkit:dev` |
 | `docker.images.ai-toolkit.remote` | Image name used when publishing your own AI-Toolkit image | `nomadoor/kura-ai-toolkit:dev` |
-| `docker.images.musubi-tuner.local` | Local Docker image used for Musubi Tuner runs | `kura/musubi-tuner:dev` |
+| `docker.images.musubi-tuner.local` | Local Docker image used for Musubi Tuner runs | `nomadoor/kura-musubi-tuner:dev` |
 | `docker.images.musubi-tuner.remote` | Image name used for RunPod when not using the default image override | `nomadoor/kura-musubi-tuner:dev` |
 | `docker.workspace_target` | Container path for the mounted workspace | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
+| `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch | `100` |
+| `docker.build_cache_limit_gb` | Docker build cache limit checked before local Docker launch | `30` |
 
 Default Hugging Face cache mount:
 
@@ -31,6 +46,11 @@ docker:
 `./cache/huggingface` stays outside Git and is reused across local Docker runs
 inside the same workspace. Advanced users can point `source` at a shared absolute
 path.
+
+For Musubi runs with automatic Hugging Face downloads, Kura tries to estimate
+the referenced file sizes before local launch. The estimate is added on top of
+`docker.min_free_gb`, so the configured value remains a safety margin instead
+of being consumed by the download.
 
 ## ComfyUI
 
@@ -62,6 +82,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |
 | `runpod.container_disk_gb` | Disposable Pod container disk size | `150` |
+| `runpod.download_min_free_gb` | Minimum local free space required before RunPod download | `50` |
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_type` / `runpod.cloud_types` | RunPod cloud preference; `ANY` tries community then secure | `ANY` |
