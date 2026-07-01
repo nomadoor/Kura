@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from kura import __version__
-from kura.comfyui_models import merged_registry, registry_from_ui_workflow_notes, resolve_model_specs, ui_workflow_companion
+from kura.comfyui_models import merged_registry, resolve_model_specs
 
 
 def now() -> str:
@@ -47,23 +47,6 @@ def _workflow_sidecar(path: Path) -> dict[str, Any]:
     if not sidecar.is_file():
         return {}
     return load_yaml(sidecar)
-
-
-def _workflow_note_models(workspace: Path, path: Path) -> dict[str, Any]:
-    try:
-        path.relative_to(workspace / "workflows" / "samples")
-    except ValueError:
-        return {}
-    companion = ui_workflow_companion(path)
-    if companion is None:
-        return {}
-    try:
-        workflow = json.loads(companion.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"workflow companion is not valid JSON: {companion}: {exc}") from exc
-    if not isinstance(workflow, dict):
-        return {}
-    return registry_from_ui_workflow_notes(workflow)
 
 
 def write_yaml(path: Path, value: Any) -> None:
@@ -294,10 +277,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["comfyui"] = comfyui
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     if executor.get("name") == "runpod":
-        note_models = _workflow_note_models(workspace, workflow_path)
         sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
         workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
-        registry = merged_registry(note_models, sidecar_models, workspace_models)
+        registry = merged_registry(sidecar_models, workspace_models)
         specs, unknown = resolve_model_specs(workflow, registry)
         if unknown:
             labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown)

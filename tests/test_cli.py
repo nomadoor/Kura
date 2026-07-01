@@ -1365,7 +1365,7 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(specs[0]["filename"], "curated/toy.safetensors")
             self.assertEqual(registry["checkpoints"]["toy.safetensors"]["repo"], "curated/toy")
 
-    def test_runpod_render_compile_reads_model_links_from_companion_workflow_notes(self) -> None:
+    def test_runpod_render_compile_accepts_sidecar_url_and_target_dir(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sample_dir = root / "workflows" / "samples" / "toy"
@@ -1381,22 +1381,17 @@ class RenderNotificationTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            (sample_dir / "toy_text2image.json").write_text(
-                json.dumps({
-                    "nodes": [
-                        {
-                            "id": 10,
-                            "type": "MarkdownNote",
-                            "widgets_values": [
-                                "## models\n\n"
-                                "- text_encoders\n"
-                                "  - [encoder.safetensors](https://huggingface.co/owner/toy/blob/main/text_encoders/encoder.safetensors)\n"
-                                "- checkpoints\n"
-                                "  - [direct.safetensors](https://civitai.example/api/download/models/1?fileId=2)\n"
-                            ],
-                        }
-                    ]
-                }),
+            (sample_dir / "toy_text2image_api.kura.yaml").write_text(
+                "models:\n"
+                "  clip:\n"
+                "    encoder.safetensors:\n"
+                "      repo: owner/toy\n"
+                "      filename: text_encoders/encoder.safetensors\n"
+                "      target_dir: text_encoders\n"
+                "  checkpoints:\n"
+                "    direct.safetensors:\n"
+                "      url: https://civitai.example/api/download/models/1?fileId=2\n"
+                "      filename: direct.safetensors\n",
                 encoding="utf-8",
             )
             (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
@@ -1424,35 +1419,6 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(specs_by_name["direct.safetensors"]["target_dir"], "checkpoints")
             self.assertEqual(registry["clip"]["encoder.safetensors"]["repo"], "owner/toy")
             self.assertEqual(registry["checkpoints"]["direct.safetensors"]["url"], "https://civitai.example/api/download/models/1?fileId=2")
-
-    def test_runpod_render_compile_ignores_companion_note_links_outside_samples(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workflows").mkdir()
-            (root / "promptsets").mkdir()
-            run_dir = root / "runs" / "render-1"
-            run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
-            (root / "workflows" / "wf_api.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "linked.safetensors"}}}), encoding="utf-8")
-            (root / "workflows" / "wf.json").write_text(
-                json.dumps({"nodes": [{"id": 10, "type": "MarkdownNote", "widgets_values": ["## models\n\n- checkpoints\n  - [linked.safetensors](https://huggingface.co/owner/toy/blob/main/linked.safetensors)\n"]}]}),
-                encoding="utf-8",
-            )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
-            (run_dir / "run.yaml").write_text(
-                yaml.safe_dump({
-                    "type": "render",
-                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf_api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
-                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
-                    "executor": {"name": "runpod"},
-                    "workflow_patches": {},
-                    "render": {"default_seed": None},
-                }),
-                encoding="utf-8",
-            )
-            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "unknown model loader"):
-                compile_render(root, run_dir)
 
     def test_workspace_registry_overrides_sample_sidecar_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
