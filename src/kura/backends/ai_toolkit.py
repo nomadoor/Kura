@@ -28,24 +28,6 @@ def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
     return override if isinstance(override, dict) else {}
 
 
-def _ai_toolkit_large_model_defaults(model_base: Any) -> bool:
-    if not isinstance(model_base, str):
-        return False
-    normalized = model_base.lower().replace("_", "-")
-    large_markers = (
-        "flux",
-        "kontext",
-        "qwen",
-        "hidream",
-        "hunyuan",
-        "wan",
-        "z-image",
-        "zimage",
-        "krea",
-    )
-    return any(marker in normalized for marker in large_markers)
-
-
 def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
     """Write AI-Toolkit native YAML for configured training runs."""
     override = _ai_toolkit_backend_override(run)
@@ -53,7 +35,6 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
     model = run.get("model", {})
     datasets = _datasets(run)
     native = override.get("config")
-    optimize_large_model = _ai_toolkit_large_model_defaults(model.get("base"))
     config = {
         "job": "extension",
         "config": {
@@ -65,8 +46,8 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
                 "network": {"type": "lora", "linear": params.get("rank"), "linear_alpha": params.get("alpha")},
                 "save": {"dtype": "bf16", "save_every": 1, "max_step_saves_to_keep": 1},
                 "datasets": _ai_toolkit_datasets(datasets, override.get("dataset_folder"), params.get("resolution")),
-                "train": {"batch_size": params.get("batch_size"), "steps": params.get("steps"), "gradient_accumulation_steps": 1, "train_unet": True, "train_text_encoder": False, "gradient_checkpointing": optimize_large_model, "noise_scheduler": "flowmatch", "optimizer": "adamw8bit", "lr": params.get("lr"), "dtype": "bf16", "disable_sampling": True},
-                "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": optimize_large_model, "quantize_te": optimize_large_model, "low_vram": False},
+                "train": {"batch_size": params.get("batch_size"), "steps": params.get("steps"), "gradient_accumulation_steps": 1, "train_unet": True, "train_text_encoder": False, "gradient_checkpointing": False, "noise_scheduler": "flowmatch", "optimizer": "adamw8bit", "lr": params.get("lr"), "dtype": "bf16", "disable_sampling": True},
+                "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
             }],
         },
     }

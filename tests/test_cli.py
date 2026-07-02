@@ -2061,24 +2061,11 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(process["datasets"][0]["folder_path"], "/workspace/datasets/tiny/images")
         self.assertEqual(process["network"]["linear"], 4)
         self.assertEqual(process["train"]["steps"], 1)
-        self.assertTrue(process["train"]["gradient_checkpointing"])
-        self.assertTrue(process["model"]["quantize"])
-        self.assertTrue(process["model"]["quantize_te"])
-        self.assertFalse(process["model"]["low_vram"])
-        self.assertEqual(command, {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "/workspace/runs/ai-toolkit-example/resolved/ai-toolkit.yaml"], "env": {}})
-
-    def test_compile_keeps_small_ai_toolkit_models_unquantized_by_default(self) -> None:
-        run = self._run()
-        run["model"] = {"base": "stabilityai/stable-diffusion-xl-base-1.0"}
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "ai-toolkit"
-            compile_ai_toolkit(run, destination)
-            config = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))
-        process = config["config"]["process"][0]
         self.assertFalse(process["train"]["gradient_checkpointing"])
         self.assertFalse(process["model"]["quantize"])
         self.assertFalse(process["model"]["quantize_te"])
         self.assertFalse(process["model"]["low_vram"])
+        self.assertEqual(command, {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "/workspace/runs/ai-toolkit-example/resolved/ai-toolkit.yaml"], "env": {}})
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
         run = self._run()

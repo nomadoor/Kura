@@ -117,11 +117,13 @@ normal consumer-GPU settings, with low-vram available when needed:
 Saving the final LoRA as bf16 is fine. That is separate from how aggressively
 Kura should optimize model loading and training memory.
 
-The audit outcome is to enable gradient checkpointing, model quantization, and
-text encoder quantization by default for known-heavy AI-Toolkit model families
-such as Flux/Kontext/Qwen-class runs, while leaving SD1.5/SDXL-style smaller
-models unquantized by default. `low_vram` remains opt-in until the profile ADR
-can distinguish acceptable speed trade-offs.
+The owner decision supersedes automatic default changes: code must provide facts
+and guard irreversible accidents, while the agent/skill decides trade-offs.
+AI-Toolkit therefore keeps gradient checkpointing, model quantization, text
+encoder quantization, and `low_vram` opt-in through explicit backend overrides.
+The audit conclusion is not "turn these on in code"; it is "surface enough facts
+in `kura run plan` for the skill to propose them when the user's hardware and
+run intent justify the trade-off."
 
 ### Run plan visibility
 
@@ -192,43 +194,41 @@ The following items block the current release:
 
 4. AI-Toolkit defaults need an audit.
 
-   Kura should not override upstream consumer-GPU practice with heavier defaults.
-   At minimum, quantization and gradient checkpointing should be considered for
-   large image/video models. Because this can change the meaning of recompiling
-   an existing run, any default change needs explicit documentation and release
-   notes.
+   Kura should not override upstream consumer-GPU practice with heavier defaults,
+   but code must not bake in model-family trade-off decisions either. The audit
+   result is to keep defaults stable and opt-in while making plan facts complete
+   enough for the skill to propose quantization, checkpointing, or low-vram
+   settings with the required user approval.
 
 ## Important follow-up, but not an emergency blocker
 
 Kura needs a resource/artifact profile, not just scattered flags.
 
-This schema should not be a single enum such as `local-12gb`, `local-24gb`, or
-`remote-large`. That mixes location and VRAM class into one name and creates
-combination pressure. The schema should use axes, for example:
+This follow-up belongs in the agent skill, not in an in-code automatic resolver.
+Code must expose the facts and freeze explicit user/agent decisions; it must not
+silently choose quality, precision, batch, rank, or resolution trade-offs. If a
+future schema is needed for recording accepted decisions, it should not be a
+single enum such as `local-12gb`, `local-24gb`, or `remote-large`. That mixes
+location and VRAM class into one name and creates combination pressure. The
+recorded axes may include:
 
 - `vram_class` or `auto`
 - `artifact_precision`
 - `speed_tolerance`
 - explicit override fields for model roles when needed
 
-`auto` must resolve at compile time and freeze concrete decisions into
-`resolved/manifest.lock.yaml` and backend lock files. This follows Kura's
-file-first rule: the same locked run must not change meaning just because it is
-replayed on another machine.
+Any accepted `auto`-like decision must resolve before compile and freeze concrete
+values into `resolved/manifest.lock.yaml` and backend lock files. This follows
+Kura's file-first rule: the same locked run must not change meaning just because
+it is replayed on another machine.
 
-The resolver should implement the existing safety principle: choose the least
-meaning-changing adjustment that fits the available hardware. Gradient
-checkpointing and fp8 text encoders may be normal default adjustments for large
-models; block swap or CPU offload may deserve approval when the speed hit is
-large. Small models such as SD1.5, and many SDXL cases, should not be slowed down
-by unnecessary low-VRAM settings when they already fit comfortably.
-
-The follow-up ADR should also make the artifact policy explicit: full-precision
-artifacts must not be the silent default for large models. If fp8/int8 artifacts
-are normal and quality-acceptable for training, Kura should prefer them when the
-model and hardware class justify it. If a low-vram setting has a serious speed
-or quality trade-off, Kura should surface that trade-off and require approval
-before applying it.
+The skill should implement the existing safety principle as a decision ladder:
+first propose adjustments that do not change meaning; then propose speed-only
+trade-offs and report them clearly; finally, require explicit user approval for
+quality-affecting changes such as resolution, batch size, rank, or precision.
+Block swap, CPU offload, gradient checkpointing, quantization, and low-vram
+settings are recommendations the skill can make from plan facts, not defaults
+the backend should silently apply.
 
 ## Design direction
 
