@@ -1356,7 +1356,7 @@ def _runpod_host_metrics(workspace: Path, summary: RunSummary) -> HostMetrics:
     """
 
     try:
-        from kura.cli import _runpod_ssh_details, _ssh_base
+        from kura.run_commands import _runpod_ssh_details, _ssh_base
 
         details = _runpod_ssh_details(workspace / "runs" / summary.id, timeout_sec=3, interval_sec=1)
         script = r"""

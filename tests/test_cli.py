@@ -1157,7 +1157,7 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch_render", return_value=0) as launch, patch("kura.run_commands._notify") as notify:
+                with patch("kura.run_commands.launch.launch_render", return_value=0) as launch, patch("kura.run_commands.launch._notify") as notify:
                     code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="local", dry_run=False, notify="ntfy"))
             finally:
                 os.chdir(previous)
@@ -1176,7 +1176,7 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch_render", side_effect=ValueError("render broke")), patch("kura.run_commands._notify") as notify:
+                with patch("kura.run_commands.launch.launch_render", side_effect=ValueError("render broke")), patch("kura.run_commands.launch._notify") as notify:
                     code = launch_run("render-1", executor="docker", dry_run=True, notify_channels="ntfy")
             finally:
                 os.chdir(previous)
@@ -1215,7 +1215,7 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands._notify") as notify:
+                with patch("kura.run_commands.render_runpod._notify") as notify:
                     code = launch_run("render-1", executor="runpod", dry_run=True, notify_channels="ntfy")
             finally:
                 os.chdir(previous)
@@ -2807,7 +2807,7 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(60)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
                     _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
                 payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
@@ -2831,9 +2831,9 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(60)),
-                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands._hf_file_size_bytes", return_value=20 * 1024**3),
+                patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)),
+                patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=20 * 1024**3),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 70 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
@@ -2852,8 +2852,8 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(100)),
-                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 110 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
@@ -2880,9 +2880,9 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(100)),
-                patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands._hf_file_size_bytes", return_value=40 * 1024**3),
+                patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=40 * 1024**3),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
@@ -2895,14 +2895,14 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(140)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(140)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
                     _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
 
     def test_local_launch_disk_preflight_rejects_unknown_wsl_backing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(900, confidence="unknown", backing_kind="wsl2_vhdx")), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(900, confidence="unknown", backing_kind="wsl2_vhdx")), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "unknown physical backing free space"):
                     _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
                 payload = _local_launch_disk_preflight(root, {"safety": {"allow_storage_risk": True}}, {}, [])
@@ -2916,7 +2916,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
-            with patch("kura.run_commands.shutil.disk_usage", return_value=Usage()):
+            with patch("kura.run_commands.plan.shutil.disk_usage", return_value=Usage()):
                 with self.assertRaisesRegex(ValueError, "needs about 10 GiB free"):
                     _ensure_free_bytes(target, 10 * 1024**3, context="test download")
 
@@ -3013,7 +3013,7 @@ class DockerLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch("kura.run_commands.launch_docker", side_effect=fake_launch), patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
+                with patch("kura.run_commands.launch.launch_docker", side_effect=fake_launch), patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0B\n", "")), patch("kura.run_commands.launch.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "0\n", "")) as wait, patch("kura.run_commands.launch.reconcile_docker", return_value={"state": "completed", "exit_code": 0}) as reconcile, patch("sys.stdout", new_callable=__import__("io").StringIO):
                     self.assertEqual(launch_run("example", executor="docker", dry_run=False, wait=True), 0)
             finally:
                 os.chdir(previous)
@@ -3046,7 +3046,7 @@ class DockerLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch("kura.run_commands.launch_docker") as launch, patch("kura.run_commands.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")):
+                with patch("kura.run_commands.launch.launch_docker") as launch, patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")):
                     self.assertEqual(launch_run("example", executor="docker", dry_run=False, image="override-image:dev"), 0)
             finally:
                 os.chdir(previous)
@@ -3459,7 +3459,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(root)
-                with patch("kura.run_commands.launch_runpod") as launch:
+                with patch("kura.run_commands.launch.launch_runpod") as launch:
                     self.assertEqual(cmd_run_launch(argparse.Namespace(run_id="example", executor="runpod", dry_run=False, image=None)), 0)
             finally:
                 os.chdir(previous)
@@ -3540,7 +3540,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args[0], 0, "", "")
 
             with patch.dict(os.environ, {"HF_TOKEN": "hf-secret"}, clear=False):
-                with patch("kura.run_commands._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                     with patch("kura.cli.subprocess.run", side_effect=fake_run):
                         self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1), 0)
 
@@ -3575,7 +3575,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     return subprocess.CompletedProcess(args[0], 0, b"\n__KURA_LOG_SIZE__:0\n", b"")
                 return subprocess.CompletedProcess(args[0], 0, "", "")
 
-            with patch("kura.run_commands._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                 with patch("kura.cli.subprocess.run", side_effect=fake_run):
                     self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=0), 0)
 
@@ -3584,7 +3584,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
     def test_runpod_render_session_starts_lease_guard_over_ssh(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
-        with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+        with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
             _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
         command = run.call_args.args[0]
         command_text = "\n".join(map(str, command))
@@ -3596,13 +3596,13 @@ class RunPodLifecycleTests(unittest.TestCase):
 
     def test_runpod_render_session_lease_guard_timeout_surfaces_as_value_error(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
-        with patch("kura.run_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(["ssh"], 60)):
+        with patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=subprocess.TimeoutExpired(["ssh"], 60)):
             with self.assertRaisesRegex(ValueError, "remote lease guard setup timed out"):
                 _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
 
     def test_runpod_comfyui_lease_guard_starts_before_model_prepare(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
-        with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+        with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
             _start_runpod_comfyui(
                 details,
                 workspace="/workspace",
@@ -3624,7 +3624,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "workflow.json"
             source.write_text("{}", encoding="utf-8")
-            with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["scp"], 0, "", "")) as run:
+            with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["scp"], 0, "", "")) as run:
                 _scp_to_runpod(details, source, "/workspace/workflow.json")
         command = run.call_args.args[0]
         self.assertIn("BatchMode=yes", command)
@@ -3636,7 +3636,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "workflow.json"
             source.write_text("{}", encoding="utf-8")
-            with patch("kura.run_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(["scp"], 600)):
+            with patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=subprocess.TimeoutExpired(["scp"], 600)):
                 with self.assertRaisesRegex(ValueError, "scp upload timed out"):
                     _scp_to_runpod(details, source, "/workspace/workflow.json")
 
@@ -3673,7 +3673,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch.dict(os.environ, {"RUNPOD_API_KEY": ""}, clear=False):
-                    with patch("kura.run_commands._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                    with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                         with patch("kura.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0, remote_stdout, b"")):
                             self.assertEqual(cmd_run_reconcile(argparse.Namespace(run_id="example")), 0)
             finally:
@@ -3690,11 +3690,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch_run", return_value=0), \
-                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.run_commands.download_with_retries", return_value=1), \
-                     patch("kura.run_commands.stop_run") as stop:
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.launch.download_with_retries", return_value=1), \
+                     patch("kura.run_commands.launch.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
             finally:
                 os.chdir(previous)
@@ -3709,11 +3709,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch_run", return_value=0), \
-                     patch("kura.run_commands._runpod_run_over_ssh", side_effect=subprocess.TimeoutExpired(["runpod-remote-job", "example"], 1)), \
-                     patch("kura.run_commands._notify") as notify, \
-                     patch("kura.run_commands.stop_run") as stop:
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", side_effect=subprocess.TimeoutExpired(["runpod-remote-job", "example"], 1)), \
+                     patch("kura.run_commands.launch._notify") as notify, \
+                     patch("kura.run_commands.launch.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, notify="ntfy", hold_for="30m", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)
@@ -3732,11 +3732,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch_run", return_value=0), \
-                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.run_commands.download_with_retries", return_value=0), \
-                     patch("kura.run_commands.stop_run") as stop:
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
+                     patch("kura.run_commands.launch.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="0"))
             finally:
                 os.chdir(previous)
@@ -3751,12 +3751,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch_run", return_value=0), \
-                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0) as remote_run, \
-                     patch("kura.run_commands.download_with_retries", return_value=0), \
-                     patch("kura.run_commands._sleep_with_completion_reminders") as hold, \
-                     patch("kura.run_commands.stop_run") as stop:
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0) as remote_run, \
+                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
+                     patch("kura.run_commands.launch._sleep_with_completion_reminders") as hold, \
+                     patch("kura.run_commands.launch.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
             finally:
                 os.chdir(previous)
@@ -3774,14 +3774,14 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch_run", return_value=0), \
-                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.run_commands.download_with_retries", return_value=0), \
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
                      patch("kura.notifications.time.sleep") as sleep, \
-                     patch("kura.run_commands._notify") as initial_notify, \
+                     patch("kura.run_commands.launch._notify") as initial_notify, \
                      patch("kura.notifications.notify") as reminder_notify, \
-                     patch("kura.run_commands.stop_run") as stop:
+                     patch("kura.run_commands.launch.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)
@@ -3801,12 +3801,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch_run", return_value=0), \
-                     patch("kura.run_commands._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.run_commands.download_with_retries", return_value=0), \
-                     patch("kura.run_commands._sleep_with_completion_reminders", side_effect=KeyboardInterrupt), \
-                     patch("kura.run_commands.stop_run") as stop:
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
+                     patch("kura.run_commands.launch._sleep_with_completion_reminders", side_effect=KeyboardInterrupt), \
+                     patch("kura.run_commands.launch.stop_run") as stop:
                     code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
             finally:
                 os.chdir(previous)
