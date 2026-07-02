@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from kura.container_scripts import script_source
+
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
     "flux2": (
@@ -543,149 +545,7 @@ def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] 
     download_specs, paths = musubi_model_download_specs(run, existing_paths=existing_paths)
     if not download_specs:
         return [], {}
-    code = r'''
-import json
-import os
-import subprocess
-import sys
-import time
-
-
-def env_int(name, default):
-    try:
-        return max(1, int(os.environ.get(name, str(default))))
-    except ValueError:
-        return default
-
-
-ATTEMPTS = env_int("KURA_HF_DOWNLOAD_ATTEMPTS", 4)
-POLL_SEC = env_int("KURA_HF_DOWNLOAD_POLL_SEC", 15)
-NO_PROGRESS_SEC = env_int("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", 180)
-
-
-CHILD = r"""
-import json
-import os
-import sys
-
-os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-
-from huggingface_hub import hf_hub_download
-
-item = json.loads(sys.argv[1])
-cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"
-kwargs = dict(repo_id=item["repo_id"], filename=item["filename"], cache_dir=cache_dir)
-if item.get("revision"):
-    kwargs["revision"] = item["revision"]
-if item.get("repo_type"):
-    kwargs["repo_type"] = item["repo_type"]
-path = hf_hub_download(**kwargs)
-print(path, flush=True)
-"""
-
-
-def tree_snapshot(directory):
-    total = 0
-    newest = 0.0
-    count = 0
-    for root, _, files in os.walk(directory):
-        for name in files:
-            path = os.path.join(root, name)
-            try:
-                stat = os.stat(path)
-            except OSError:
-                continue
-            total += stat.st_size
-            newest = max(newest, stat.st_mtime)
-            count += 1
-    return total, newest, count
-
-
-def repo_cache_dirs(cache_dir, item):
-    repo_type = item.get("repo_type") or "model"
-    prefix = {"model": "models", "dataset": "datasets", "space": "spaces"}.get(repo_type, f"{repo_type}s")
-    repo_dir = f"{prefix}--{item['repo_id'].replace('/', '--')}"
-    hub_dir = os.path.join(cache_dir, "hub")
-    return [
-        os.path.join(hub_dir, repo_dir),
-        os.path.join(hub_dir, ".locks", repo_dir),
-    ]
-
-
-def remove_incomplete_files(directories):
-    removed = 0
-    for directory in directories:
-        if not os.path.isdir(directory):
-            continue
-        for root, _, files in os.walk(directory):
-            for name in files:
-                if ".incomplete" not in name:
-                    continue
-                path = os.path.join(root, name)
-                try:
-                    os.remove(path)
-                except OSError:
-                    continue
-                removed += 1
-    return removed
-
-
-def run_one(item):
-    link_path = item["link_path"]
-    link_dir = os.path.dirname(link_path)
-    os.makedirs(link_dir, exist_ok=True)
-    cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"
-    os.makedirs(cache_dir, exist_ok=True)
-    label = f"{item['key']}:{item['filename']}"
-    last_total, last_mtime, _ = tree_snapshot(cache_dir)
-    for attempt in range(1, ATTEMPTS + 1):
-        print(f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}", flush=True)
-        process = subprocess.Popen([sys.executable, "-c", CHILD, json.dumps(item, ensure_ascii=False)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        last_progress = time.monotonic()
-        while process.poll() is None:
-            time.sleep(POLL_SEC)
-            total, newest, count = tree_snapshot(cache_dir)
-            if total != last_total or newest != last_mtime:
-                last_total, last_mtime = total, newest
-                last_progress = time.monotonic()
-                print(f"[kura] hf download progress {label} files={count} bytes={total}", flush=True)
-                continue
-            idle = int(time.monotonic() - last_progress)
-            print(f"[kura] hf download idle {label} idle={idle}s bytes={total}", flush=True)
-            if idle >= NO_PROGRESS_SEC:
-                process.kill()
-                process.wait(timeout=30)
-                removed = remove_incomplete_files(repo_cache_dirs(cache_dir, item))
-                print(f"[kura] hf download stalled {label}; removed {removed} incomplete file(s); retrying", flush=True)
-                last_total, last_mtime, _ = tree_snapshot(cache_dir)
-                break
-        output = ""
-        if process.stdout is not None:
-            output = process.stdout.read() or ""
-        if process.returncode == 0:
-            path = output.strip().splitlines()[-1] if output.strip() else ""
-            if not path:
-                raise SystemExit(f"[kura] hf download did not return a cache path: {label}")
-            if os.path.lexists(link_path):
-                if os.path.islink(link_path):
-                    os.unlink(link_path)
-                elif os.path.realpath(link_path) != os.path.realpath(path):
-                    raise SystemExit(f"[kura] cannot replace non-symlink model cache path: {link_path}")
-            if not os.path.lexists(link_path):
-                os.symlink(path, link_path)
-            print(f"[kura] downloaded {item['key']} -> {path}", flush=True)
-            print(f"[kura] linked {item['key']} -> {link_path}", flush=True)
-            return
-        if output.strip():
-            print(output.strip(), flush=True)
-        if attempt < ATTEMPTS:
-            time.sleep(min(30, POLL_SEC))
-    raise SystemExit(f"[kura] hf download failed after {ATTEMPTS} attempts: {label}")
-
-
-for item in json.loads(sys.argv[1]):
-    run_one(item)
-'''.strip()
+    code = script_source("hf_download.py")
     return [["python", "-c", code, json.dumps(download_specs, ensure_ascii=False)]], paths
 
 
@@ -920,132 +780,7 @@ def _musubi_output_compatibility(run: dict[str, Any]) -> dict[str, str]:
 
 
 def _safetensors_validator_code() -> str:
-    return r'''
-import glob
-import json
-import os
-import struct
-import sys
-
-
-def die(message):
-    raise SystemExit("[kura] validation failed: " + message)
-
-
-def read_header(path):
-    if not os.path.isfile(path):
-        die(f"missing safetensors file: {path}")
-    with open(path, "rb") as handle:
-        size_raw = handle.read(8)
-        if len(size_raw) != 8:
-            die(f"not a safetensors file: {path}")
-        size = struct.unpack("<Q", size_raw)[0]
-        if size <= 0 or size > 100 * 1024 * 1024:
-            die(f"invalid safetensors header size in {path}: {size}")
-        try:
-            header = json.loads(handle.read(size))
-        except Exception as exc:
-            die(f"invalid safetensors header JSON in {path}: {exc}")
-    keys = [key for key in header if key != "__metadata__"]
-    metadata = header.get("__metadata__") or {}
-    if not keys:
-        die(f"safetensors file has no tensors: {path}")
-    return keys, metadata
-
-
-def has_key(keys, name):
-    return name in keys
-
-
-def has_prefix(keys, prefix):
-    return any(key.startswith(prefix) for key in keys)
-
-
-def has_fragment(keys, fragment):
-    return any(fragment in key for key in keys)
-
-
-def validate_model(role, path, expected):
-    if expected == "hf_model_id_or_path":
-        if os.path.exists(path):
-            return
-        first_part = path.split("/", 1)[0]
-        if (
-            os.path.isabs(path)
-            or path.startswith("./")
-            or path.startswith("../")
-            or path.startswith("~")
-            or first_part in ("models", "weights", "checkpoints", "cache", "runs", "datasets", "data")
-            or path.endswith((".safetensors", ".pt", ".pth", ".bin"))
-        ):
-            die(f"{role} path does not exist: {path}")
-        if "/" in path:
-            return
-        die(f"{role} is neither a local path nor a Hugging Face model id: {path}")
-    if expected == "file":
-        if os.path.isfile(path):
-            return
-        die(f"{role} is not a readable model file: {path}")
-    keys, metadata = read_header(path)
-    base = os.path.basename(path).lower()
-    if expected == "safetensors":
-        return
-    if expected in ("flux2_vae", "flux2_ae"):
-        if base == "ae.safetensors":
-            if expected != "flux2_ae":
-                die(f"{role} uses ae.safetensors; this filename is only accepted for explicit FLUX.2 AE bundles")
-        diffusers = has_prefix(keys, "encoder.down_blocks.") and has_prefix(keys, "decoder.up_blocks.") and has_prefix(keys, "quant_conv.")
-        native = (
-            has_prefix(keys, "encoder.down.")
-            and has_prefix(keys, "decoder.up.")
-            and (has_prefix(keys, "quant_conv.") or has_prefix(keys, "post_quant_conv.") or has_prefix(keys, "decoder.post_quant_conv."))
-        )
-        if not (diffusers or native):
-            die(f"{role} is not recognized as a FLUX.2 VAE/AE: {path}")
-        return
-    if expected in ("qwen3_4b_text_encoder", "qwen3_8b_text_encoder"):
-        if has_prefix(keys, "model.language_model."):
-            die(f"{role} looks like a Qwen/VL wrapper checkpoint, not the Qwen3 4B text encoder Musubi expects: {path}")
-        if not has_key(keys, "model.embed_tokens.weight"):
-            die(f"{role} is missing model.embed_tokens.weight; expected Qwen3 text encoder layout: {path}")
-        return
-    if expected == "flux2_dit":
-        if not (has_prefix(keys, "double_blocks.") or has_prefix(keys, "single_blocks.") or has_prefix(keys, "transformer_blocks.")):
-            die(f"{role} is not recognized as a FLUX.2 diffusion transformer: {path}")
-        return
-    die(f"unknown model expected_format {expected!r} for {role}")
-
-
-def validate_lora(pattern, architecture, compatibility):
-    paths = sorted(glob.glob(pattern))
-    if not paths:
-        die(f"no LoRA safetensors matched {pattern}")
-    for path in paths:
-        keys, metadata = read_header(path)
-        has_down = any(key.endswith(".lora_down.weight") for key in keys)
-        has_up = any(key.endswith(".lora_up.weight") for key in keys)
-        has_lora = any(key.startswith("lora_") for key in keys)
-        if not (has_lora and has_down and has_up):
-            die(f"output is not a recognized LoRA safetensors file: {path}")
-        if architecture in ("flux2", "flux_2"):
-            module = str(metadata.get("ss_network_module") or "")
-            model_spec = str(metadata.get("modelspec.architecture") or "")
-            if module and module != "networks.lora_flux_2":
-                die(f"FLUX.2 LoRA has unexpected ss_network_module={module!r}: {path}")
-            if not any(key.startswith("lora_unet_") for key in keys):
-                die(f"FLUX.2 LoRA is missing lora_unet_* keys expected by Musubi/Kohya-style loaders: {path}")
-            if compatibility == "comfyui" and model_spec and "Flux.2" not in model_spec and "flux" not in model_spec.lower():
-                die(f"LoRA metadata does not identify a FLUX architecture for ComfyUI compatibility target: {path}")
-
-
-spec = json.loads(sys.argv[1])
-for item in spec.get("models", []):
-    validate_model(item["role"], item["path"], item.get("expected_format") or "safetensors")
-if spec.get("lora"):
-    lora = spec["lora"]
-    validate_lora(lora["pattern"], spec.get("architecture", ""), lora.get("compatibility", "comfyui"))
-print("[kura] validation ok", flush=True)
-'''
+    return script_source("safetensors_validator.py")
 
 
 def _musubi_model_validation_command(run: dict[str, Any], paths: dict[str, str]) -> list[str]:
@@ -1082,27 +817,7 @@ def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_
         raise ValueError("Musubi Tuner prune_checkpoints_before_step must be an integer") from exc
     if threshold <= 0:
         return None
-    code = r'''
-import glob
-import os
-import re
-import sys
-
-output_dir, output_name, threshold_raw = sys.argv[1], sys.argv[2], sys.argv[3]
-threshold = int(threshold_raw)
-pattern = os.path.join(output_dir.rstrip("/"), output_name + "-step*.safetensors")
-removed = []
-for path in sorted(glob.glob(pattern)):
-    match = re.search(r"-step(\d+)\.safetensors$", os.path.basename(path))
-    if not match:
-        continue
-    step = int(match.group(1))
-    if step < threshold:
-        os.remove(path)
-        removed.append(os.path.basename(path))
-print(f"[kura] pruned {len(removed)} checkpoints before step {threshold}", flush=True)
-'''
-    return ["python", "-c", code, output_dir, output_name, str(threshold)]
+    return ["python", "-c", script_source("prune_checkpoints.py"), output_dir, output_name, str(threshold)]
 
 
 def _require_paths(paths: dict[str, str], names: tuple[str, ...]) -> list[str]:
