@@ -169,7 +169,10 @@ The following items block the current release:
 
    A model download above a configured threshold should require explicit
    approval, not just a generic disk preflight warning. Unknown-size files must
-   be shown honestly as unknown rather than omitted.
+   be shown honestly as unknown rather than omitted. Disk fit is not enough:
+   the gate should also cover known-heavy configurations that lack expected
+   low-memory settings, or selected model artifacts that are unlikely to fit the
+   configured/local GPU class.
 
 3. Musubi real smoke must separate adapter proof from user-practical proof.
 
@@ -177,6 +180,9 @@ The following items block the current release:
    recipes should use the smallest practical artifact profile and the same
    memory-saving path Kura would recommend to a user. At minimum, FLUX.1 Kontext
    smoke must stop presenting FP16 T5 without `fp8_t5` as the normal local path.
+   The Musubi smoke docs should record artifact profile, expected VRAM class,
+   download size, and whether each result represents a practical local default
+   or a heavy developer acceptance test.
 
 4. AI-Toolkit defaults need an audit.
 
@@ -211,26 +217,12 @@ models; block swap or CPU offload may deserve approval when the speed hit is
 large. Small models such as SD1.5, and many SDXL cases, should not be slowed down
 by unnecessary low-VRAM settings when they already fit comfortably.
 
-## Additional required fixes
-
-1. Plan output needs VRAM-risk warnings.
-
-   Disk fit is not enough. The plan should warn when a known-heavy architecture
-   lacks expected memory-saving settings, or when selected model artifacts are
-   unlikely to fit the configured/local GPU class.
-
-2. Documentation must stop presenting "passed smoke" as enough capacity proof.
-
-   The Musubi smoke docs should record artifact profile, expected VRAM class,
-   download size, and whether the result represents a practical local default or
-   a heavy developer acceptance test.
-
-3. Full-precision artifacts must not be the silent default for large models.
-
-   If fp8/int8 artifacts are normal and quality-acceptable for training, Kura
-   should prefer them when the model and hardware class justify it. If a
-   low-vram setting has a serious speed or quality trade-off, Kura should surface
-   that trade-off and require approval before applying it.
+The follow-up ADR should also make the artifact policy explicit: full-precision
+artifacts must not be the silent default for large models. If fp8/int8 artifacts
+are normal and quality-acceptable for training, Kura should prefer them when the
+model and hardware class justify it. If a low-vram setting has a serious speed
+or quality trade-off, Kura should surface that trade-off and require approval
+before applying it.
 
 ## Design direction
 
