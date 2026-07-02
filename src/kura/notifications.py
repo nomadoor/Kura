@@ -55,7 +55,7 @@ def notification_channels(raw: Any) -> list[str]:
     return channels
 
 
-def notify(channels: Any, *, subject: str, body: str) -> None:
+def notify(channels: Any, *, subject: str, body: str, priority: str | None = None) -> None:
     selected = notification_channels(channels)
     if not selected:
         return
@@ -66,14 +66,14 @@ def notify(channels: Any, *, subject: str, body: str) -> None:
                     subprocess.run(["notify-send", subject, body], check=False)
                 continue
             if channel == "ntfy":
-                send_ntfy_notification(subject, body)
+                send_ntfy_notification(subject, body, priority=priority)
                 continue
             print(f"warning: unknown notification channel: {channel}", file=sys.stderr)
         except Exception as exc:  # notification must never break run lifecycle
             print(f"warning: notification failed ({channel}): {safe_error(exc)}", file=sys.stderr)
 
 
-def send_ntfy_notification(subject: str, body: str) -> None:
+def send_ntfy_notification(subject: str, body: str, priority: str | None = None) -> None:
     topic = os.environ.get("KURA_NTFY_TOPIC")
     if not topic:
         raise ValueError("ntfy notification requires KURA_NTFY_TOPIC")
@@ -82,7 +82,7 @@ def send_ntfy_notification(subject: str, body: str) -> None:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("KURA_NTFY_SERVER must be an absolute http:// or https:// URL")
     token = os.environ.get("KURA_NTFY_TOKEN")
-    priority = os.environ.get("KURA_NTFY_PRIORITY", "4")
+    priority = priority or os.environ.get("KURA_NTFY_PRIORITY", "4")
     url = f"{server}/{topic.lstrip('/')}"
     headers = {"Title": subject, "Tags": "rocket", "Priority": priority}
     if token:

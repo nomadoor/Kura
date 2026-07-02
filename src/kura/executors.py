@@ -35,6 +35,7 @@ def _realization_id() -> str:
 
 
 def _event(path: Path, event: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
 
@@ -738,6 +739,125 @@ sleep infinity
     status.pop("last_observation", None)
     _write_status(run_dir, status)
     _event(run_dir / "logs" / "events.jsonl", {"event": "run_started", "timestamp": _now(), "executor": "runpod", "realization_id": realization_id, "pod_id": pod_id})
+    return realization_id
+
+
+def launch_runpod_session(*, run_dir: Path, image: str, config: dict[str, Any], purpose: str, dry_run: bool = False) -> str | None:
+    """Create a thin disposable RunPod session without Kura training staging."""
+    settings = _runpod_settings(config)
+    realization_id = _realization_id()
+    workspace_path = settings["workspace_path"]
+    log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
+    runtime_env = {"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/.cache/huggingface", "KURA_WORKSPACE": workspace_path, "KURA_RUN_ID": run_dir.name, "KURA_MAX_LEASE_SEC": str(12 * 3600)}
+    ssh_script = r'''
+set -u
+mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
+touch "$KURA_LOG_PATH"
+if ! command -v sshd >/dev/null 2>&1; then
+  apt-get update >> "$KURA_LOG_PATH" 2>&1
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
+fi
+mkdir -p /run/sshd /root/.ssh
+chmod 700 /root/.ssh
+if [ -n "${PUBLIC_KEY:-}" ]; then
+  printf '%s\n' "$PUBLIC_KEY" | grep '^ssh-' > /root/.ssh/authorized_keys || true
+  chmod 600 /root/.ssh/authorized_keys
+fi
+/usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
+if [ "${KURA_MAX_LEASE_SEC:-0}" -gt 0 ] 2>/dev/null; then
+  (
+    sleep "$KURA_MAX_LEASE_SEC"
+    echo "Kura session max lease expired after ${KURA_MAX_LEASE_SEC} seconds; attempting to delete RunPod pod" >> "$KURA_LOG_PATH" 2>&1 || true
+    if command -v runpodctl >/dev/null 2>&1 && [ -n "${RUNPOD_POD_ID:-}" ]; then
+      runpodctl pod delete "$RUNPOD_POD_ID" >> "$KURA_LOG_PATH" 2>&1 || true
+    else
+      echo "Kura session max lease could not delete pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LOG_PATH" 2>&1 || true
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+fi
+echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
+sleep infinity
+'''.strip()
+    request_body = {
+        "name": f"kura-{run_dir.name}-{realization_id}",
+        "gpuCount": settings["gpu_count"],
+        "containerDiskInGb": settings["container_disk_gb"],
+        "volumeInGb": settings["volume_in_gb"],
+        "interruptible": settings["interruptible"],
+        "env": runtime_env,
+        "dockerStartCmd": ["sh", "-lc", ssh_script],
+        "imageName": image,
+    }
+    if settings.get("support_public_ip") is not None:
+        request_body["supportPublicIp"] = bool(settings["support_public_ip"])
+    if settings.get("data_center_ids") is not None:
+        request_body["dataCenterIds"] = settings["data_center_ids"]
+    if settings.get("data_center_priority") is not None:
+        request_body["dataCenterPriority"] = settings["data_center_priority"]
+    if settings.get("gpu_type_priority") is not None:
+        request_body["gpuTypePriority"] = settings["gpu_type_priority"]
+    if settings.get("country_codes") is not None:
+        request_body["countryCodes"] = settings["country_codes"]
+    if isinstance(settings.get("ports"), list) and all(isinstance(port, str) for port in settings["ports"]):
+        request_body["ports"] = settings["ports"]
+    safe_request = dict(request_body)
+    safe_request["env"] = _safe_env(runtime_env)
+    safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
+    safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
+    safe_request["cloudTypeCandidates"] = settings["cloud_types"]
+    if dry_run:
+        print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
+        return None
+    api_key = os.environ.get(settings["api_key_env"])
+    if not api_key:
+        raise ValueError(f"{settings['api_key_env']} must be exported to launch a RunPod session")
+    pod: dict[str, Any] | None = None
+    used_request: dict[str, Any] | None = None
+    launch_errors: list[dict[str, str]] = []
+    for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]):
+        for cloud_type in settings["cloud_types"]:
+            attempt_request = dict(request_body)
+            attempt_request["gpuTypeIds"] = gpu_type_ids
+            attempt_request["cloudType"] = cloud_type
+            try:
+                pod = _runpod_request("POST", "/pods", api_key, attempt_request)
+                used_request = attempt_request
+                break
+            except ValueError as exc:
+                launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
+        if pod is not None:
+            break
+    if pod is None or used_request is None:
+        failed_at = _now()
+        realization_path = run_dir / "realizations" / f"{realization_id}.json"
+        realization_path.parent.mkdir(exist_ok=True)
+        failed_request = dict(safe_request)
+        failed_request["launch_attempts"] = launch_errors
+        realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), "kura_version": __version__}
+        _write_json(realization_path, realization)
+        status = _load_status(run_dir)
+        status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir))})
+        status.pop("pod_id", None)
+        status.pop("last_observation", None)
+        _write_status(run_dir, status)
+        _event(run_dir / "logs" / "events.jsonl", {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
+        raise ValueError("RunPod session launch failed for all configured cloud types: " + realization["error"])
+    pod_id = pod.get("id")
+    if not isinstance(pod_id, str) or not pod_id:
+        raise ValueError("RunPod create response did not include a pod ID")
+    safe_used_request = dict(used_request)
+    safe_used_request["env"] = _safe_env(runtime_env)
+    safe_used_request["cloudTypeCandidates"] = settings["cloud_types"]
+    state, _ = _runpod_state(pod)
+    realization_path = run_dir / "realizations" / f"{realization_id}.json"
+    realization_path.parent.mkdir(exist_ok=True)
+    realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "kura_version": __version__}
+    _write_json(realization_path, realization)
+    status = _load_status(run_dir)
+    status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
+    status.pop("last_observation", None)
+    _write_status(run_dir, status)
+    _event(run_dir / "logs" / "events.jsonl", {"event": "run_started", "timestamp": _now(), "executor": "runpod", "purpose": purpose, "realization_id": realization_id, "pod_id": pod_id})
     return realization_id
 
 

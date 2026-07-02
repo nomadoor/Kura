@@ -1,0 +1,21 @@
+models:
+  diffusion_models:
+    ideogram4_fp8_scaled.safetensors:
+      repo: Comfy-Org/Ideogram-4
+      filename: diffusion_models/ideogram4_fp8_scaled.safetensors
+    ideogram4_unconditional_nvfp4_mixed.safetensors:
+      repo: Comfy-Org/Ideogram-4
+      filename: diffusion_models/ideogram4_unconditional_nvfp4_mixed.safetensors
+  vae:
+    flux2-vae.safetensors:
+      repo: Comfy-Org/Ideogram-4
+      filename: vae/flux2-vae.safetensors
+  clip:
+    qwen3vl_8b_fp8_scaled.safetensors:
+      repo: Comfy-Org/Ideogram-4
+      filename: text_encoders/qwen3vl_8b_fp8_scaled.safetensors
+      target_dir: text_encoders
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

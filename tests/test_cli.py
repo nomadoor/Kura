@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import contextlib
 import io
+import importlib.util
 import os
 import struct
 import subprocess
@@ -22,11 +23,11 @@ import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.executors import docker_command, docker_preflight, launch_runpod, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
-from kura.render import _cleanup_lora_stage, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, launch_run
+from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -348,9 +349,48 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["workspace_root"], str(root))
             self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
+            self.assertEqual(payload["issues"][0]["severity"], "warning")
             self.assertIn("workspace filesystem has less than 100GiB free", payload["warnings"])
             self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
+
+    def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+            sizes = {
+                str(root / "cache"): 31 * 1024**3,
+                str(root / "runs"): 1 * 1024**3,
+            }
+
+            def fake_size(path: Path) -> int:
+                return sizes.get(str(path), 0)
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 500 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 400 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", side_effect=fake_size),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["warnings"], [])
+            self.assertIn("workspace cache+runs exceed 30GiB", payload["advisories"])
+            issue = next(item for item in payload["issues"] if item["code"] == "workspace_cache_runs_large")
+            self.assertEqual(issue["severity"], "advisory")
+            self.assertEqual(issue["size_bytes"], 32 * 1024**3)
 
     def test_doctor_disk_warns_about_wsl_ext4_virtual_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1126,6 +1166,62 @@ class RenderNotificationTests(unittest.TestCase):
             notify.assert_called_once()
             self.assertIn("completed", notify.call_args.kwargs["subject"])
 
+    def test_render_dry_run_failure_does_not_notify(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.launch_render", side_effect=ValueError("render broke")), patch("kura.run_commands._notify") as notify:
+                    code = launch_run("render-1", executor="docker", dry_run=True, notify_channels="ntfy")
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            notify.assert_not_called()
+
+    def test_runpod_render_dry_run_failure_does_not_notify(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                "docker:\n"
+                "  images:\n"
+                "    comfyui:\n"
+                "      local: local/comfy\n"
+                "      remote: remote/comfy\n"
+                "      dockerfile: docker/comfyui/Dockerfile\n"
+                "      context: .\n"
+                "runpod:\n"
+                "  storage_mode: upload\n",
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": 1},
+                }),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands._notify") as notify:
+                    code = launch_run("render-1", executor="runpod", dry_run=True, notify_channels="ntfy")
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            notify.assert_not_called()
+
     def test_render_stages_local_lora_for_comfyui_and_cleans_it_up(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1202,6 +1298,580 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertFalse(captured["staged_path"].exists())
             images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
             self.assertIn('"comfyui_lora_name":', images)
+
+    def test_render_inserts_sidecar_lora_loader_when_checkpoint_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "comfyui" / "models" / "loras"
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            output_run = root / "runs" / "train-1" / "outputs"
+            for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n", encoding="utf-8")
+            checkpoint = output_run / "example.safetensors"
+            checkpoint.write_bytes(b"fake-lora")
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"class_type": "KSampler", "inputs": {"seed": 0, "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0]}},
+                    "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+                    "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 1]}},
+                    "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 1]}},
+                }),
+                encoding="utf-8",
+            )
+            (workflow_dir / "wf.kura.yaml").write_text(
+                "lora_insert:\n"
+                "  kind: model_clip\n"
+                "  model_node: '4'\n"
+                "  clip_node: '4'\n",
+                encoding="utf-8",
+            )
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+            manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["lora_insert"]["class_type"], "LoraLoader")
+            captured: dict[str, Any] = {}
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    captured["workflow"] = workflow
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "image.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"png"
+
+            with patch("kura.render.ComfyUIClient", FakeClient):
+                self.assertEqual(launch_render(root, run_dir), 0)
+            queued = captured["workflow"]
+            lora_node = queued["8"]
+            self.assertEqual(lora_node["class_type"], "LoraLoader")
+            self.assertTrue(lora_node["inputs"]["lora_name"].startswith("Kura_tmp/render-1-example-"))
+            self.assertEqual(lora_node["inputs"]["model"], ["4", 0])
+            self.assertEqual(lora_node["inputs"]["clip"], ["4", 1])
+            self.assertEqual(queued["3"]["inputs"]["model"], ["8", 0])
+            self.assertEqual(queued["6"]["inputs"]["clip"], ["8", 1])
+            self.assertEqual(queued["7"]["inputs"]["clip"], ["8", 1])
+
+    def test_insert_lora_loader_skips_empty_lora_name(self) -> None:
+        workflow = {"1": {"inputs": {"model": ["2", 0]}}, "2": {"inputs": {}}}
+        self.assertEqual(insert_lora_loader(workflow, {"class_type": "LoraLoaderModelOnly", "model_node": "2", "model_output": 0}, ""), workflow)
+
+    def test_lora_insert_kind_error_lists_accepted_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            for path in (workflow_dir, promptset_dir, run_dir):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (workflow_dir / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}}}), encoding="utf-8")
+            (workflow_dir / "wf.kura.yaml").write_text("lora_insert:\n  kind: typo\n  model_node: '1'\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader"):
+                compile_render(root, run_dir)
+
+    def test_runpod_lora_upload_plan_uses_sidecar_insert(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            output_dir = root / "runs" / "train-1" / "outputs"
+            output_dir.mkdir(parents=True)
+            source = output_dir / "example.safetensors"
+            source.write_bytes(b"fake-lora")
+            lora_source, lora_name = _render_runpod_lora(
+                root,
+                run_dir,
+                {
+                    "inputs": {"checkpoint": {"path": "runs/train-1/outputs/example.safetensors"}},
+                    "workflow_patches": {},
+                    "lora_insert": {"class_type": "LoraLoader", "model_node": "4", "model_output": 0},
+                },
+            )
+            self.assertEqual(lora_source, source.resolve())
+            self.assertIsNotNone(lora_name)
+            self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
+
+    def test_comfyui_prepare_model_ready_logs_json_paths(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloaded = root / "cache" / "toy.safetensors"
+            downloaded.parent.mkdir()
+            downloaded.write_bytes(b"toy")
+            module._download_model = lambda spec, cache_dir: downloaded
+            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry=registry)
+            events = [json.loads(line) for line in buffer.getvalue().splitlines()]
+            self.assertEqual(events[0]["event"], "model_ready")
+            self.assertIsInstance(events[0]["source"], str)
+            self.assertTrue((root / "ComfyUI" / "models" / "checkpoints" / "toy.safetensors").is_symlink())
+
+    def test_comfyui_prepare_preserves_existing_real_model_file(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloaded = root / "cache" / "toy.safetensors"
+            downloaded.parent.mkdir()
+            downloaded.write_bytes(b"downloaded")
+            target = root / "ComfyUI" / "models" / "checkpoints" / "toy.safetensors"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"existing")
+            module._download_model = lambda spec, cache_dir: downloaded
+            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            with self.assertRaisesRegex(ValueError, "refusing to replace existing ComfyUI model target"):
+                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry=registry)
+            self.assertFalse(target.is_symlink())
+            self.assertEqual(target.read_bytes(), b"existing")
+
+    def test_comfyui_prepare_direct_download_rejects_unsafe_urls(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(module.urllib.request, "urlopen") as urlopen:
+                with self.assertRaisesRegex(ValueError, "https:// URL"):
+                    module._download_model({"url": "http://example.com/model.safetensors", "filename": "model.safetensors"}, root)
+                urlopen.assert_not_called()
+            with (
+                patch.object(module.socket, "getaddrinfo", return_value=[(module.socket.AF_INET, module.socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))]),
+                patch.object(module.urllib.request, "urlopen") as urlopen,
+            ):
+                with self.assertRaisesRegex(ValueError, "non-public address"):
+                    module._download_model({"url": "https://localhost/model.safetensors", "filename": "model.safetensors"}, root)
+                urlopen.assert_not_called()
+
+    def test_comfyui_prepare_direct_download_allows_public_https(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class Response(io.BytesIO):
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch.object(module.socket, "getaddrinfo", return_value=[(module.socket.AF_INET, module.socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]),
+                patch.object(module.urllib.request, "urlopen", return_value=Response(b"model-bytes")) as urlopen,
+            ):
+                target = module._download_model({"url": "https://example.com/model.safetensors", "filename": "model.safetensors"}, root)
+            self.assertEqual(target.read_bytes(), b"model-bytes")
+            urlopen.assert_called_once_with("https://example.com/model.safetensors", timeout=60)
+
+    def test_render_failure_appends_to_existing_stdout_log(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            output_run = root / "runs" / "train-1" / "outputs"
+            for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  lora_dir: ''\n", encoding="utf-8")
+            checkpoint = output_run / "example.safetensors"
+            checkpoint.write_bytes(b"fake-lora")
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"inputs": {"seed": 0}},
+                    "6": {"inputs": {"text": ""}},
+                    "7": {"inputs": {"text": ""}},
+                    "12": {"inputs": {"lora_name": "old.safetensors"}},
+                }),
+                encoding="utf-8",
+            )
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}, "lora": {"node": "12", "field": "inputs.lora_name"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            class FailingClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    raise RuntimeError("render broke")
+
+            with patch("kura.render.ComfyUIClient", FailingClient):
+                code = launch_render(root, run_dir)
+            self.assertEqual(code, 1)
+            stdout = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8")
+            self.assertIn("render endpoint: http://127.0.0.1:8188", stdout)
+            self.assertIn("queued p1 seed=123 prompt_id=prompt-1", stdout)
+            self.assertIn("RuntimeError: render broke", stdout)
+
+    def test_runpod_render_compile_requires_model_registry_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workflows").mkdir()
+            (root / "promptsets").mkdir()
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "missing.safetensors"}}}), encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown model loader"):
+                compile_render(root, run_dir)
+
+    def test_runpod_render_compile_freezes_workspace_registry_model_specs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workflows").mkdir()
+            (root / "promptsets").mkdir()
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                "comfyui:\n"
+                "  model_registry:\n"
+                "    checkpoints:\n"
+                "      toy.safetensors:\n"
+                "        repo: owner/toy\n"
+                "        filename: weights/toy.safetensors\n"
+                "        revision: abc123\n",
+                encoding="utf-8",
+            )
+            (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+            specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
+            registry = json.loads((run_dir / "resolved" / "comfyui_model_registry.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs[0]["repo"], "owner/toy")
+            self.assertEqual(specs[0]["filename"], "weights/toy.safetensors")
+            self.assertEqual(specs[0]["target_dir"], "checkpoints")
+            self.assertEqual(registry["checkpoints"]["toy.safetensors"]["revision"], "abc123")
+
+    def test_runpod_render_compile_merges_sample_sidecar_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_dir = root / "workflows" / "samples" / "toy"
+            (root / "promptsets").mkdir(parents=True)
+            sample_dir.mkdir(parents=True)
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (sample_dir / "toy-text2image-api.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
+            (sample_dir / "toy-text2image-api.kura.yaml").write_text(
+                "models:\n"
+                "  checkpoints:\n"
+                "    toy.safetensors:\n"
+                "      repo: curated/toy\n"
+                "      filename: curated/toy.safetensors\n",
+                encoding="utf-8",
+            )
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
+            registry = json.loads((run_dir / "resolved" / "comfyui_model_registry.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs[0]["repo"], "curated/toy")
+            self.assertEqual(specs[0]["filename"], "curated/toy.safetensors")
+            self.assertEqual(registry["checkpoints"]["toy.safetensors"]["repo"], "curated/toy")
+
+    def test_runpod_render_compile_accepts_sidecar_url_and_target_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_dir = root / "workflows" / "samples" / "toy"
+            (root / "promptsets").mkdir(parents=True)
+            sample_dir.mkdir(parents=True)
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (sample_dir / "toy_text2image_api.json").write_text(
+                json.dumps({
+                    "1": {"class_type": "CLIPLoader", "inputs": {"clip_name": "encoder.safetensors"}},
+                    "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "direct.safetensors"}},
+                }),
+                encoding="utf-8",
+            )
+            (sample_dir / "toy_text2image_api.kura.yaml").write_text(
+                "models:\n"
+                "  clip:\n"
+                "    encoder.safetensors:\n"
+                "      repo: owner/toy\n"
+                "      filename: text_encoders/encoder.safetensors\n"
+                "      target_dir: text_encoders\n"
+                "  checkpoints:\n"
+                "    direct.safetensors:\n"
+                "      url: https://civitai.example/api/download/models/1?fileId=2\n"
+                "      filename: direct.safetensors\n",
+                encoding="utf-8",
+            )
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy_text2image_api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
+            registry = json.loads((run_dir / "resolved" / "comfyui_model_registry.json").read_text(encoding="utf-8"))
+            specs_by_name = {item["name"]: item for item in specs}
+            self.assertEqual(specs_by_name["encoder.safetensors"]["repo"], "owner/toy")
+            self.assertEqual(specs_by_name["encoder.safetensors"]["filename"], "text_encoders/encoder.safetensors")
+            self.assertEqual(specs_by_name["encoder.safetensors"]["target_dir"], "text_encoders")
+            self.assertEqual(specs_by_name["direct.safetensors"]["url"], "https://civitai.example/api/download/models/1?fileId=2")
+            self.assertEqual(specs_by_name["direct.safetensors"]["target_dir"], "checkpoints")
+            self.assertEqual(registry["clip"]["encoder.safetensors"]["repo"], "owner/toy")
+            self.assertEqual(registry["checkpoints"]["direct.safetensors"]["url"], "https://civitai.example/api/download/models/1?fileId=2")
+
+    def test_workspace_registry_overrides_sample_sidecar_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_dir = root / "workflows" / "samples" / "toy"
+            (root / "promptsets").mkdir(parents=True)
+            sample_dir.mkdir(parents=True)
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                "comfyui:\n"
+                "  model_registry:\n"
+                "    checkpoints:\n"
+                "      toy.safetensors:\n"
+                "        repo: local/toy\n"
+                "        filename: local/toy.safetensors\n",
+                encoding="utf-8",
+            )
+            (sample_dir / "toy-text2image-api.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
+            (sample_dir / "toy-text2image-api.kura.yaml").write_text(
+                "models:\n"
+                "  checkpoints:\n"
+                "    toy.safetensors:\n"
+                "      repo: curated/toy\n"
+                "      filename: curated/toy.safetensors\n",
+                encoding="utf-8",
+            )
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/samples/toy/toy-text2image-api.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            specs = json.loads((run_dir / "resolved" / "comfyui_models.json").read_text(encoding="utf-8"))
+            self.assertEqual(specs[0]["repo"], "local/toy")
+            self.assertEqual(specs[0]["filename"], "local/toy.safetensors")
+
+    def test_runpod_render_launch_dry_run_prints_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                (root / "runs" / "render-1" / "resolved").mkdir(parents=True)
+                run_dir = root / "runs" / "render-1"
+                (root / "workspace.yaml").write_text(
+                    "docker:\n"
+                    "  images:\n"
+                    "    comfyui:\n"
+                    "      local: local/comfy\n"
+                    "      remote: remote/comfy\n"
+                    "      dockerfile: docker/comfyui/Dockerfile\n"
+                    "      context: .\n"
+                    "runpod:\n"
+                    "  storage_mode: upload\n"
+                    "  gpu_type_ids: [NVIDIA RTX A5000]\n"
+                    "  default_image:\n"
+                    "    comfyui: remote/default-comfy\n"
+                    "comfyui:\n"
+                    "  runpod:\n"
+                    "    ports: [22/tcp]\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                    yaml.safe_dump({
+                        "type": "render",
+                        "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                        "executor": {"name": "runpod"},
+                        "workflow_patches": {},
+                        "render": {"default_seed": 1},
+                        "comfyui_model_registry": {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}},
+                        "comfyui_models": [{"name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints"}],
+                    }),
+                    encoding="utf-8",
+                )
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    code = launch_run("render-1", executor="runpod", dry_run=True)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            plan = json.loads(buffer.getvalue())
+            self.assertEqual(plan["image"], "remote/default-comfy")
+            self.assertEqual(plan["executor"], "runpod")
+            self.assertEqual(plan["models"][0]["repo"], "owner/toy")
+
+    def test_runpod_render_launch_requires_runpod_compiled_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                (root / "runs" / "render-1" / "resolved").mkdir(parents=True)
+                run_dir = root / "runs" / "render-1"
+                (root / "workspace.yaml").write_text(
+                    "docker:\n"
+                    "  images:\n"
+                    "    comfyui:\n"
+                    "      local: local/comfy\n"
+                    "      remote: remote/comfy\n"
+                    "      dockerfile: docker/comfyui/Dockerfile\n"
+                    "      context: .\n"
+                    "runpod:\n"
+                    "  storage_mode: upload\n"
+                    "comfyui:\n"
+                    "  runpod:\n"
+                    "    ports: [22/tcp]\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                    yaml.safe_dump({
+                        "type": "render",
+                        "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                        "executor": {"name": "local"},
+                        "workflow_patches": {},
+                        "render": {"default_seed": 1},
+                    }),
+                    encoding="utf-8",
+                )
+                buffer = io.StringIO()
+                with contextlib.redirect_stderr(buffer):
+                    code = launch_run("render-1", executor="runpod", dry_run=False)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            self.assertIn("compiled for executor.name=runpod", buffer.getvalue())
 
     def test_render_cleanup_keeps_preexisting_stage_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2695,6 +3365,19 @@ class RunPodLifecycleTests(unittest.TestCase):
             record = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual(record["container_cwd"], "/app/ai-toolkit")
 
+    def test_launch_runpod_session_bootstrap_includes_max_lease_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                    realization_id = launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=self._config(), purpose="comfyui-render")
+            self.assertIsNotNone(realization_id)
+            payload = request.call_args.args[3]
+            self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
+            self.assertIn("runpodctl pod delete", payload["dockerStartCmd"][2])
+            self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
+
     def test_launch_runpod_can_pin_availability_filters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2866,7 +3549,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("sleep 43200", argv_text)
             self.assertIn("KURA_LEASE_LOG_PATH=/workspace/runs/example/logs/stdout.log", argv_text)
             self.assertIn("RUNPOD_POD_ID=pod-1", argv_text)
-            self.assertIn("runpodctl pod stop", argv_text)
+            self.assertIn("runpodctl pod delete", argv_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
 
     def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
@@ -2897,7 +3580,65 @@ class RunPodLifecycleTests(unittest.TestCase):
                     self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=0), 0)
 
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
-            self.assertNotIn("runpodctl pod stop", argv_text)
+            self.assertNotIn("runpodctl pod delete", argv_text)
+
+    def test_runpod_render_session_starts_lease_guard_over_ssh(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+            _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
+        command = run.call_args.args[0]
+        command_text = "\n".join(map(str, command))
+        self.assertIn("sleep 60", command_text)
+        self.assertIn("runpodctl pod delete", command_text)
+        self.assertIn("pod-1", command_text)
+        self.assertIn("/workspace/runs/render-1/logs/stdout.log", command_text)
+        self.assertEqual(run.call_args.kwargs["timeout"], 60)
+
+    def test_runpod_render_session_lease_guard_timeout_surfaces_as_value_error(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(["ssh"], 60)):
+            with self.assertRaisesRegex(ValueError, "remote lease guard setup timed out"):
+                _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
+
+    def test_runpod_comfyui_lease_guard_starts_before_model_prepare(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
+            _start_runpod_comfyui(
+                details,
+                workspace="/workspace",
+                run_id="render-1",
+                workflow_remote="/workspace/runs/render-1/resolved/workflow_used.json",
+                registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
+                lora_remote_name=None,
+                lora_remote_path=None,
+                max_lease_sec=60,
+            )
+        script = run.call_args.args[0][-1]
+        self.assertIn("trap cleanup EXIT", script)
+        self.assertIn('rm -f "$secret_file"', script)
+        self.assertLess(script.index("runpodctl pod delete"), script.index("kura_comfy_prepare.py"))
+        self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
+
+    def test_runpod_scp_is_non_interactive_and_bounded(self) -> None:
+        details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "workflow.json"
+            source.write_text("{}", encoding="utf-8")
+            with patch("kura.run_commands.subprocess.run", return_value=subprocess.CompletedProcess(["scp"], 0, "", "")) as run:
+                _scp_to_runpod(details, source, "/workspace/workflow.json")
+        command = run.call_args.args[0]
+        self.assertIn("BatchMode=yes", command)
+        self.assertIn("ConnectTimeout=20", command)
+        self.assertEqual(run.call_args.kwargs["timeout"], 600)
+
+    def test_runpod_scp_timeout_surfaces_as_value_error(self) -> None:
+        details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "workflow.json"
+            source.write_text("{}", encoding="utf-8")
+            with patch("kura.run_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(["scp"], 600)):
+                with self.assertRaisesRegex(ValueError, "scp upload timed out"):
+                    _scp_to_runpod(details, source, "/workspace/workflow.json")
 
     def test_reconcile_runpod_exited_is_unknown_without_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -2,6 +2,8 @@
 
 ## Start Here
 
+On every new session or crash/reconnect recovery, read `AGENT_STATE.md` first if it exists. This file is local working memory only; update it after meaningful work with the current goal, files changed, checks run, next action, and blockers. Do not commit `AGENT_STATE.md`, and do not rely on chat history as durable memory.
+
 Before changing code, inspect:
 
 ```sh
@@ -10,6 +12,8 @@ git log --oneline -5
 ```
 
 Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
+
+If `/ops` exists, treat it as the single source of truth for information architecture, writing rules, design tokens, and contribution rules. New owner decisions that change behavior, IA, naming, writing rules, or design rules must be reflected in `/ops` or an ADR before implementation.
 
 ## Core Model
 

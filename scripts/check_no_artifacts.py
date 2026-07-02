@@ -35,6 +35,7 @@ ALLOWED_PREFIXES = {
     "examples/",
     "tests/",
     "docs/",
+    "workflows/samples/",
 }
 
 
@@ -57,9 +58,9 @@ def main() -> int:
             continue
         parts = set(Path(item).parts)
         suffixes = Path(item).suffixes
-        if allowed(item):
-            continue
-        if parts & FORBIDDEN_PARTS or any(suffix in FORBIDDEN_SUFFIXES for suffix in suffixes):
+        dir_forbidden = bool(parts & FORBIDDEN_PARTS) and not allowed(item)
+        suffix_forbidden = any(suffix in FORBIDDEN_SUFFIXES for suffix in suffixes)
+        if dir_forbidden or suffix_forbidden:
             bad.append(item)
     if bad:
         print("Tracked generated/large artifacts are not allowed:", file=sys.stderr)

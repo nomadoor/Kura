@@ -67,6 +67,7 @@ Useful `run remote` flags:
 | `uv run kura render new --slug <slug>` | Create a ComfyUI render run |
 | `uv run kura render compile <run-id>` | Freeze workflow and promptset inputs |
 | `uv run kura render launch <run-id>` | Generate images through ComfyUI |
+| `uv run kura render launch <run-id> --executor runpod` | Generate images through a disposable RunPod ComfyUI Pod |
 
 ## Images
 
@@ -76,3 +77,4 @@ Image names are set in `workspace.yaml`. Build only when needed.
 | --- | --- |
 | `uv run kura image build ai-toolkit --ref <ref>` | Build the AI-Toolkit image |
 | `uv run kura image build musubi-tuner --ref <ref>` | Build the Musubi Tuner image |
+| `uv run kura image build comfyui --ref <ref>` | Build the ComfyUI render image |

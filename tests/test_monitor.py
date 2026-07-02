@@ -93,6 +93,19 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(active, [])
             self.assertEqual({summary.id for summary in history}, {"aware", "naive"})
 
+    def test_render_samples_images_are_reported_as_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "samples" / "images").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: render-1\ntype: render\ncreated: '2026-06-21T10:00:00+09:00'\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+            (run_dir / "samples" / "images" / "image.png").write_bytes(b"png")
+
+            summaries = collect_run_summaries(root)
+
+            self.assertEqual(summaries[0].outputs_path, run_dir / "samples" / "images")
+
     def test_collect_run_summaries_overlays_finished_local_docker_state_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

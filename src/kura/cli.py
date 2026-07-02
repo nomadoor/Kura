@@ -705,8 +705,10 @@ def cmd_image_build(args: argparse.Namespace) -> int:
             if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
                 print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
                 return 1
-    ref_arg = "MUSUBI_TUNER_REF" if args.name == "musubi-tuner" else "AI_TOOLKIT_REF"
-    default_ref = "main" if args.name == "musubi-tuner" else "548a286992261fbef40c380e82495d21fd3bca86"
+    ref_args = {"musubi-tuner": "MUSUBI_TUNER_REF", "comfyui": "COMFYUI_REF"}
+    default_refs = {"musubi-tuner": "main", "comfyui": "50e5270b86765bac2da70248d61050abba72b19f"}
+    ref_arg = ref_args.get(args.name, "AI_TOOLKIT_REF")
+    default_ref = default_refs.get(args.name, "548a286992261fbef40c380e82495d21fd3bca86")
     dockerfile = _workspace_relative_path(image["dockerfile"])
     context = _workspace_relative_path(image["context"])
     command = ["docker", "build", "--tag", image["local"], "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(context)]
@@ -916,9 +918,11 @@ def main() -> None:
     render_compile.set_defaults(func=cmd_run_compile)
     render_launch = render_sub.add_parser("launch", help="Generate images through ComfyUI")
     render_launch.add_argument("run_id")
+    render_launch.add_argument("--executor", default="local", choices=("local", "runpod"))
     render_launch.add_argument("--dry-run", action="store_true")
+    render_launch.add_argument("--image", help="Override the runtime image for this render only")
     render_launch.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
-    render_launch.set_defaults(func=cmd_run_launch, executor="local")
+    render_launch.set_defaults(func=cmd_run_launch)
     render_status = render_sub.add_parser("status", help="Print the latest render status")
     render_status.add_argument("run_id")
     render_status.set_defaults(func=cmd_run_status)
@@ -926,15 +930,15 @@ def main() -> None:
     image = sub.add_parser("image", help="Build, inspect, and publish runtime images")
     image_sub = image.add_subparsers(dest="image_command", required=True)
     build = image_sub.add_parser("build", help="Build a runtime image")
-    build.add_argument("name", choices=("ai-toolkit", "musubi-tuner"))
+    build.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "comfyui"))
     build.add_argument("--ref")
     build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds the safety threshold")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
-    inspect.add_argument("name", choices=("ai-toolkit", "musubi-tuner"))
+    inspect.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "comfyui"))
     inspect.set_defaults(func=cmd_image_inspect)
     publish = image_sub.add_parser("publish", help="Publish a runtime image")
-    publish.add_argument("name", choices=("ai-toolkit", "musubi-tuner"))
+    publish.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "comfyui"))
     publish.add_argument("--dry-run", action="store_true")
     publish.set_defaults(func=cmd_image_publish)
 

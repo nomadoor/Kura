@@ -1,0 +1,18 @@
+models:
+  diffusion_models:
+    qwen_image_edit_2511_fp8mixed.safetensors:
+      repo: Comfy-Org/Qwen-Image-Edit_ComfyUI
+      filename: split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors
+  clip:
+    qwen_2.5_vl_7b_fp8_scaled.safetensors:
+      repo: Comfy-Org/Qwen-Image_ComfyUI
+      filename: split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+      target_dir: text_encoders
+  vae:
+    qwen_image_vae.safetensors:
+      repo: Comfy-Org/Qwen-Image_ComfyUI
+      filename: split_files/vae/qwen_image_vae.safetensors
+lora_insert:
+  kind: model_only
+  model_node: '111'
+  strength_model: 0.8

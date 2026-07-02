@@ -141,13 +141,161 @@ if __name__ == "__main__":
 '''
 
 
+COMFYUI_DOCKERFILE_TEMPLATE = """ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+FROM ${PYTORCH_BASE}
+
+ARG COMFYUI_REF=50e5270b86765bac2da70248d61050abba72b19f
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_DEFAULT_TIMEOUT=180
+ENV PIP_RETRIES=5
+ENV COMFYUI_ROOT=/opt/ComfyUI
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \\
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/Comfy-Org/ComfyUI.git "$COMFYUI_ROOT" \\
+    && cd "$COMFYUI_ROOT" \\
+    && git checkout "$COMFYUI_REF" \\
+    && pip install --no-cache-dir -r requirements.txt huggingface_hub
+
+COPY docker/comfyui/kura_comfy_prepare.py /opt/kura_comfy_prepare.py
+
+WORKDIR /workspace
+EXPOSE 8188
+CMD ["python", "/opt/ComfyUI/main.py", "--listen", "127.0.0.1", "--port", "8188"]
+"""
+
+
+COMFYUI_PREPARE_TEMPLATE = """#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+MODEL_INPUTS = {
+    "CheckpointLoaderSimple": (("checkpoints", "ckpt_name"),),
+    "VAELoader": (("vae", "vae_name"),),
+    "CLIPLoader": (("clip", "clip_name"),),
+    "DualCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2")),
+    "TripleCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2"), ("clip", "clip_name3")),
+    "UNETLoader": (("diffusion_models", "unet_name"),),
+    "ControlNetLoader": (("controlnet", "control_net_name"),),
+}
+MODEL_DIRS = {"checkpoints": "checkpoints", "vae": "vae", "clip": "clip", "diffusion_models": "diffusion_models", "controlnet": "controlnet"}
+MODEL_REGISTRY = {"checkpoints": {"v1-5-pruned-emaonly-fp16.safetensors": {"repo": "Comfy-Org/stable-diffusion-v1-5-archive", "filename": "v1-5-pruned-emaonly-fp16.safetensors"}}}
+
+
+def _safe_child(root: Path, relative: str) -> Path:
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"refusing unsafe model target: {relative}") from exc
+    return candidate
+
+
+def _required_models(workflow: dict[str, Any]) -> list[dict[str, str]]:
+    refs, seen = [], set()
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type, inputs = node.get("class_type"), node.get("inputs")
+        if not isinstance(class_type, str) or not isinstance(inputs, dict):
+            continue
+        for model_type, input_name in MODEL_INPUTS.get(class_type, ()):
+            value = inputs.get(input_name)
+            if not isinstance(value, str) or not value:
+                continue
+            key = (model_type, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            refs.append({"node": str(node_id), "class_type": class_type, "input": input_name, "type": model_type, "name": value})
+    return refs
+
+
+def _resolve(ref: dict[str, str], registry: dict[str, Any]) -> dict[str, str] | None:
+    section = registry.get(ref["type"], {})
+    if not isinstance(section, dict):
+        return None
+    entry = section.get(ref["name"])
+    if not isinstance(entry, dict):
+        return None
+    repo = entry.get("repo") or entry.get("repo_id")
+    filename = entry.get("filename") or entry.get("file") or ref["name"]
+    if not repo or not filename:
+        return None
+    spec = {**ref, "repo": repo, "filename": filename, "target_dir": MODEL_DIRS.get(ref["type"], ref["type"]), "target_name": entry.get("target_name") or ref["name"]}
+    if entry.get("revision"):
+        spec["revision"] = entry["revision"]
+    if entry.get("subfolder"):
+        spec["subfolder"] = entry["subfolder"]
+    return spec
+
+
+def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None, registry: dict[str, Any]) -> list[dict[str, str]]:
+    models_root = comfyui_root / "models"
+    specs, unknown = [], []
+    for ref in _required_models(workflow):
+        spec = _resolve(ref, registry)
+        if spec is None:
+            unknown.append(ref)
+        else:
+            specs.append(spec)
+    if unknown:
+        raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
+    from huggingface_hub import hf_hub_download
+
+    for spec in specs:
+        downloaded = hf_hub_download(repo_id=spec["repo"], filename=spec["filename"], subfolder=spec.get("subfolder"), revision=spec.get("revision"), cache_dir=str(cache_dir) if cache_dir else None, token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None)
+        target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() or target.is_symlink():
+            if target.is_symlink() and target.resolve() == Path(downloaded).resolve():
+                continue
+            raise ValueError(f"refusing to replace existing ComfyUI model target: {target}")
+        os.symlink(downloaded, target)
+        print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": str(downloaded)}, ensure_ascii=False), flush=True)
+    return specs
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("workflow_json")
+    parser.add_argument("--registry-json")
+    parser.add_argument("--comfyui-root", default=os.environ.get("COMFYUI_ROOT", "/opt/ComfyUI"))
+    parser.add_argument("--cache-dir", default=os.environ.get("HF_HOME"))
+    args = parser.parse_args()
+    workflow = json.loads(Path(args.workflow_json).read_text(encoding="utf-8"))
+    if not isinstance(workflow, dict):
+        raise ValueError("workflow_json must contain a ComfyUI API workflow object")
+    registry = MODEL_REGISTRY
+    if args.registry_json:
+        loaded = json.loads(Path(args.registry_json).read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("registry_json must contain a model registry object")
+        registry = loaded
+    specs = prepare(workflow, comfyui_root=Path(args.comfyui_root), cache_dir=Path(args.cache_dir) if args.cache_dir else None, registry=registry)
+    print(json.dumps({"event": "models_prepared", "count": len(specs), "models": specs}, ensure_ascii=False), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
 def cmd_init(_: argparse.Namespace) -> int:
     root = Path.cwd()
-    for relative in ("datasets", "experiments", "runs", "workflows", "promptsets", "backends", "executors", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner"):
+    for relative in ("datasets", "experiments", "runs", "workflows", "promptsets", "backends", "executors", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner", "docker/comfyui"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
-        dump_yaml(workspace, {"schema_version": 1, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"images": {"ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render"}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
+        dump_yaml(workspace, {"schema_version": 1, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"images": {"ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}, "comfyui": {"local": "nomadoor/kura-comfyui:dev", "remote": "nomadoor/kura-comfyui:dev", "dockerfile": "docker/comfyui/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev", "comfyui": "nomadoor/kura-comfyui:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
     agents = root / "AGENTS.md"
     if not agents.exists():
         agents.write_text("# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n", encoding="utf-8")
@@ -173,6 +321,12 @@ def cmd_init(_: argparse.Namespace) -> int:
             "from pathlib import Path\n\n\nTARGET = Path(\"/opt/musubi-tuner/src/musubi_tuner/flux_2/flux2_utils.py\")\n\n\nOLD = \"\"\"    logger.info(f\\\"Loading state dict from {ckpt_path}\\\")\n    sd = load_split_weights(ckpt_path, device=str(device), disable_mmap=disable_mmap, dtype=dtype)\n    info = ae.load_state_dict(sd, strict=True, assign=True)\n\"\"\"\n\n\nNEW = \"\"\"    logger.info(f\\\"Loading state dict from {ckpt_path}\\\")\n    sd = load_split_weights(ckpt_path, device=str(device), disable_mmap=disable_mmap, dtype=dtype)\n    if any(\\\".down_blocks.\\\" in key or \\\".up_blocks.\\\" in key or key.endswith(\\\"conv_norm_out.weight\\\") for key in sd):\n        logger.info(\\\"Converting Diffusers-layout Flux2 VAE state dict\\\")\n        from musubi_tuner.ideogram4.ideogram4_autoencoder import convert_diffusers_state_dict\n\n        sd = convert_diffusers_state_dict(sd)\n    info = ae.load_state_dict(sd, strict=True, assign=True)\n\"\"\"\n\n\ndef main() -> None:\n    text = TARGET.read_text()\n    if NEW in text:\n        return\n    if OLD not in text:\n        raise SystemExit(f\"expected load_ae block not found in {TARGET}\")\n    TARGET.write_text(text.replace(OLD, NEW))\n\n\nif __name__ == \"__main__\":\n    main()\n",
             encoding="utf-8",
         )
+    comfyui_dockerfile = root / "docker/comfyui/Dockerfile"
+    if not comfyui_dockerfile.exists():
+        comfyui_dockerfile.write_text(COMFYUI_DOCKERFILE_TEMPLATE, encoding="utf-8")
+    comfyui_prepare = root / "docker/comfyui/kura_comfy_prepare.py"
+    if not comfyui_prepare.exists():
+        comfyui_prepare.write_text(COMFYUI_PREPARE_TEMPLATE, encoding="utf-8")
     print(f"initialized workspace: {root}")
     print("next:")
     print("  1. Put a dataset under datasets/<id>/ with dataset.yaml and items.jsonl.")

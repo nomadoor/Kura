@@ -58,6 +58,34 @@ the separate config/dir, not the port; never edit the user's main ComfyUI config
 - Validate node/field existence before launch.
 - Keep prompt text and seed decisions in promptsets/run files, not ad-hoc scripts.
 
+## RunPod model registry resolution
+
+RunPod ComfyUI render may download workflow-required models automatically, but
+only from an explicit registry. Never infer a Hugging Face repo from a file name
+and silently download it; there is no trustworthy reverse lookup, and the wrong
+model wastes money and can invalidate results.
+
+Resolution flow for user-provided workflows:
+
+1. Enumerate ComfyUI loader nodes in the API workflow.
+2. Match each requested model name against the effective registry:
+   - Kura-curated sample sidecar next to the workflow:
+     `workflows/samples/.../<workflow>.kura.yaml` under `models:`.
+   - Local user registry in ignored `workspace.yaml`:
+     `comfyui.model_registry`.
+3. Known entries are frozen at compile time and the RunPod helper downloads the
+   specified repo/file.
+4. Unknown entries must halt before Pod creation. Propose candidates from the
+   workflow notes, linked docs, or Hugging Face search, but keep them as
+   proposals until the human confirms.
+5. Record confirmed user choices only in local `workspace.yaml`
+   (`comfyui.model_registry`), not in Kura-curated sample sidecars.
+6. Re-run `kura render compile <run-id>` after adding a registry entry so the
+   resolved manifest freezes the accepted mapping.
+
+Registry precedence is: built-in defaults, then sample sidecar `models:`, then
+local `workspace.yaml` overrides.
+
 ## Validation
 
 ```sh

@@ -1,0 +1,11 @@
+models:
+  checkpoints:
+    sd_xl_base_1.0_0.9vae.safetensors:
+      repo: stabilityai/stable-diffusion-xl-base-1.0
+      filename: sd_xl_base_1.0_0.9vae.safetensors
+lora_insert:
+  kind: model_clip
+  model_node: '4'
+  clip_node: '4'
+  strength_model: 0.8
+  strength_clip: 0.8

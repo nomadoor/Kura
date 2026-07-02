@@ -1,0 +1,145 @@
+{
+  "6": {
+    "inputs": {
+      "text": "A hawk dives through open sky at high speed, captured at the exact moment it reaches for a rabbit. The camera freezes the action mid-air: wings fully spread, talons extended, feathers sharply defined, and a slight motion blur only on the wing tips to convey velocity. The rabbit is just below, startled and twisting as dust lifts from the ground far beneath. Bright late-afternoon sunlight creates crisp highlights along the hawk’s silhouette and soft shadows under the wings. Clean blue sky with a distant horizon, cinematic wildlife photography, ultra-sharp detail, dramatic tension, no gore.",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "31",
+        0
+      ],
+      "vae": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "31": {
+    "inputs": {
+      "seed": 12345,
+      "steps": 20,
+      "cfg": 5,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "48",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "33",
+        0
+      ],
+      "latent_image": [
+        "47",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "33": {
+    "inputs": {
+      "text": "text, worst quality, blurry, ugly",
+      "clip": [
+        "44",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "43": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "44": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "45": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "47": {
+    "inputs": {
+      "width": [
+        "50",
+        0
+      ],
+      "height": [
+        "50",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Flux 2 Latent"
+    }
+  },
+  "48": {
+    "inputs": {
+      "unet_name": "flux-2-klein-base-4b.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "50": {
+    "inputs": {
+      "aspect_ratio": "4:3 (Standard)",
+      "megapixels": 1,
+      "multiple": 16
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector"
+    }
+  }
+}

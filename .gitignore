@@ -19,7 +19,8 @@ index.jsonl
 datasets/
 experiments/
 runs/
-workflows/
+workflows/*
+!workflows/samples/
 promptsets/
 backends/
 executors/

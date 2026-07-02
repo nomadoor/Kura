@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from kura import __version__
+from kura.comfyui_models import merged_registry, resolve_model_specs
 
 
 def now() -> str:
@@ -39,6 +40,13 @@ def load_optional_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     return load_yaml(path)
+
+
+def _workflow_sidecar(path: Path) -> dict[str, Any]:
+    sidecar = path.with_suffix(".kura.yaml")
+    if not sidecar.is_file():
+        return {}
+    return load_yaml(sidecar)
 
 
 def write_yaml(path: Path, value: Any) -> None:
@@ -92,6 +100,109 @@ def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt:
     return patched
 
 
+def _link(node: str, output: int) -> list[Any]:
+    return [node, output]
+
+
+def _as_node_id(value: Any, *, context: str) -> str:
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, int):
+        return str(value)
+    raise ValueError(f"{context} requires node")
+
+
+def _as_output_index(value: Any, default: int, *, context: str) -> int:
+    if value is None:
+        return default
+    if isinstance(value, int) and value >= 0:
+        return value
+    raise ValueError(f"{context} output must be a non-negative integer")
+
+
+def _lora_insert_from_sidecar(sidecar: dict[str, Any]) -> dict[str, Any] | None:
+    raw = sidecar.get("lora_insert")
+    if raw is None and isinstance(sidecar.get("lora"), dict):
+        raw = sidecar["lora"].get("insert")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("lora_insert must be a mapping")
+    kind = str(raw.get("kind") or raw.get("type") or "model_clip").strip()
+    class_type = "LoraLoaderModelOnly" if kind in ("model_only", "LoraLoaderModelOnly") else "LoraLoader"
+    if kind not in ("model_only", "model_clip", "full", "LoraLoaderModelOnly", "LoraLoader"):
+        raise ValueError("lora_insert.kind must be one of: model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader")
+    model = raw.get("model") if isinstance(raw.get("model"), dict) else {}
+    clip = raw.get("clip") if isinstance(raw.get("clip"), dict) else {}
+    model_node = _as_node_id(raw.get("model_node", model.get("node")), context="lora_insert.model")
+    spec: dict[str, Any] = {
+        "class_type": class_type,
+        "model_node": model_node,
+        "model_output": _as_output_index(raw.get("model_output", model.get("output")), 0, context="lora_insert.model"),
+        "strength_model": float(raw.get("strength_model", 0.8)),
+    }
+    if class_type == "LoraLoader":
+        spec["clip_node"] = _as_node_id(raw.get("clip_node", clip.get("node", model_node)), context="lora_insert.clip")
+        spec["clip_output"] = _as_output_index(raw.get("clip_output", clip.get("output")), 1, context="lora_insert.clip")
+        spec["strength_clip"] = float(raw.get("strength_clip", 0.8))
+    return spec
+
+
+def insert_lora_loader(workflow: dict[str, Any], spec: dict[str, Any] | None, lora_name: str) -> dict[str, Any]:
+    if not spec or not lora_name:
+        return workflow
+    patched = deepcopy(workflow)
+    model_node = spec["model_node"]
+    if model_node not in patched:
+        raise ValueError(f"lora_insert model node does not exist: {model_node}")
+    class_type = spec["class_type"]
+    model_link = _link(model_node, int(spec.get("model_output", 0)))
+    if class_type == "LoraLoader":
+        clip_node = spec["clip_node"]
+        if clip_node not in patched:
+            raise ValueError(f"lora_insert clip node does not exist: {clip_node}")
+        clip_link = _link(clip_node, int(spec.get("clip_output", 1)))
+    else:
+        clip_link = None
+    node_id = _next_workflow_node_id(patched)
+    inputs: dict[str, Any] = {
+        "model": model_link,
+        "lora_name": lora_name,
+        "strength_model": float(spec.get("strength_model", 0.8)),
+    }
+    if class_type == "LoraLoader":
+        inputs["clip"] = clip_link
+        inputs["strength_clip"] = float(spec.get("strength_clip", 0.8))
+    patched[node_id] = {"class_type": class_type, "inputs": inputs}
+    _replace_links(patched, model_link, _link(node_id, 0), skip_node=node_id)
+    if clip_link is not None:
+        _replace_links(patched, clip_link, _link(node_id, 1), skip_node=node_id)
+    return patched
+
+
+def _next_workflow_node_id(workflow: dict[str, Any]) -> str:
+    numeric = [int(node_id) for node_id in workflow if isinstance(node_id, str) and node_id.isdigit()]
+    return str(max(numeric, default=0) + 1)
+
+
+def _replace_links(value: Any, old: list[Any], new: list[Any], *, skip_node: str | None = None, node_id: str | None = None) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            next_node_id = key if node_id is None and isinstance(key, str) else node_id
+            if next_node_id == skip_node:
+                continue
+            if isinstance(child, list) and child == old:
+                value[key] = list(new)
+            else:
+                _replace_links(child, old, new, skip_node=skip_node, node_id=next_node_id)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            if isinstance(child, list) and child == old:
+                value[index] = list(new)
+            else:
+                _replace_links(child, old, new, skip_node=skip_node, node_id=node_id)
+
+
 def _workspace_path(workspace: Path, value: Any) -> Path | None:
     if not isinstance(value, str) or not value:
         return None
@@ -114,7 +225,7 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
 
 
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
-    if "lora" not in frozen.get("workflow_patches", {}):
+    if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
         return None
     if str(frozen.get("render", {}).get("lora_stage", "auto")).strip().lower() in ("0", "false", "off", "none", "no"):
         return None
@@ -151,7 +262,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
 def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
-    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup")
+    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_registry", "runpod")
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
 
 
@@ -254,18 +365,35 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"workflow is not valid JSON: {exc}") from exc
+    sidecar = _workflow_sidecar(workflow_path)
+    lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
     promptset(promptset_path)
     patch_workflow(
         workflow, run.get("workflow_patches", {}), prompt="", negative_prompt="", seed=0,
         checkpoint=inputs.get("checkpoint", {}).get("path", ""),
     )
-    resolved = run_dir / "resolved"; resolved.mkdir(exist_ok=True)
+    resolved = run_dir / "resolved"
+    resolved.mkdir(exist_ok=True)
     frozen = deepcopy(run)
+    if lora_insert:
+        insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
+        frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"))
     if comfyui:
         frozen["comfyui"] = comfyui
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    if executor.get("name") == "runpod":
+        sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
+        workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
+        registry = merged_registry(sidecar_models, workspace_models)
+        specs, unknown = resolve_model_specs(workflow, registry)
+        if unknown:
+            labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown)
+            raise ValueError("runpod ComfyUI render has unknown model loader entries; add comfyui.model_registry mappings for: " + labels)
+        frozen["comfyui_model_registry"] = registry
+        frozen["comfyui_models"] = specs
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
     if checkpoint_path:
         candidate = workspace / checkpoint_path
@@ -276,21 +404,36 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
     write_yaml(resolved / "manifest.lock.yaml", frozen)
     (resolved / "workflow_used.json").write_text(json.dumps(workflow, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if "comfyui_models" in frozen:
+        (resolved / "comfyui_models.json").write_text(json.dumps(frozen["comfyui_models"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if "comfyui_model_registry" in frozen:
+        (resolved / "comfyui_model_registry.json").write_text(json.dumps(frozen["comfyui_model_registry"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
     write_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled")
 
 
-def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
+def launch_render(
+    workspace: Path,
+    run_dir: Path,
+    dry_run: bool = False,
+    *,
+    endpoint_override: str | None = None,
+    lora_name_override: str | None = None,
+    executor_name: str | None = None,
+    manage_lora_stage: bool = True,
+) -> int:
     manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
     workflow_used_path = run_dir / "resolved" / "workflow_used.json"
     if not manifest_path.is_file() or not workflow_used_path.is_file():
         raise ValueError("render is not compiled; run kura render compile first")
     frozen = load_yaml(manifest_path)
-    if frozen.get("generator", {}).get("name") != "comfyui" or frozen.get("executor", {}).get("name") != "local":
-        raise ValueError("render runs currently require generator.name=comfyui and executor.name=local")
+    resolved_executor = executor_name or frozen.get("executor", {}).get("name")
+    if frozen.get("generator", {}).get("name") != "comfyui" or resolved_executor not in ("local", "runpod"):
+        raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
     current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    if current_status.get("state") != "compiled":
+    allowed_states = {"compiled"} if resolved_executor == "local" else {"compiled", "running"}
+    if current_status.get("state") not in allowed_states:
         raise ValueError("render must be compiled and has already been launched or finalized")
     inputs = frozen.get("inputs", {})
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
@@ -304,28 +447,33 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
     pairs = [(item, seed) for item in prompts for seed in item.get("seeds", [default_seed]) if seed is not None]
     if not pairs:
         raise ValueError("promptset has no seeds and render.default_seed is not set")
-    lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint)
-    lora_name = lora_stage["lora_name"] if lora_stage else checkpoint.get("path", "")
-    details = {"endpoint": frozen["generator"].get("endpoint"), "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    endpoint = endpoint_override or frozen["generator"].get("endpoint")
+    lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+    lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
+    details = {"endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if dry_run:
-        print(json.dumps(details, ensure_ascii=False, indent=2)); return 0
+        print(json.dumps(details, ensure_ascii=False, indent=2))
+        return 0
     workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
     output_dir = run_dir / frozen.get("render", {}).get("output_dir", "samples/images")
     output_dir.mkdir(parents=True, exist_ok=True)
     images_log = run_dir / "samples" / "images.jsonl"
     images_log.parent.mkdir(parents=True, exist_ok=True)
-    client = ComfyUIClient(frozen["generator"]["endpoint"], int(frozen.get("render", {}).get("timeout_sec", 600)))
+    if not isinstance(endpoint, str) or not endpoint:
+        raise ValueError("render generator endpoint is empty")
+    client = ComfyUIClient(endpoint, int(frozen.get("render", {}).get("timeout_sec", 600)))
     stdout_log = run_dir / "logs" / "stdout.log"
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
-    stdout_log.write_text(f"render endpoint: {frozen['generator']['endpoint']}\n", encoding="utf-8")
+    stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     status(run_dir, state="running", started=now(), ended=None, exit_code=None)
     try:
         if lora_stage:
             _materialize_lora_stage(lora_stage)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "generator": "comfyui", "endpoint": frozen["generator"]["endpoint"], "lora_stage": lora_stage})
+        event(run_dir, {"event": "render_started", "timestamp": now(), "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage})
         generated = 0
         for item, seed in pairs:
             patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name)
+            patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
                 handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
@@ -341,13 +489,16 @@ def launch_render(workspace: Path, run_dir: Path, dry_run: bool = False) -> int:
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
                 generated += 1
         status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, executor="local", generator="comfyui", state="completed", endpoint=frozen["generator"]["endpoint"], workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
+        write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
-        (run_dir / "logs" / "stdout.log").write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
+        stdout_log = run_dir / "logs" / "stdout.log"
+        stdout_log.parent.mkdir(parents=True, exist_ok=True)
+        with stdout_log.open("a", encoding="utf-8") as handle:
+            handle.write(f"{type(exc).__name__}: {exc}\n")
         status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, executor="local", generator="comfyui", state="failed", endpoint=frozen["generator"]["endpoint"], workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
+        write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:

@@ -1,0 +1,18 @@
+models:
+  diffusion_models:
+    krea2_turbo_fp8_scaled.safetensors:
+      repo: Comfy-Org/Krea-2
+      filename: diffusion_models/krea2_turbo_fp8_scaled.safetensors
+  clip:
+    qwen3vl_4b_fp8_scaled.safetensors:
+      repo: Comfy-Org/Krea-2
+      filename: text_encoders/qwen3vl_4b_fp8_scaled.safetensors
+      target_dir: text_encoders
+  vae:
+    qwen_image_vae.safetensors:
+      repo: Comfy-Org/Krea-2
+      filename: vae/qwen_image_vae.safetensors
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

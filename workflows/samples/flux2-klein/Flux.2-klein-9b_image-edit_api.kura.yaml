@@ -1,0 +1,18 @@
+models:
+  diffusion_models:
+    flux-2-klein-9b-fp8.safetensors:
+      repo: black-forest-labs/FLUX.2-klein-9b-fp8
+      filename: flux-2-klein-9b-fp8.safetensors
+  clip:
+    qwen_3_8b.safetensors:
+      repo: Comfy-Org/vae-text-encorder-for-flux-klein-9b
+      filename: split_files/text_encoders/qwen_3_8b.safetensors
+      target_dir: text_encoders
+  vae:
+    flux2-vae.safetensors:
+      repo: Comfy-Org/vae-text-encorder-for-flux-klein-9b
+      filename: split_files/vae/flux2-vae.safetensors
+lora_insert:
+  kind: model_only
+  model_node: '48'
+  strength_model: 0.8

@@ -1,0 +1,18 @@
+models:
+  diffusion_models:
+    z_image_turbo_bf16.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/diffusion_models/z_image_turbo_bf16.safetensors
+  clip:
+    qwen_3_4b.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/text_encoders/qwen_3_4b.safetensors
+      target_dir: text_encoders
+  vae:
+    ae.safetensors:
+      repo: Comfy-Org/z_image_turbo
+      filename: split_files/vae/ae.safetensors
+lora_insert:
+  kind: model_only
+  model_node: '37'
+  strength_model: 0.8

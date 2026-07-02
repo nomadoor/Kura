@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 from kura.monitor import RunSummary
-from kura.tui import _batch, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _resolve_run_selection, _runpod_pod_url
+from kura.tui import _aware_datetime, _batch, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _resolve_run_selection, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
@@ -37,11 +39,28 @@ class TuiMetricsTests(unittest.TestCase):
         self.assertIsNone(_runpod_pod_url(None))
 
     def test_open_url_uses_windows_browser_bridge_on_wsl(self) -> None:
-        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui.subprocess.Popen") as popen:
-            _open_url("https://console.runpod.io/pods?id=pod-1")
+        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui._windows_command", side_effect=lambda name: name if name == "cmd.exe" else None), patch("kura.tui.subprocess.Popen") as popen:
+            opened = _open_url("https://console.runpod.io/pods?id=pod-1")
 
+        self.assertTrue(opened)
         popen.assert_called_once()
         self.assertEqual(popen.call_args.args[0][:4], ["cmd.exe", "/c", "start", ""])
+
+    def test_open_path_missing_wsl_bridge_returns_false(self) -> None:
+        with patch("kura.tui._is_wsl", return_value=True), patch("kura.tui._windows_command", return_value=None), patch("kura.tui.subprocess.run") as run, patch("kura.tui.subprocess.Popen") as popen:
+            run.return_value.returncode = 0
+            run.return_value.stdout = r"\\wsl.localhost\\Ubuntu\\tmp" + "\n"
+            opened = _open_path(Path("/tmp"))
+
+        self.assertFalse(opened)
+        popen.assert_not_called()
+
+    def test_aware_datetime_normalizes_naive_values(self) -> None:
+        naive = datetime(2026, 6, 21, 10, 0, 0)
+        aware = datetime(2026, 6, 21, 10, 0, 0, tzinfo=timezone.utc)
+
+        self.assertIsNotNone(_aware_datetime(naive).tzinfo)
+        self.assertEqual(_aware_datetime(aware), aware)
 
     def test_active_selection_does_not_fall_through_to_history(self) -> None:
         selected, lane = _resolve_run_selection("run-1", "active", [], {"run-1"})
