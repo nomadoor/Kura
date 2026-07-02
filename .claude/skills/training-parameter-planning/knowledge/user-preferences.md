@@ -12,8 +12,14 @@ Format example (keep entries in this shape):
   note: <why / observed behavior>
 ```
 
-No confirmed general entries yet. Known signals not yet confirmed as
-preferences:
+Confirmed entries:
+
+- character LoRA resolution: 768 is usually sufficient as a practical starting
+  point; raise toward 1024 only when the model/task benefits and hardware has
+  headroom.
+  source: owner (2026-07-02)
+
+Known signals not yet confirmed as preferences:
 
 - The owner has hinted at preferring lower starting learning rates (7e-5 /
   5e-5) over the common 1e-4, but has not confirmed this as a general

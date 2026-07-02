@@ -1,8 +1,9 @@
 # flux_kontext
 
-- Artifacts: fp8 DiT + fp8 T5 (`t5xxl_fp8_e4m3fn` with `fp8_t5: true`) are
-  quality-acceptable for LoRA training and the rung-1 default at ≤ 24 GB.
-  Full-precision T5 is not worth the download for LoRA.
+- Artifacts: owner baseline is fp8 DiT + fp8 T5 (`t5xxl_fp8_e4m3fn` with
+  `fp8_t5: true`) for local/consumer-GPU LoRA training. Full-precision T5 is
+  not worth the download for normal LoRA use unless a run has a specific reason
+  to test it.
   source: owner (2026-07-02, efficiency ADR) + upstream (Musubi flux_kontext.md)
 - VRAM class: ~16–24 GB with fp8 artifacts + gradient checkpointing; below
   that expect offload/swap (ask first).

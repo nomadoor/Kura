@@ -11,6 +11,10 @@
   source: owner (2026-07-02)
 - batch: 2 (effective)
   source: owner (2026-07-02)
+- resolution: 768 as the owner-preferred practical character-LoRA starting
+  point; raise toward 1024 only when hardware headroom and task goals justify
+  the extra cost.
+  source: owner (2026-07-02)
 - notes: owner-stated baseline; attach a run id when first verified on an
   evaluated run.
 

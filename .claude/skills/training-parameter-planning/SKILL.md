@@ -44,7 +44,10 @@ Gather these before proposing parameters:
 3. Knowledge cards: read **only** the cards that match this run —
    `knowledge/<architecture>.md` (the architecture string from the plan's
    Resources section) and `knowledge/user-preferences.md`. Do not bulk-read
-   the whole knowledge directory.
+   the whole knowledge directory. If no exact card exists and the architecture
+   is a video adapter (`wan`, `hunyuan_video`, `hunyuan_video_1_5`,
+   `framepack`, `kandinsky5`), read `knowledge/video-architectures.md` as a
+   placeholder and treat it as a weak starting point.
 4. Prior evidence: `runs/` history for the same architecture on this
    hardware — successful configs, OOM failures, observed speed. Real outcomes
    on this machine beat any rule of thumb.
@@ -57,7 +60,7 @@ Assemble each parameter from the first source that covers it:
 
 1. An explicit user instruction in this conversation.
 2. `knowledge/user-preferences.md` — the user's own tested preferences
-   outrank Kura baselines.
+   outrank Kura baselines when they cover this model/task.
 3. A `source: run <id>` entry for the same architecture × task in the
    architecture card — verified evidence from this workspace.
 4. The architecture card's baseline values.
@@ -103,7 +106,9 @@ sufficient rung:
   learning rate, training precision below established practice, dataset
   reduction. **Never silently.** Present two or three concrete options with
   trade-offs, recommend one so a light user can simply accept it, and
-  include the alternative of a larger RunPod GPU with approximate cost.
+  include the alternative of a larger RunPod GPU with approximate cost. For
+  character LoRAs, 768px is often a sufficient starting point; use 1024px or
+  higher only when the task/model and hardware headroom justify the cost.
 
 After launch approval: if OOM still occurs, diagnose from the actual log,
 move exactly one rung, record the change in `run.yaml`, recompile, and show
