@@ -167,11 +167,11 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run = {
         "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
-        "backend": {"name": "ai-toolkit", "version": None, "adapter_version": 1},
+        "backend": {"name": args.backend, "version": None, "adapter_version": 1},
         "model": {"base": "", "revision": None},
         "datasets": [{"id": "", "digest": None, "role": None}],
         "params": {key: None for key in ("rank", "alpha", "lr", "scheduler", "steps", "batch_size", "resolution", "seed")},
-        "backend_overrides": {}, "compute": {"executor": "docker", "gpu": None},
+        "backend_overrides": {}, "compute": {"executor": args.executor, "gpu": args.gpu},
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
@@ -838,6 +838,9 @@ def main() -> None:
     new = run_sub.add_parser("new", help="Create a train run")
     new.add_argument("--experiment", required=True)
     new.add_argument("--slug", required=True)
+    new.add_argument("--backend", default="ai-toolkit", choices=("ai-toolkit", "musubi-tuner"))
+    new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
+    new.add_argument("--gpu")
     new.set_defaults(func=cmd_run_new)
     compile_parser = run_sub.add_parser("compile", help="Freeze run.yaml into resolved inputs")
     compile_parser.add_argument("run_id")

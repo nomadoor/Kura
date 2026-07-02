@@ -87,6 +87,19 @@ def remove_incomplete_files(directories):
     return removed
 
 
+def stable_link_target(path, link_path):
+    try:
+        target = os.path.abspath(path)
+        link = os.path.abspath(link_path)
+        target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
+        link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
+    except ValueError:
+        return path
+    if target_workspace and link_workspace:
+        return os.path.relpath(target, os.path.dirname(link))
+    return path
+
+
 def run_one(item):
     link_path = item["link_path"]
     link_dir = os.path.dirname(link_path)
@@ -129,7 +142,7 @@ def run_one(item):
                 elif os.path.realpath(link_path) != os.path.realpath(path):
                     raise SystemExit(f"[kura] cannot replace non-symlink model cache path: {link_path}")
             if not os.path.lexists(link_path):
-                os.symlink(path, link_path)
+                os.symlink(stable_link_target(path, link_path), link_path)
             print(f"[kura] downloaded {item['key']} -> {path}", flush=True)
             print(f"[kura] linked {item['key']} -> {link_path}", flush=True)
             return

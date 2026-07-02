@@ -1,9 +1,14 @@
 # krea2
 
-- VRAM class: ~24 GB comfortable with `fp8_base` + `fp8_scaled`; 12 GB needs
-  rung-2 aids (smoke runs of 2026-06-30 on RTX 4070 Ti 12 GB used
-  `blocks_to_swap: 26`). Training quality at 12 GB not yet evaluated.
-  source: run 20260630-1905_musubi-real-smoke-krea2_1a38 (smoke only)
+- VRAM class: ~24 GB is practical with `fp8_base` + `fp8_scaled` +
+  `gradient_checkpointing` for 768/rank16/batch2 character LoRA. A5000-class
+  24 GB OOMed at batch2 without gradient checkpointing.
+  source: run 20260703-0013_myakumyaku-krea2-768-runpod-candidates_5a27
+  source: run 20260703-0021_myakumyaku-krea2-768-runpod-gc_1c25
+- 12 GB can run 768/rank16/effective-batch2 only as forced local mode with
+  rung-2 aids: `gradient_checkpointing`, batch1+accum2, and block swap around
+  26. Observed about 20-21s/step on RTX 4070 Ti.
+  source: run 20260702-2343_myakumyaku-krea2-768-12gb-rootdata_1a0e
 
 ## character
 
@@ -17,6 +22,10 @@
   source: owner (2026-07-02)
 - notes: owner-stated baseline; attach a run id when first verified on an
   evaluated run.
+- evidence: 768/rank16/lr7e-5/effective-batch2 completed locally on 12 GB
+  with heavy speed aids, and on RunPod A5000 with gradient checkpointing only.
+  source: run 20260702-2343_myakumyaku-krea2-768-12gb-rootdata_1a0e
+  source: run 20260703-0021_myakumyaku-krea2-768-runpod-gc_1c25
 
 ## style
 

@@ -474,6 +474,14 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     return {"bytes": download_total, "total_bytes": size_total, "cached_bytes": cached_total, "items": items, "unknown": unknown}
 
 
+def _download_estimate_workspace(run: dict[str, Any], workspace: Path) -> Path | None:
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    if executor == "runpod":
+        return None
+    return workspace
+
+
 def _model_download_threshold_bytes(run: dict[str, Any]) -> int:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     return _configured_gib(safety.get("large_model_download_gb"), default=25) * 1024**3
@@ -665,7 +673,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
     important_overrides = _important_backend_overrides(run)
-    download_estimate = _estimate_musubi_download_bytes(run, workspace=workspace)
+    download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
     resources = _resources_payload(run, _workspace_config(), download_estimate)
     return {
         "id": run_id,

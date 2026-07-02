@@ -9,6 +9,9 @@ from typing import Any
 from kura.backends.common import _datasets, _int_or_none, _musubi_backend_override, _toml_scalar
 
 
+IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+
+
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path) -> None:
     params = run.get("params", {})
     override = _musubi_backend_override(run)
@@ -59,7 +62,7 @@ def _musubi_dataset_items(run: dict[str, Any], destination: Path, datasets: list
             "num_repeats": dataset.get("num_repeats") or dataset.get("repeats") or 1,
         }
         if not uses_jsonl:
-            item["image_directory"] = f"/workspace/datasets/{dataset_id}/images"
+            item["image_directory"] = _default_image_directory(destination, dataset_id)
         if "paired_jsonl" in override_item:
             paired = override_item.pop("paired_jsonl")
             if isinstance(paired, dict):
@@ -68,6 +71,31 @@ def _musubi_dataset_items(run: dict[str, Any], destination: Path, datasets: list
         item.update(override_item)
         raw_items.append((dataset, item))
     return _collapse_duplicate_musubi_bucket_items(raw_items)
+
+
+def _default_image_directory(destination: Path, dataset_id: str) -> str:
+    workspace = _workspace_from_resolved_path(destination)
+    dataset_root = workspace / "datasets" / dataset_id
+    images_dir = dataset_root / "images"
+    if images_dir.is_dir():
+        return f"/workspace/datasets/{dataset_id}/images"
+    if _has_direct_images(dataset_root):
+        return f"/workspace/datasets/{dataset_id}"
+    return f"/workspace/datasets/{dataset_id}/images"
+
+
+def _has_direct_images(path: Path) -> bool:
+    try:
+        return any(item.is_file() and item.suffix.lower() in IMAGE_SUFFIXES for item in path.iterdir())
+    except OSError:
+        return False
+
+
+def _workspace_from_resolved_path(path: Path) -> Path:
+    for parent in path.parents:
+        if parent.name == "runs":
+            return parent.parent
+    return path.parent
 
 
 def _collapse_duplicate_musubi_bucket_items(raw_items: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:

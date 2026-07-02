@@ -22,12 +22,13 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.container_scripts import script_source
 from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -80,6 +81,24 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
             finally:
                 os.chdir(previous)
+
+    def test_run_new_accepts_backend_and_executor(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    code = cmd_run_new(argparse.Namespace(experiment="exp", slug="krea2-run", backend="musubi-tuner", executor="runpod", gpu="NVIDIA RTX A5000"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            run_id = stdout.getvalue().strip()
+            run = yaml.safe_load((Path(directory) / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(run["backend"]["name"], "musubi-tuner")
+            self.assertEqual(run["compute"]["executor"], "runpod")
+            self.assertEqual(run["compute"]["gpu"], "NVIDIA RTX A5000")
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1098,6 +1117,38 @@ class RunPlanTests(unittest.TestCase):
         )
         self.assertEqual(payload["bytes"], 0)
         self.assertIn("invalid musubi model download spec", payload["unknown"])
+
+    def test_runpod_plan_counts_remote_downloads_even_when_local_cache_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "datasets" / "tiny").mkdir(parents=True)
+            run_dir = root / "runs" / "remote"
+            run_dir.mkdir(parents=True)
+            cache_file = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
+            cache_file.parent.mkdir(parents=True)
+            cache_file.write_bytes(b"x" * 100)
+            run = {
+                "id": "remote",
+                "type": "train",
+                "backend": {"name": "musubi-tuner"},
+                "model": {"base": "repo/model"},
+                "datasets": [{"id": "tiny"}],
+                "params": {"steps": 1},
+                "compute": {"executor": "runpod"},
+                "backend_overrides": {"musubi-tuner": {"architecture": "flux2", "model_bundle": "none", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}}},
+            }
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=200), patch("kura.run_commands._hf_file_size_bytes", return_value=200):
+                    payload = plan_run("remote")
+            finally:
+                os.chdir(previous)
+        self.assertEqual(payload["model_downloads"]["bytes"], 200, payload["model_downloads"])
+        self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
+        self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
 
     def test_checkpoint_safety_preflight_rejects_many_unpruned_checkpoints(self) -> None:
         run = {
@@ -2156,6 +2207,35 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(expected["text_encoder"], "qwen3_4b_text_encoder")
         self.assertEqual(bundle["output"]["lora_format"], "comfyui")
 
+    def test_compile_musubi_uses_dataset_root_when_images_subdir_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "tiny"
+            dataset.mkdir(parents=True)
+            (dataset / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            run = self._run()
+            destination = root / "runs" / "musubi-example" / "resolved" / "musubi"
+
+            compile_musubi_tuner(run, destination)
+
+            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
+        self.assertIn('image_directory = "/workspace/datasets/tiny"', dataset_toml)
+
+    def test_compile_musubi_prefers_images_subdir_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "tiny"
+            (dataset / "images").mkdir(parents=True)
+            (dataset / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            run = self._run()
+            destination = root / "runs" / "musubi-example" / "resolved" / "musubi"
+
+            compile_musubi_tuner(run, destination)
+
+            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
+        self.assertIn('image_directory = "/workspace/datasets/tiny/images"', dataset_toml)
+
     def test_command_musubi_only_adds_memory_saving_flags_when_explicit(self) -> None:
         run = self._run()
         run["backend_overrides"]["musubi-tuner"]["gradient_checkpointing"] = True
@@ -2550,6 +2630,8 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("repo_cache_dirs(cache_dir, item)", script)
         self.assertNotIn("remove_incomplete_files(cache_dir)", script)
         self.assertIn("removed {removed} incomplete", script)
+        self.assertIn("def stable_link_target", script)
+        self.assertIn("os.symlink(stable_link_target(path, link_path), link_path)", script)
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
         self.assertIn("/workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
         self.assertIn("--dit /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
@@ -2559,6 +2641,20 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertLess(script.index("hf_hub_download"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
         self.assertLess(script.index("expected_format"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
         self.assertLess(script.index("src/musubi_tuner/flux_2_train_network.py"), script.rindex("lora_unet_*"))
+
+    def test_hf_download_links_workspace_cache_relatively(self) -> None:
+        namespace: dict[str, Any] = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        stable_link_target = namespace["stable_link_target"]
+
+        target = "/workspace/cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors"
+        link_path = "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors"
+        self.assertEqual(
+            stable_link_target(target, link_path),
+            "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
+        )
+        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "/root/.cache/huggingface/weights.safetensors")
 
     def test_command_musubi_rejects_model_download_local_dir(self) -> None:
         run = self._run()
