@@ -66,6 +66,7 @@ For local workspace configuration keys, see `docs/workspace-config.md`.
 Use the focused project skills under `.claude/skills/` for details that should not live in this always-loaded file:
 
 - `kura-core`
+- `training-parameter-planning`
 - `local-disk-safety`
 - `runpod-lifecycle`
 - `musubi-tuner-backend`

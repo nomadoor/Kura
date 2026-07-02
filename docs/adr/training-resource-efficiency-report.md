@@ -230,7 +230,12 @@ values into `resolved/manifest.lock.yaml` and backend lock files. This follows
 Kura's file-first rule: the same locked run must not change meaning just because
 it is replayed on another machine.
 
-The skill should implement the existing safety principle as a decision ladder:
+Status update (2026-07-02): this decision procedure is now implemented as the
+`training-parameter-planning` skill, with a companion `recipes.md` that
+accumulates verified (architecture × task) parameter knowledge with provenance
+labels and run-id evidence.
+
+The skill implements the existing safety principle as a decision ladder:
 first propose adjustments that do not change meaning; then propose speed-only
 trade-offs and report them clearly; finally, require explicit user approval for
 quality-affecting changes such as resolution, batch size, rank, or precision.
