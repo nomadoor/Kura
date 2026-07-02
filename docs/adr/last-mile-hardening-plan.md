@@ -51,13 +51,15 @@ def atomic_write_yaml(path: Path, value: Any) -> None:
 ```
 
 `atomic_write_text` must write a temporary file in the destination directory,
-flush it, and replace the target with `os.replace`.
+flush and `fsync` the temporary file, replace the target with `os.replace`, and
+make a best-effort `fsync` of the parent directory on platforms that support it.
+The helper must clean up the temporary file on failure.
 
 Replace existing state writes without changing public signatures:
 
 | Location | Target | Change |
 | --- | --- | --- |
-| `executors.py` `_write_json` | `status.json`, observations | Delegate to `atomic_write_json` after existing redaction. |
+| `executors.py` `_write_json` | status, realization, and observation JSON writes | Delegate to `atomic_write_json` after existing redaction. |
 | `workspace.py` `dump_yaml` | `run.yaml`, `manifest.lock.yaml`, `env.lock` | Delegate to `atomic_write_yaml`. |
 | `render.py` `write_yaml` | render lock files | Remove the duplicate helper and use `workspace.dump_yaml`. |
 | `render.py` `status()` | `status.json` | Write atomically after read-modify-write. |
@@ -65,7 +67,9 @@ Replace existing state writes without changing public signatures:
 | `cli.py` run creation/compile | `status.json` | Write atomically. |
 | `cli.py` index rebuild | `index.jsonl` | Build the full text and atomically replace the file. |
 
-Do not change append-only files such as `events.jsonl` and `stdout.log`.
+Do not change append-only files or immutable run records such as `events.jsonl`,
+`stdout.log`, and files under `realizations/` except where an existing helper
+already owns a whole-file JSON write.
 
 Tests:
 
@@ -115,7 +119,9 @@ source in `hf_download.py`.
 
 Split the large modules in three stages. Each old module becomes a package with
 an `__init__.py` that re-exports the previous public surface, including private
-symbols that current tests or modules import.
+symbols that current tests or modules import. Replace a module file with its
+same-named package in a single commit so Python never sees both
+`src/kura/<name>.py` and `src/kura/<name>/` as competing implementations.
 
 Rules:
 
@@ -218,5 +224,7 @@ uv run kura run plan <existing-run-id>
 ```
 
 For WS2 and WS3, spot-check command generation by compiling an existing run
-before and after the refactor and comparing `resolved/command.json`. Only
-irrelevant whitespace differences are acceptable.
+before and after the refactor and comparing `resolved/command.json`. For WS3,
+only irrelevant whitespace differences are acceptable. For WS2, differences
+must be limited to the extracted `python -c` script source while argv/env
+contract and runtime meaning remain unchanged.
