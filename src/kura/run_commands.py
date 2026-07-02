@@ -1755,7 +1755,7 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
             _wait_http_ready(endpoint, timeout_sec=max(ready_timeout, 180))
             code = launch_render(workspace, run_dir, endpoint_override=endpoint, lora_name_override=lora_name, executor_name="runpod", manage_lora_stage=False)
             state_word = "completed" if code == 0 else "failed"
-            _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"RunPod render {run_id} {state_word} with exit code {code}.")
+            _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"RunPod render {run_id} {state_word} with exit code {code}.", priority="3")
             return code
         finally:
             tunnel.terminate()
@@ -1776,7 +1776,7 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
             _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
         message = _safe_error(exc)
         print(f"cannot launch runpod render: {message}", file=sys.stderr)
-        _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"RunPod render {run_id} failed before completion:\n{message}")
+        _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"RunPod render {run_id} failed before completion:\n{message}", priority="3")
         return 1
     finally:
         if launched:
@@ -1806,12 +1806,12 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             code = launch_render(_workspace(), run_dir, dry_run=dry_run, executor_name="local")
             if not dry_run:
                 state_word = "completed" if code == 0 else "failed"
-                _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"Render {run_id} {state_word} with exit code {code}.")
+                _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"Render {run_id} {state_word} with exit code {code}.", priority="3")
             return code
         except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
             message = _safe_error(exc)
             print(f"cannot launch render: {message}", file=sys.stderr)
-            _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}")
+            _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
             return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
