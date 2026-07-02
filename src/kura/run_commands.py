@@ -30,6 +30,7 @@ import yaml
 
 from kura.backends import command_ai_toolkit, command_musubi_tuner, musubi_model_download_specs
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets, launch_docker, launch_runpod, launch_runpod_session, reconcile_docker, stage_runpod, stop_docker, stop_runpod
+from kura.fsio import atomic_write_json
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
@@ -843,7 +844,7 @@ def download_run(run_id: str, *, force: bool = False) -> int:
                         status["total_steps"] = steps
                 except (OSError, ValueError, yaml.YAMLError):
                     pass
-            (run_dir / "status.json").write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            atomic_write_json(run_dir / "status.json", status)
             return True
 
         if downloaded_run.exists() and not force:
@@ -1030,7 +1031,7 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
         status = json.loads(status_path.read_text(encoding="utf-8"))
         status["pulled_outputs"] = pulled
         status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
-        status_path.write_text(json.dumps(_redact_secrets(status), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(status_path, _redact_secrets(status))
         _event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(pulled), "outputs": pulled})
         print(json.dumps({"run_id": args.run_id, "destination": str(destination), "pulled": pulled}, ensure_ascii=False, indent=2))
         return 0
@@ -1235,7 +1236,7 @@ fi
     status["remote_log_bytes"] = remote_size
     status["remote_log_synced_at"] = datetime.now().astimezone().isoformat()
     _materialize_stdout_progress(run_dir, status, state=str(status.get("state") or "running"))
-    status_path.write_text(json.dumps(_redact_secrets(status), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(status_path, _redact_secrets(status))
     return True
 
 
@@ -1446,7 +1447,7 @@ echo $!
         status = json.loads(status_path.read_text(encoding="utf-8"))
         status["remote_pid"] = remote_pid
         status["remote_job_started_at"] = datetime.now().astimezone().isoformat()
-        status_path.write_text(json.dumps(_redact_secrets(status), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(status_path, _redact_secrets(status))
     except (OSError, json.JSONDecodeError):
         pass
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None

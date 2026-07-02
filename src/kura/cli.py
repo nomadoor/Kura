@@ -23,6 +23,7 @@ from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
+from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -174,7 +175,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
-    (run_dir / "status.json").write_text(json.dumps({"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []}, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
     (run_dir / "plan.md").write_text("# Training plan\n\n", encoding="utf-8")
     (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
     for relative in ("logs/events.jsonl", "metrics/metrics.jsonl", "samples/samples.jsonl"):
@@ -193,7 +194,7 @@ def cmd_render_new(args: argparse.Namespace) -> int:
         (run_dir / relative).mkdir(parents=True, exist_ok=True)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "promptset": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
-    (run_dir / "status.json").write_text(json.dumps({"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []}, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
     (run_dir / "plan.md").write_text("# Render plan\n\n", encoding="utf-8"); (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
     (run_dir / "logs/events.jsonl").touch(); (run_dir / "samples/images.jsonl").touch()
     print(run_id); return 0
@@ -264,7 +265,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     status_path = run_dir / "status.json"
     status = json.loads(status_path.read_text(encoding="utf-8"))
     status["state"] = "compiled"
-    status_path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(status_path, status)
     print(f"compiled run: {args.run_id}")
     return 0
 
@@ -772,9 +773,10 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
             entries.append(entry)
         except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
             print(f"warning: skipped {run_file.parent.name}: {_safe_error(exc)}", file=sys.stderr)
-    with (_workspace() / "index.jsonl").open("w", encoding="utf-8") as handle:
-        for entry in entries:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    atomic_write_text(
+        _workspace() / "index.jsonl",
+        "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries),
+    )
     print(f"rebuilt index: {len(entries)} runs")
     return 0
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from kura import __version__
+from kura.fsio import atomic_write_json
 
 CONTAINER_WORKSPACE = "/workspace"
 MIN_FREE_SPACE_GIB = 50
@@ -72,7 +73,7 @@ def _redact_secrets(value: Any) -> Any:
 
 
 def _write_json(path: Path, value: Any) -> None:
-    path.write_text(json.dumps(_redact_secrets(value), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, _redact_secrets(value))
 
 
 def _safe_env(env: dict[str, str]) -> dict[str, str]:
