@@ -6,12 +6,14 @@ import argparse
 import asyncio
 import contextlib
 import io
+import importlib.util
 import os
 import struct
 import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import unittest
 import json
 from pathlib import Path
@@ -1305,6 +1307,31 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(lora_source, source.resolve())
             self.assertIsNotNone(lora_name)
             self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
+
+    def test_comfyui_prepare_model_ready_logs_json_paths(self) -> None:
+        fake_hf = types.ModuleType("huggingface_hub")
+        fake_hf.hf_hub_download = lambda **kwargs: ""
+        with patch.dict(sys.modules, {"huggingface_hub": fake_hf}):
+            spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloaded = root / "cache" / "toy.safetensors"
+            downloaded.parent.mkdir()
+            downloaded.write_bytes(b"toy")
+            module._download_model = lambda spec, cache_dir: downloaded
+            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry=registry)
+            events = [json.loads(line) for line in buffer.getvalue().splitlines()]
+            self.assertEqual(events[0]["event"], "model_ready")
+            self.assertIsInstance(events[0]["source"], str)
+            self.assertTrue((root / "ComfyUI" / "models" / "checkpoints" / "toy.safetensors").is_symlink())
 
     def test_render_failure_appends_to_existing_stdout_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

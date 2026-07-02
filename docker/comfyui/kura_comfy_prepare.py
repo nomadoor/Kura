@@ -148,7 +148,7 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
                 continue
             target.unlink()
         os.symlink(downloaded, target)
-        print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": downloaded}, ensure_ascii=False), flush=True)
+        print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": str(downloaded)}, ensure_ascii=False), flush=True)
     return specs
 
 
