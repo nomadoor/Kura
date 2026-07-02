@@ -1,6 +1,6 @@
 # Training resource efficiency report
 
-Status: investigation report, release-blocking concerns.
+Status: investigation report, scoped release blockers.
 
 Date: 2026-07-02
 
@@ -11,11 +11,17 @@ problem is not limited to FLUX.1 Kontext. Across backends, Kura exposes useful
 low-memory knobs, but it does not yet treat model artifact size, runtime
 precision, VRAM class, and download cost as one planned training decision.
 
-This is a release blocker for the current branch. Kura's value is that an AI
-agent can make reasonable training trade-offs for the user's environment,
+Parts of this are release blockers for the current branch. Kura's value is that
+an AI agent can make reasonable training trade-offs for the user's environment,
 instead of making the user hand-pick every low-memory flag. The current behavior
-does not meet that bar: it can silently select or encourage large full-precision
-artifacts, then only discover the cost after launch.
+does not meet that bar: it can silently select or encourage large
+full-precision artifacts, then only discover the cost after launch.
+
+The immediate release blockers are the places where Kura can still surprise the
+user: missing plan visibility, missing approval gates for large downloads, and
+heavy smoke/default recipes that look like practical local paths. The broader
+resource profile schema should be designed carefully in a separate ADR rather
+than rushed as part of the emergency fix.
 
 ## Owner concern to carry forward
 
@@ -58,7 +64,9 @@ However, Kura does not yet distinguish between:
 - model family, such as FLUX.1 Kontext or FLUX.2 klein
 - artifact profile, such as full, fp8, int8, quantized text encoder, or local
   existing paths
-- runtime profile, such as default, 24GB, 12GB, low-vram, or remote-large
+- runtime strategy, such as gradient checkpointing, quantization, block swap,
+  CPU offload, or text encoder precision
+- hardware fit, such as detected or requested VRAM class
 - output precision, such as saving LoRA as bf16
 
 As a result, a run can look optimized at runtime while still selecting wasteful
@@ -118,54 +126,111 @@ But `kura run plan` does not include or render that estimate.
 This means the command the user must inspect before launch can omit the most
 important fact: how many GiB will be downloaded, and which files are responsible.
 
-## Problems to fix before release
+## Fix order
+
+The fixes should not be treated as one large schema change. The right order is:
+
+1. Visibility.
+
+   Add model download estimates to `kura run plan`. This is behavior-preserving
+   and would have prevented the incident by showing the large download before
+   launch.
+
+2. Gates.
+
+   Add approval gates or hard warnings for large downloads, unknown-size model
+   files, and known-heavy configurations that lack expected low-memory settings.
+
+3. Defaults and smoke recipes.
+
+   Fix clearly wrong default recipes, especially FLUX.1 Kontext smoke using
+   FP16 T5 without `fp8_t5`. Audit AI-Toolkit defaults, but document any
+   behavior change because recompiling an existing `run.yaml` may produce a
+   different native config.
+
+4. Schema.
+
+   Design resource/artifact profiles as a separate ADR. This should happen
+   before adding more known model bundles, because every new bundle otherwise
+   hardcodes another artifact choice.
+
+## Release blockers
+
+The following items block the current release:
 
 1. `kura run plan` must show model download estimates.
 
    Show total bytes, per-file estimates, unknown-size files, and whether the
-   estimate is based on explicit downloads, known bundles, or existing paths.
+   estimate is based on explicit downloads, known bundles, existing paths, or
+   cache hits. The estimate should subtract files already present in the
+   workspace cache when Kura can prove they are already available.
+
+2. Large downloads need an approval gate.
+
    A model download above a configured threshold should require explicit
-   approval, not just a generic disk preflight warning.
+   approval, not just a generic disk preflight warning. Unknown-size files must
+   be shown honestly as unknown rather than omitted.
 
-2. Kura needs a resource/artifact profile, not just scattered flags.
-
-   The schema should express intent such as `auto`, `local-12gb`, `local-24gb`,
-   `remote-24gb`, `remote-large`, or equivalent. Kura can then choose artifact
-   variants and runtime flags consistently. This should include DiT precision,
-   text encoder precision, quantization, block swap/offload, gradient
-   checkpointing, batch, accumulation, and resolution.
-
-3. Full-precision artifacts must not be the silent default for large models.
-
-   If fp8/int8 artifacts are normal and quality-acceptable for training, Kura
-   should prefer them by default for local runs. If a low-vram setting has a
-   serious speed or quality trade-off, Kura should surface that trade-off and
-   require approval before applying it.
-
-4. Musubi real smoke must separate adapter proof from user-practical proof.
+3. Musubi real smoke must separate adapter proof from user-practical proof.
 
    Heavy acceptance recipes should be labeled as such. Local default smoke
    recipes should use the smallest practical artifact profile and the same
-   memory-saving path Kura would recommend to a user.
+   memory-saving path Kura would recommend to a user. At minimum, FLUX.1 Kontext
+   smoke must stop presenting FP16 T5 without `fp8_t5` as the normal local path.
 
-5. AI-Toolkit defaults need an audit.
+4. AI-Toolkit defaults need an audit.
 
    Kura should not override upstream consumer-GPU practice with heavier defaults.
-   At minimum, quantization and gradient checkpointing should be considered
-   default-on for large image/video models unless the user or a profile says
-   otherwise.
+   At minimum, quantization and gradient checkpointing should be considered for
+   large image/video models. Because this can change the meaning of recompiling
+   an existing run, any default change needs explicit documentation and release
+   notes.
 
-6. Plan output needs VRAM-risk warnings.
+## Important follow-up, but not an emergency blocker
+
+Kura needs a resource/artifact profile, not just scattered flags.
+
+This schema should not be a single enum such as `local-12gb`, `local-24gb`, or
+`remote-large`. That mixes location and VRAM class into one name and creates
+combination pressure. The schema should use axes, for example:
+
+- `vram_class` or `auto`
+- `artifact_precision`
+- `speed_tolerance`
+- explicit override fields for model roles when needed
+
+`auto` must resolve at compile time and freeze concrete decisions into
+`resolved/manifest.lock.yaml` and backend lock files. This follows Kura's
+file-first rule: the same locked run must not change meaning just because it is
+replayed on another machine.
+
+The resolver should implement the existing safety principle: choose the least
+meaning-changing adjustment that fits the available hardware. Gradient
+checkpointing and fp8 text encoders may be normal default adjustments for large
+models; block swap or CPU offload may deserve approval when the speed hit is
+large. Small models such as SD1.5, and many SDXL cases, should not be slowed down
+by unnecessary low-VRAM settings when they already fit comfortably.
+
+## Additional required fixes
+
+1. Plan output needs VRAM-risk warnings.
 
    Disk fit is not enough. The plan should warn when a known-heavy architecture
    lacks expected memory-saving settings, or when selected model artifacts are
    unlikely to fit the configured/local GPU class.
 
-7. Documentation must stop presenting "passed smoke" as enough capacity proof.
+2. Documentation must stop presenting "passed smoke" as enough capacity proof.
 
    The Musubi smoke docs should record artifact profile, expected VRAM class,
    download size, and whether the result represents a practical local default or
    a heavy developer acceptance test.
+
+3. Full-precision artifacts must not be the silent default for large models.
+
+   If fp8/int8 artifacts are normal and quality-acceptable for training, Kura
+   should prefer them when the model and hardware class justify it. If a
+   low-vram setting has a serious speed or quality trade-off, Kura should surface
+   that trade-off and require approval before applying it.
 
 ## Design direction
 
@@ -188,11 +253,10 @@ reasonable efficient profile from the environment and show what it chose.
 ## Immediate next implementation candidates
 
 1. Add model download estimates to `kura run plan`.
-2. Add warning or approval gates for large downloads and missing low-memory
+2. Add approval gates for large downloads and missing low-memory
    flags on known-heavy architectures.
 3. Change FLUX.1 Kontext smoke to an efficient profile, including fp8 T5 where
    compatible, or clearly mark the current recipe as heavy.
 4. Audit AI-Toolkit generated defaults against upstream examples.
-5. Draft a schema change for resource/artifact profiles before adding more
-   model bundles.
-
+5. Draft a separate resource/artifact profile ADR before adding more model
+   bundles.
