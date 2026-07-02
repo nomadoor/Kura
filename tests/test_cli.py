@@ -2770,7 +2770,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
-            with patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 docker_preflight(root, mounts)
             self.assertTrue((root / "cache" / "huggingface").is_dir())
 
@@ -2783,8 +2783,8 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.executors.shutil.disk_usage", return_value=Usage()),
+                patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
                     docker_preflight(root, [])
@@ -2798,8 +2798,8 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.executors.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.executors.shutil.disk_usage", return_value=Usage()),
+                patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
                 payload = docker_preflight(root, [], min_free_gb=10)
         self.assertEqual(payload["disk"]["workspace"]["free_bytes"], 20 * 1024**3)
@@ -2936,7 +2936,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')
-            with patch("kura.executors.subprocess.run", return_value=result):
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
                 status = reconcile_docker(run_dir)
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["exit_code"], 0)
@@ -2950,7 +2950,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')
-            with patch("kura.executors.subprocess.run", return_value=result):
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
                 status = reconcile_docker(run_dir)
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["last_step"], 100)
@@ -2966,7 +2966,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             result = __import__("subprocess").CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}')
-            with patch("kura.executors.subprocess.run", return_value=result):
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
                 status = reconcile_docker(run_dir)
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["last_step"], 5)
@@ -2977,7 +2977,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             result = __import__("subprocess").CompletedProcess([], 1, "", "Error: No such container")
-            with patch("kura.executors.subprocess.run", return_value=result):
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
                 status = reconcile_docker(run_dir)
             self.assertEqual(status["state"], "interrupted")
             self.assertIsNone(status["exit_code"])
@@ -3319,7 +3319,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = self._run_dir(root)
             self._stage_upload(root, run_dir)
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret", "HF_TOKEN": "hf-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
                     realization_id = launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config())
             self.assertIsNotNone(realization_id)
             payload = request.call_args.args[3]
@@ -3353,7 +3353,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 "ports": ["8675/http", "22/tcp"],
             }
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config)
             payload = request.call_args.args[3]
             self.assertEqual(payload["templateId"], "0fqzfjy6f3")
@@ -3370,7 +3370,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             root = Path(directory)
             run_dir = self._run_dir(root)
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
                     realization_id = launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=self._config(), purpose="comfyui-render")
             self.assertIsNotNone(realization_id)
             payload = request.call_args.args[3]
@@ -3392,7 +3392,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 "country_codes": ["US"],
             }
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config)
             payload = request.call_args.args[3]
             self.assertEqual(payload["dataCenterIds"], ["US-GA-1"])
@@ -3406,7 +3406,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = self._run_dir(root)
             self._stage_upload(root, run_dir)
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", side_effect=[ValueError("no community capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
+                with patch("kura.executors.runpod._runpod_request", side_effect=[ValueError("no community capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config())
             first = request.call_args_list[0].args[3]
             second = request.call_args_list[1].args[3]
@@ -3422,7 +3422,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self._stage_upload(root, run_dir)
             config = {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "cloud_types": ["COMMUNITY"], "gpu_type_priority": "custom"}
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", side_effect=[ValueError("no A5000 capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
+                with patch("kura.executors.runpod._runpod_request", side_effect=[ValueError("no A5000 capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config)
             first = request.call_args_list[0].args[3]
             second = request.call_args_list[1].args[3]
@@ -3493,7 +3493,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = self._run_dir(Path(directory))
             (run_dir / "status.json").write_text(json.dumps({"state": "interrupted", "pod_id": "stale-pod", "last_observation": "realizations/old.observed.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret", "HF_TOKEN": "hf-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", side_effect=ValueError("RunPod API POST /pods failed (500): echoed api-secret hf-secret")):
+                with patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API POST /pods failed (500): echoed api-secret hf-secret")):
                     with self.assertRaisesRegex(ValueError, r"\\*\\*\\*"):
                         launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._container_disk_config())
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -3646,7 +3646,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={"id": "pod-1", "desiredStatus": "EXITED"}):
+                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "EXITED"}):
                     status = reconcile_runpod(run_dir, self._config())
             self.assertEqual(status["state"], "unknown")
             self.assertIsNone(status["exit_code"])
@@ -4077,7 +4077,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = self._run_dir(Path(directory))
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={}) as request:
+                with patch("kura.executors.runpod._runpod_request", return_value={}) as request:
                     status = stop_runpod(run_dir, self._config())
             self.assertEqual(status["state"], "interrupted")
             self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
@@ -4087,7 +4087,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = self._run_dir(Path(directory))
             (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0, "pod_id": "pod-1"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors._runpod_request", return_value={}):
+                with patch("kura.executors.runpod._runpod_request", return_value={}):
                     status = stop_runpod(run_dir, self._config())
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["exit_code"], 0)
