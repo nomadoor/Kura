@@ -9,11 +9,12 @@
 ## character
 
 - rank: 16–32
-- lr: 1e-4 (adamw8bit)
+- lr: 7e-5 provisional Kura default; 1e-4 is a common stronger SDXL option
 - batch: 2–4 (effective)
 - resolution: 768 owner-preferred starting point; 1024 when the task/model and
   hardware justify it.
 - source: owner (2026-07-02) for 768 practical starting point; upstream
-  (AI-Toolkit SDXL practice) for 1024 as a common higher-cost option.
+  (AI-Toolkit SDXL practice) for 1024 and 1e-4 as common higher-cost/stronger
+  options.
 - notes: unverified in this workspace — replace with `source: run <id>` after
   the first evaluated run.

@@ -7,7 +7,7 @@
 
 ## character
 
-- lr: 5e-5
+- lr: 7e-5 provisional Kura default
   source: owner (2026-07-02)
 - batch: 2 (effective)
   source: owner (2026-07-02)

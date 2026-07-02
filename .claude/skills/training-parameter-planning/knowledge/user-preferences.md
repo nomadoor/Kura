@@ -7,13 +7,17 @@ only when the owner says they should apply generally.
 Format example (keep entries in this shape):
 
 ```
-- lr starting point: prefer 5e-5 over the common 1e-4 for <scope>
+- lr starting point: prefer 7e-5 over the common 1e-4 for <scope>
   source: owner (<date>)
   note: <why / observed behavior>
 ```
 
 Confirmed entries:
 
+- LoRA learning-rate starting point: use 7e-5 as the owner's provisional Kura
+  default when no evaluated run or architecture-specific reason says
+  otherwise. Treat 1e-4 as a common stronger option, not the default.
+  source: owner (2026-07-02)
 - character LoRA resolution: 768 is usually sufficient as a practical starting
   point; raise toward 1024 only when the model/task benefits and hardware has
   headroom.
@@ -21,10 +25,6 @@ Confirmed entries:
 
 Known signals not yet confirmed as preferences:
 
-- The owner has hinted at preferring lower starting learning rates (7e-5 /
-  5e-5) over the common 1e-4, but has not confirmed this as a general
-  preference — ask when it next becomes relevant, then record the answer
-  here with `source: owner`.
 - The owner uses gradient checkpointing sparingly and dislikes it being
   enabled without need. Already encoded as skill procedure (headroom rule),
   noted here for context. source: owner (2026-07-02)
