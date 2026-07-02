@@ -232,7 +232,7 @@ SPECS: dict[str, SmokeSpec] = {
         model_downloads={
             "dit": {"repo": "black-forest-labs/FLUX.1-Kontext-dev", "filename": "flux1-kontext-dev.safetensors"},
             "vae": {"repo": "black-forest-labs/FLUX.1-Kontext-dev", "filename": "ae.safetensors"},
-            "text_encoder1": {"repo": "comfyanonymous/flux_text_encoders", "filename": "t5xxl_fp16.safetensors"},
+            "text_encoder1": {"repo": "comfyanonymous/flux_text_encoders", "filename": "t5xxl_fp8_e4m3fn.safetensors"},
             "text_encoder2": {"repo": "comfyanonymous/flux_text_encoders", "filename": "clip_l.safetensors"},
         },
         extra_override={
@@ -248,6 +248,7 @@ SPECS: dict[str, SmokeSpec] = {
             "gradient_checkpointing": True,
             "fp8_base": True,
             "fp8_scaled": True,
+            "fp8_t5": True,
             "text_encoder_batch_size": 1,
             "extra_args": ["--timestep_sampling", "flux_shift", "--weighting_scheme", "none", "--blocks_to_swap", "24"],
             "save_every_n_steps": 1,

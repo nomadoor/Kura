@@ -954,7 +954,10 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                with (
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=None),
+                ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="plan-example", json=False)), 0)
             finally:
                 os.chdir(previous)
@@ -966,8 +969,59 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("items        2", output)
             self.assertIn("lr           0.00005", output)
             self.assertIn("extra_args   --blocks_to_swap, 3", output)
+            self.assertIn("Model downloads", output)
+            self.assertIn("unknown-size files", output)
             self.assertIn("Disk warnings", output)
             self.assertIn("checkpoint cadence may create about 15 checkpoints", output)
+
+    def test_run_plan_prints_musubi_download_estimates_and_cache_hits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "download-plan"
+            cached = root / "cache" / "models" / "musubi" / "example--model" / "vae" / "vae.safetensors"
+            cached.parent.mkdir(parents=True)
+            cached.write_bytes(b"x" * 1024)
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "download-plan",
+                        "type": "train",
+                        "backend": {"name": "musubi-tuner"},
+                        "model": {"base": "custom"},
+                        "backend_overrides": {
+                            "musubi-tuner": {
+                                "architecture": "flux_kontext",
+                                "model_downloads": {
+                                    "dit": {"repo": "example/model", "filename": "dit.safetensors"},
+                                    "vae": {"repo": "example/model", "filename": "vae.safetensors"},
+                                },
+                            }
+                        },
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=3 * 1024**3),
+                ):
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="download-plan", json=True)), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+        downloads = payload["model_downloads"]
+        self.assertEqual(downloads["bytes"], 3 * 1024**3)
+        self.assertEqual(downloads["cached_bytes"], 1024)
+        self.assertEqual(len(downloads["items"]), 2)
+        cached_items = [item for item in downloads["items"] if item["key"] == "vae"]
+        self.assertEqual(cached_items[0]["download_bytes"], 0)
+        self.assertTrue(cached_items[0]["cached"])
 
     def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2007,7 +2061,24 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(process["datasets"][0]["folder_path"], "/workspace/datasets/tiny/images")
         self.assertEqual(process["network"]["linear"], 4)
         self.assertEqual(process["train"]["steps"], 1)
+        self.assertTrue(process["train"]["gradient_checkpointing"])
+        self.assertTrue(process["model"]["quantize"])
+        self.assertTrue(process["model"]["quantize_te"])
+        self.assertFalse(process["model"]["low_vram"])
         self.assertEqual(command, {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "/workspace/runs/ai-toolkit-example/resolved/ai-toolkit.yaml"], "env": {}})
+
+    def test_compile_keeps_small_ai_toolkit_models_unquantized_by_default(self) -> None:
+        run = self._run()
+        run["model"] = {"base": "stabilityai/stable-diffusion-xl-base-1.0"}
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            compile_ai_toolkit(run, destination)
+            config = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))
+        process = config["config"]["process"][0]
+        self.assertFalse(process["train"]["gradient_checkpointing"])
+        self.assertFalse(process["model"]["quantize"])
+        self.assertFalse(process["model"]["quantize_te"])
+        self.assertFalse(process["model"]["low_vram"])
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
         run = self._run()
@@ -2841,6 +2912,33 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 20 * 1024**3)
         self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 20 * 1024**3)
 
+    def test_local_launch_disk_preflight_rejects_large_unapproved_model_downloads(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "model": {"base": "custom"},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "model_downloads": {
+                        "dit": {"repo": "example/model", "filename": "dit.safetensors"},
+                    },
+                }
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
+                patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=30 * 1024**3),
+            ):
+                with self.assertRaisesRegex(ValueError, "allow_large_model_downloads"):
+                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+                run["safety"] = {"allow_large_model_downloads": True}
+                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+        self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 30 * 1024**3)
+
     def test_local_launch_disk_preflight_counts_allowed_checkpoint_budget(self) -> None:
         run = {
             "type": "train",
@@ -2874,7 +2972,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     },
                 }
             },
-            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2, "allow_large_model_downloads": True},
         }
         mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
         with tempfile.TemporaryDirectory() as directory:

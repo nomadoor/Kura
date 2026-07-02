@@ -85,9 +85,9 @@ make the artifact choice visible and resource-aware.
 ### Musubi smoke recipes
 
 `scripts/musubi_real_smoke.py` is a developer acceptance test, but it is still a
-high-risk source of copied recipes and release confidence. The current specs mix
-capacity-conscious choices with full artifacts. The FLUX.1 Kontext spec is the
-clearest problem:
+high-risk source of copied recipes and release confidence. The specs must not
+mix capacity-conscious choices with full artifacts in a way that looks like a
+practical default. The FLUX.1 Kontext incident recipe was the clearest problem:
 
 - downloads `black-forest-labs/FLUX.1-Kontext-dev/flux1-kontext-dev.safetensors`
 - downloads `black-forest-labs/FLUX.1-Kontext-dev/ae.safetensors`
@@ -100,7 +100,7 @@ default path a local user should run.
 
 ### AI-Toolkit backend defaults
 
-`src/kura/backends/ai_toolkit.py` currently defaults to:
+`src/kura/backends/ai_toolkit.py` previously defaulted to:
 
 - `train.gradient_checkpointing: false`
 - `model.quantize: false`
@@ -116,6 +116,12 @@ normal consumer-GPU settings, with low-vram available when needed:
 
 Saving the final LoRA as bf16 is fine. That is separate from how aggressively
 Kura should optimize model loading and training memory.
+
+The audit outcome is to enable gradient checkpointing, model quantization, and
+text encoder quantization by default for known-heavy AI-Toolkit model families
+such as Flux/Kontext/Qwen-class runs, while leaving SD1.5/SDXL-style smaller
+models unquantized by default. `low_vram` remains opt-in until the profile ADR
+can distinguish acceptable speed trade-offs.
 
 ### Run plan visibility
 
@@ -247,8 +253,8 @@ reasonable efficient profile from the environment and show what it chose.
 1. Add model download estimates to `kura run plan`.
 2. Add approval gates for large downloads and missing low-memory
    flags on known-heavy architectures.
-3. Change FLUX.1 Kontext smoke to an efficient profile, including fp8 T5 where
-   compatible, or clearly mark the current recipe as heavy.
+3. Keep FLUX.1 Kontext smoke on an efficient profile, including fp8 T5 where
+   compatible, or clearly mark any heavier recipe as heavy.
 4. Audit AI-Toolkit generated defaults against upstream examples.
 5. Draft a separate resource/artifact profile ADR before adding more model
    bundles.

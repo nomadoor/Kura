@@ -22,7 +22,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _backend_image_name, _command_for_backend, _image_config, _safe_error
-from kura.run_commands.plan import _checkpoint_safety_preflight, _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, stage_run, stop_run
+from kura.run_commands.plan import _checkpoint_safety_preflight, _configured_gib, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _model_download_safety_preflight, _parse_duration_seconds, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
 
@@ -201,6 +201,8 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
         else:
             if wait:
                 raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
+            if not dry_run:
+                _model_download_safety_preflight(locked, _estimate_musubi_download_bytes(locked))
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
             remote_spec = dict(spec)

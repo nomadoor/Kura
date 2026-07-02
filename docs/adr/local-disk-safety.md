@@ -40,6 +40,9 @@ launch.
   sizes before starting when metadata is reachable. The configured free-space
   floor is treated as the post-write safety margin, so a run that may download
   33GiB requires roughly `floor + 33GiB` free on the cache backing store.
+- Musubi model downloads above the safety threshold, 25GiB by default, require
+  explicit run intent with `safety.allow_large_model_downloads: true`. A run can
+  tune this threshold with `safety.large_model_download_gb`.
 - When many checkpoints are explicitly allowed, local Docker launch adds a
   conservative checkpoint write budget to the workspace requirement.
 - On WSL2, Kura auto-detects the distro backing drive from the WSL registry when
@@ -57,6 +60,7 @@ launch.
 | --- | --- | --- |
 | `kura doctor disk` | read-only inventory | exits non-zero on warning-severity issues |
 | local Docker launch | `StorageStatus.effective_free_bytes` plus estimated writes for workspace, cache, and writable mounts | low effective free, unknown WSL2 backing, excessive Docker build cache |
+| large Musubi model download | estimated new Hugging Face/model-cache writes after Kura cache hits | above `safety.large_model_download_gb` without `safety.allow_large_model_downloads: true` |
 | checkpoint-heavy train run | run plan / launch preflight | many unpruned checkpoints unless explicitly allowed |
 | RunPod download/pull | local destination free space | insufficient space for downloaded artifacts |
 | cleanup | dry-run by default | destructive action requires `--yes`; final artifacts require extra flag |

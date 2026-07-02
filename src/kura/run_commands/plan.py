@@ -251,14 +251,32 @@ def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int |
         return None
 
 
-def _estimate_musubi_download_bytes(run: dict[str, Any]) -> dict[str, Any]:
+def _workspace_cache_file(workspace: Path | None, container_path: str | None) -> Path | None:
+    if workspace is None or not container_path:
+        return None
+    prefix = "/workspace/"
+    if not container_path.startswith(prefix):
+        return None
+    return workspace / container_path[len(prefix):]
+
+
+def _cached_file_size(path: Path | None) -> int | None:
+    if path is None or not path.exists() or not path.is_file():
+        return None
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
+
+
+def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if backend_name != "musubi-tuner":
-        return {"bytes": 0, "items": [], "unknown": []}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": []}
     overrides = run.get("backend_overrides")
     if overrides is not None and not isinstance(overrides, dict):
-        return {"bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
     override = overrides.get("musubi-tuner", {}) if isinstance(overrides, dict) else {}
     existing_paths = {}
     if isinstance(override, dict):
@@ -268,20 +286,55 @@ def _estimate_musubi_download_bytes(run: dict[str, Any]) -> dict[str, Any]:
     try:
         specs, _ = musubi_model_download_specs(run, existing_paths=existing_paths)
     except ValueError:
-        return {"bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
-    total = 0
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+    download_total = 0
+    size_total = 0
+    cached_total = 0
     items: list[dict[str, Any]] = []
     unknown: list[str] = []
     for item in specs:
-        size = _hf_file_size_bytes(item)
+        cache_path = _workspace_cache_file(workspace, item.get("link_path"))
+        cached_size = _cached_file_size(cache_path)
+        cached = cached_size is not None
+        size = cached_size if cached else _hf_file_size_bytes(item)
+        download_size = 0 if cached else size
         record = {key: item.get(key) for key in ("key", "repo_id", "filename", "revision") if item.get(key)}
         record["size_bytes"] = size
+        record["download_bytes"] = download_size
+        record["cached"] = cached
+        if cache_path is not None:
+            record["cache_path"] = str(cache_path)
         items.append(record)
-        if size is None:
+        if cached and cached_size is not None:
+            cached_total += cached_size
+            size_total += cached_size
+        elif size is None:
             unknown.append(f"{item.get('repo_id')}:{item.get('filename')}")
         else:
-            total += size
-    return {"bytes": total, "items": items, "unknown": unknown}
+            size_total += size
+            download_total += size
+    return {"bytes": download_total, "total_bytes": size_total, "cached_bytes": cached_total, "items": items, "unknown": unknown}
+
+
+def _model_download_threshold_bytes(run: dict[str, Any]) -> int:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    return _configured_gib(safety.get("large_model_download_gb"), default=25) * 1024**3
+
+
+def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dict[str, Any]) -> None:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    if safety.get("allow_large_model_downloads") is True:
+        return
+    download_bytes = int(download_estimate.get("bytes") or 0)
+    threshold_bytes = _model_download_threshold_bytes(run)
+    if download_bytes <= threshold_bytes:
+        return
+    download_gib = (download_bytes + 1024**3 - 1) // 1024**3
+    threshold_gib = threshold_bytes // 1024**3
+    raise ValueError(
+        f"model downloads may write about {download_gib} GiB, above the {threshold_gib} GiB safety threshold; "
+        "inspect `kura run plan`, choose smaller/quantized artifacts, or set safety.allow_large_model_downloads: true if intentional"
+    )
 
 
 def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
@@ -312,7 +365,8 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
             paths[f"mount:{mount.get('target', mount['source'])}"] = source
     hf_cache_path = _hf_cache_path(workspace, mounts)
     paths.setdefault("hf_cache", hf_cache_path)
-    download_estimate = _estimate_musubi_download_bytes(run)
+    download_estimate = _estimate_musubi_download_bytes(run, workspace=workspace)
+    _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
     write_estimates = {
         "hf_cache": int(download_estimate.get("bytes") or 0),
@@ -453,6 +507,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
     important_overrides = _important_backend_overrides(run)
+    download_estimate = _estimate_musubi_download_bytes(run, workspace=workspace)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -475,6 +530,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "params": {key: value for key, value in plan_params.items() if value is not None},
         "sampling": sampling_payload,
         "backend_overrides": important_overrides,
+        "model_downloads": download_estimate,
         "disk_warnings": _disk_warnings(run, important_overrides),
     }
 
@@ -492,6 +548,27 @@ def _format_plan_value(value: Any) -> str:
 def _append_kv(lines: list[str], label: str, value: Any, *, indent: int = 2) -> None:
     prefix = " " * indent
     lines.append(f"{prefix}{label:<12} {_format_plan_value(value)}")
+
+
+def _format_bytes(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if number <= 0:
+        return "0 B"
+    gib = number / 1024**3
+    if gib >= 1:
+        return f"{gib:.1f} GiB"
+    mib = number / 1024**2
+    if mib >= 1:
+        return f"{mib:.1f} MiB"
+    kib = number / 1024
+    if kib >= 1:
+        return f"{kib:.1f} KiB"
+    return f"{number} B"
 
 
 def format_run_plan(payload: dict[str, Any]) -> str:
@@ -556,6 +633,30 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("Backend overrides")
         for key, value in overrides.items():
             _append_kv(lines, key, value)
+
+    downloads = payload.get("model_downloads") if isinstance(payload.get("model_downloads"), dict) else {}
+    download_items = downloads.get("items") if isinstance(downloads.get("items"), list) else []
+    unknown_downloads = downloads.get("unknown") if isinstance(downloads.get("unknown"), list) else []
+    if download_items or unknown_downloads:
+        lines.append("")
+        lines.append("Model downloads")
+        _append_kv(lines, "download", _format_bytes(downloads.get("bytes")))
+        _append_kv(lines, "cached", _format_bytes(downloads.get("cached_bytes")))
+        _append_kv(lines, "total", _format_bytes(downloads.get("total_bytes")))
+        for item in download_items:
+            role = item.get("key") or "model"
+            repo = item.get("repo_id") or "-"
+            filename = item.get("filename") or "-"
+            cache_state = "cached" if item.get("cached") else "missing"
+            lines.append(f"  - {_format_plan_value(role)}")
+            _append_kv(lines, "source", f"{repo}:{filename}", indent=4)
+            _append_kv(lines, "size", _format_bytes(item.get("size_bytes")), indent=4)
+            _append_kv(lines, "download", _format_bytes(item.get("download_bytes")), indent=4)
+            _append_kv(lines, "cache", cache_state, indent=4)
+        if unknown_downloads:
+            lines.append("  - unknown-size files")
+            for item in unknown_downloads:
+                lines.append(f"    - {item}")
     disk_warnings = payload.get("disk_warnings") if isinstance(payload.get("disk_warnings"), list) else []
     if disk_warnings:
         lines.append("")
