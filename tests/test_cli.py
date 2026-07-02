@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import types
 import unittest
 import json
 from pathlib import Path
@@ -1309,14 +1308,11 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
 
     def test_comfyui_prepare_model_ready_logs_json_paths(self) -> None:
-        fake_hf = types.ModuleType("huggingface_hub")
-        fake_hf.hf_hub_download = lambda **kwargs: ""
-        with patch.dict(sys.modules, {"huggingface_hub": fake_hf}):
-            spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
-            self.assertIsNotNone(spec)
-            self.assertIsNotNone(spec.loader)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             downloaded = root / "cache" / "toy.safetensors"

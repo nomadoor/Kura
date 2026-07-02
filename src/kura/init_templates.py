@@ -176,8 +176,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import hf_hub_download
-
 MODEL_INPUTS = {
     "CheckpointLoaderSimple": (("checkpoints", "ckpt_name"),),
     "VAELoader": (("vae", "vae_name"),),
@@ -250,6 +248,8 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
             specs.append(spec)
     if unknown:
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
+    from huggingface_hub import hf_hub_download
+
     for spec in specs:
         downloaded = hf_hub_download(repo_id=spec["repo"], filename=spec["filename"], subfolder=spec.get("subfolder"), revision=spec.get("revision"), cache_dir=str(cache_dir) if cache_dir else None, token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None)
         target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")

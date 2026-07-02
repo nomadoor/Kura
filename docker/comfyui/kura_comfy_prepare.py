@@ -12,9 +12,6 @@ import shutil
 import urllib.request
 from typing import Any
 
-from huggingface_hub import hf_hub_download
-
-
 MODEL_INPUTS: dict[str, tuple[tuple[str, str], ...]] = {
     "CheckpointLoaderSimple": (("checkpoints", "ckpt_name"),),
     "VAELoader": (("vae", "vae_name"),),
@@ -117,6 +114,8 @@ def _download_model(spec: dict[str, str], cache_dir: Path | None) -> Path:
             shutil.copyfileobj(response, handle)
         temporary.replace(target)
         return target
+    from huggingface_hub import hf_hub_download
+
     return Path(hf_hub_download(
         repo_id=spec["repo"],
         filename=spec["filename"],
