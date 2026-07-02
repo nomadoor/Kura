@@ -134,6 +134,12 @@ But `kura run plan` does not include or render that estimate.
 This means the command the user must inspect before launch can omit the most
 important fact: how many GiB will be downloaded, and which files are responsible.
 
+`kura run plan` should also include a factual `Resources` section for the agent
+skill: detected local GPU/VRAM when available, executor and requested RunPod GPU
+types, model architecture/base/artifact filenames, and memory-related flags.
+Unset values should be shown as `(not set)`. This section must not recommend,
+warn, or automatically change settings; it is an instrument panel for the skill.
+
 ## Fix order
 
 The fixes should not be treated as one large schema change. The right order is:
@@ -171,7 +177,9 @@ The following items block the current release:
    Show total bytes, per-file estimates, unknown-size files, and whether the
    estimate is based on explicit downloads, known bundles, existing paths, or
    cache hits. The estimate should subtract files already present in the
-   workspace cache when Kura can prove they are already available.
+   workspace cache when Kura can prove they are already available. The plan
+   should also expose factual resource inputs without recommendations so the
+   skill can decide what to propose.
 
 2. Large downloads need an approval gate.
 

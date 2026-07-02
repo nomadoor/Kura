@@ -957,6 +957,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan._hf_file_size_bytes", return_value=None),
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "NVIDIA A40, 46068\n", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="plan-example", json=False)), 0)
             finally:
@@ -971,6 +972,14 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("extra_args   --blocks_to_swap, 3", output)
             self.assertIn("Model downloads", output)
             self.assertIn("unknown-size files", output)
+            self.assertIn("Resources", output)
+            self.assertIn("local_gpu    NVIDIA A40", output)
+            self.assertIn("vram_mb      46068", output)
+            self.assertIn("runpod_gpu_type_ids", output)
+            self.assertIn("batch_size   2", output)
+            self.assertIn("rank         16", output)
+            self.assertIn("fp8_base     True", output)
+            self.assertIn("blocks_to_swap 3", output)
             self.assertIn("Disk warnings", output)
             self.assertIn("checkpoint cadence may create about 15 checkpoints", output)
 
@@ -1010,6 +1019,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan._hf_file_size_bytes", return_value=3 * 1024**3),
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="download-plan", json=True)), 0)
             finally:
@@ -1022,6 +1032,12 @@ class RunPlanTests(unittest.TestCase):
         cached_items = [item for item in downloads["items"] if item["key"] == "vae"]
         self.assertEqual(cached_items[0]["download_bytes"], 0)
         self.assertTrue(cached_items[0]["cached"])
+        resources = payload["resources"]
+        self.assertEqual(resources["hardware"]["local_gpu"]["name"], "unknown")
+        self.assertEqual(resources["model"]["architecture"], "flux_kontext")
+        self.assertEqual(resources["memory_flags"]["common"]["batch_size"], "(not set)")
+        artifact_filenames = {item["filename"] for item in resources["model"]["artifacts"]}
+        self.assertEqual(artifact_filenames, {"dit.safetensors", "vae.safetensors"})
 
     def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

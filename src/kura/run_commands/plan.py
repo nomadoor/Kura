@@ -28,6 +28,9 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _event, _run_datasets, _safe_error, _workspace_display_path
 
 
+NOT_SET = "(not set)"
+
+
 def _dataset_path(workspace: Path, dataset: dict[str, Any]) -> Path | None:
     path_value = dataset.get("path")
     if isinstance(path_value, str) and path_value:
@@ -61,6 +64,64 @@ def _nested_get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
             return None
         current = current[key]
     return current
+
+
+def _plan_value(value: Any) -> Any:
+    if value is None or value == "":
+        return NOT_SET
+    return value
+
+
+def _extra_args_value(extra_args: Any, name: str) -> Any:
+    if not isinstance(extra_args, list):
+        return NOT_SET
+    index = 0
+    while index < len(extra_args):
+        item = extra_args[index]
+        if not isinstance(item, str):
+            index += 1
+            continue
+        flag, sep, inline_value = item.partition("=")
+        if flag != name:
+            index += 1
+            continue
+        if sep:
+            return inline_value or True
+        if index + 1 < len(extra_args) and isinstance(extra_args[index + 1], str) and not extra_args[index + 1].startswith("--"):
+            return extra_args[index + 1]
+        return True
+    return NOT_SET
+
+
+def _local_gpu_payload() -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"name": "unknown", "vram_total_mb": "unknown"}
+    if result.returncode != 0:
+        return {"name": "unknown", "vram_total_mb": "unknown"}
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = [part.strip() for part in line.split(",", 1)]
+        if len(parts) != 2:
+            continue
+        try:
+            vram_total: int | str = int(parts[1])
+        except ValueError:
+            vram_total = "unknown"
+        return {"name": parts[0] or "unknown", "vram_total_mb": vram_total}
+    return {"name": "unknown", "vram_total_mb": "unknown"}
 
 
 def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +164,103 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             important[label] = value
     return important
+
+
+def _runpod_requested_gpus(compute: dict[str, Any], config: dict[str, Any]) -> Any:
+    gpu = compute.get("gpu") if isinstance(compute, dict) else None
+    if isinstance(gpu, str) and gpu and gpu.lower() not in {"true", "false", "gpu", "cpu"}:
+        return [gpu]
+    if isinstance(gpu, list) and all(isinstance(item, str) and item for item in gpu):
+        return list(gpu)
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    configured = runpod.get("gpu_type_ids") if isinstance(runpod, dict) else None
+    return configured if isinstance(configured, list) else NOT_SET
+
+
+def _model_artifact_filenames(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+    artifacts: list[dict[str, Any]] = []
+    for item in download_estimate.get("items") if isinstance(download_estimate.get("items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        artifacts.append(
+            {
+                "role": _plan_value(item.get("key")),
+                "filename": _plan_value(item.get("filename")),
+                "source": _plan_value(item.get("repo_id")),
+            }
+        )
+    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    backend_name = backend.get("name")
+    backend_override = overrides.get(backend_name) if isinstance(backend_name, str) and isinstance(overrides.get(backend_name), dict) else {}
+    paths = backend_override.get("model_paths") if isinstance(backend_override, dict) else None
+    if isinstance(paths, dict):
+        for role, value in sorted(paths.items()):
+            if isinstance(role, str) and isinstance(value, str) and value:
+                artifacts.append({"role": role, "filename": Path(value).name or value, "source": "model_paths"})
+    return artifacts
+
+
+def _resource_architecture(backend_name: Any, backend_override: dict[str, Any]) -> Any:
+    if not isinstance(backend_override, dict):
+        return NOT_SET
+    value = backend_override.get("architecture") or backend_override.get("model_arch")
+    if value:
+        return value
+    if backend_name == "musubi-tuner":
+        return "flux2"
+    return NOT_SET
+
+
+def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    backend_name = backend.get("name")
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
+    backend_override = overrides.get(backend_name) if isinstance(backend_name, str) and isinstance(overrides.get(backend_name), dict) else {}
+    extra_args = backend_override.get("extra_args") if isinstance(backend_override, dict) else None
+    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    common_flags = {
+        "batch_size": _plan_value(params.get("batch_size")),
+        "gradient_accumulation": _plan_value(params.get("gradient_accumulation") or params.get("gradient_accumulation_steps")),
+        "resolution": _plan_value(params.get("resolution")),
+        "rank": _plan_value(params.get("rank")),
+        "optimizer": _plan_value(params.get("optimizer")),
+    }
+    ai_toolkit_flags = {
+        "gradient_checkpointing": _plan_value(_nested_get(backend_override, ("config", "train", "gradient_checkpointing"))),
+        "quantize": _plan_value(_nested_get(backend_override, ("config", "model", "quantize"))),
+        "quantize_te": _plan_value(_nested_get(backend_override, ("config", "model", "quantize_te"))),
+        "low_vram": _plan_value(_nested_get(backend_override, ("config", "model", "low_vram"))),
+    }
+    musubi_flags = {
+        "fp8_base": _plan_value(backend_override.get("fp8_base") if isinstance(backend_override, dict) else None),
+        "fp8_scaled": _plan_value(backend_override.get("fp8_scaled") if isinstance(backend_override, dict) else None),
+        "fp8_t5": _plan_value(backend_override.get("fp8_t5") if isinstance(backend_override, dict) else None),
+        "fp8_llm": _plan_value(backend_override.get("fp8_llm") if isinstance(backend_override, dict) else None),
+        "fp8_vl": _plan_value(backend_override.get("fp8_vl") if isinstance(backend_override, dict) else None),
+        "blocks_to_swap": _plan_value(backend_override.get("blocks_to_swap")) if isinstance(backend_override, dict) and backend_override.get("blocks_to_swap") is not None else _extra_args_value(extra_args, "--blocks_to_swap"),
+    }
+    return {
+        "hardware": {"local_gpu": _local_gpu_payload()},
+        "executor": {
+            "name": _plan_value(executor),
+            "runpod_gpu_type_ids": _runpod_requested_gpus(compute, workspace_config) if executor == "runpod" else NOT_SET,
+        },
+        "model": {
+            "backend": _plan_value(backend_name),
+            "architecture": _resource_architecture(backend_name, backend_override),
+            "base": _plan_value(model.get("base")),
+            "artifacts": _model_artifact_filenames(run, download_estimate),
+        },
+        "memory_flags": {
+            "common": common_flags,
+            "ai_toolkit": ai_toolkit_flags,
+            "musubi": musubi_flags,
+        },
+    }
 
 
 def _as_positive_int(value: Any) -> int | None:
@@ -508,6 +666,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
 
     important_overrides = _important_backend_overrides(run)
     download_estimate = _estimate_musubi_download_bytes(run, workspace=workspace)
+    resources = _resources_payload(run, _workspace_config(), download_estimate)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -530,6 +689,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "params": {key: value for key, value in plan_params.items() if value is not None},
         "sampling": sampling_payload,
         "backend_overrides": important_overrides,
+        "resources": resources,
         "model_downloads": download_estimate,
         "disk_warnings": _disk_warnings(run, important_overrides),
     }
@@ -548,6 +708,11 @@ def _format_plan_value(value: Any) -> str:
 def _append_kv(lines: list[str], label: str, value: Any, *, indent: int = 2) -> None:
     prefix = " " * indent
     lines.append(f"{prefix}{label:<12} {_format_plan_value(value)}")
+
+
+def _append_mapping(lines: list[str], mapping: dict[str, Any], *, indent: int = 2) -> None:
+    for key, value in mapping.items():
+        _append_kv(lines, key, value, indent=indent)
 
 
 def _format_bytes(value: Any) -> str:
@@ -633,6 +798,41 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("Backend overrides")
         for key, value in overrides.items():
             _append_kv(lines, key, value)
+
+    resources = payload.get("resources") if isinstance(payload.get("resources"), dict) else {}
+    if resources:
+        lines.append("")
+        lines.append("Resources")
+        hardware = resources.get("hardware") if isinstance(resources.get("hardware"), dict) else {}
+        local_gpu = hardware.get("local_gpu") if isinstance(hardware.get("local_gpu"), dict) else {}
+        lines.append("  hardware")
+        _append_kv(lines, "local_gpu", local_gpu.get("name", "unknown"), indent=4)
+        _append_kv(lines, "vram_mb", local_gpu.get("vram_total_mb", "unknown"), indent=4)
+        executor_resources = resources.get("executor") if isinstance(resources.get("executor"), dict) else {}
+        lines.append("  executor")
+        _append_mapping(lines, executor_resources, indent=4)
+        model_resources = resources.get("model") if isinstance(resources.get("model"), dict) else {}
+        lines.append("  model")
+        for key, value in model_resources.items():
+            if key == "artifacts":
+                continue
+            _append_kv(lines, key, value, indent=4)
+        artifacts = model_resources.get("artifacts") if isinstance(model_resources.get("artifacts"), list) else []
+        if artifacts:
+            lines.append("    artifacts")
+            for item in artifacts:
+                if not isinstance(item, dict):
+                    continue
+                role = item.get("role") or "model"
+                filename = item.get("filename") or NOT_SET
+                source = item.get("source") or NOT_SET
+                lines.append(f"      - {_format_plan_value(role)}: {_format_plan_value(filename)} ({_format_plan_value(source)})")
+        memory_flags = resources.get("memory_flags") if isinstance(resources.get("memory_flags"), dict) else {}
+        for section in ("common", "ai_toolkit", "musubi"):
+            values = memory_flags.get(section)
+            if isinstance(values, dict):
+                lines.append(f"  {section}")
+                _append_mapping(lines, values, indent=4)
 
     downloads = payload.get("model_downloads") if isinstance(payload.get("model_downloads"), dict) else {}
     download_items = downloads.get("items") if isinstance(downloads.get("items"), list) else []
