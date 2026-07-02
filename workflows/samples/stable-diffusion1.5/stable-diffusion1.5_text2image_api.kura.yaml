@@ -1,0 +1,15 @@
+models:
+  checkpoints:
+    v1-5-pruned-emaonly-fp16.safetensors:
+      repo: Comfy-Org/stable-diffusion-v1-5-archive
+      filename: v1-5-pruned-emaonly-fp16.safetensors
+  vae:
+    vae-ft-mse-840000-ema-pruned.safetensors:
+      repo: stabilityai/sd-vae-ft-mse-original
+      filename: vae-ft-mse-840000-ema-pruned.safetensors
+lora_insert:
+  kind: model_clip
+  model_node: '4'
+  clip_node: '4'
+  strength_model: 0.8
+  strength_clip: 0.8

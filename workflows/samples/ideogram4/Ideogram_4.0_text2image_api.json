@@ -1,0 +1,229 @@
+{
+  "8": {
+    "inputs": {
+      "samples": [
+        "79",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "ideogram4_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "76": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "78": {
+    "inputs": {
+      "noise_seed": 9999
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "79": {
+    "inputs": {
+      "noise": [
+        "78",
+        0
+      ],
+      "guider": [
+        "88",
+        0
+      ],
+      "sampler": [
+        "76",
+        0
+      ],
+      "sigmas": [
+        "95",
+        0
+      ],
+      "latent_image": [
+        "92",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "83": {
+    "inputs": {
+      "text": "\n  \"high_level_description\": \"A cinematic Leica-style twilight photograph shows a tall modern office tower from a dramatic low angle, rising against a deep evening sky. Warm illuminated rooms on the front facade spell \\\"Comfy,\\\" while a small handwritten \\\"Ideogram 4.0\\\" signature appears at the lower right.\",\n  \"style_description\": \n    \"aesthetics\": \"cinematic, atmospheric, elegant, slightly dreamy, high-end urban photography with strong vertical composition and restrained visual clutter\",\n    \"lighting\": \"blue-hour ambient light with soft haze, gentle street glow near the lower frame, and warm yellow interior window lights standing out against the dark facade\",\n    \"photo\": \"shot like a Leica photograph with a low-angle perspective, subtle filmic contrast, crisp architectural lines, natural depth, and a refined editorial cityscape look\",\n    \"medium\": \"photograph\",\n    \"color_palette\": [\"#1E2148\", \"#4A3F7E\", \"#F3E34B\", \"#C8CEDF\", \"#6E314D\"]\n  ,\n  \"compositional_deconstruction\": \n    \"background\": \"A dusky urban evening sky fills most of the frame with deep navy and violet tones, fading slightly brighter near the horizon. The atmosphere is lightly hazy, with a soft bloom of city light near the lower left. Minimal surrounding street-level structures appear as subdued silhouettes near the bottom edges, keeping the tower dominant in the portrait-oriented composition.\",\n    \"elements\": [\n      \n        \"type\": \"obj\",\n        \"bbox\": [120, 330, 945, 845],\n        \"desc\": \"A tall dark-glass office tower viewed from below, centered slightly right of frame. The building has sharp modern edges, horizontal floor bands, a subtly reflective facade, and a tapering sense of height emphasized by the perspective. The front-facing plane is the main visual surface, while the right side recedes into shadow.\",\n        \"color_palette\": [\"#161A33\", \"#252C54\", \"#BEC6DC\"]\n      ,\n      \n        \"type\": \"text\",\n        \"bbox\": [170, 455, 785, 615],\n        \"text\": \"Comfy\",\n        \"desc\": \"The word is formed by warm glowing room windows arranged vertically on the front facade of the tower. Each letter is clearly legible through clusters of illuminated office rooms, appearing as bright yellow typographic shapes embedded within the architecture.\",\n        \"color_palette\": [\"#F3E34B\"]\n      ,\n      \n        \"type\": \"obj\",\n        \"bbox\": [40, 85, 90, 130],\n        \"desc\": \"A small crescent moon in the upper left portion of the sky, softly glowing and isolated against the dark twilight background.\",\n        \"color_palette\": [\"#F3E34B\", \"#F8F0A8\"]\n      ,\n      \n        \"type\": \"text\",\n        \"bbox\": [955, 790, 995, 985],\n        \"text\": \"Ideogram 4.0\",\n        \"desc\": \"A small handwritten signature placed at the lower right corner, rendered in a light ink-like white script with a casual, unobtrusive appearance.\",\n        \"color_palette\": [\"#F3F3F0\"]\n      \n    ]\n  \n",
+      "clip": [
+        "91",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "87": {
+    "inputs": {
+      "conditioning": [
+        "83",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "ConditioningZeroOut"
+    }
+  },
+  "88": {
+    "inputs": {
+      "cfg": 7,
+      "model": [
+        "89",
+        0
+      ],
+      "positive": [
+        "83",
+        0
+      ],
+      "model_negative": [
+        "90",
+        0
+      ],
+      "negative": [
+        "87",
+        0
+      ]
+    },
+    "class_type": "DualModelGuider",
+    "_meta": {
+      "title": "Dual Model CFG Guider"
+    }
+  },
+  "89": {
+    "inputs": {
+      "cfg": 3,
+      "start_percent": 0.7,
+      "end_percent": 1,
+      "model": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "CFGOverride",
+    "_meta": {
+      "title": "CFG Override"
+    }
+  },
+  "90": {
+    "inputs": {
+      "unet_name": "ideogram4_unconditional_nvfp4_mixed.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "91": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_fp8_scaled.safetensors",
+      "type": "ideogram4",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "92": {
+    "inputs": {
+      "width": [
+        "94",
+        0
+      ],
+      "height": [
+        "94",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Flux 2 Latent"
+    }
+  },
+  "94": {
+    "inputs": {
+      "aspect_ratio": "2:3 (Portrait Photo)",
+      "megapixels": 1,
+      "multiple": 16
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector"
+    }
+  },
+  "95": {
+    "inputs": {
+      "steps": 20,
+      "width": [
+        "94",
+        0
+      ],
+      "height": [
+        "94",
+        1
+      ],
+      "mu": 0,
+      "std": 1.75
+    },
+    "class_type": "Ideogram4Scheduler",
+    "_meta": {
+      "title": "Ideogram 4 Scheduler"
+    }
+  }
+}

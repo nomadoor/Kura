@@ -1,0 +1,9 @@
+models:
+  checkpoints:
+    waiIllustriousSDXL_v170.safetensors:
+      url: https://civitai.red/api/download/models/2883731?fileId=2763986
+      filename: waiIllustriousSDXL_v170.safetensors
+lora_insert:
+  kind: model_only
+  model_node: '4'
+  strength_model: 0.8

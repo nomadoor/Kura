@@ -1,0 +1,107 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 8888,
+      "steps": 25,
+      "cfg": 5,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "4": {
+    "inputs": {
+      "ckpt_name": "waiIllustriousSDXL_v170.safetensors"
+    },
+    "class_type": "CheckpointLoaderSimple",
+    "_meta": {
+      "title": "Load Checkpoint"
+    }
+  },
+  "5": {
+    "inputs": {
+      "width": 832,
+      "height": 1216,
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "masterpiece, best quality, very aesthetic, vibrant colors,flat illustration, graphic style, minimal shading, bold shapes, subtle grain texture,1girl, lower body focus, adult woman, calm and elegant,\nwearing a long sheer lace skirt, layered design, opaque inner skirt around hips,transparent lace from knees down, delicate lace patterns, \nputting on high heels, one foot in the shoe, one hand gently holding the heel strap,simple clean silhouette of legs under the sheer fabric, no emphasis on sexuality,low angle close-up of feet and skirt hem, dynamic perspective,long sharp-edged shadow on the floor,solid blue background, minimal background, no extra objects,strong contrast, clear edges, modern fashion illustration, stylish and cool atmosphere\n",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "worst quality, low quality, lowres, blurry, noisy, jpeg artifacts,\nnsfw, sexy, cleavage, underwear, fetish, loli, childish,\ndetailed background, busy background, crowd, furniture,\n3d render, photorealistic, sketch, rough doodle, watercolor,\ntext, watermark, logo, signature\n",
+      "clip": [
+        "4",
+        1
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}

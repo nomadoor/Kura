@@ -11,27 +11,41 @@ is committed.
   accepted by `/prompt`.
 - **Core ComfyUI nodes only** (no custom nodes), so they run on the base Kura
   ComfyUI image and do not rot when custom nodes change.
-- File name is self-describing: `<family>/<family>-<task>-api.json`
-  (e.g. `flux2-klein/flux2-klein-text2image-api.json`).
-- Each workflow ships a **patch-mapping sidecar** with the same stem plus
-  `.kura.yaml`, telling Kura which node ids carry the LoRA / prompt / seed:
+- File name is self-describing: `<family>/<family>_<task>_api.json`
+  (e.g. `krea2/Krea_2_turbo_text2image_api.json`). A matching UI workflow
+  without `_api` may sit next to it for human editing/notes, but Kura renders
+  the API workflow.
+- Each workflow ships a **metadata sidecar** with the same stem plus
+  `.kura.yaml`, telling Kura which models are safe to resolve on RunPod and,
+  when possible, where an optional LoRA loader can be inserted:
 
   ```yaml
-  # flux2-klein/flux2-klein-text2image-api.kura.yaml
-  workflow_patches:
-    lora:   {node: "<id>", field: inputs.lora_name}
-    prompt: {node: "<id>", field: inputs.text}
-    seed:   {node: "<id>", field: inputs.seed}
-  # LoRA loader is present but bypassed by default (base generation works as-is).
-  # To apply a trained LoRA, the agent un-bypasses the loader and points it at the LoRA.
+  # krea2/Krea_2_turbo_text2image_api.kura.yaml
+  models:
+    diffusion_models:
+      krea2_turbo_fp8_scaled.safetensors:
+        repo: Comfy-Org/Krea-2
+        filename: diffusion_models/krea2_turbo_fp8_scaled.safetensors
+    clip:
+      qwen3vl_4b_fp8_scaled.safetensors:
+        repo: Comfy-Org/Krea-2
+        filename: text_encoders/qwen3vl_4b_fp8_scaled.safetensors
+        target_dir: text_encoders
+  lora_insert:
+    kind: model_only
+    model_node: "37"
+    strength_model: 0.8
   ```
 
-- A **LoRA loader is pre-inserted and bypassed** by default, so the workflow does
-  plain base generation as-is. To apply a trained LoRA, the agent edits the
-  workflow: un-bypass the loader and set it to the LoRA. (Editing the workflow
-  JSON is the agent's job — no special Kura mechanism is needed.)
+- API workflows should run as plain base generation by default. Do not rely on a
+  bypassed LoRA loader being preserved by ComfyUI API export. If a sample should
+  support LoRA smoke tests, use `lora_insert` in the sidecar so Kura can insert
+  `LoraLoader` / `LoraLoaderModelOnly` only when a LoRA is supplied.
 - Reference only models known to the ComfyUI model registry, so on-demand
   Hugging Face download works on RunPod.
+- Image-edit workflows must also account for their input image assets. Do not
+  ship them as ready-to-smoke until the required sample inputs are present or
+  Kura has an explicit staging path for them.
 
 ## Maintenance
 

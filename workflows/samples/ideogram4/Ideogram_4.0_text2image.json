@@ -1,0 +1,909 @@
+{
+  "id": "d8034549-7e0a-40f1-8c2e-de3ffc6f1cae",
+  "revision": 0,
+  "last_node_id": 110,
+  "last_link_id": 175,
+  "nodes": [
+    {
+      "id": 76,
+      "type": "KSamplerSelect",
+      "pos": [
+        560.1252292712549,
+        324.6528974302894
+      ],
+      "size": [
+        270,
+        68.88020833333334
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            132
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.56",
+        "Node name for S&R": "KSamplerSelect",
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        "euler"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "VAEDecode",
+      "pos": [
+        1180.6146240234375,
+        195.84114925861235
+      ],
+      "size": [
+        157.56002807617188,
+        46
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 164
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 76
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            101
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 92,
+      "type": "EmptyFlux2LatentImage",
+      "pos": [
+        560.1252292712549,
+        721.3543590454891
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 153
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 154
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            152
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "EmptyFlux2LatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ]
+    },
+    {
+      "id": 88,
+      "type": "DualModelGuider",
+      "pos": [
+        560.1252292712549,
+        119.74227078935617
+      ],
+      "size": [
+        270,
+        118
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 172
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 146
+        },
+        {
+          "name": "model_negative",
+          "shape": 7,
+          "type": "MODEL",
+          "link": 149
+        },
+        {
+          "name": "negative",
+          "shape": 7,
+          "type": "CONDITIONING",
+          "link": 145
+        }
+      ],
+      "outputs": [
+        {
+          "name": "GUIDER",
+          "type": "GUIDER",
+          "links": [
+            144
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "DualModelGuider"
+      },
+      "widgets_values": [
+        7
+      ]
+    },
+    {
+      "id": 91,
+      "type": "CLIPLoader",
+      "pos": [
+        -510.80318076960083,
+        311.42496280403503
+      ],
+      "size": [
+        289.8073985431536,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            150
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen3vl_8b_fp8_scaled.safetensors",
+        "ideogram4",
+        "default"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 39,
+      "type": "VAELoader",
+      "pos": [
+        904.0583918587276,
+        72.88171068869869
+      ],
+      "size": [
+        242.12760404770165,
+        58
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "slot_index": 0,
+          "links": [
+            76
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "flux2-vae.safetensors"
+      ],
+      "color": "#322",
+      "bgcolor": "#533"
+    },
+    {
+      "id": 90,
+      "type": "UNETLoader",
+      "pos": [
+        -96.592885685151,
+        131.5898766922886
+      ],
+      "size": [
+        305.3782043457031,
+        82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "slot_index": 0,
+          "links": [
+            149
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "ideogram4_unconditional_nvfp4_mixed.safetensors",
+        "default"
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 87,
+      "type": "ConditioningZeroOut",
+      "pos": [
+        278.5119793477361,
+        427.0196777116257
+      ],
+      "size": [
+        211.88658923633488,
+        26
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 142
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            145
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "ConditioningZeroOut"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 79,
+      "type": "SamplerCustomAdvanced",
+      "pos": [
+        904.0583918587276,
+        195.84114925861235
+      ],
+      "size": [
+        242.12760404770165,
+        106
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "noise",
+          "type": "NOISE",
+          "link": 130
+        },
+        {
+          "name": "guider",
+          "type": "GUIDER",
+          "link": 144
+        },
+        {
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 132
+        },
+        {
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 167
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 152
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "LATENT",
+          "links": [
+            164
+          ]
+        },
+        {
+          "name": "denoised_output",
+          "type": "LATENT",
+          "links": []
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.60",
+        "Node name for S&R": "SamplerCustomAdvanced",
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 95,
+      "type": "Ideogram4Scheduler",
+      "pos": [
+        560.1252292712549,
+        480.44373240455593
+      ],
+      "size": [
+        270,
+        154
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 156
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 157
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            167
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "Ideogram4Scheduler"
+      },
+      "widgets_values": [
+        20,
+        1024,
+        1024,
+        0,
+        1.75
+      ]
+    },
+    {
+      "id": 56,
+      "type": "SaveImage",
+      "pos": [
+        1371.5615738427737,
+        195.84114925861235
+      ],
+      "size": [
+        436.7195313170437,
+        711.2421298391242
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 101
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.75"
+      },
+      "widgets_values": [
+        "ComfyUI"
+      ]
+    },
+    {
+      "id": 94,
+      "type": "ResolutionSelector",
+      "pos": [
+        249.45527396590353,
+        701.3543590454891
+      ],
+      "size": [
+        270,
+        126
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            153,
+            156
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            154,
+            157
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "ResolutionSelector"
+      },
+      "widgets_values": [
+        "2:3 (Portrait Photo)",
+        1,
+        16
+      ]
+    },
+    {
+      "id": 83,
+      "type": "CLIPTextEncode",
+      "pos": [
+        -194.71785512781273,
+        311.42496280403503
+      ],
+      "size": [
+        408.34315901785703,
+        324.50164397511764
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 150
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            142,
+            146
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.56",
+        "Node name for S&R": "CLIPTextEncode",
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        "{\n  \"high_level_description\": \"A cinematic Leica-style twilight photograph shows a tall modern office tower from a dramatic low angle, rising against a deep evening sky. Warm illuminated rooms on the front facade spell \\\"Comfy,\\\" while a small handwritten \\\"Ideogram 4.0\\\" signature appears at the lower right.\",\n  \"style_description\": {\n    \"aesthetics\": \"cinematic, atmospheric, elegant, slightly dreamy, high-end urban photography with strong vertical composition and restrained visual clutter\",\n    \"lighting\": \"blue-hour ambient light with soft haze, gentle street glow near the lower frame, and warm yellow interior window lights standing out against the dark facade\",\n    \"photo\": \"shot like a Leica photograph with a low-angle perspective, subtle filmic contrast, crisp architectural lines, natural depth, and a refined editorial cityscape look\",\n    \"medium\": \"photograph\",\n    \"color_palette\": [\"#1E2148\", \"#4A3F7E\", \"#F3E34B\", \"#C8CEDF\", \"#6E314D\"]\n  },\n  \"compositional_deconstruction\": {\n    \"background\": \"A dusky urban evening sky fills most of the frame with deep navy and violet tones, fading slightly brighter near the horizon. The atmosphere is lightly hazy, with a soft bloom of city light near the lower left. Minimal surrounding street-level structures appear as subdued silhouettes near the bottom edges, keeping the tower dominant in the portrait-oriented composition.\",\n    \"elements\": [\n      {\n        \"type\": \"obj\",\n        \"bbox\": [120, 330, 945, 845],\n        \"desc\": \"A tall dark-glass office tower viewed from below, centered slightly right of frame. The building has sharp modern edges, horizontal floor bands, a subtly reflective facade, and a tapering sense of height emphasized by the perspective. The front-facing plane is the main visual surface, while the right side recedes into shadow.\",\n        \"color_palette\": [\"#161A33\", \"#252C54\", \"#BEC6DC\"]\n      },\n      {\n        \"type\": \"text\",\n        \"bbox\": [170, 455, 785, 615],\n        \"text\": \"Comfy\",\n        \"desc\": \"The word is formed by warm glowing room windows arranged vertically on the front facade of the tower. Each letter is clearly legible through clusters of illuminated office rooms, appearing as bright yellow typographic shapes embedded within the architecture.\",\n        \"color_palette\": [\"#F3E34B\"]\n      },\n      {\n        \"type\": \"obj\",\n        \"bbox\": [40, 85, 90, 130],\n        \"desc\": \"A small crescent moon in the upper left portion of the sky, softly glowing and isolated against the dark twilight background.\",\n        \"color_palette\": [\"#F3E34B\", \"#F8F0A8\"]\n      },\n      {\n        \"type\": \"text\",\n        \"bbox\": [955, 790, 995, 985],\n        \"text\": \"Ideogram 4.0\",\n        \"desc\": \"A small handwritten signature placed at the lower right corner, rendered in a light ink-like white script with a casual, unobtrusive appearance.\",\n        \"color_palette\": [\"#F3F3F0\"]\n      }\n    ]\n  }\n}"
+      ]
+    },
+    {
+      "id": 78,
+      "type": "RandomNoise",
+      "pos": [
+        560.1252292712549,
+        -49.16835585157703
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "NOISE",
+          "type": "NOISE",
+          "links": [
+            130
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.56",
+        "Node name for S&R": "RandomNoise",
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        9999,
+        "fixed"
+      ]
+    },
+    {
+      "id": 89,
+      "type": "CFGOverride",
+      "pos": [
+        249.4552739659035,
+        -49.16835585157703
+      ],
+      "size": [
+        270,
+        106
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 175
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            172
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.26.0",
+        "Node name for S&R": "CFGOverride"
+      },
+      "widgets_values": [
+        3,
+        0.7,
+        1
+      ]
+    },
+    {
+      "id": 37,
+      "type": "UNETLoader",
+      "pos": [
+        -96.592885685151,
+        -49.16835585157703
+      ],
+      "size": [
+        305.3782043457031,
+        82
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "slot_index": 0,
+          "links": [
+            175
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.33",
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "ideogram4_fp8_scaled.safetensors",
+        "default"
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 71,
+      "type": "MarkdownNote",
+      "pos": [
+        -576.0421283080824,
+        -146.319946805773
+      ],
+      "size": [
+        402.9868769880169,
+        355.5887797584986
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## models\n\n- diffusion_models\n  - [ideogram4_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Ideogram-4/blob/main/diffusion_models/ideogram4_fp8_scaled.safetensors) (9.28 GB)\n  - [ideogram4_nvfp4_mixed.safetensors](https://huggingface.co/Comfy-Org/Ideogram-4/blob/main/diffusion_models/ideogram4_nvfp4_mixed.safetensors) (5.49 GB)\n  - [ideogram4_unconditional_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Ideogram-4/blob/main/diffusion_models/ideogram4_unconditional_fp8_scaled.safetensors) (9.28 GB)\n  - [ideogram4_unconditional_nvfp4_mixed.safetensors](https://huggingface.co/Comfy-Org/Ideogram-4/blob/main/diffusion_models/ideogram4_unconditional_nvfp4_mixed.safetensors) (5.49 GB)\n- text_encoders\n  - [qwen3vl_8b_fp8_scaled.safetensors](https://huggingface.co/Comfy-Org/Ideogram-4/blob/main/text_encoders/qwen3vl_8b_fp8_scaled.safetensors) (10.6 GB)\n- vae\n  - [flux2-vae.safetensors](https://huggingface.co/Comfy-Org/Ideogram-4/blob/main/vae/flux2-vae.safetensors) (336 MB)\n\n```text\n📂ComfyUI/\n└── 📂models/\n    ├── 📂diffusion_models/\n    │   ├── ideogram4_fp8_scaled.safetensors\n    │   ├── ideogram4_nvfp4_mixed.safetensors\n    │   ├── ideogram4_unconditional_fp8_scaled.safetensors\n    │   └── ideogram4_unconditional_nvfp4_mixed.safetensors\n    ├── 📂text_encoders/\n    │   └── qwen3vl_8b_fp8_scaled.safetensors\n    └── 📂vae/\n         └── flux2-vae.safetensors\n```"
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    }
+  ],
+  "links": [
+    [
+      76,
+      39,
+      0,
+      8,
+      1,
+      "VAE"
+    ],
+    [
+      101,
+      8,
+      0,
+      56,
+      0,
+      "IMAGE"
+    ],
+    [
+      130,
+      78,
+      0,
+      79,
+      0,
+      "NOISE"
+    ],
+    [
+      132,
+      76,
+      0,
+      79,
+      2,
+      "SAMPLER"
+    ],
+    [
+      142,
+      83,
+      0,
+      87,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      144,
+      88,
+      0,
+      79,
+      1,
+      "GUIDER"
+    ],
+    [
+      145,
+      87,
+      0,
+      88,
+      3,
+      "CONDITIONING"
+    ],
+    [
+      146,
+      83,
+      0,
+      88,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      149,
+      90,
+      0,
+      88,
+      2,
+      "MODEL"
+    ],
+    [
+      150,
+      91,
+      0,
+      83,
+      0,
+      "CLIP"
+    ],
+    [
+      152,
+      92,
+      0,
+      79,
+      4,
+      "LATENT"
+    ],
+    [
+      153,
+      94,
+      0,
+      92,
+      0,
+      "INT"
+    ],
+    [
+      154,
+      94,
+      1,
+      92,
+      1,
+      "INT"
+    ],
+    [
+      156,
+      94,
+      0,
+      95,
+      0,
+      "INT"
+    ],
+    [
+      157,
+      94,
+      1,
+      95,
+      1,
+      "INT"
+    ],
+    [
+      164,
+      79,
+      0,
+      8,
+      0,
+      "LATENT"
+    ],
+    [
+      167,
+      95,
+      0,
+      79,
+      3,
+      "SIGMAS"
+    ],
+    [
+      172,
+      89,
+      0,
+      88,
+      0,
+      "MODEL"
+    ],
+    [
+      175,
+      37,
+      0,
+      89,
+      0,
+      "MODEL"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.5644739300537776,
+      "offset": [
+        802.2262543931646,
+        463.2599544501776
+      ]
+    },
+    "frontendVersion": "1.45.19",
+    "VHS_latentpreview": false,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true
+  },
+  "version": 0.4
+}

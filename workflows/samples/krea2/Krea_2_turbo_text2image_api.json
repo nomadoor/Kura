@@ -1,0 +1,145 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 12345,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "37",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "62",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "A highly stylized anime illustration, viewed from a high-angle three-quarter perspective, showing an old compact car dramatically stranded in shallow coastal water among large rocks, as if it ran aground and got stuck there. The car is tilted unevenly and wedged against multiple rocks, creating a more dynamic and three-dimensional stranded composition. The surrounding environment is a natural rocky shoreline with bright blue seawater, scattered stones under the water, and no alley, no wall, no air-conditioning units, no urban background, no tree, no graffiti, and no city clutter.\n\nA desperate young woman sits on the roof of the car near a large hand-painted \"SOS\" sign. She has messy blonde hair and a visibly exhausted, worn-down expression. She is urgently drinking from a nearly empty plastic water bottle, as if she is rationing the last of it. Her posture should feel tense, drained, and survival-oriented, not relaxed or casual. She wears a pale light blue jumpsuit that is heavily worn, torn, dirty, and damaged, with frayed fabric and signs of hardship. Her body language and face should suggest thirst, fatigue, and isolation.\n\nThe car is old, weathered, faded, rusted, and damaged, with cracked windows and a harsh sun-bleached surface. Strong cloud shadows pass dramatically over the woman, the car, the rocks, and the water, creating bold shifting patches of light and shadow. Flat cel-shaded anime style, graphic poster-like composition, bold simplified shapes, clean linework, slightly exaggerated perspective, painterly digital texture, quiet but intense survival mood, vivid cyan-blue water, pale rocks, faded vehicle colors, strong atmospheric lighting, no photorealism, no 3D render.",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "krea2_turbo_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "60": {
+    "inputs": {
+      "aspect_ratio": "3:2 (Photo)",
+      "megapixels": 1,
+      "multiple": 16
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector"
+    }
+  },
+  "62": {
+    "inputs": {
+      "width": [
+        "60",
+        0
+      ],
+      "height": [
+        "60",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  }
+}
