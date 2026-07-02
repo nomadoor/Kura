@@ -257,7 +257,7 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
         if target.exists() or target.is_symlink():
             if target.is_symlink() and target.resolve() == Path(downloaded).resolve():
                 continue
-            target.unlink()
+            raise ValueError(f"refusing to replace existing ComfyUI model target: {target}")
         os.symlink(downloaded, target)
         print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": str(downloaded)}, ensure_ascii=False), flush=True)
     return specs

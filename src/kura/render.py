@@ -131,7 +131,7 @@ def _lora_insert_from_sidecar(sidecar: dict[str, Any]) -> dict[str, Any] | None:
     kind = str(raw.get("kind") or raw.get("type") or "model_clip").strip()
     class_type = "LoraLoaderModelOnly" if kind in ("model_only", "LoraLoaderModelOnly") else "LoraLoader"
     if kind not in ("model_only", "model_clip", "full", "LoraLoaderModelOnly", "LoraLoader"):
-        raise ValueError("lora_insert.kind must be model_only or model_clip")
+        raise ValueError("lora_insert.kind must be one of: model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader")
     model = raw.get("model") if isinstance(raw.get("model"), dict) else {}
     clip = raw.get("clip") if isinstance(raw.get("clip"), dict) else {}
     model_node = _as_node_id(raw.get("model_node", model.get("node")), context="lora_insert.model")
@@ -372,7 +372,8 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         workflow, run.get("workflow_patches", {}), prompt="", negative_prompt="", seed=0,
         checkpoint=inputs.get("checkpoint", {}).get("path", ""),
     )
-    resolved = run_dir / "resolved"; resolved.mkdir(exist_ok=True)
+    resolved = run_dir / "resolved"
+    resolved.mkdir(exist_ok=True)
     frozen = deepcopy(run)
     if lora_insert:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")

@@ -1166,6 +1166,62 @@ class RenderNotificationTests(unittest.TestCase):
             notify.assert_called_once()
             self.assertIn("completed", notify.call_args.kwargs["subject"])
 
+    def test_render_dry_run_failure_does_not_notify(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.launch_render", side_effect=ValueError("render broke")), patch("kura.run_commands._notify") as notify:
+                    code = launch_run("render-1", executor="docker", dry_run=True, notify_channels="ntfy")
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            notify.assert_not_called()
+
+    def test_runpod_render_dry_run_failure_does_not_notify(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            (run_dir / "resolved").mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                "docker:\n"
+                "  images:\n"
+                "    comfyui:\n"
+                "      local: local/comfy\n"
+                "      remote: remote/comfy\n"
+                "      dockerfile: docker/comfyui/Dockerfile\n"
+                "      context: .\n"
+                "runpod:\n"
+                "  storage_mode: upload\n",
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "runpod"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": 1},
+                }),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands._notify") as notify:
+                    code = launch_run("render-1", executor="runpod", dry_run=True, notify_channels="ntfy")
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            notify.assert_not_called()
+
     def test_render_stages_local_lora_for_comfyui_and_cleans_it_up(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1325,6 +1381,33 @@ class RenderNotificationTests(unittest.TestCase):
         workflow = {"1": {"inputs": {"model": ["2", 0]}}, "2": {"inputs": {}}}
         self.assertEqual(insert_lora_loader(workflow, {"class_type": "LoraLoaderModelOnly", "model_node": "2", "model_output": 0}, ""), workflow)
 
+    def test_lora_insert_kind_error_lists_accepted_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            for path in (workflow_dir, promptset_dir, run_dir):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
+            (workflow_dir / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}}}), encoding="utf-8")
+            (workflow_dir / "wf.kura.yaml").write_text("lora_insert:\n  kind: typo\n  model_node: '1'\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {},
+                    "render": {"default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader"):
+                compile_render(root, run_dir)
+
     def test_runpod_lora_upload_plan_uses_sidecar_insert(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1367,6 +1450,72 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(events[0]["event"], "model_ready")
             self.assertIsInstance(events[0]["source"], str)
             self.assertTrue((root / "ComfyUI" / "models" / "checkpoints" / "toy.safetensors").is_symlink())
+
+    def test_comfyui_prepare_preserves_existing_real_model_file(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloaded = root / "cache" / "toy.safetensors"
+            downloaded.parent.mkdir()
+            downloaded.write_bytes(b"downloaded")
+            target = root / "ComfyUI" / "models" / "checkpoints" / "toy.safetensors"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"existing")
+            module._download_model = lambda spec, cache_dir: downloaded
+            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            with self.assertRaisesRegex(ValueError, "refusing to replace existing ComfyUI model target"):
+                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry=registry)
+            self.assertFalse(target.is_symlink())
+            self.assertEqual(target.read_bytes(), b"existing")
+
+    def test_comfyui_prepare_direct_download_rejects_unsafe_urls(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(module.urllib.request, "urlopen") as urlopen:
+                with self.assertRaisesRegex(ValueError, "https:// URL"):
+                    module._download_model({"url": "http://example.com/model.safetensors", "filename": "model.safetensors"}, root)
+                urlopen.assert_not_called()
+            with (
+                patch.object(module.socket, "getaddrinfo", return_value=[(module.socket.AF_INET, module.socket.SOCK_STREAM, 0, "", ("127.0.0.1", 443))]),
+                patch.object(module.urllib.request, "urlopen") as urlopen,
+            ):
+                with self.assertRaisesRegex(ValueError, "non-public address"):
+                    module._download_model({"url": "https://localhost/model.safetensors", "filename": "model.safetensors"}, root)
+                urlopen.assert_not_called()
+
+    def test_comfyui_prepare_direct_download_allows_public_https(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class Response(io.BytesIO):
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch.object(module.socket, "getaddrinfo", return_value=[(module.socket.AF_INET, module.socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443))]),
+                patch.object(module.urllib.request, "urlopen", return_value=Response(b"model-bytes")) as urlopen,
+            ):
+                target = module._download_model({"url": "https://example.com/model.safetensors", "filename": "model.safetensors"}, root)
+            self.assertEqual(target.read_bytes(), b"model-bytes")
+            urlopen.assert_called_once_with("https://example.com/model.safetensors", timeout=60)
 
     def test_render_failure_appends_to_existing_stdout_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3465,6 +3614,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                 max_lease_sec=60,
             )
         script = run.call_args.args[0][-1]
+        self.assertIn("trap cleanup EXIT", script)
+        self.assertIn('rm -f "$secret_file"', script)
         self.assertLess(script.index("runpodctl pod delete"), script.index("kura_comfy_prepare.py"))
         self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
 

@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -101,16 +104,38 @@ def _resolve(ref: dict[str, str], registry: dict[str, Any]) -> dict[str, str] | 
     return spec
 
 
+def _validate_direct_download_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("direct model downloads require an absolute https:// URL")
+    port = parsed.port or 443
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"direct model download host could not be resolved: {parsed.hostname}") from exc
+    checked: set[str] = set()
+    for item in addresses:
+        address = item[4][0]
+        if address in checked:
+            continue
+        checked.add(address)
+        ip = ipaddress.ip_address(address)
+        if not ip.is_global:
+            raise ValueError(f"direct model download host resolves to a non-public address: {parsed.hostname}")
+    return url
+
+
 def _download_model(spec: dict[str, str], cache_dir: Path | None) -> Path:
     if spec.get("url"):
+        url = _validate_direct_download_url(spec["url"])
         root = cache_dir or Path("/tmp/kura-comfyui-downloads")
-        digest = hashlib.sha256(spec["url"].encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
         target = root / "direct" / digest / Path(spec["filename"]).name
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.is_file():
             return target
         temporary = target.with_suffix(target.suffix + ".tmp")
-        with urllib.request.urlopen(spec["url"], timeout=60) as response, temporary.open("wb") as handle:
+        with urllib.request.urlopen(url, timeout=60) as response, temporary.open("wb") as handle:
             shutil.copyfileobj(response, handle)
         temporary.replace(target)
         return target
@@ -145,7 +170,7 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
         if target.exists() or target.is_symlink():
             if target.is_symlink() and target.resolve() == downloaded.resolve():
                 continue
-            target.unlink()
+            raise ValueError(f"refusing to replace existing ComfyUI model target: {target}")
         os.symlink(downloaded, target)
         print(json.dumps({"event": "model_ready", "model": spec["name"], "target": str(target), "source": str(downloaded)}, ensure_ascii=False), flush=True)
     return specs

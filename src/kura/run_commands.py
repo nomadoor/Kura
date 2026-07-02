@@ -1662,12 +1662,16 @@ export KURA_RUN_ID={shlex.quote(run_id)}
 export KURA_LOG_PATH={shlex.quote(workspace.rstrip('/') + '/runs/' + run_id + '/logs/stdout.log')}
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 touch "$KURA_LOG_PATH"
-if [ -f {shlex.quote(remote_secret_path)} ]; then
-  . {shlex.quote(remote_secret_path)}
+secret_file={shlex.quote(remote_secret_path)}
+cleanup() {{
+  rm -f "$secret_file"
+}}
+trap cleanup EXIT
+if [ -f "$secret_file" ]; then
+  . "$secret_file"
 fi
 {lease_guard}
 python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --registry-json {shlex.quote(registry_remote)} --comfyui-root /opt/ComfyUI >> "$KURA_LOG_PATH" 2>&1
-rm -f {shlex.quote(remote_secret_path)}
 {lora_line}
 cd /opt/ComfyUI
 nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
@@ -1776,7 +1780,8 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
             _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
         message = _safe_error(exc)
         print(f"cannot launch runpod render: {message}", file=sys.stderr)
-        _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"RunPod render {run_id} failed before completion:\n{message}", priority="3")
+        if not dry_run:
+            _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"RunPod render {run_id} failed before completion:\n{message}", priority="3")
         return 1
     finally:
         if launched:
@@ -1811,7 +1816,8 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
         except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
             message = _safe_error(exc)
             print(f"cannot launch render: {message}", file=sys.stderr)
-            _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
+            if not dry_run:
+                _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
             return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
