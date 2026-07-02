@@ -14,10 +14,10 @@ from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 
 
-def compile_musubi_tuner(run: dict[str, Any], destination: Path) -> None:
+def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
     """Write Musubi Tuner native dataset TOML and a readable command manifest."""
     destination.mkdir(parents=True, exist_ok=True)
-    _write_musubi_dataset_config(run, destination / "dataset.toml")
+    _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
     command = command_musubi_tuner(run)
     (destination / "command.json").write_text(json.dumps(command, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (destination / "model-bundle.lock.yaml").write_text(
@@ -36,6 +36,10 @@ def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_
     if threshold <= 0:
         return None
     return ["python", "-c", script_source("prune_checkpoints.py"), output_dir, output_name, str(threshold)]
+
+
+def _musubi_start_commands(dataset_config: str, download_commands: list[list[str]]) -> list[list[str]]:
+    return [["python", "-c", script_source("musubi_dataset_assert.py"), dataset_config], *download_commands]
 
 
 def _musubi_save_precision(override: dict[str, Any]) -> str:
@@ -233,7 +237,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if params.get("alpha") is not None:
             train_argv.extend(["--network_alpha", str(params["alpha"])])
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -294,7 +298,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if params.get("alpha") is not None:
             train_argv.extend(["--network_alpha", str(params["alpha"])])
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -360,7 +364,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             if paths.get("turbo_dit"):
                 train_argv.extend(["--turbo_dit", paths["turbo_dit"]])
         train_argv.extend(extra_args)
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -404,7 +408,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_vl")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -448,7 +452,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_llm")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -492,7 +496,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_t5")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -544,7 +548,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             train_argv.extend(["--dit_dtype", str(override["dit_dtype"])])
         _append_flag(train_argv, override, "gradient_checkpointing")
         train_argv.extend(extra_args)
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -600,7 +604,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "flash_attn")
         _append_flag(train_argv, override, "skip_t2i_visual_dummy")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -638,7 +642,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "gradient_checkpointing")
         _append_flag(train_argv, override, "fp8_base")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -693,7 +697,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_vl")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -743,7 +747,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_llm")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:
@@ -796,7 +800,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
         train_argv.extend(_extra_args(override))
-        commands = [*download_commands]
+        commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
             commands.append(_musubi_model_validation_command(run, paths))
         if precache:

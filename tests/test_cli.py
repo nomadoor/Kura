@@ -22,13 +22,13 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_compile, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.container_scripts import script_source
 from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -99,6 +99,82 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(run["backend"]["name"], "musubi-tuner")
             self.assertEqual(run["compute"]["executor"], "runpod")
             self.assertEqual(run["compute"]["gpu"], "NVIDIA RTX A5000")
+
+    def test_run_compile_rejects_musubi_dataset_without_images(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.chdir(root)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                dataset = root / "datasets" / "tiny"
+                dataset.mkdir(parents=True)
+                (dataset / "dataset.yaml").write_text("id: tiny\n", encoding="utf-8")
+                (dataset / "items.jsonl").write_text("{}\n", encoding="utf-8")
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="empty-musubi", backend="musubi-tuner", executor="docker", gpu=None)), 0)
+                run_id = stdout.getvalue().strip()
+                run_path = root / "runs" / run_id / "run.yaml"
+                run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+                run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
+                run["datasets"] = [{"id": "tiny"}]
+                run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_paths": {"dit": "/models/dit.safetensors", "vae": "/models/vae.safetensors", "text_encoder": "/models/text.safetensors"}}}
+                run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
+                stderr = io.StringIO()
+                with patch("sys.stderr", stderr):
+                    code = cmd_run_compile(argparse.Namespace(run_id=run_id))
+                manifest_exists = (root / "runs" / run_id / "resolved" / "manifest.lock.yaml").exists()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 1)
+        self.assertIn("has no images/ directory and no root-level image files", stderr.getvalue())
+        self.assertFalse(manifest_exists)
+
+    def test_run_compile_rejects_backend_override_mismatch(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.chdir(root)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                dataset = root / "datasets" / "tiny" / "images"
+                dataset.mkdir(parents=True)
+                (root / "datasets" / "tiny" / "dataset.yaml").write_text("id: tiny\n", encoding="utf-8")
+                (root / "datasets" / "tiny" / "items.jsonl").write_text("{}\n", encoding="utf-8")
+                (dataset / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="wrong-backend", backend="ai-toolkit", executor="docker", gpu=None)), 0)
+                run_id = stdout.getvalue().strip()
+                run_path = root / "runs" / run_id / "run.yaml"
+                run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+                run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
+                run["datasets"] = [{"id": "tiny"}]
+                run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2"}}
+                run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
+                stderr = io.StringIO()
+                with patch("sys.stderr", stderr):
+                    code = cmd_run_compile(argparse.Namespace(run_id=run_id))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 1)
+        self.assertIn("backend is ai-toolkit but backend_overrides.musubi-tuner is set", stderr.getvalue())
+
+    def test_dataset_validate_checks_referenced_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "tiny"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+            stderr = io.StringIO()
+            with patch("sys.stderr", stderr):
+                self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 1)
+            self.assertIn("referenced file does not exist", stderr.getvalue())
+            (dataset / "images").mkdir()
+            (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 0)
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1149,6 +1225,21 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(payload["model_downloads"]["bytes"], 200, payload["model_downloads"])
         self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
         self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
+
+    def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "params": {"steps": 20},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 10}},
+            "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
+        }
+        download_estimate = {"bytes": 8 * 1024**3}
+        with self.assertRaisesRegex(ValueError, "container_disk_gb=10"):
+            _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
+        run["safety"]["allow_runpod_disk_risk"] = True
+        result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
+        self.assertEqual(result["estimated_write_bytes"], 12 * 1024**3)
 
     def test_checkpoint_safety_preflight_rejects_many_unpruned_checkpoints(self) -> None:
         run = {
@@ -2630,6 +2721,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("repo_cache_dirs(cache_dir, item)", script)
         self.assertNotIn("remove_incomplete_files(cache_dir)", script)
         self.assertIn("removed {removed} incomplete", script)
+        self.assertLess(script.index("musubi dataset ok"), script.index("hf_hub_download"))
         self.assertIn("def stable_link_target", script)
         self.assertIn("os.symlink(stable_link_target(path, link_path), link_path)", script)
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)

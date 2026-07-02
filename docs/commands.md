@@ -33,7 +33,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura run new --experiment <name> --slug <slug>` | Create a train run |
+| `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
 | `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |

@@ -21,6 +21,7 @@ import yaml
 
 from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
+from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
@@ -102,6 +103,20 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _validate_train_compile_intent(run: dict[str, Any]) -> None:
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    backend_name = backend.get("name")
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    if not isinstance(model.get("base"), str) or not model.get("base").strip():
+        raise ValueError("training run model.base must be set before compile")
+    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
+    other_backend = "musubi-tuner" if backend_name == "ai-toolkit" else "ai-toolkit"
+    if isinstance(overrides.get(other_backend), dict) and overrides[other_backend]:
+        raise ValueError(f"backend is {backend_name} but backend_overrides.{other_backend} is set")
+    if backend_name == "musubi-tuner":
+        validate_musubi_dataset_layout(run, _workspace())
+
+
 def _now() -> datetime:
     return datetime.now().astimezone()
 
@@ -135,11 +150,20 @@ def cmd_dataset_validate(args: argparse.Namespace) -> int:
             continue
         if not isinstance(item, dict) or not item.get("id") or not item.get("path"):
             errors.append(f"items.jsonl:{number}: item requires id and path")
+            count += 1
+            continue
+        item_path = Path(str(item["path"]))
+        if item_path.is_absolute():
+            errors.append(f"items.jsonl:{number}: path must be relative to the dataset directory")
+        elif not (directory / item_path).is_file():
+            errors.append(f"items.jsonl:{number}: referenced file does not exist: {item['path']}")
         if not item.get("caption"):
             warnings.append(f"items.jsonl:{number}: missing caption")
         if not item.get("hash"):
             warnings.append(f"items.jsonl:{number}: missing hash")
         count += 1
+    if count == 0:
+        errors.append("items.jsonl contains no items")
     declared = metadata.get("stats", {}).get("count")
     if declared != count:
         warnings.append(f"stats.count is {declared!r}, but items.jsonl contains {count} items")
@@ -226,6 +250,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         print(f"unsupported backend: {backend.get('name')}", file=sys.stderr)
         return 1
     try:
+        _validate_train_compile_intent(run)
         datasets = _run_datasets(run)
         if not datasets:
             raise ValueError("training run requires datasets[]")
@@ -254,7 +279,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     if backend.get("name") == "ai-toolkit":
         compile_ai_toolkit(locked, resolved / "ai-toolkit.toml")
     else:
-        compile_musubi_tuner(locked, resolved / "musubi")
+        compile_musubi_tuner(locked, resolved / "musubi", workspace=_workspace(), strict=True)
     env = {
         "kura_version": __version__, "python_version": platform.python_version(),
         "platform": platform.platform(), "backend_name": backend.get("name"),

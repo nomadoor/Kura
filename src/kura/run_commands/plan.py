@@ -474,10 +474,10 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     return {"bytes": download_total, "total_bytes": size_total, "cached_bytes": cached_total, "items": items, "unknown": unknown}
 
 
-def _download_estimate_workspace(run: dict[str, Any], workspace: Path) -> Path | None:
+def _download_estimate_workspace(run: dict[str, Any], workspace: Path, *, executor: str | None = None) -> Path | None:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
-    if executor == "runpod":
+    resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    if resolved_executor == "runpod":
         return None
     return workspace
 
@@ -518,6 +518,27 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     return {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
 
 
+def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=50)
+    container_disk_bytes = container_disk_gib * 1024**3
+    checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
+    estimated_write_bytes = int(download_estimate.get("bytes") or 0) + int(checkpoint_estimate.get("bytes") or 0)
+    if estimated_write_bytes > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
+        required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
+        raise ValueError(
+            f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
+            "(model downloads plus checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
+            "safety.allow_runpod_disk_risk: true if intentional"
+        )
+    return {
+        "container_disk_gib": container_disk_gib,
+        "container_disk_bytes": container_disk_bytes,
+        "estimated_write_bytes": estimated_write_bytes,
+        "estimates": {"musubi_downloads": download_estimate, "checkpoints": checkpoint_estimate},
+    }
+
+
 def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]], storage_config: dict[str, Any] | None = None) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
@@ -531,7 +552,7 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
             paths[f"mount:{mount.get('target', mount['source'])}"] = source
     hf_cache_path = _hf_cache_path(workspace, mounts)
     paths.setdefault("hf_cache", hf_cache_path)
-    download_estimate = _estimate_musubi_download_bytes(run, workspace=workspace)
+    download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"))
     _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
     write_estimates = {

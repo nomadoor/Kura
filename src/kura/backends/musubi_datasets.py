@@ -12,7 +12,7 @@ from kura.backends.common import _datasets, _int_or_none, _musubi_backend_overri
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
-def _write_musubi_dataset_config(run: dict[str, Any], destination: Path) -> None:
+def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
     params = run.get("params", {})
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
@@ -32,7 +32,7 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path) -> None
     for key, value in general.items():
         if value is not None:
             lines.append(f"{key} = {_toml_scalar(value)}")
-    items = _musubi_dataset_items(run, destination, datasets, dataset_config)
+    items = _musubi_dataset_items(run, destination, datasets, dataset_config, workspace=workspace, strict=strict)
     for item in items:
         lines.extend(["", "[[datasets]]"])
         for key, value in item.items():
@@ -45,7 +45,15 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path) -> None
             path.unlink()
 
 
-def _musubi_dataset_items(run: dict[str, Any], destination: Path, datasets: list[dict[str, Any]], dataset_config: Any) -> list[dict[str, Any]]:
+def _musubi_dataset_items(
+    run: dict[str, Any],
+    destination: Path,
+    datasets: list[dict[str, Any]],
+    dataset_config: Any,
+    *,
+    workspace: Path | None = None,
+    strict: bool = False,
+) -> list[dict[str, Any]]:
     raw_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for index, dataset in enumerate(datasets):
         dataset_id = dataset.get("id", "")
@@ -62,26 +70,61 @@ def _musubi_dataset_items(run: dict[str, Any], destination: Path, datasets: list
             "num_repeats": dataset.get("num_repeats") or dataset.get("repeats") or 1,
         }
         if not uses_jsonl:
-            item["image_directory"] = _default_image_directory(destination, dataset_id)
+            item["image_directory"] = _default_image_directory(destination, dataset_id, workspace=workspace, strict=strict)
         if "paired_jsonl" in override_item:
             paired = override_item.pop("paired_jsonl")
             if isinstance(paired, dict):
                 item["_kura_paired_key"] = _paired_dataset_key(dataset_id, paired)
             item["image_jsonl_file"] = _write_musubi_paired_jsonl(run, destination, dataset_id, paired)
         item.update(override_item)
+        if strict and not uses_jsonl and isinstance(item.get("image_directory"), str):
+            _validate_image_directory(workspace or _workspace_from_resolved_path(destination), dataset_id, item["image_directory"])
         raw_items.append((dataset, item))
     return _collapse_duplicate_musubi_bucket_items(raw_items)
 
 
-def _default_image_directory(destination: Path, dataset_id: str) -> str:
-    workspace = _workspace_from_resolved_path(destination)
-    dataset_root = workspace / "datasets" / dataset_id
+def _default_image_directory(destination: Path, dataset_id: str, *, workspace: Path | None = None, strict: bool = False) -> str:
+    workspace_root = workspace or _workspace_from_resolved_path(destination)
+    dataset_root = workspace_root / "datasets" / dataset_id
     images_dir = dataset_root / "images"
     if images_dir.is_dir():
         return f"/workspace/datasets/{dataset_id}/images"
     if _has_direct_images(dataset_root):
         return f"/workspace/datasets/{dataset_id}"
+    if strict:
+        raise ValueError(f"Musubi dataset {dataset_id!r} has no images/ directory and no root-level image files")
     return f"/workspace/datasets/{dataset_id}/images"
+
+
+def validate_musubi_dataset_layout(run: dict[str, Any], workspace: Path) -> None:
+    override = _musubi_backend_override(run)
+    _musubi_dataset_items(
+        run,
+        workspace / "runs" / str(run.get("id") or "_unknown") / "resolved" / "musubi" / "dataset.toml",
+        _datasets(run),
+        override.get("dataset_config"),
+        workspace=workspace,
+        strict=True,
+    )
+
+
+def _validate_image_directory(workspace: Path, dataset_id: str, image_directory: str) -> None:
+    host_path = _host_path_for_container_path(workspace, image_directory)
+    if host_path is None:
+        return
+    if not host_path.is_dir():
+        raise ValueError(f"Musubi dataset {dataset_id!r} image_directory does not exist: {image_directory}")
+    if not _has_direct_images(host_path):
+        raise ValueError(f"Musubi dataset {dataset_id!r} image_directory has no image files: {image_directory}")
+
+
+def _host_path_for_container_path(workspace: Path, value: str) -> Path | None:
+    if value == "/workspace":
+        return workspace
+    prefix = "/workspace/"
+    if value.startswith(prefix):
+        return workspace / value[len(prefix):]
+    return None
 
 
 def _has_direct_images(path: Path) -> bool:
