@@ -349,9 +349,48 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["workspace_root"], str(root))
             self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
+            self.assertEqual(payload["issues"][0]["severity"], "warning")
             self.assertIn("workspace filesystem has less than 100GiB free", payload["warnings"])
             self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
+
+    def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "runs").mkdir()
+            sizes = {
+                str(root / "cache"): 31 * 1024**3,
+                str(root / "runs"): 1 * 1024**3,
+            }
+
+            def fake_size(path: Path) -> int:
+                return sizes.get(str(path), 0)
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 500 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 400 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", side_effect=fake_size),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["warnings"], [])
+            self.assertIn("workspace cache+runs exceed 30GiB", payload["advisories"])
+            issue = next(item for item in payload["issues"] if item["code"] == "workspace_cache_runs_large")
+            self.assertEqual(issue["severity"], "advisory")
+            self.assertEqual(issue["size_bytes"], 32 * 1024**3)
 
     def test_doctor_disk_warns_about_wsl_ext4_virtual_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -268,6 +268,12 @@ def _docker_storage_summary() -> dict[str, Any]:
     return summary
 
 
+def _disk_issue(*, code: str, severity: str, message: str, **details: Any) -> dict[str, Any]:
+    issue: dict[str, Any] = {"code": code, "severity": severity, "message": message}
+    issue.update(details)
+    return issue
+
+
 def cmd_doctor_disk(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
@@ -314,25 +320,60 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     }
 
     gib = 1024**3
-    warnings: list[str] = []
+    issues: list[dict[str, Any]] = []
     workspace_free = filesystems["workspace"].get("free_bytes")
     if isinstance(workspace_free, int) and workspace_free < 100 * gib:
-        warnings.append("workspace filesystem has less than 100GiB free")
+        issues.append(_disk_issue(
+            code="workspace_free_low",
+            severity="warning",
+            message="workspace filesystem has less than 100GiB free",
+            free_bytes=workspace_free,
+            threshold_bytes=100 * gib,
+        ))
     workspace_storage = storage_statuses.get("workspace")
     if workspace_storage is not None and workspace_storage.effective_free_bytes < 100 * gib:
-        warnings.append(
-            f"workspace backing store has less than 100GiB effective free ({workspace_storage.backing_id})"
-        )
+        issues.append(_disk_issue(
+            code="workspace_effective_free_low",
+            severity="warning",
+            message=f"workspace backing store has less than 100GiB effective free ({workspace_storage.backing_id})",
+            backing_id=workspace_storage.backing_id,
+            backing_kind=workspace_storage.backing_kind,
+            effective_free_bytes=workspace_storage.effective_free_bytes,
+            threshold_bytes=100 * gib,
+        ))
     cache_runs = (sizes["cache"].get("size_bytes") or 0) + (sizes["runs"].get("size_bytes") or 0)
     if cache_runs > 30 * gib:
-        warnings.append("workspace cache+runs exceed 30GiB")
+        issues.append(_disk_issue(
+            code="workspace_cache_runs_large",
+            severity="advisory",
+            message="workspace cache+runs exceed 30GiB",
+            size_bytes=cache_runs,
+            threshold_bytes=30 * gib,
+        ))
     for item in docker_storage.get("usage", []):
         if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * gib:
-            warnings.append("Docker build cache exceeds 30GiB")
+            issues.append(_disk_issue(
+                code="docker_build_cache_large",
+                severity="warning",
+                message="Docker build cache exceeds 30GiB",
+                size_bytes=item.get("size_bytes"),
+                threshold_bytes=30 * gib,
+            ))
         if str(item.get("Type", "")).lower() == "images" and (item.get("size_bytes") or 0) > 50 * gib:
-            warnings.append("Docker images exceed 50GiB")
+            issues.append(_disk_issue(
+                code="docker_images_large",
+                severity="advisory",
+                message="Docker images exceed 50GiB",
+                size_bytes=item.get("size_bytes"),
+                threshold_bytes=50 * gib,
+            ))
     if root_owned.get("count"):
-        warnings.append("cache/runs contain root-owned files; cleanup may require permission repair")
+        issues.append(_disk_issue(
+            code="root_owned_cache_runs",
+            severity="warning",
+            message="cache/runs contain root-owned files; cleanup may require permission repair",
+            count=root_owned.get("count"),
+        ))
     warned_backings: set[tuple[str, str]] = set()
     for status in storage_statuses.values():
         if not status.warning:
@@ -341,7 +382,17 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         if key in warned_backings:
             continue
         warned_backings.add(key)
-        warnings.append(status.warning)
+        issues.append(_disk_issue(
+            code="storage_backing_warning",
+            severity="warning",
+            message=status.warning,
+            backing_id=status.backing_id,
+            backing_kind=status.backing_kind,
+            confidence=status.confidence,
+        ))
+
+    warnings = [issue["message"] for issue in issues if issue.get("severity") == "warning"]
+    advisories = [issue["message"] for issue in issues if issue.get("severity") == "advisory"]
 
     payload = {
         "workspace_root": str(workspace_root),
@@ -356,7 +407,9 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "docker_storage": docker_storage,
         "root_owned": root_owned,
         "cache_environment": env,
+        "issues": issues,
         "warnings": warnings,
+        "advisories": advisories,
         "diagnosis": "Disk diagnostics completed. This command is read-only.",
     }
     print(json.dumps(_redact_secrets(payload), indent=2))

@@ -25,7 +25,9 @@ launch.
 
 - `kura doctor disk` reports workspace cache/runs, filesystem free space, Docker
   storage, cache-related environment variables, root-owned files, and storage
-  backing confidence.
+  backing confidence. It returns structured `issues`; blocking-risk findings are
+  `warnings`, while cleanup hygiene such as a large but currently affordable
+  cache is an `advisory`.
 - `kura cleanup ...` defaults to dry-run. Destructive cleanup requires `--yes`.
   Whole-run deletion, including outputs/downloads, additionally requires
   `--delete-final-artifacts`.
@@ -53,7 +55,7 @@ launch.
 
 | Operation | Check | Blocks on |
 | --- | --- | --- |
-| `kura doctor disk` | read-only inventory | exits non-zero on warnings |
+| `kura doctor disk` | read-only inventory | exits non-zero on warning-severity issues |
 | local Docker launch | `StorageStatus.effective_free_bytes` plus estimated writes for workspace, cache, and writable mounts | low effective free, unknown WSL2 backing, excessive Docker build cache |
 | checkpoint-heavy train run | run plan / launch preflight | many unpruned checkpoints unless explicitly allowed |
 | RunPod download/pull | local destination free space | insufficient space for downloaded artifacts |
