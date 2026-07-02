@@ -231,9 +231,14 @@ Kura's file-first rule: the same locked run must not change meaning just because
 it is replayed on another machine.
 
 Status update (2026-07-02): this decision procedure is now implemented as the
-`training-parameter-planning` skill, with a companion `recipes.md` that
-accumulates verified (architecture × task) parameter knowledge with provenance
-labels and run-id evidence.
+`training-parameter-planning` skill. Knowledge lives beside it as small
+per-architecture cards (`knowledge/<architecture>.md`) plus
+`knowledge/user-preferences.md`; file location expresses precedence
+(preferences outrank baselines), and every value carries a `source:` line
+(owner / run id / upstream / agent) so evidence stays orthogonal to
+precedence. Run `notes.md` remains the primary evidence record; cards cite
+run ids instead of duplicating them. The single mandatory approval is the
+`kura run plan` review before launch.
 
 The skill implements the existing safety principle as a decision ladder:
 first propose adjustments that do not change meaning; then propose speed-only
