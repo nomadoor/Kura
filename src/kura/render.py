@@ -67,7 +67,7 @@ def write_realization(run_dir: Path, **details: Any) -> None:
     realization_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     path = run_dir / "realizations" / f"{realization_id}.json"
     path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps({"id": realization_id, "timestamp": now(), **details}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, {"id": realization_id, "timestamp": now(), **details})
     status(run_dir, last_realization=str(path.relative_to(run_dir)))
 
 
