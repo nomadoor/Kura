@@ -26,7 +26,7 @@ from kura.executors import docker_command, docker_preflight, launch_runpod, laun
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -1284,6 +1284,27 @@ class RenderNotificationTests(unittest.TestCase):
     def test_insert_lora_loader_skips_empty_lora_name(self) -> None:
         workflow = {"1": {"inputs": {"model": ["2", 0]}}, "2": {"inputs": {}}}
         self.assertEqual(insert_lora_loader(workflow, {"class_type": "LoraLoaderModelOnly", "model_node": "2", "model_output": 0}, ""), workflow)
+
+    def test_runpod_lora_upload_plan_uses_sidecar_insert(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            output_dir = root / "runs" / "train-1" / "outputs"
+            output_dir.mkdir(parents=True)
+            source = output_dir / "example.safetensors"
+            source.write_bytes(b"fake-lora")
+            lora_source, lora_name = _render_runpod_lora(
+                root,
+                run_dir,
+                {
+                    "inputs": {"checkpoint": {"path": "runs/train-1/outputs/example.safetensors"}},
+                    "workflow_patches": {},
+                    "lora_insert": {"class_type": "LoraLoader", "model_node": "4", "model_output": 0},
+                },
+            )
+            self.assertEqual(lora_source, source.resolve())
+            self.assertIsNotNone(lora_name)
+            self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
 
     def test_render_failure_appends_to_existing_stdout_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

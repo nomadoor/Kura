@@ -1607,7 +1607,7 @@ def _render_runpod_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _render_runpod_lora(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -> tuple[Path | None, str | None]:
-    if "lora" not in frozen.get("workflow_patches", {}):
+    if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
         return None, None
     checkpoint = frozen.get("inputs", {}).get("checkpoint")
     if not isinstance(checkpoint, dict):
@@ -1620,7 +1620,7 @@ def _render_runpod_lora(workspace: Path, run_dir: Path, frozen: dict[str, Any]) 
         source = workspace / source
     source = source.resolve()
     if not source.is_file() or source.suffix != ".safetensors":
-        raise ValueError("runpod ComfyUI render requires workflow_patches.lora checkpoint.path to point to a local .safetensors file")
+        raise ValueError("runpod ComfyUI render with LoRA requires checkpoint.path to point to a local .safetensors file")
     return source, "Kura_tmp/" + _safe_stage_name(run_dir.name, source)
 
 
