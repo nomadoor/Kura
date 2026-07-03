@@ -91,6 +91,22 @@ def stable_link_target(path, link_path):
     try:
         target = os.path.abspath(path)
         link = os.path.abspath(link_path)
+        raw_maps = os.environ.get("KURA_WORKSPACE_PATH_MAPS") or "[]"
+        try:
+            mappings = json.loads(raw_maps)
+        except json.JSONDecodeError:
+            mappings = []
+        for item in mappings:
+            container = os.path.abspath(str(item.get("container", "")))
+            workspace = os.path.abspath(str(item.get("workspace", "")))
+            if not container or not workspace:
+                continue
+            if target == container or target.startswith(container.rstrip("/") + "/"):
+                suffix = target[len(container):].lstrip("/")
+                target = os.path.join(workspace, suffix)
+                break
+        # Legacy compatibility for links created before Docker passed the mount
+        # table. New Docker launches use KURA_WORKSPACE_PATH_MAPS above.
         if target.startswith("/root/.cache/huggingface/") and os.path.commonpath([link, "/workspace"]) == "/workspace":
             target = "/workspace/cache/huggingface/" + target[len("/root/.cache/huggingface/"):]
         target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"

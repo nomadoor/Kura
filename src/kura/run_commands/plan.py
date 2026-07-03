@@ -19,6 +19,7 @@ import yaml
 
 from kura.backends import musubi_model_download_specs
 from kura.executors import stage_runpod, stop_docker, stop_runpod
+from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
@@ -436,6 +437,15 @@ def _host_cache_target(path: Path, *, workspace: Path | None = None) -> Path:
             target = os.readlink(path)
         except OSError:
             return path
+        config = _workspace_config()
+        docker = config.get("docker", {}) if isinstance(config.get("docker"), dict) else {}
+        mounts = docker.get("mounts", []) if isinstance(docker.get("mounts"), list) else []
+        mapped = to_workspace_relative(target, workspace=workspace, mounts=mounts)
+        if mapped is not None:
+            return workspace / mapped
+        # Legacy compatibility for links written before the Docker mount table
+        # was passed into hf_download.py. Unmapped links are treated as missing
+        # by the caller rather than crashing the plan.
         prefix = "/root/.cache/huggingface/"
         if target.startswith(prefix):
             return workspace / "cache" / "huggingface" / target[len(prefix):]

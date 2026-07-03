@@ -20,6 +20,7 @@ from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
+from kura.paths import inspect_workspace_symlinks
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storages
 from kura.workspace import require_workspace as _require_workspace
@@ -296,6 +297,8 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "tmp": Path(os.environ.get("TMPDIR") or "/tmp"),
     }
     docker_mounts = config.get("docker", {}).get("mounts", []) if isinstance(config.get("docker"), dict) else []
+    if not isinstance(docker_mounts, list):
+        docker_mounts = []
     mounted_hf = next(
         (
             _workspace_relative_path(item["source"])
@@ -315,6 +318,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     storage = {name: status.to_dict() for name, status in storage_statuses.items()}
     docker_storage = _docker_storage_summary()
     root_owned = _root_owned_files([paths["cache"], paths["runs"]])
+    symlinks = inspect_workspace_symlinks(workspace_root, mounts=docker_mounts)
     env = {
         name: os.environ.get(name)
         for name in ("KURA_CACHE_DIR", "HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE", "TORCH_HOME", "XDG_CACHE_HOME")
@@ -376,6 +380,14 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             message="cache/runs contain root-owned files; cleanup may require permission repair",
             count=root_owned.get("count"),
         ))
+    unsafe_links = symlinks.get("unsafe")
+    if isinstance(unsafe_links, list) and unsafe_links:
+        issues.append(_disk_issue(
+            code="unsafe_workspace_symlinks",
+            severity="warning",
+            message="workspace contains symlinks with container-private or workspace-external absolute targets",
+            count=len(unsafe_links),
+        ))
     warned_backings: set[tuple[str, str]] = set()
     for status in storage_statuses.values():
         if not status.warning:
@@ -408,6 +420,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "storage": storage,
         "docker_storage": docker_storage,
         "root_owned": root_owned,
+        "symlinks": symlinks,
         "cache_environment": env,
         "issues": issues,
         "warnings": warnings,

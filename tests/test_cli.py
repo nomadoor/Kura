@@ -22,7 +22,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_compile, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_compile, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.container_scripts import script_source
 from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
@@ -406,6 +406,51 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertTrue(payload["dry_run"])
             self.assertEqual(payload["root_owned"]["count"], 1)
 
+    def test_fix_links_rewrites_repairable_container_private_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}}),
+                encoding="utf-8",
+            )
+            link = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
+            link.parent.mkdir(parents=True)
+            link.symlink_to("/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_fix_links(argparse.Namespace(yes=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertFalse(payload["dry_run"])
+            self.assertEqual(len(payload["actions"]), 1)
+            self.assertEqual(
+                os.readlink(link),
+                "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
+            )
+
+    def test_fix_links_reports_unmapped_absolute_symlink_without_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
+            link = root / "cache" / "models" / "bad.safetensors"
+            link.parent.mkdir(parents=True)
+            link.symlink_to("/opt/models/bad.safetensors")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_fix_links(argparse.Namespace(yes=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["actions"][0]["repairable"], False)
+            self.assertEqual(os.readlink(link), "/opt/models/bad.safetensors")
+
     def test_doctor_disk_reports_workspace_storage_and_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -486,6 +531,40 @@ class DoctorDockerTests(unittest.TestCase):
             issue = next(item for item in payload["issues"] if item["code"] == "workspace_cache_runs_large")
             self.assertEqual(issue["severity"], "advisory")
             self.assertEqual(issue["size_bytes"], 32 * 1024**3)
+
+    def test_doctor_disk_warns_about_container_private_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}}),
+                encoding="utf-8",
+            )
+            (root / "cache" / "huggingface").mkdir(parents=True)
+            link = root / "cache" / "models" / "bad.safetensors"
+            link.parent.mkdir(parents=True)
+            link.symlink_to("/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
+
+            def fake_disk_usage(path: Path) -> dict[str, object]:
+                return {"path": str(path), "probe": str(path), "total_bytes": 500 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 400 * 1024**3}
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._path_size_bytes", return_value=0),
+                    patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_disk(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIn("workspace contains symlinks with container-private or workspace-external absolute targets", payload["warnings"])
+            self.assertEqual(payload["symlinks"]["unsafe"][0]["path"], "cache/models/bad.safetensors")
+            self.assertEqual(payload["symlinks"]["unsafe"][0]["workspace_target"], "cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
 
     def test_doctor_disk_warns_about_wsl_ext4_virtual_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2782,6 +2861,21 @@ class MusubiBackendTests(unittest.TestCase):
         )
         self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "../../../../huggingface/weights.safetensors")
 
+    def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
+        namespace: dict[str, Any] = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        stable_link_target = namespace["stable_link_target"]
+        link_path = "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors"
+        with patch.dict(
+            os.environ,
+            {"KURA_WORKSPACE_PATH_MAPS": json.dumps([{"container": "/cache/hf", "workspace": "/workspace/shared/hf"}])},
+        ):
+            self.assertEqual(
+                stable_link_target("/cache/hf/hub/models--repo--model/snapshots/abc/weights.safetensors", link_path),
+                "../../../../../shared/hf/hub/models--repo--model/snapshots/abc/weights.safetensors",
+            )
+
     def test_command_musubi_rejects_model_download_local_dir(self) -> None:
         run = self._run()
         run["backend_overrides"] = {
@@ -3051,6 +3145,7 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertIn("PYTHONUNBUFFERED=1", command)
         self.assertEqual(runtime_env["HF_HOME"], "/root/.cache/huggingface")
         self.assertIn("HF_HOME=/root/.cache/huggingface", command)
+        self.assertIn("KURA_WORKSPACE_PATH_MAPS", runtime_env)
         self.assertIn('exec "$@" >> "$KURA_LOG_PATH" 2>&1', command)
 
     def test_docker_mount_sources_are_resolved_from_workspace(self) -> None:
@@ -3059,8 +3154,15 @@ class DockerLifecycleTests(unittest.TestCase):
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
-            command, _, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", mounts, True, "r1")
+            command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", mounts, True, "r1")
         self.assertIn(f"{root}/cache/huggingface:/root/.cache/huggingface", command)
+        self.assertEqual(
+            json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"]),
+            [
+                {"container": "/root/.cache/huggingface", "workspace": "/workspace/cache/huggingface"},
+                {"container": "/workspace", "workspace": "/workspace"},
+            ],
+        )
 
     def test_docker_preflight_creates_writable_mount_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

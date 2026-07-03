@@ -13,6 +13,7 @@ from typing import Any
 
 from kura import __version__
 from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, _event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
+from kura.paths import workspace_mount_mappings
 
 
 def _docker_image_id(image: str) -> str | None:
@@ -117,6 +118,7 @@ def docker_command(
     if spec_secret_keys:
         raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
     runtime_env["KURA_LOG_PATH"] = log_path
+    runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(workspace_mount_mappings(workspace, mounts, container_root=workspace_target), ensure_ascii=False, separators=(",", ":"))
     # Container output is redirected to a mounted file; force Python progress
     # messages through immediately instead of waiting for its file buffer.
     runtime_env.setdefault("PYTHONUNBUFFERED", "1")

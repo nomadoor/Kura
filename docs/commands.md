@@ -15,6 +15,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura cleanup all` | Preview local cache, run, and Docker cleanup targets |
 | `uv run kura cleanup cache --yes` | Delete Kura-managed local model/cache data after previewing it |
 | `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
+| `uv run kura fix-links` | Preview repair for Kura symlinks with container-private targets |
 | `uv run kura --version` | Print the installed Kura version |
 | `uv run kura doctor docker` | Check Docker / GPU / cache readiness |
 | `uv run kura doctor disk` | Report local disk, cache, Docker storage, and permission risks |

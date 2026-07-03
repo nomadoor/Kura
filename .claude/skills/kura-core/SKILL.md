@@ -22,6 +22,13 @@ Use this skill before changing production code in `src/kura/`, tests, executor/b
 - Launch/runtime facts go into append-only `realizations/`.
 - `status.json` materializes latest state; it is not the source of historical truth.
 - Apart from `notes.md`, treat run artifacts as append-only or immutable unless a CLI command explicitly owns the mutation.
+- Path namespace is determined by the artifact consumer:
+  - container command specs, dataset TOML, and training argv may use container absolute paths such as `/workspace/...`;
+  - host-consumed state such as `status.json`, model locks, indexes, and workspace symlinks should use workspace-relative paths or host-resolvable links;
+  - realization mounts are explicit source/target pairs and may contain both host and container paths;
+  - logs are not machine-interpreted path truth.
+- Do not persist container-private paths such as `/root/...`, `/opt/...`, `/tmp/...`, `/var/...`, or `/app/...` into host-consumed workspace artifacts. Use `src/kura/paths.py` and the workspace mount table; if a path cannot be mapped, fail or treat it as unavailable rather than guessing.
+- Host-side plan/monitor code must not crash on unresolvable convenience symlinks. Treat cache detection as best-effort and fall back to "not cached".
 
 ## Backend / executor split
 

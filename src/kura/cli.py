@@ -28,6 +28,7 @@ from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
+from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -652,6 +653,58 @@ def cmd_fix_permissions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix_links(args: argparse.Namespace) -> int:
+    workspace = _require_workspace()
+    config = _workspace_config()
+    docker = config.get("docker", {}) if isinstance(config.get("docker"), dict) else {}
+    mounts = docker.get("mounts", []) if isinstance(docker.get("mounts"), list) else []
+    inspected = inspect_workspace_symlinks(workspace, mounts=mounts)
+    actions: list[dict[str, Any]] = []
+    for item in inspected.get("unsafe", []):
+        if not isinstance(item, dict):
+            continue
+        link_rel = item.get("path")
+        target = item.get("target")
+        if not isinstance(link_rel, str) or not isinstance(target, str):
+            continue
+        mapped = to_workspace_relative(target, workspace=workspace, mounts=mounts)
+        action: dict[str, Any] = {
+            "path": link_rel,
+            "target": target,
+            "repairable": mapped is not None,
+        }
+        if mapped is not None:
+            action["workspace_target"] = mapped
+            action["new_target"] = relative_symlink_target(link_relative=link_rel, target_relative=mapped)
+        else:
+            action["reason"] = "target is not covered by the workspace mount table"
+        actions.append(action)
+
+    if args.yes:
+        try:
+            for action in actions:
+                if not action.get("repairable"):
+                    continue
+                link = workspace / str(action["path"])
+                if not link.is_symlink():
+                    continue
+                link.unlink()
+                link.symlink_to(str(action["new_target"]))
+        except OSError as exc:
+            print(f"cannot fix links: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+
+    print(json.dumps({
+        "dry_run": not args.yes,
+        "workspace_root": str(workspace),
+        "scanned_symlinks": inspected.get("scanned", 0),
+        "truncated": inspected.get("truncated", False),
+        "actions": actions,
+        "diagnosis": "Link repair rewrites only symlinks whose targets are covered by the workspace mount table.",
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_run_prune(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
@@ -845,6 +898,10 @@ def main() -> None:
     fix_permissions.add_argument("target", choices=("cache", "runs", "all"), default="all", nargs="?")
     fix_permissions.add_argument("--yes", action="store_true", help="Apply ownership repair; default is dry-run")
     fix_permissions.set_defaults(func=cmd_fix_permissions)
+
+    fix_links = sub.add_parser("fix-links", help="Repair Kura workspace symlinks with container-private targets")
+    fix_links.add_argument("--yes", action="store_true", help="Apply link repair; default is dry-run")
+    fix_links.set_defaults(func=cmd_fix_links)
 
     monitor = sub.add_parser("monitor", help="Open the run monitor TUI")
     monitor.add_argument("--interval", type=float, default=2.0)
