@@ -376,6 +376,7 @@ SPECS: dict[str, SmokeSpec] = {
             "fp8_scaled": True,
             "extra_args": ["--blocks_to_swap", "26"],
             "save_every_n_steps": 1,
+            "prune_checkpoints_before_step": 1,
         },
         params={
             "rank": 1,
@@ -645,6 +646,7 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         "params": dict(spec.params),
         "backend_overrides": {"musubi-tuner": override},
         "compute": {"executor": executor, "gpu": gpu},
+        "safety": {"allow_large_model_downloads": True},
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     (run_dir / "run.yaml").write_text(yaml.safe_dump(run_yaml, allow_unicode=True, sort_keys=False), encoding="utf-8")
