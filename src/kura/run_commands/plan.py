@@ -418,13 +418,28 @@ def _workspace_cache_file(workspace: Path | None, container_path: str | None) ->
     return workspace / container_path[len(prefix):]
 
 
-def _cached_file_size(path: Path | None) -> int | None:
-    if path is None or not path.exists() or not path.is_file():
+def _cached_file_size(path: Path | None, *, workspace: Path | None = None) -> int | None:
+    if path is None:
         return None
+    candidate = _host_cache_target(path, workspace=workspace)
     try:
-        return path.stat().st_size
+        if not candidate.exists() or not candidate.is_file():
+            return None
+        return candidate.stat().st_size
     except OSError:
         return None
+
+
+def _host_cache_target(path: Path, *, workspace: Path | None = None) -> Path:
+    if workspace is not None and path.is_symlink():
+        try:
+            target = os.readlink(path)
+        except OSError:
+            return path
+        prefix = "/root/.cache/huggingface/"
+        if target.startswith(prefix):
+            return workspace / "cache" / "huggingface" / target[len(prefix):]
+    return path
 
 
 def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
@@ -452,7 +467,7 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     unknown: list[str] = []
     for item in specs:
         cache_path = _workspace_cache_file(workspace, item.get("link_path"))
-        cached_size = _cached_file_size(cache_path)
+        cached_size = _cached_file_size(cache_path, workspace=workspace)
         cached = cached_size is not None
         size = cached_size if cached else _hf_file_size_bytes(item)
         download_size = 0 if cached else size

@@ -91,6 +91,8 @@ def stable_link_target(path, link_path):
     try:
         target = os.path.abspath(path)
         link = os.path.abspath(link_path)
+        if target.startswith("/root/.cache/huggingface/") and os.path.commonpath([link, "/workspace"]) == "/workspace":
+            target = "/workspace/cache/huggingface/" + target[len("/root/.cache/huggingface/"):]
         target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
         link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
     except ValueError:

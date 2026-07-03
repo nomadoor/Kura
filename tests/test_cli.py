@@ -1226,6 +1226,40 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
         self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
 
+    def test_local_plan_reads_legacy_root_hf_cache_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "datasets" / "tiny").mkdir(parents=True)
+            run_dir = root / "runs" / "local"
+            run_dir.mkdir(parents=True)
+            target = root / "cache" / "huggingface" / "hub" / "models--repo--model" / "snapshots" / "abc" / "weights.safetensors"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"x" * 123)
+            cache_file = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
+            cache_file.parent.mkdir(parents=True)
+            cache_file.symlink_to("/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
+            run = {
+                "id": "local",
+                "type": "train",
+                "backend": {"name": "musubi-tuner"},
+                "model": {"base": "repo/model"},
+                "datasets": [{"id": "tiny"}],
+                "params": {"steps": 1},
+                "compute": {"executor": "docker"},
+                "backend_overrides": {"musubi-tuner": {"architecture": "flux2", "model_bundle": "none", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}}},
+            }
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                payload = plan_run("local")
+            finally:
+                os.chdir(previous)
+        self.assertEqual(payload["model_downloads"]["bytes"], 0, payload["model_downloads"])
+        self.assertEqual(payload["model_downloads"]["cached_bytes"], 123)
+        self.assertTrue(payload["model_downloads"]["items"][0]["cached"])
+
     def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
         run = {
             "type": "train",
@@ -2746,7 +2780,7 @@ class MusubiBackendTests(unittest.TestCase):
             stable_link_target(target, link_path),
             "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
         )
-        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "/root/.cache/huggingface/weights.safetensors")
+        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "../../../../huggingface/weights.safetensors")
 
     def test_command_musubi_rejects_model_download_local_dir(self) -> None:
         run = self._run()
