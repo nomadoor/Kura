@@ -105,10 +105,6 @@ def stable_link_target(path, link_path):
                 suffix = target[len(container):].lstrip("/")
                 target = os.path.join(workspace, suffix)
                 break
-        # Legacy compatibility for links created before Docker passed the mount
-        # table. New Docker launches use KURA_WORKSPACE_PATH_MAPS above.
-        if target.startswith("/root/.cache/huggingface/") and os.path.commonpath([link, "/workspace"]) == "/workspace":
-            target = "/workspace/cache/huggingface/" + target[len("/root/.cache/huggingface/"):]
         target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
         link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
     except ValueError:

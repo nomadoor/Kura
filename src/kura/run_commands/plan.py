@@ -443,12 +443,6 @@ def _host_cache_target(path: Path, *, workspace: Path | None = None) -> Path:
         mapped = to_workspace_relative(target, workspace=workspace, mounts=mounts)
         if mapped is not None:
             return workspace / mapped
-        # Legacy compatibility for links written before the Docker mount table
-        # was passed into hf_download.py. Unmapped links are treated as missing
-        # by the caller rather than crashing the plan.
-        prefix = "/root/.cache/huggingface/"
-        if target.startswith(prefix):
-            return workspace / "cache" / "huggingface" / target[len(prefix):]
     return path
 
 

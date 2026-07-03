@@ -1305,7 +1305,7 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
         self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
 
-    def test_local_plan_reads_legacy_root_hf_cache_symlink(self) -> None:
+    def test_local_plan_treats_unmapped_absolute_symlink_as_not_cached(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
@@ -1332,12 +1332,13 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                payload = plan_run("local")
+                with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=200), patch("kura.run_commands._hf_file_size_bytes", return_value=200):
+                    payload = plan_run("local")
             finally:
                 os.chdir(previous)
-        self.assertEqual(payload["model_downloads"]["bytes"], 0, payload["model_downloads"])
-        self.assertEqual(payload["model_downloads"]["cached_bytes"], 123)
-        self.assertTrue(payload["model_downloads"]["items"][0]["cached"])
+        self.assertEqual(payload["model_downloads"]["bytes"], 200, payload["model_downloads"])
+        self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
+        self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
 
     def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
         run = {
@@ -2859,7 +2860,7 @@ class MusubiBackendTests(unittest.TestCase):
             stable_link_target(target, link_path),
             "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
         )
-        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "../../../../huggingface/weights.safetensors")
+        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "/root/.cache/huggingface/weights.safetensors")
 
     def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
