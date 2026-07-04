@@ -67,9 +67,13 @@ mkdir -p /tmp/kura-secrets
 cat > {shlex.quote(remote_secret_path)}
 chmod 600 {shlex.quote(remote_secret_path)}
 """.strip()
-        installed = subprocess.run([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, check=False)
+        try:
+            installed = subprocess.run([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, capture_output=True, check=False, timeout=600)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(f"ssh secret preparation timed out after {exc.timeout} seconds") from exc
         if installed.returncode:
-            raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
+            detail = _safe_error(installed.stderr.strip() or installed.stdout.strip() or "ssh secret preparation failed")
+            raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}: {detail}")
     pod_id = details.get("pod_id")
     pod_id_value = pod_id if isinstance(pod_id, str) else ""
     lease_guard = ""
@@ -108,9 +112,9 @@ python /opt/kura_comfy_prepare.py {shlex.quote(workflow_remote)} --registry-json
 cd /opt/ComfyUI
 nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
 """.strip()
-    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False)
+    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=600)
     if result.returncode:
-        detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "remote ComfyUI start failed")
+        detail = _safe_error(result.stderr.strip() or result.stdout.strip() or "remote ComfyUI start failed")
         raise ValueError(f"remote ComfyUI start failed with exit code {result.returncode}: {detail}")
 
 
@@ -159,7 +163,7 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         remote_workspace = str(runpod_config.get("workspace_path") or "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
         _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name)
-        prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp"], check=False)
+        prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp"], check=False, timeout=600)
         if prepared.returncode:
             raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
         workflow_path = run_dir / "resolved" / "workflow_used.json"
@@ -209,7 +213,10 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         return 130
     except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, subprocess.TimeoutExpired) as exc:
         if ssh_details is not None:
-            _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
+            try:
+                _sync_runpod_remote_stdout(run_dir, ssh_details, workspace=remote_workspace, run_id=run_dir.name, timeout_sec=15)
+            except (OSError, ValueError, subprocess.TimeoutExpired) as sync_exc:
+                print(f"warning: could not sync RunPod render logs: {_safe_error(sync_exc)}", file=sys.stderr)
         message = _safe_error(exc)
         print(f"cannot launch runpod render: {message}", file=sys.stderr)
         if not dry_run:

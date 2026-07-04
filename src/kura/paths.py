@@ -16,6 +16,8 @@ DEFAULT_CONTAINER_ROOT = "/workspace"
 
 
 def _clean_relative(value: str) -> str | None:
+    if value.replace("\\", "/").startswith("/"):
+        return None
     normalized = posixpath.normpath(value.replace("\\", "/"))
     if normalized in ("", ".") or normalized.startswith("../") or normalized == "..":
         return None
@@ -55,6 +57,8 @@ def to_workspace_relative(
         return _clean_relative(suffix)
 
     for mount in mounts or []:
+        if not isinstance(mount, dict):
+            continue
         source = mount.get("source")
         target = mount.get("target")
         if not isinstance(source, str) or not isinstance(target, str) or not target:
@@ -105,6 +109,8 @@ def workspace_mount_mappings(
     """Build container-to-workspace mappings safe to pass into containers."""
     mappings = [{"container": _container_prefix(container_root), "workspace": _container_prefix(container_root)}]
     for mount in mounts or []:
+        if not isinstance(mount, dict):
+            continue
         source = mount.get("source")
         target = mount.get("target")
         if not isinstance(source, str) or not isinstance(target, str) or not target:

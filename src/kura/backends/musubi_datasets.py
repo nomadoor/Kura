@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends.common import _datasets, _int_or_none, _musubi_backend_override, _toml_scalar
+from kura.fsio import atomic_write_text
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
@@ -38,7 +39,7 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, work
         for key, value in item.items():
             if value is not None:
                 lines.append(f"{key} = {_toml_scalar(value)}")
-    destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(destination, "\n".join(lines) + "\n")
     referenced_jsonl = {Path(value).name for item in items for key, value in item.items() if key == "image_jsonl_file" and isinstance(value, str)}
     for path in destination.parent.glob("*.jsonl"):
         if path.name not in referenced_jsonl:
@@ -75,7 +76,7 @@ def _musubi_dataset_items(
             paired = override_item.pop("paired_jsonl")
             if isinstance(paired, dict):
                 item["_kura_paired_key"] = _paired_dataset_key(dataset_id, paired)
-            item["image_jsonl_file"] = _write_musubi_paired_jsonl(run, destination, dataset_id, paired)
+            item["image_jsonl_file"] = _write_musubi_paired_jsonl(run, destination, dataset_id, paired, workspace=workspace)
         item.update(override_item)
         if strict and not uses_jsonl and isinstance(item.get("image_directory"), str):
             _validate_image_directory(workspace or _workspace_from_resolved_path(destination), dataset_id, item["image_directory"])
@@ -204,7 +205,7 @@ def _selection_key(value: Any) -> tuple[Any, ...] | None:
     raise ValueError("unsupported paired_jsonl select; supported: {modulo, remainder}")
 
 
-def _write_musubi_paired_jsonl(run: dict[str, Any], destination: Path, dataset_id: str, spec: Any) -> str:
+def _write_musubi_paired_jsonl(run: dict[str, Any], destination: Path, dataset_id: str, spec: Any, *, workspace: Path | None = None) -> str:
     if not isinstance(spec, dict):
         raise ValueError("Musubi paired_jsonl must be a mapping")
     target_dir = _relative_dataset_path(spec.get("target_dir") or spec.get("image_dir") or "target")
@@ -214,8 +215,8 @@ def _write_musubi_paired_jsonl(run: dict[str, Any], destination: Path, dataset_i
     if not filename.endswith(".jsonl") or "/" in filename or "\\" in filename or filename in (".jsonl",):
         raise ValueError(f"invalid paired_jsonl filename: {filename!r}")
     output_dir = destination.parent
-    workspace = output_dir.parents[3]
-    dataset_root = workspace / "datasets" / dataset_id
+    workspace_root = workspace or _workspace_from_resolved_path(destination)
+    dataset_root = workspace_root / "datasets" / dataset_id
     host_target = dataset_root / target_dir
     host_control = dataset_root / control_dir
     host_caption = dataset_root / caption_dir

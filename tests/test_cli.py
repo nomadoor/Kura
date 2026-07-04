@@ -24,11 +24,13 @@ import yaml
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_run_compile, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.container_scripts import script_source
-from kura.executors import docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
+from kura.executors.common import _safe_env
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
+from kura.run_commands.plan import _model_download_safety_preflight
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -175,6 +177,50 @@ class InitCommandTests(unittest.TestCase):
             (dataset / "images").mkdir()
             (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
             self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 0)
+
+    def test_dataset_validate_rejects_paths_outside_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "tiny"
+            dataset.mkdir(parents=True)
+            outside = root / "outside.png"
+            outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+            (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text('{"id":"1","path":"../../outside.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+
+            stderr = io.StringIO()
+            with patch("sys.stderr", stderr):
+                self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 1)
+
+            self.assertIn("path must stay inside the dataset directory", stderr.getvalue())
+
+    def test_run_compile_preserves_requested_executor_in_env_lock(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.chdir(root)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                dataset = root / "datasets" / "tiny"
+                (dataset / "images").mkdir(parents=True)
+                (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
+                (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="runpod", backend="ai-toolkit", executor="runpod", gpu="NVIDIA A40")), 0)
+                run_id = stdout.getvalue().strip()
+                run_path = root / "runs" / run_id / "run.yaml"
+                run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+                run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
+                run["datasets"] = [{"id": "tiny"}]
+                run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
+                self.assertEqual(cmd_run_compile(argparse.Namespace(run_id=run_id)), 0)
+            finally:
+                os.chdir(previous)
+
+            env_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "env.lock").read_text(encoding="utf-8"))
+            self.assertEqual(env_lock["declared_executor"], "runpod")
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2586,6 +2632,28 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(payload["control_path"], "/workspace/datasets/paired/paired/cond/item1.png")
         self.assertEqual(payload["caption"], "control caption")
 
+    def test_compile_musubi_paired_jsonl_uses_explicit_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "datasets" / "paired"
+            (dataset / "paired" / "target").mkdir(parents=True)
+            (dataset / "paired" / "cond").mkdir()
+            (dataset / "paired" / "caption").mkdir()
+            (dataset / "paired" / "target" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            (dataset / "paired" / "cond" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+            (dataset / "paired" / "caption" / "item1.txt").write_text("control caption\n", encoding="utf-8")
+            run = self._run()
+            run["id"] = "paired-run"
+            run["datasets"] = [{"id": "paired", "digest": "sha256:abc"}]
+            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+                "datasets": [{"paired_jsonl": {"filename": "paired.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"}}],
+            }
+            destination = root / "scratch" / "musubi"
+
+            compile_musubi_tuner(run, destination, workspace=root)
+
+            self.assertTrue((destination / "paired.jsonl").is_file())
+
     def test_compile_musubi_rejects_duplicate_resolution_sections_for_same_paired_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3130,6 +3198,19 @@ class DockerLifecycleTests(unittest.TestCase):
         (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json", "container_id": "container-1"}), encoding="utf-8")
         (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "container": {"id": "container-1", "name": "kura-example-r1"}}), encoding="utf-8")
         return run_dir
+
+    def test_private_key_env_names_are_redacted(self) -> None:
+        with patch.dict(os.environ, {"SSH_PRIVATE_KEY": "secret-key"}, clear=False):
+            safe = _safe_env({"SSH_PRIVATE_KEY": "secret-key", "NORMAL": "hello secret-key"})
+
+        self.assertEqual(safe["SSH_PRIVATE_KEY"], "***")
+        self.assertEqual(safe["NORMAL"], "hello ***")
+
+    def test_model_download_safety_rejects_unknown_sizes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "model download sizes are unknown"):
+            _model_download_safety_preflight({"safety": {}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
+
+        _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
 
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4045,6 +4126,21 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertLess(script.index("runpodctl pod delete"), script.index("kura_comfy_prepare.py"))
         self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
 
+    def test_runpod_comfyui_start_failure_reports_ssh_error(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.render_runpod.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 2, "", "remote broke")):
+            with self.assertRaisesRegex(ValueError, "remote ComfyUI start failed"):
+                _start_runpod_comfyui(
+                    details,
+                    workspace="/workspace",
+                    run_id="render-1",
+                    workflow_remote="/workspace/runs/render-1/resolved/workflow_used.json",
+                    registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
+                    lora_remote_name=None,
+                    lora_remote_path=None,
+                    max_lease_sec=0,
+                )
+
     def test_runpod_scp_is_non_interactive_and_bounded(self) -> None:
         details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
         with tempfile.TemporaryDirectory() as directory:
@@ -4065,6 +4161,24 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=subprocess.TimeoutExpired(["scp"], 600)):
                 with self.assertRaisesRegex(ValueError, "scp upload timed out"):
                     _scp_to_runpod(details, source, "/workspace/workflow.json")
+
+    def test_runpod_ssh_details_retries_after_pod_get_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1"}), encoding="utf-8")
+            pod = {"ssh": {"ip": "127.0.0.1", "port": 22, "ssh_key": {"path": "/tmp/key"}}}
+            with patch(
+                "kura.run_commands.runpod_ssh.subprocess.run",
+                side_effect=[
+                    subprocess.TimeoutExpired(["runpodctl", "pod", "get", "pod-1"], 1),
+                    subprocess.CompletedProcess(["runpodctl"], 0, json.dumps(pod), ""),
+                ],
+            ) as run:
+                details = _runpod_ssh_details(run_dir, timeout_sec=5, interval_sec=0)
+
+            self.assertEqual(details["pod_id"], "pod-1")
+            self.assertEqual(run.call_args.kwargs["timeout"], 1)
 
     def test_reconcile_runpod_exited_is_unknown_without_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4149,6 +4263,25 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("controller failed", notify.call_args.kwargs["subject"])
             self.assertIn("may still be running and billing", notify.call_args.kwargs["body"])
             self.assertIn("kura run stop example", notify.call_args.kwargs["body"])
+
+    def test_stop_run_without_realization_reports_clean_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                stderr = io.StringIO()
+                with patch("sys.stderr", stderr):
+                    code = stop_run("example")
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertIn("run has no realization to stop", stderr.getvalue())
 
     def test_run_remote_stops_pod_immediately_when_hold_is_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

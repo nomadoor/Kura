@@ -12,6 +12,7 @@ from kura.container_scripts import script_source
 from kura.backends.common import _append_flag, _extra_args, _int_or_none, _musubi_backend_override, _require_paths, _script_command, _truthy
 from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
+from kura.fsio import atomic_write_json, atomic_write_yaml
 
 
 def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
@@ -19,11 +20,8 @@ def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: P
     destination.mkdir(parents=True, exist_ok=True)
     _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
     command = command_musubi_tuner(run)
-    (destination / "command.json").write_text(json.dumps(command, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    (destination / "model-bundle.lock.yaml").write_text(
-        yaml.safe_dump(_musubi_model_lock(run), allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
+    atomic_write_json(destination / "command.json", command)
+    atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
 
 
 def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: Any) -> list[str] | None:

@@ -45,7 +45,7 @@ def _event(path: Path, event: dict[str, Any]) -> None:
 
 
 def _is_secret(name: str) -> bool:
-    return any(part in name.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY"))
+    return any(part in name.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY"))
 
 
 def _secret_values() -> list[str]:

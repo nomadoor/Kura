@@ -6,7 +6,7 @@ only when the owner says they should apply generally.
 
 Format example (keep entries in this shape):
 
-```
+```text
 - lr starting point: prefer 7e-5 over the common 1e-4 for <scope>
   source: owner (<date>)
   note: <why / observed behavior>

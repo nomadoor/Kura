@@ -13,6 +13,8 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,6 +28,16 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _event, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
+
+
+RUNPOD_TRANSFER_TIMEOUT_SEC = 600
+
+
+def _run_bounded(command: list[str], *, context: str, timeout: int = RUNPOD_TRANSFER_TIMEOUT_SEC, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+    try:
+        return subprocess.run(command, check=False, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"{context} timed out after {exc.timeout} seconds") from exc
 
 
 def _latest_runpod_transfer(run_dir: Path) -> dict[str, Any]:
@@ -139,7 +151,7 @@ def download_run(run_id: str, *, force: bool = False) -> int:
             raise ValueError("run has no RunPod pod ID")
         config = _workspace_config()
         min_download_free = _configured_download_min_free_bytes(config)
-        pod = subprocess.run(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, check=False)
+        pod = _run_bounded(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, context="runpodctl pod get")
         if pod.returncode:
             raise ValueError(_redact_secret_text(pod.stderr.strip() or pod.stdout.strip() or "runpodctl pod get failed"))
         details = json.loads(pod.stdout)
@@ -163,7 +175,7 @@ def download_run(run_id: str, *, force: bool = False) -> int:
             f"--exclude {shlex.quote(run_id + '/transfer')} "
             f"-czf {shlex.quote(remote_archive)} {shlex.quote(run_id)}"
         )
-        packed = subprocess.run([*_ssh_base({"ip": ip, "port": port, "key": key}), remote_script], check=False)
+        packed = _run_bounded([*_ssh_base({"ip": ip, "port": port, "key": key}), remote_script], context="remote archive packing")
         if packed.returncode:
             return packed.returncode
         local_archive = destination / f"kura-download-{run_id}.tar.gz"
@@ -176,18 +188,18 @@ def download_run(run_id: str, *, force: bool = False) -> int:
             f"root@{ip}:{remote_archive}",
             str(local_archive),
         ]
-        result = subprocess.run(command, check=False)
-        subprocess.run([*_ssh_base({"ip": ip, "port": port, "key": key}), f"rm -f {shlex.quote(remote_archive)}"], check=False)
+        result = _run_bounded(command, context="scp download")
+        _run_bounded([*_ssh_base({"ip": ip, "port": port, "key": key}), f"rm -f {shlex.quote(remote_archive)}"], context="remote archive cleanup")
         if result.returncode:
             return result.returncode
-        extracted = subprocess.run(["tar", "--warning=no-timestamp", "-xzf", str(local_archive), "-C", str(destination)], check=False)
+        extracted = _run_bounded(["tar", "--warning=no-timestamp", "-xzf", str(local_archive), "-C", str(destination)], context="download archive extraction")
         local_archive.unlink(missing_ok=True)
         if extracted.returncode:
             return extracted.returncode
         if not materialize_downloaded_status():
             raise ValueError("downloaded run snapshot is missing remote-exit; remote completion is not confirmed")
         return 0
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
         return 1
 
@@ -292,7 +304,7 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and not args.force:
                 pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "skipped": True})
                 continue
-            result = subprocess.run([
+            result = _run_bounded([
                 "scp",
                 "-o", "StrictHostKeyChecking=no",
                 "-o", "UserKnownHostsFile=/dev/null",
@@ -300,7 +312,7 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
                 "-i", str(details["key"]),
                 f"root@{details['ip']}:{remote_path}",
                 str(local_path),
-            ], check=False)
+            ], context="scp output pull")
             if result.returncode:
                 return result.returncode
             pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "skipped": False})
@@ -352,7 +364,12 @@ def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 
     deadline = time.monotonic() + timeout_sec
     last_error = ""
     while time.monotonic() < deadline:
-        result = subprocess.run(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, check=False)
+        try:
+            result = subprocess.run(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, check=False, timeout=max(interval_sec * 3, 1))
+        except subprocess.TimeoutExpired:
+            last_error = "runpodctl pod get timed out"
+            time.sleep(interval_sec)
+            continue
         if result.returncode:
             last_error = _redact_secret_text(result.stderr.strip() or result.stdout.strip())
         else:
@@ -598,7 +615,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
         raise ValueError("latest realization has no runnable RunPod command")
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
     remote_archive = f"{workspace}/{archive_name}"
-    prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(workspace)}"], check=False)
+    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(workspace)}"], context="ssh workspace preparation")
     if prepared.returncode:
         raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
     scp = [
@@ -610,7 +627,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
         str(archive_path),
         f"root@{details['ip']}:{remote_archive}",
     ]
-    uploaded = subprocess.run(scp, check=False)
+    uploaded = _run_bounded(scp, context="scp upload")
     if uploaded.returncode:
         raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
     command = " ".join(shlex.quote(arg) for arg in argv)
@@ -624,7 +641,7 @@ mkdir -p /tmp/kura-secrets
 cat > {shlex.quote(remote_secret_path)}
 chmod 600 {shlex.quote(remote_secret_path)}
 """.strip()
-        installed = subprocess.run([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, check=False)
+        installed = _run_bounded([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, context="ssh secret preparation")
         if installed.returncode:
             raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
     lease_log_path = f"{workspace}/runs/{run_id}/logs/stdout.log"
@@ -714,7 +731,7 @@ chmod 700 {shlex.quote(remote_job_path)}
 nohup sh {shlex.quote(remote_job_path)} </dev/null >{shlex.quote(remote_controller_log)} 2>&1 &
 echo $!
 """.strip()
-    started = subprocess.run([*_ssh_base(details), start_script], input=remote_job_script, text=True, capture_output=True, check=False)
+    started = _run_bounded([*_ssh_base(details), start_script], input=remote_job_script, text=True, capture_output=True, context="remote job start")
     if started.returncode:
         detail = _redact_secret_text(started.stderr.strip() or started.stdout.strip() or "remote job start failed")
         raise ValueError(f"remote job start failed with exit code {started.returncode}: {detail}")

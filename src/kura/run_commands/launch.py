@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors import launch_docker, launch_runpod, reconcile_docker
+from kura.executors import _redact_secret_text, launch_docker, launch_runpod, reconcile_docker
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders

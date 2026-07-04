@@ -62,7 +62,8 @@ Path namespace depends on the consumer. Container command specs may use
 `/workspace/...`, but host-consumed workspace artifacts should be
 workspace-relative or host-resolvable. `kura doctor disk` reports Kura symlinks
 that point at container-private paths such as `/root/...`; `kura fix-links`
-previews and can repair links whose targets are covered by `docker.mounts`.
+previews and can repair links whose targets are covered by the effective
+workspace mount table.
 
 ## ComfyUI
 

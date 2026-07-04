@@ -510,6 +510,15 @@ def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dic
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_large_model_downloads") is True:
         return
+    unknown = download_estimate.get("unknown")
+    if isinstance(unknown, list) and unknown:
+        labels = ", ".join(str(item) for item in unknown[:5])
+        suffix = "" if len(unknown) <= 5 else f", and {len(unknown) - 5} more"
+        raise ValueError(
+            "model download sizes are unknown for "
+            f"{labels}{suffix}; inspect `kura run plan`, choose explicit smaller/known artifacts, "
+            "or set safety.allow_large_model_downloads: true if this unbounded download is intentional"
+        )
     download_bytes = int(download_estimate.get("bytes") or 0)
     threshold_bytes = _model_download_threshold_bytes(run)
     if download_bytes <= threshold_bytes:
@@ -952,7 +961,10 @@ def stop_run(run_id: str) -> int:
     try:
         run_dir = _run_path(run_id)
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+        realization_ref = status.get("last_realization")
+        if not isinstance(realization_ref, str):
+            raise ValueError("run has no realization to stop")
+        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
         if realization.get("executor") == "runpod":
             print(json.dumps(stop_runpod(run_dir, _workspace_config().get("runpod", {})), indent=2))
         else:

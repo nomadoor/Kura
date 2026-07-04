@@ -318,7 +318,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     storage = {name: status.to_dict() for name, status in storage_statuses.items()}
     docker_storage = _docker_storage_summary()
     root_owned = _root_owned_files([paths["cache"], paths["runs"]])
-    symlinks = inspect_workspace_symlinks(workspace_root, mounts=docker_mounts)
+    symlinks = inspect_workspace_symlinks(workspace_root, mounts=[item for item in docker_mounts if isinstance(item, dict)])
     env = {
         name: os.environ.get(name)
         for name in ("KURA_CACHE_DIR", "HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE", "TORCH_HOME", "XDG_CACHE_HOME")

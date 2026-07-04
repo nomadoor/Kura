@@ -401,11 +401,11 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             print("warning: checkpoint hash is unavailable", flush=True)
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
     dump_yaml(resolved / "manifest.lock.yaml", frozen)
-    (resolved / "workflow_used.json").write_text(json.dumps(workflow, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(resolved / "workflow_used.json", workflow)
     if "comfyui_models" in frozen:
-        (resolved / "comfyui_models.json").write_text(json.dumps(frozen["comfyui_models"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(resolved / "comfyui_models.json", frozen["comfyui_models"])
     if "comfyui_model_registry" in frozen:
-        (resolved / "comfyui_model_registry.json").write_text(json.dumps(frozen["comfyui_model_registry"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(resolved / "comfyui_model_registry.json", frozen["comfyui_model_registry"])
     shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
     dump_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled")

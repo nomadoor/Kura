@@ -156,8 +156,15 @@ def cmd_dataset_validate(args: argparse.Namespace) -> int:
         item_path = Path(str(item["path"]))
         if item_path.is_absolute():
             errors.append(f"items.jsonl:{number}: path must be relative to the dataset directory")
-        elif not (directory / item_path).is_file():
-            errors.append(f"items.jsonl:{number}: referenced file does not exist: {item['path']}")
+        else:
+            candidate = (directory / item_path).resolve(strict=False)
+            try:
+                candidate.relative_to(directory.resolve())
+            except ValueError:
+                errors.append(f"items.jsonl:{number}: path must stay inside the dataset directory")
+            else:
+                if not candidate.is_file():
+                    errors.append(f"items.jsonl:{number}: referenced file does not exist: {item['path']}")
         if not item.get("caption"):
             warnings.append(f"items.jsonl:{number}: missing caption")
         if not item.get("hash"):
@@ -285,7 +292,8 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         "kura_version": __version__, "python_version": platform.python_version(),
         "platform": platform.platform(), "backend_name": backend.get("name"),
         "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
-        "declared_executor": "docker", "local_image": image["local"], "dockerfile": image["dockerfile"],
+        "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
+        "local_image": image["local"], "dockerfile": image["dockerfile"],
     }
     _dump_yaml(resolved / "env.lock", env)
     status_path = run_dir / "status.json"

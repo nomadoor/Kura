@@ -22,8 +22,8 @@ runs/
 workflows/*
 !workflows/samples/
 promptsets/
-backends/
-executors/
+/backends/
+/executors/
 
 # Defense in depth: generated artifacts should live under ignored workspace
 # directories, but keep accidental root-level drops out of git too.

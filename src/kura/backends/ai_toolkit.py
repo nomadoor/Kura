@@ -6,9 +6,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kura.backends.common import _datasets
+from kura.fsio import atomic_write_yaml
 
 
 def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, resolution: Any) -> list[dict[str, Any]]:
@@ -60,7 +59,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
                 process[section].update(deepcopy(values))
             else:
                 process[section] = deepcopy(values)
-    destination.with_suffix(".yaml").write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    atomic_write_yaml(destination.with_suffix(".yaml"), config)
 
 
 def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
