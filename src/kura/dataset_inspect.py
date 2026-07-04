@@ -53,7 +53,7 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
             "resolution": _resolution_summary(images),
         },
         "captions": _caption_summary(captions, trigger_word=trigger_word),
-        "paired_control": _paired_summary(dataset_path, records),
+        "paired_control": _paired_summary(dataset_path, records, metadata),
         "videos": _video_summary(videos),
         "items_jsonl": {
             "records": len(records),
@@ -89,10 +89,13 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
     else:
         lines.append("  trigger_word: (not declared)")
     paired = report.get("paired_control") if isinstance(report.get("paired_control"), dict) else {}
-    lines.append(f"  paired_control.source_count: {paired.get('source_count')}")
-    lines.append(f"  paired_control.target_count: {paired.get('target_count')}")
-    lines.append(f"  paired_control.missing_source_count: {paired.get('missing_source_count')}")
-    lines.append(f"  paired_control.missing_target_count: {paired.get('missing_target_count')}")
+    if paired.get("applicable"):
+        lines.append(f"  paired_control.source_count: {paired.get('source_count')}")
+        lines.append(f"  paired_control.target_count: {paired.get('target_count')}")
+        lines.append(f"  paired_control.missing_source_count: {paired.get('missing_source_count')}")
+        lines.append(f"  paired_control.missing_target_count: {paired.get('missing_target_count')}")
+    else:
+        lines.append("  paired_control: (not applicable)")
     videos = report.get("videos") if isinstance(report.get("videos"), dict) else {}
     lines.append(f"  videos.count: {videos.get('count')}")
     return "\n".join(lines)
@@ -259,22 +262,33 @@ def _webp_size(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def _paired_summary(dataset_path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
+def _paired_summary(dataset_path: Path, records: list[dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
     source_items = [item for item in records if _first_present(item, SOURCE_KEYS)]
     target_items = [item for item in records if _first_present(item, TARGET_KEYS)]
-    missing_source_items = sum(1 for item in target_items if not _first_present(item, SOURCE_KEYS))
-    missing_target_items = sum(1 for item in source_items if not _first_present(item, TARGET_KEYS))
     dir_summary = _paired_directory_summary(dataset_path)
+    applicable = bool(source_items or dir_summary["source_count"] or dir_summary["target_count"] or _declares_paired_control(metadata))
+    missing_source_items = sum(1 for item in target_items if not _first_present(item, SOURCE_KEYS)) if applicable else None
+    missing_target_items = sum(1 for item in source_items if not _first_present(item, TARGET_KEYS)) if applicable else None
     return {
-        "source_count": len(source_items) if records else dir_summary["source_count"],
-        "target_count": len(target_items) if records else dir_summary["target_count"],
-        "missing_source_count": missing_source_items if records else dir_summary["missing_source_count"],
-        "missing_target_count": missing_target_items if records else dir_summary["missing_target_count"],
+        "applicable": applicable,
+        "source_count": (len(source_items) if records else dir_summary["source_count"]) if applicable else None,
+        "target_count": (len(target_items) if records else dir_summary["target_count"]) if applicable else None,
+        "missing_source_count": missing_source_items if records else (dir_summary["missing_source_count"] if applicable else None),
+        "missing_target_count": missing_target_items if records else (dir_summary["missing_target_count"] if applicable else None),
         "directory_source_count": dir_summary["source_count"],
         "directory_target_count": dir_summary["target_count"],
-        "directory_missing_source_count": dir_summary["missing_source_count"],
-        "directory_missing_target_count": dir_summary["missing_target_count"],
+        "directory_missing_source_count": dir_summary["missing_source_count"] if applicable else None,
+        "directory_missing_target_count": dir_summary["missing_target_count"] if applicable else None,
     }
+
+
+def _declares_paired_control(metadata: dict[str, Any]) -> bool:
+    texts: list[str] = []
+    for key in ("task", "type", "role", "dataset_type"):
+        value = metadata.get(key)
+        if isinstance(value, str):
+            texts.append(value.lower())
+    return any(any(token in text for token in ("pair", "control", "edit", "source", "target")) for text in texts)
 
 
 def _first_present(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:

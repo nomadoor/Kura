@@ -77,6 +77,34 @@ class DatasetInspectTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["dataset"]["input"], "example")
         self.assertEqual(payload["captions"]["trigger_word"], {"declared": False, "value": None})
+        self.assertEqual(
+            payload["paired_control"],
+            {
+                "applicable": False,
+                "source_count": None,
+                "target_count": None,
+                "missing_source_count": None,
+                "missing_target_count": None,
+                "directory_source_count": 0,
+                "directory_target_count": 0,
+                "directory_missing_source_count": None,
+                "directory_missing_target_count": None,
+            },
+        )
+
+    def test_dataset_inspect_marks_declared_paired_dataset_applicable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "edit"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("task: image-edit\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text(json.dumps({"id": "a", "path": "a.png", "caption": "plain"}) + "\n", encoding="utf-8")
+            (dataset / "a.png").write_bytes(png_bytes(512, 512))
+
+            report = inspect_dataset("edit", workspace=root)
+
+        self.assertTrue(report["paired_control"]["applicable"])
+        self.assertEqual(report["paired_control"]["missing_source_count"], 1)
 
     def test_simple_dataset_id_prefers_workspace_datasets_over_cwd_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
