@@ -3796,6 +3796,39 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertEqual(launch.call_args.kwargs["image"], "override-image:dev")
             self.assertEqual(launch.call_args.kwargs["min_free_gb"], 10)
 
+    def test_launch_rejects_non_default_workspace_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "realizations").mkdir()
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"workspace_target": "/ws", "images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.launch_docker") as launch, patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                    self.assertEqual(launch_run("example", executor="docker", dry_run=True), 1)
+            finally:
+                os.chdir(previous)
+            launch.assert_not_called()
+            self.assertIn("docker.workspace_target must be /workspace", stderr.getvalue())
+
 
 class RunPruneTests(unittest.TestCase):
     def _make_run(self, root: Path, run_id: str, *, state: str, created: str) -> Path:

@@ -180,6 +180,9 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
         image_config = _image_config(image_name)
         if executor == "docker":
             docker = config.get("docker", {})
+            workspace_target = str(docker.get("workspace_target", "/workspace"))
+            if workspace_target != "/workspace":
+                raise ValueError("docker.workspace_target must be /workspace; backend artifacts currently compile container paths against /workspace")
             mounts = docker.get("mounts", [])
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
@@ -193,7 +196,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 dockerfile=image_config["dockerfile"],
                 mounts=mounts,
                 gpu=bool(docker.get("gpu", False)),
-                workspace_target=str(docker.get("workspace_target", "/workspace")),
+                workspace_target=workspace_target,
                 dry_run=dry_run,
                 min_free_gb=_configured_gib(docker.get("min_free_gb"), default=100) if isinstance(docker, dict) else 100,
             )
