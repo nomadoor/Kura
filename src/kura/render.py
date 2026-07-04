@@ -307,9 +307,18 @@ def _lora_name_visible(client: Any, lora_name: str) -> bool:
     return lora_name in client.lora_names()
 
 
+def _redact_url_userinfo(value: str) -> str:
+    parsed = urllib.parse.urlparse(value)
+    if "@" not in parsed.netloc:
+        return urllib.parse.urlunparse(parsed)
+    host = parsed.netloc.rsplit("@", 1)[1]
+    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}"))
+
+
 def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] | None) -> None:
     if not plan:
         return
+    safe_endpoint = _redact_url_userinfo(endpoint)
     try:
         if _lora_name_visible(client, str(plan.get("lora_name", ""))):
             return
@@ -319,13 +328,13 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
     except RuntimeError as exc:
         raise ValueError(
             "ComfyUI LoRA visibility could not be checked because object_info is unavailable. "
-            f"endpoint={endpoint}; error={exc}. "
-            f"Run `uv run kura doctor comfyui --endpoint {endpoint}` to check the endpoint."
+            f"endpoint={safe_endpoint}; error={exc}. "
+            f"Run `uv run kura doctor comfyui --endpoint {safe_endpoint}` to check the endpoint."
         ) from exc
     raise ValueError(
         "ComfyUI LoRA stage is not visible from the configured endpoint. "
-        f"endpoint={endpoint}; lora_name={plan.get('lora_name')}; lora_dir={Path(str(plan.get('target'))).parent.parent}. "
-        f"Run `uv run kura doctor comfyui --endpoint {endpoint} --probe-stage` to verify staging, "
+        f"endpoint={safe_endpoint}; lora_name={plan.get('lora_name')}; lora_dir={Path(str(plan.get('target'))).parent.parent}. "
+        f"Run `uv run kura doctor comfyui --endpoint {safe_endpoint} --probe-stage` to verify staging, "
         "then set comfyui.lora_dir to a LoRA directory used by that ComfyUI instance and recompile the render run."
     )
 

@@ -544,8 +544,7 @@ def _preflight_bytes(value: Any) -> str:
         number = int(value)
     except (TypeError, ValueError):
         return "unknown"
-    gib = (number + 1024**3 - 1) // 1024**3
-    return f"{gib} GiB" if gib else f"{number} B"
+    return _format_bytes(number)
 
 
 def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -690,7 +689,15 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
     }
 
 
-def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_config: dict[str, Any], mounts: list[dict[str, Any]], storage_config: dict[str, Any] | None = None) -> dict[str, Any]:
+def _local_launch_disk_preflight(
+    workspace: Path,
+    run: dict[str, Any],
+    docker_config: dict[str, Any],
+    mounts: list[dict[str, Any]],
+    storage_config: dict[str, Any] | None = None,
+    *,
+    enforce_model_download_safety: bool = True,
+) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
     if safety.get("max_run_disk_gb") is not None:
@@ -704,7 +711,8 @@ def _local_launch_disk_preflight(workspace: Path, run: dict[str, Any], docker_co
     hf_cache_path = _hf_cache_path(workspace, mounts)
     paths.setdefault("hf_cache", hf_cache_path)
     download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"))
-    _model_download_safety_preflight(run, download_estimate)
+    if enforce_model_download_safety:
+        _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
     write_estimates = {
         "hf_cache": int(download_estimate.get("bytes") or 0),
@@ -873,7 +881,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resources": resources,
         "model_downloads": download_estimate,
         "preflight": preflight,
-        "disk_warnings": _disk_warnings(run, important_overrides),
     }
 
 
@@ -1052,12 +1059,6 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             _append_kv(lines, "fact", record.get("fact"), indent=4)
             if record.get("path"):
                 _append_kv(lines, "path", record.get("path"), indent=4)
-    disk_warnings = payload.get("disk_warnings") if isinstance(payload.get("disk_warnings"), list) else []
-    if disk_warnings:
-        lines.append("")
-        lines.append("Disk warnings")
-        for warning in disk_warnings:
-            lines.append(f"  - {warning}")
     return "\n".join(lines)
 
 

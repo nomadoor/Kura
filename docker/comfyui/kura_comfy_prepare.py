@@ -151,6 +151,15 @@ def _download_model(spec: dict[str, str], cache_dir: Path) -> Path:
     ))
 
 
+def _require_workspace_cache_dir(cache_dir: Path) -> None:
+    workspace = Path(os.environ.get("KURA_WORKSPACE", "/workspace")).resolve()
+    resolved = cache_dir.resolve()
+    try:
+        resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError(f"ComfyUI model prepare cache_dir must be under {workspace}: {cache_dir}") from exc
+
+
 def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None, registry: dict[str, Any]) -> list[dict[str, str]]:
     models_root = comfyui_root / "models"
     specs: list[dict[str, str]] = []
@@ -165,6 +174,8 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
     if specs and cache_dir is None:
         raise ValueError("ComfyUI model prepare requires HF_HOME or --cache-dir before downloading models")
+    if specs and cache_dir is not None:
+        _require_workspace_cache_dir(cache_dir)
     for spec in specs:
         downloaded = _download_model(spec, cache_dir)
         target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")

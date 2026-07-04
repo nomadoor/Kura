@@ -250,6 +250,12 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
     if specs and cache_dir is None:
         raise ValueError("ComfyUI model prepare requires HF_HOME or --cache-dir before downloading models")
+    if specs and cache_dir is not None:
+        workspace = Path(os.environ.get("KURA_WORKSPACE", "/workspace")).resolve()
+        try:
+            cache_dir.resolve().relative_to(workspace)
+        except ValueError as exc:
+            raise ValueError(f"ComfyUI model prepare cache_dir must be under {workspace}: {cache_dir}") from exc
     from huggingface_hub import hf_hub_download
 
     for spec in specs:

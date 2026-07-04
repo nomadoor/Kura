@@ -95,8 +95,8 @@ def stable_link_target(path, link_path):
     try:
         target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
         link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
-    except ValueError:
-        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}")
+    except ValueError as exc:
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}") from exc
     if target_workspace and link_workspace:
         return os.path.relpath(target, os.path.dirname(link))
     if os.path.isabs(path):
@@ -121,8 +121,8 @@ def workspace_mapped_path(path):
                 suffix = target[len(container):].lstrip("/")
                 target = os.path.join(workspace, suffix)
                 break
-    except ValueError:
-        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}")
+    except ValueError as exc:
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}") from exc
     return target
 
 
@@ -134,7 +134,7 @@ def require_cache_mappable(cache_dir, link_path):
     except ValueError:
         link_workspace = False
         cache_workspace = False
-    if link_workspace and not cache_workspace:
+    if not cache_workspace:
         raise SystemExit(
             "[kura] HF_HOME must be inside /workspace or covered by KURA_WORKSPACE_PATH_MAPS before downloading models: "
             f"{cache_dir}"

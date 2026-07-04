@@ -785,7 +785,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         diagnostics["stage_parent_writable"] = os.access(lora_dir, os.W_OK)
     if checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False:
         diagnosis = "ComfyUI endpoint is reachable."
-    elif checks["lora_stage_visible"] is False:
+    elif checks["endpoint_reachable"] and checks["lora_stage_visible"] is False:
         diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
     else:
         diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."

@@ -187,7 +187,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
-                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config)
+                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config, enforce_model_download_safety=False)
             launch_docker(
                 workspace=_workspace(),
                 run_dir=run_dir,
