@@ -18,6 +18,7 @@ from typing import Any
 import yaml
 
 from kura.backends import musubi_model_download_specs
+from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.executors import stage_runpod, stop_docker, stop_runpod
 from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
@@ -531,6 +532,128 @@ def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dic
     )
 
 
+def _preflight_record(check: str, severity: str, fact: str, path: str | None = None) -> dict[str, Any]:
+    record: dict[str, Any] = {"check": check, "severity": severity, "fact": fact}
+    if path:
+        record["path"] = path
+    return record
+
+
+def _preflight_bytes(value: Any) -> str:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    gib = (number + 1024**3 - 1) // 1024**3
+    return f"{gib} GiB" if gib else f"{number} B"
+
+
+def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    unknown = download_estimate.get("unknown")
+    if isinstance(unknown, list) and unknown:
+        labels = ", ".join(str(item) for item in unknown[:5])
+        suffix = "" if len(unknown) <= 5 else f", and {len(unknown) - 5} more"
+        severity = "info" if safety.get("allow_large_model_downloads") is True else "error"
+        records.append(_preflight_record("model-downloads", severity, f"model download sizes are unknown for {labels}{suffix}", "run.yaml"))
+        return records
+    download_bytes = int(download_estimate.get("bytes") or 0)
+    threshold_bytes = _model_download_threshold_bytes(run)
+    if download_bytes > threshold_bytes:
+        severity = "info" if safety.get("allow_large_model_downloads") is True else "error"
+        records.append(
+            _preflight_record(
+                "model-downloads",
+                severity,
+                f"estimated model downloads write about {_preflight_bytes(download_bytes)}; threshold is {_preflight_bytes(threshold_bytes)}",
+                "run.yaml",
+            )
+        )
+    else:
+        records.append(_preflight_record("model-downloads", "info", f"estimated model downloads write {_preflight_bytes(download_bytes)}", "run.yaml"))
+    return records
+
+
+def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        _checkpoint_safety_preflight(run)
+    except ValueError as exc:
+        return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
+    important = _important_backend_overrides(run)
+    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    save_every = _as_positive_int(important.get("save_every_n_steps"))
+    if steps and save_every:
+        expected = max(steps // save_every, 1)
+        return [_preflight_record("checkpoint-safety", "info", f"checkpoint cadence implies about {expected} checkpoint(s)", "run.yaml")]
+    return []
+
+
+def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> list[dict[str, Any]]:
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    if backend.get("name") != "musubi-tuner":
+        return []
+    try:
+        validate_musubi_dataset_layout(run, workspace)
+    except ValueError as exc:
+        return [_preflight_record("dataset-images", "error", str(exc), "run.yaml")]
+    return [_preflight_record("dataset-images", "info", "Musubi dataset image directories resolved", "run.yaml")]
+
+
+def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        payload = _runpod_launch_disk_preflight(run, runpod_config, download_estimate)
+    except ValueError as exc:
+        return [_preflight_record("runpod-disk", "error", str(exc), "workspace.yaml")]
+    return [
+        _preflight_record(
+            "runpod-disk",
+            "info",
+            "container_disk_gb="
+            f"{payload['container_disk_gib']}; estimated remote writes {_preflight_bytes(payload['estimated_write_bytes'])}",
+            "workspace.yaml",
+        )
+    ]
+
+
+def collect_run_preflight(
+    run: dict[str, Any],
+    workspace: Path,
+    *,
+    config: dict[str, Any] | None = None,
+    executor: str | None = None,
+    download_estimate: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    workspace_config = config if isinstance(config, dict) else {}
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    estimate = download_estimate or _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)))
+    records: list[dict[str, Any]] = []
+    records.extend(_dataset_layout_preflight_report(run, workspace))
+    records.extend(_checkpoint_preflight_report(run))
+    records.extend(_model_download_preflight_report(run, estimate))
+    important = _important_backend_overrides(run)
+    for warning in _disk_warnings(run, important):
+        records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
+    if resolved_executor == "runpod":
+        runpod_config = workspace_config.get("runpod") if isinstance(workspace_config.get("runpod"), dict) else {}
+        records.extend(_runpod_disk_preflight_report(run, runpod_config, estimate))
+    return records
+
+
+def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
+    errors = [record for record in records if record.get("severity") == "error"]
+    if not errors:
+        return
+    facts = []
+    for record in errors:
+        check = record.get("check") or "preflight"
+        fact = record.get("fact") or "failed"
+        facts.append(f"{check}: {fact}")
+    raise ValueError("; ".join(facts))
+
+
 def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is not True:
@@ -724,6 +847,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     important_overrides = _important_backend_overrides(run)
     download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
     resources = _resources_payload(run, _workspace_config(), download_estimate)
+    preflight = collect_run_preflight(run, workspace, config=_workspace_config(), download_estimate=download_estimate)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -748,6 +872,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "backend_overrides": important_overrides,
         "resources": resources,
         "model_downloads": download_estimate,
+        "preflight": preflight,
         "disk_warnings": _disk_warnings(run, important_overrides),
     }
 
@@ -914,6 +1039,19 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             lines.append("  - unknown-size files")
             for item in unknown_downloads:
                 lines.append(f"    - {item}")
+    preflight = payload.get("preflight") if isinstance(payload.get("preflight"), list) else []
+    if preflight:
+        lines.append("")
+        lines.append("Preflight")
+        for record in preflight:
+            if not isinstance(record, dict):
+                continue
+            severity = record.get("severity") or "-"
+            check = record.get("check") or "check"
+            lines.append(f"  - [{_format_plan_value(severity)}] {_format_plan_value(check)}")
+            _append_kv(lines, "fact", record.get("fact"), indent=4)
+            if record.get("path"):
+                _append_kv(lines, "path", record.get("path"), indent=4)
     disk_warnings = payload.get("disk_warnings") if isinstance(payload.get("disk_warnings"), list) else []
     if disk_warnings:
         lines.append("")

@@ -130,7 +130,7 @@ class InitCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("has no images/ directory and no root-level image files", stderr.getvalue())
+        self.assertIn("dataset tiny has no images/ directory and no image files at its root", stderr.getvalue())
         self.assertFalse(manifest_exists)
 
     def test_run_compile_rejects_backend_override_mismatch(self) -> None:
@@ -1258,6 +1258,9 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(resources["memory_flags"]["common"]["batch_size"], "(not set)")
         artifact_filenames = {item["filename"] for item in resources["model"]["artifacts"]}
         self.assertEqual(artifact_filenames, {"dit.safetensors", "vae.safetensors"})
+        checks = {(item["check"], item["severity"]) for item in payload["preflight"]}
+        self.assertIn(("model-downloads", "info"), checks)
+        self.assertIn(("dataset-images", "info"), checks)
 
     def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1282,6 +1285,40 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
             self.assertEqual(payload["params"]["lr"], 0.00005)
             self.assertIn("local Docker launch requires a disk preflight", payload["disk_warnings"][0])
+            self.assertIn("preflight", payload)
+
+    def test_run_plan_prints_preflight_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "preflight-example"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "preflight-example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "model": {"base": "example"},
+                        "compute": {"executor": "docker"},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                ):
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
+            finally:
+                os.chdir(previous)
+            output = stdout.getvalue()
+        self.assertIn("Preflight", output)
+        self.assertIn("[warning] disk", output)
 
     def test_run_plan_rejects_render_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
