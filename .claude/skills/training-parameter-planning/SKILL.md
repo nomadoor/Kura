@@ -32,6 +32,24 @@ plan review; that destroys the light-user experience. The items listed under
 "ask first" below are the only ones that need their own conversation *before*
 they appear in a proposed plan.
 
+## Question budget
+
+Questions are the second way to destroy the light-user experience (the first
+is extra gates). Rules:
+
+- **Prefer stated assumptions over questions.** When intent is missing
+  (trigger word, task type, pair direction), infer it from evidence and
+  state the assumption with its evidence in the plan provenance line —
+  "captions start with 'myaku' in 38/40, treating it as the trigger word".
+  Plan approval doubles as confirmation; a wrong guess costs one correction,
+  not one interrogation.
+- **Ask directly only when** inference is impossible **and** being wrong
+  wastes a run. Batch such questions into one message at first contact with
+  a dataset — never a drip.
+- **Write every answer down** (`dataset.yaml`, `run.yaml` intent) so it is
+  never asked again. Undeclared intent cannot be detected mechanically;
+  once recorded, it becomes a measurable fact for every future run.
+
 ## Inputs (facts, not guesses)
 
 Gather these before proposing parameters:
