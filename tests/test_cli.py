@@ -17,7 +17,7 @@ import unittest
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -28,7 +28,7 @@ from kura.executors import _redact_secret_text, docker_command, docker_preflight
 from kura.executors.common import _safe_env
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
-from kura.render import _cleanup_lora_stage, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
+from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _model_download_safety_preflight
 from kura.storage import StorageStatus, probe_storage
@@ -130,7 +130,7 @@ class InitCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("has no images/ directory and no root-level image files", stderr.getvalue())
+        self.assertIn("dataset tiny has no images/ directory and no image files at its root", stderr.getvalue())
         self.assertFalse(manifest_exists)
 
     def test_run_compile_rejects_backend_override_mismatch(self) -> None:
@@ -1200,7 +1200,9 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("rank         16", output)
             self.assertIn("fp8_base     True", output)
             self.assertIn("blocks_to_swap 3", output)
-            self.assertIn("Disk warnings", output)
+            self.assertIn("Preflight", output)
+            self.assertIn("[warning] disk", output)
+            self.assertNotIn("Disk warnings", output)
             self.assertIn("checkpoint cadence may create about 15 checkpoints", output)
 
     def test_run_plan_prints_musubi_download_estimates_and_cache_hits(self) -> None:
@@ -1258,6 +1260,9 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(resources["memory_flags"]["common"]["batch_size"], "(not set)")
         artifact_filenames = {item["filename"] for item in resources["model"]["artifacts"]}
         self.assertEqual(artifact_filenames, {"dit.safetensors", "vae.safetensors"})
+        checks = {(item["check"], item["severity"]) for item in payload["preflight"]}
+        self.assertIn(("model-downloads", "info"), checks)
+        self.assertIn(("dataset-images", "info"), checks)
 
     def test_run_plan_json_uses_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1281,7 +1286,86 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
             self.assertEqual(payload["params"]["lr"], 0.00005)
-            self.assertIn("local Docker launch requires a disk preflight", payload["disk_warnings"][0])
+            self.assertIn("preflight", payload)
+            disk_records = [item for item in payload["preflight"] if item["check"] == "disk"]
+            self.assertTrue(disk_records)
+            self.assertIn("local Docker launch requires a disk preflight", disk_records[0]["fact"])
+            self.assertNotIn("disk_warnings", payload)
+
+    def test_run_plan_prints_preflight_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "preflight-example"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "preflight-example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "model": {"base": "example"},
+                        "compute": {"executor": "docker"},
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                ):
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
+            finally:
+                os.chdir(previous)
+            output = stdout.getvalue()
+        self.assertIn("Preflight", output)
+        self.assertIn("[warning] disk", output)
+        self.assertNotIn("Disk warnings", output)
+
+    def test_run_plan_preflight_bytes_preserve_small_units(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "small-download-plan"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "small-download-plan",
+                        "type": "train",
+                        "backend": {"name": "musubi-tuner"},
+                        "model": {"base": "custom"},
+                        "safety": {"large_model_download_gb": 1},
+                        "backend_overrides": {
+                            "musubi-tuner": {
+                                "architecture": "flux2",
+                                "model_downloads": {"dit": {"repo": "example/model", "filename": "small.safetensors"}},
+                            }
+                        },
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=50 * 1024**2),
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                ):
+                    self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="small-download-plan", json=True)), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+        facts = [item["fact"] for item in payload["preflight"] if item["check"] == "model-downloads"]
+        self.assertTrue(any("50.0 MiB" in fact for fact in facts))
+        self.assertFalse(any("1 GiB" in fact for fact in facts))
 
     def test_run_plan_rejects_render_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1816,8 +1900,8 @@ class RenderNotificationTests(unittest.TestCase):
             workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
             registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
             buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry=registry)
+            with contextlib.redirect_stdout(buffer), patch.dict(os.environ, {"KURA_WORKSPACE": str(root)}, clear=False):
+                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=root / "cache", registry=registry)
             events = [json.loads(line) for line in buffer.getvalue().splitlines()]
             self.assertEqual(events[0]["event"], "model_ready")
             self.assertIsInstance(events[0]["source"], str)
@@ -1840,10 +1924,38 @@ class RenderNotificationTests(unittest.TestCase):
             module._download_model = lambda spec, cache_dir: downloaded
             workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
             registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
-            with self.assertRaisesRegex(ValueError, "refusing to replace existing ComfyUI model target"):
-                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry=registry)
+            with patch.dict(os.environ, {"KURA_WORKSPACE": str(root)}, clear=False), self.assertRaisesRegex(ValueError, "refusing to replace existing ComfyUI model target"):
+                module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=root / "cache", registry=registry)
             self.assertFalse(target.is_symlink())
             self.assertEqual(target.read_bytes(), b"existing")
+
+    def test_comfyui_prepare_requires_cache_dir_before_download(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+        registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "requires HF_HOME or --cache-dir"):
+                module.prepare(workflow, comfyui_root=Path(directory) / "ComfyUI", cache_dir=None, registry=registry)
+
+    def test_comfyui_prepare_rejects_private_cache_dir_before_download(self) -> None:
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
+            registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
+            module._download_model = Mock(side_effect=AssertionError("download should not start"))
+            with patch.dict(os.environ, {"KURA_WORKSPACE": str(root / "workspace")}, clear=False):
+                with self.assertRaisesRegex(ValueError, "cache_dir must be under"):
+                    module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=root / "private-cache", registry=registry)
+            module._download_model.assert_not_called()
 
     def test_comfyui_prepare_direct_download_rejects_unsafe_urls(self) -> None:
         spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))
@@ -1947,6 +2059,61 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertIn("render endpoint: http://127.0.0.1:8188", stdout)
             self.assertIn("queued p1 seed=123 prompt_id=prompt-1", stdout)
             self.assertIn("RuntimeError: render broke", stdout)
+
+    def test_render_fails_when_comfyui_returns_no_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            for path in (workflow_dir, promptset_dir, run_dir / "resolved"):
+                path.mkdir(parents=True)
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"inputs": {"seed": 0}},
+                    "6": {"inputs": {"text": ""}},
+                    "7": {"inputs": {"text": ""}},
+                }),
+                encoding="utf-8",
+            )
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            class EmptyClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return []
+
+            with patch("kura.render.ComfyUIClient", EmptyClient):
+                code = launch_render(root, run_dir)
+
+            self.assertEqual(code, 1)
+            state = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "failed")
+            stdout = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8")
+            self.assertIn("RuntimeError: ComfyUI completed without returning any images", stdout)
 
     def test_runpod_render_compile_requires_model_registry_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2287,6 +2454,125 @@ class RenderNotificationTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "different content"):
                 _materialize_lora_stage(plan)
+
+    def test_render_fails_when_configured_lora_dir_is_not_visible_to_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "wrong" / "loras"
+            workflow_dir = root / "workflows"
+            promptset_dir = root / "promptsets"
+            run_dir = root / "runs" / "render-1"
+            output_run = root / "runs" / "train-1" / "outputs"
+            for path in (lora_dir, workflow_dir, promptset_dir, run_dir / "resolved", output_run):
+                path.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_mode: copy\n  lora_stage_cleanup: remove_after_render\n",
+                encoding="utf-8",
+            )
+            checkpoint = output_run / "example.safetensors"
+            checkpoint.write_bytes(b"fake-lora")
+            (workflow_dir / "wf.json").write_text(
+                json.dumps({
+                    "3": {"inputs": {"seed": 0}},
+                    "6": {"inputs": {"text": ""}},
+                    "7": {"inputs": {"text": ""}},
+                    "12": {"inputs": {"model": ["4", 0]}},
+                    "56": {"inputs": {"images": ["8", 0]}},
+                }),
+                encoding="utf-8",
+            )
+            (workflow_dir / "wf.kura.yaml").write_text("lora_insert:\n  kind: model_only\n  model_node: '12'\n", encoding="utf-8")
+            (promptset_dir / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [123]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "type": "render",
+                    "inputs": {
+                        "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                        "workflow": {"path": "workflows/wf.json", "digest": None},
+                        "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
+                    },
+                    "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8189"},
+                    "executor": {"name": "local"},
+                    "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}},
+                    "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
+                }),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            compile_render(root, run_dir)
+            captured: dict[str, Any] = {}
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    captured["endpoint"] = endpoint
+
+                def lora_names(self) -> set[str]:
+                    return set()
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    captured["queued"] = True
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "image.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"png"
+
+            with patch("kura.render.ComfyUIClient", FakeClient):
+                code = launch_render(root, run_dir)
+
+            self.assertEqual(code, 1)
+            self.assertNotIn("queued", captured)
+            self.assertFalse(any((lora_dir / "Kura_tmp").glob("*.safetensors")))
+            stdout = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8")
+            self.assertIn("LoRA stage is not visible", stdout)
+            self.assertIn("http://127.0.0.1:8189", stdout)
+
+    def test_lora_visibility_check_distinguishes_object_info_failure(self) -> None:
+        class FailingClient:
+            def lora_names(self) -> set[str]:
+                raise RuntimeError("object_info unavailable")
+
+        plan = {"target": "/tmp/Kura_tmp/example.safetensors", "lora_name": "Kura_tmp/example.safetensors"}
+
+        with self.assertRaisesRegex(ValueError, "object_info is unavailable"):
+            _ensure_lora_stage_visible(FailingClient(), "http://127.0.0.1:8190", plan)
+
+    def test_lora_visibility_check_redacts_endpoint_userinfo(self) -> None:
+        class FailingClient:
+            def lora_names(self) -> set[str]:
+                raise RuntimeError("object_info unavailable")
+
+        plan = {"target": "/tmp/Kura_tmp/example.safetensors", "lora_name": "Kura_tmp/example.safetensors"}
+
+        with self.assertRaises(ValueError) as caught:
+            _ensure_lora_stage_visible(FailingClient(), "http://user:secret@127.0.0.1:8190", plan)
+
+        message = str(caught.exception)
+        self.assertIn("http://***@127.0.0.1:8190", message)
+        self.assertNotIn("secret", message)
+
+    def test_lora_visibility_check_retries_once_for_stale_object_info(self) -> None:
+        class EventuallyVisibleClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def lora_names(self) -> set[str]:
+                self.calls += 1
+                if self.calls == 1:
+                    return set()
+                return {"Kura_tmp/example.safetensors"}
+
+        client = EventuallyVisibleClient()
+        plan = {"target": "/tmp/Kura_tmp/example.safetensors", "lora_name": "Kura_tmp/example.safetensors"}
+
+        with patch("kura.render.time.sleep") as sleep:
+            _ensure_lora_stage_visible(client, "http://127.0.0.1:8190", plan)
+
+        self.assertEqual(client.calls, 2)
+        sleep.assert_called_once()
 
     def test_lora_stage_name_preserves_safetensors_suffix_when_truncated(self) -> None:
         source = Path("/tmp") / (("very-long-checkpoint-name-" * 20) + ".safetensors")
@@ -2896,7 +3182,9 @@ class MusubiBackendTests(unittest.TestCase):
         script = command["argv"][2]
         self.assertIn("hf_hub_download", script)
         self.assertIn("HF_HUB_DISABLE_XET", script)
-        self.assertIn('cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"', script)
+        self.assertIn('cache_dir = os.environ.get("HF_HOME")', script)
+        self.assertIn("HF_HOME is required before downloading models", script)
+        self.assertNotIn('or "/root/.cache/huggingface"', script)
         self.assertNotIn("local_dir", script)
         self.assertNotIn("/workspace/cache/hf-models/musubi", script)
         self.assertIn("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", script)
@@ -2905,6 +3193,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("removed {removed} incomplete", script)
         self.assertLess(script.index("musubi dataset ok"), script.index("hf_hub_download"))
         self.assertIn("def stable_link_target", script)
+        self.assertIn("require_cache_mappable(cache_dir, link_path)", script)
         self.assertIn("os.symlink(stable_link_target(path, link_path), link_path)", script)
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
         self.assertIn("/workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
@@ -2928,18 +3217,45 @@ class MusubiBackendTests(unittest.TestCase):
             stable_link_target(target, link_path),
             "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
         )
-        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "/root/.cache/huggingface/weights.safetensors")
+        with self.assertRaisesRegex(SystemExit, "cannot map downloaded model path"):
+            stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path)
+
+    def test_hf_download_rejects_unmapped_cache_before_download(self) -> None:
+        namespace: dict[str, Any] = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        require_cache_mappable = namespace["require_cache_mappable"]
+        link_path = "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors"
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(SystemExit, "HF_HOME must be inside /workspace"):
+                require_cache_mappable("/root/.cache/huggingface", link_path)
+        require_cache_mappable("/workspace/cache/huggingface", link_path)
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(SystemExit, "HF_HOME must be inside /workspace"):
+                require_cache_mappable("/root/.cache/huggingface", "/tmp/model.safetensors")
+
+    def test_hf_download_requires_hf_home_before_download(self) -> None:
+        namespace: dict[str, Any] = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        run_one = namespace["run_one"]
+        item = {"key": "dit", "repo_id": "owner/model", "filename": "weights.safetensors", "link_path": "/workspace/cache/models/musubi/owner--model/dit/weights.safetensors"}
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(SystemExit, "HF_HOME is required"):
+                run_one(item)
 
     def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
 
         stable_link_target = namespace["stable_link_target"]
+        require_cache_mappable = namespace["require_cache_mappable"]
         link_path = "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors"
         with patch.dict(
             os.environ,
             {"KURA_WORKSPACE_PATH_MAPS": json.dumps([{"container": "/cache/hf", "workspace": "/workspace/shared/hf"}])},
         ):
+            require_cache_mappable("/cache/hf", link_path)
             self.assertEqual(
                 stable_link_target("/cache/hf/hub/models--repo--model/snapshots/abc/weights.safetensors", link_path),
                 "../../../../../shared/hf/hub/models--repo--model/snapshots/abc/weights.safetensors",
@@ -3560,6 +3876,39 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertEqual(launch.call_args.kwargs["image"], "override-image:dev")
             self.assertEqual(launch.call_args.kwargs["min_free_gb"], 10)
 
+    def test_launch_rejects_non_default_workspace_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "realizations").mkdir()
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "backend": {"name": "ai-toolkit"},
+                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"workspace_target": "/ws", "images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.launch_docker") as launch, patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"Type":"Build Cache","Size":"0B"}\n', "")), patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr:
+                    self.assertEqual(launch_run("example", executor="docker", dry_run=True), 1)
+            finally:
+                os.chdir(previous)
+            launch.assert_not_called()
+            self.assertIn("docker.workspace_target must be /workspace", stderr.getvalue())
+
 
 class RunPruneTests(unittest.TestCase):
     def _make_run(self, root: Path, run_id: str, *, state: str, created: str) -> Path:
@@ -3839,6 +4188,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("sleep infinity", payload["dockerStartCmd"][2])
             self.assertIn("KURA_UPLOAD_CODE", payload["env"])
             self.assertIn("KURA_DOWNLOAD_CODE", payload["env"])
+            self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
             self.assertNotIn("HF_TOKEN", payload["env"])
             self.assertEqual(payload["cloudType"], "COMMUNITY")
             record = (run_dir / "realizations" / f"{realization_id}.json").read_text(encoding="utf-8")
@@ -3882,6 +4232,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(realization_id)
             payload = request.call_args.args[3]
             self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
+            self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
             self.assertIn("runpodctl pod delete", payload["dockerStartCmd"][2])
             self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
 
@@ -4057,6 +4408,10 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("KURA_LEASE_LOG_PATH=/workspace/runs/example/logs/stdout.log", argv_text)
             self.assertIn("RUNPOD_POD_ID=pod-1", argv_text)
             self.assertIn("runpodctl pod delete", argv_text)
+            input_text = "\n".join(str(call[1].get("input") or "") for call in calls)
+            self.assertIn('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"', input_text)
+            self.assertIn('mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"', input_text)
+            self.assertIn('HF_HOME must be under KURA_WORKSPACE before remote job start', input_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
 
     def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
@@ -4605,6 +4960,162 @@ class RunPodLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
+
+    def test_doctor_comfyui_reports_kura_stage_files(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "comfyui" / "models" / "loras"
+            stage_dir = lora_dir / "Kura_tmp"
+            stage_dir.mkdir(parents=True)
+            (stage_dir / "render-1-example.safetensors").write_bytes(b"leftover")
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  endpoint: http://127.0.0.1:8188\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n",
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=False))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["diagnostics"]["kura_stage_file_count"], 1)
+            self.assertEqual(payload["diagnostics"]["kura_stage_file_samples"], ["render-1-example.safetensors"])
+
+    def test_doctor_comfyui_endpoint_override_is_measured(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: http://127.0.0.1:8188}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()) as urlopen, patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint="http://127.0.0.1:8190/"))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["diagnostics"]["endpoint"], "http://127.0.0.1:8190")
+            self.assertEqual(urlopen.call_args.args[0], "http://127.0.0.1:8190/object_info")
+
+    def test_doctor_comfyui_probe_stage_checks_lora_visibility(self) -> None:
+        class FakeResponse:
+            def __init__(self, payload: dict[str, Any]) -> None:
+                self.payload = payload
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self.payload).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "models" / "loras"
+            stage_dir = lora_dir / "Kura_tmp"
+            stage_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  endpoint: http://127.0.0.1:8190\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n",
+                encoding="utf-8",
+            )
+
+            def fake_urlopen(url: str, timeout: int = 5) -> FakeResponse:
+                staged = [f"Kura_tmp/{path.name}" for path in stage_dir.glob("kura-doctor-probe-*.safetensors")]
+                return FakeResponse({"LoraLoader": {"input": {"required": {"lora_name": [staged, {}]}}}})
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", side_effect=fake_urlopen), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertTrue(payload["checks"]["lora_stage_visible"])
+            self.assertFalse(list(stage_dir.glob("kura-doctor-probe-*.safetensors")))
+
+    def test_doctor_comfyui_probe_stage_reports_invisible_lora_dir(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "models" / "loras"
+            (lora_dir / "Kura_tmp").mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  endpoint: http://127.0.0.1:8190\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n",
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertFalse(payload["checks"]["lora_stage_visible"])
+            self.assertIn("not visible", payload["diagnosis"])
+
+    def test_doctor_comfyui_probe_stage_prefers_unreachable_endpoint_diagnosis(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lora_dir = root / "models" / "loras"
+            (lora_dir / "Kura_tmp").mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  endpoint: http://127.0.0.1:8190\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n",
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("connection refused")),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertFalse(payload["checks"]["endpoint_reachable"])
+            self.assertFalse(payload["checks"]["lora_stage_visible"])
+            self.assertIn("not ready", payload["diagnosis"])
+            self.assertNotIn("not visible", payload["diagnosis"])
 
     def test_stage_runpod_object_staging_is_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

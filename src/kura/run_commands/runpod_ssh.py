@@ -661,7 +661,10 @@ export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 export KURA_WORKSPACE={shlex.quote(workspace)}
 export KURA_RUN_ID={shlex.quote(run_id)}
 export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
+export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
+mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"
+case "$HF_HOME" in "$KURA_WORKSPACE"/*) ;; *) echo "[kura] HF_HOME must be under KURA_WORKSPACE before remote job start: $HF_HOME" >&2; exit 1 ;; esac
 touch "$KURA_LOG_PATH"
 echo "Kura controller uploaded {shlex.quote(archive_name)}" >> "$KURA_LOG_PATH"
 exit_code=0

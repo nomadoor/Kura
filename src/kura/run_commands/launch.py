@@ -17,13 +17,12 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
 from kura.render import launch_render
-from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _backend_image_name, _command_for_backend, _image_config, _safe_error
-from kura.run_commands.plan import _checkpoint_safety_preflight, _configured_gib, _download_estimate_workspace, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _model_download_safety_preflight, _parse_duration_seconds, _runpod_launch_disk_preflight, stage_run, stop_run
+from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
 
@@ -168,9 +167,8 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             raise ValueError("run already has a running realization; reconcile or stop it first")
         if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):
             raise ValueError("run must be compiled before launch")
-        _checkpoint_safety_preflight(locked)
-        if (locked.get("backend") if isinstance(locked.get("backend"), dict) else {}).get("name") == "musubi-tuner":
-            validate_musubi_dataset_layout(locked, _workspace())
+        config = _workspace_config()
+        enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
         spec = _command_for_backend(locked)
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
@@ -182,11 +180,14 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
         image_config = _image_config(image_name)
         if executor == "docker":
             docker = config.get("docker", {})
+            workspace_target = str(docker.get("workspace_target", "/workspace"))
+            if workspace_target != "/workspace":
+                raise ValueError("docker.workspace_target must be /workspace; backend artifacts currently compile container paths against /workspace")
             mounts = docker.get("mounts", [])
             if not isinstance(mounts, list):
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
-                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config)
+                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config, enforce_model_download_safety=False)
             launch_docker(
                 workspace=_workspace(),
                 run_dir=run_dir,
@@ -195,7 +196,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 dockerfile=image_config["dockerfile"],
                 mounts=mounts,
                 gpu=bool(docker.get("gpu", False)),
-                workspace_target=str(docker.get("workspace_target", "/workspace")),
+                workspace_target=workspace_target,
                 dry_run=dry_run,
                 min_free_gb=_configured_gib(docker.get("min_free_gb"), default=100) if isinstance(docker, dict) else 100,
             )
@@ -206,10 +207,6 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
-            if not dry_run:
-                download_estimate = _estimate_musubi_download_bytes(locked, workspace=_download_estimate_workspace(locked, _workspace(), executor="runpod"))
-                _model_download_safety_preflight(locked, download_estimate)
-                _runpod_launch_disk_preflight(locked, runpod_config, download_estimate)
             remote_spec = dict(spec)
             remote_image = image_config["remote"]
             if image_name == "ai-toolkit" and isinstance(runpod_config.get("container_cwd"), str):

@@ -19,6 +19,8 @@ If `/ops` exists, treat it as the single source of truth for information archite
 
 Kura is an agent-first, file-first workspace for reproducible training and render runs. Files are the source of truth. Do not introduce a hidden UI state store, database, queue, daemon, or second run-record system.
 
+The decision model (see `docs/adr/kura-decision-model.md`): the CLI measures, the files remember, the skill judges, the user decides. Code measures; code stops only irreversible accidents; the agent judges; the user approves once before launch; Last look is not a gate but a regret reminder.
+
 - `run.yaml` records human/agent intent.
 - `resolved/` contains immutable compile-time inputs.
 - Launch/runtime facts belong in append-only `realizations/`.

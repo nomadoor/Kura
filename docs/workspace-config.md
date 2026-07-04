@@ -27,7 +27,7 @@ wrong or unavailable.
 | `docker.images.ai-toolkit.remote` | Image name used when publishing your own AI-Toolkit image | `nomadoor/kura-ai-toolkit:dev` |
 | `docker.images.musubi-tuner.local` | Local Docker image used for Musubi Tuner runs | `nomadoor/kura-musubi-tuner:dev` |
 | `docker.images.musubi-tuner.remote` | Image name used for RunPod when not using the default image override | `nomadoor/kura-musubi-tuner:dev` |
-| `docker.workspace_target` | Container path for the mounted workspace | `/workspace` |
+| `docker.workspace_target` | Container path for the mounted workspace. Kura currently supports only `/workspace`; other values are rejected at launch because backend artifacts compile `/workspace/...` paths. | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
 | `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch | `100` |

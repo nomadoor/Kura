@@ -125,10 +125,10 @@ def _validate_direct_download_url(url: str) -> str:
     return url
 
 
-def _download_model(spec: dict[str, str], cache_dir: Path | None) -> Path:
+def _download_model(spec: dict[str, str], cache_dir: Path) -> Path:
     if spec.get("url"):
         url = _validate_direct_download_url(spec["url"])
-        root = cache_dir or Path("/tmp/kura-comfyui-downloads")
+        root = cache_dir
         digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
         target = root / "direct" / digest / Path(spec["filename"]).name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -146,9 +146,18 @@ def _download_model(spec: dict[str, str], cache_dir: Path | None) -> Path:
         filename=spec["filename"],
         subfolder=spec.get("subfolder"),
         revision=spec.get("revision"),
-        cache_dir=str(cache_dir) if cache_dir else None,
+        cache_dir=str(cache_dir),
         token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None,
     ))
+
+
+def _require_workspace_cache_dir(cache_dir: Path) -> None:
+    workspace = Path(os.environ.get("KURA_WORKSPACE", "/workspace")).resolve()
+    resolved = cache_dir.resolve()
+    try:
+        resolved.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError(f"ComfyUI model prepare cache_dir must be under {workspace}: {cache_dir}") from exc
 
 
 def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | None, registry: dict[str, Any]) -> list[dict[str, str]]:
@@ -163,6 +172,10 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
             specs.append(spec)
     if unknown:
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
+    if specs and cache_dir is None:
+        raise ValueError("ComfyUI model prepare requires HF_HOME or --cache-dir before downloading models")
+    if specs and cache_dir is not None:
+        _require_workspace_cache_dir(cache_dir)
     for spec in specs:
         downloaded = _download_model(spec, cache_dir)
         target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")

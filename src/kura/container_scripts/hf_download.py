@@ -30,7 +30,9 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from huggingface_hub import hf_hub_download
 
 item = json.loads(sys.argv[1])
-cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"
+cache_dir = os.environ.get("HF_HOME")
+if not cache_dir:
+    raise SystemExit("[kura] HF_HOME is required before downloading models")
 kwargs = dict(repo_id=item["repo_id"], filename=item["filename"], cache_dir=cache_dir)
 if item.get("revision"):
     kwargs["revision"] = item["revision"]
@@ -88,9 +90,23 @@ def remove_incomplete_files(directories):
 
 
 def stable_link_target(path, link_path):
+    target = workspace_mapped_path(path)
+    link = os.path.abspath(link_path)
+    try:
+        target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
+        link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
+    except ValueError as exc:
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}") from exc
+    if target_workspace and link_workspace:
+        return os.path.relpath(target, os.path.dirname(link))
+    if os.path.isabs(path):
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}")
+    return path
+
+
+def workspace_mapped_path(path):
     try:
         target = os.path.abspath(path)
-        link = os.path.abspath(link_path)
         raw_maps = os.environ.get("KURA_WORKSPACE_PATH_MAPS") or "[]"
         try:
             mappings = json.loads(raw_maps)
@@ -105,20 +121,34 @@ def stable_link_target(path, link_path):
                 suffix = target[len(container):].lstrip("/")
                 target = os.path.join(workspace, suffix)
                 break
-        target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
+    except ValueError as exc:
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}") from exc
+    return target
+
+
+def require_cache_mappable(cache_dir, link_path):
+    link = os.path.abspath(link_path)
+    try:
         link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
+        cache_workspace = os.path.commonpath([workspace_mapped_path(cache_dir), "/workspace"]) == "/workspace"
     except ValueError:
-        return path
-    if target_workspace and link_workspace:
-        return os.path.relpath(target, os.path.dirname(link))
-    return path
+        link_workspace = False
+        cache_workspace = False
+    if not cache_workspace:
+        raise SystemExit(
+            "[kura] HF_HOME must be inside /workspace or covered by KURA_WORKSPACE_PATH_MAPS before downloading models: "
+            f"{cache_dir}"
+        )
 
 
 def run_one(item):
     link_path = item["link_path"]
+    cache_dir = os.environ.get("HF_HOME")
+    if not cache_dir:
+        raise SystemExit("[kura] HF_HOME is required before downloading models")
+    require_cache_mappable(cache_dir, link_path)
     link_dir = os.path.dirname(link_path)
     os.makedirs(link_dir, exist_ok=True)
-    cache_dir = os.environ.get("HF_HOME") or "/root/.cache/huggingface"
     os.makedirs(cache_dir, exist_ok=True)
     label = f"{item['key']}:{item['filename']}"
     last_total, last_mtime, _ = tree_snapshot(cache_dir)

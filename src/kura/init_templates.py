@@ -248,10 +248,18 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
             specs.append(spec)
     if unknown:
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
+    if specs and cache_dir is None:
+        raise ValueError("ComfyUI model prepare requires HF_HOME or --cache-dir before downloading models")
+    if specs and cache_dir is not None:
+        workspace = Path(os.environ.get("KURA_WORKSPACE", "/workspace")).resolve()
+        try:
+            cache_dir.resolve().relative_to(workspace)
+        except ValueError as exc:
+            raise ValueError(f"ComfyUI model prepare cache_dir must be under {workspace}: {cache_dir}") from exc
     from huggingface_hub import hf_hub_download
 
     for spec in specs:
-        downloaded = hf_hub_download(repo_id=spec["repo"], filename=spec["filename"], subfolder=spec.get("subfolder"), revision=spec.get("revision"), cache_dir=str(cache_dir) if cache_dir else None, token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None)
+        downloaded = hf_hub_download(repo_id=spec["repo"], filename=spec["filename"], subfolder=spec.get("subfolder"), revision=spec.get("revision"), cache_dir=str(cache_dir), token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or None)
         target = _safe_child(models_root, f"{spec['target_dir']}/{spec['target_name']}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():

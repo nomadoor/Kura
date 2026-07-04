@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -233,9 +234,6 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     comfyui = frozen.get("comfyui", {})
     if not isinstance(comfyui, dict):
         return None
-    lora_dir = _workspace_path(workspace, comfyui.get("lora_dir"))
-    if lora_dir is None:
-        return None
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
     if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.lora_stage_subdir must be a safe relative directory name")
@@ -245,6 +243,9 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     cleanup = str(comfyui.get("lora_stage_cleanup") or "remove_after_render").strip().lower()
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.lora_stage_cleanup must be remove_after_render or keep")
+    lora_dir = _workspace_path(workspace, comfyui.get("lora_dir"))
+    if lora_dir is None:
+        return None
     stage_dir = (lora_dir / stage_subdir).resolve()
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {
@@ -300,6 +301,44 @@ def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
         pass
 
 
+def _lora_name_visible(client: Any, lora_name: str) -> bool:
+    if not lora_name or not hasattr(client, "lora_names"):
+        return True
+    return lora_name in client.lora_names()
+
+
+def _redact_url_userinfo(value: str) -> str:
+    parsed = urllib.parse.urlparse(value)
+    if "@" not in parsed.netloc:
+        return urllib.parse.urlunparse(parsed)
+    host = parsed.netloc.rsplit("@", 1)[1]
+    return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}"))
+
+
+def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] | None) -> None:
+    if not plan:
+        return
+    safe_endpoint = _redact_url_userinfo(endpoint)
+    try:
+        if _lora_name_visible(client, str(plan.get("lora_name", ""))):
+            return
+        time.sleep(0.5)
+        if _lora_name_visible(client, str(plan.get("lora_name", ""))):
+            return
+    except RuntimeError as exc:
+        raise ValueError(
+            "ComfyUI LoRA visibility could not be checked because object_info is unavailable. "
+            f"endpoint={safe_endpoint}; error={exc}. "
+            f"Run `uv run kura doctor comfyui --endpoint {safe_endpoint}` to check the endpoint."
+        ) from exc
+    raise ValueError(
+        "ComfyUI LoRA stage is not visible from the configured endpoint. "
+        f"endpoint={safe_endpoint}; lora_name={plan.get('lora_name')}; lora_dir={Path(str(plan.get('target'))).parent.parent}. "
+        f"Run `uv run kura doctor comfyui --endpoint {safe_endpoint} --probe-stage` to verify staging, "
+        "then set comfyui.lora_dir to a LoRA directory used by that ComfyUI instance and recompile the render run."
+    )
+
+
 def promptset(path: Path) -> list[dict[str, Any]]:
     prompts: list[dict[str, Any]] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -325,6 +364,28 @@ class ComfyUIClient:
         request = urllib.request.Request(f"{self.endpoint}{path}", data=data, headers={"Content-Type": "application/json"} if data else {})
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read())
+
+    def lora_names(self) -> set[str]:
+        names: set[str] = set()
+        errors: list[str] = []
+        responded = False
+        for class_type in ("LoraLoader", "LoraLoaderModelOnly"):
+            try:
+                response = self._json(f"/object_info/{class_type}")
+                responded = True
+            except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+                errors.append(f"{class_type}: {exc}")
+                continue
+            node = response.get(class_type)
+            if not isinstance(node, dict):
+                continue
+            required = node.get("input", {}).get("required", {})
+            raw = required.get("lora_name")
+            if isinstance(raw, list) and raw and isinstance(raw[0], list):
+                names.update(str(item) for item in raw[0])
+        if not responded:
+            raise RuntimeError("ComfyUI object_info query failed for LoRA loaders: " + "; ".join(errors))
+        return names
 
     def queue(self, workflow: dict[str, Any]) -> str:
         response = self._json("/prompt", {"prompt": workflow, "client_id": str(uuid.uuid4())})
@@ -467,6 +528,7 @@ def launch_render(
     try:
         if lora_stage:
             _materialize_lora_stage(lora_stage)
+            _ensure_lora_stage_visible(client, endpoint, lora_stage)
         event(run_dir, {"event": "render_started", "timestamp": now(), "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage})
         generated = 0
         for item, seed in pairs:
@@ -486,6 +548,8 @@ def launch_render(
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
                 generated += 1
+        if generated == 0:
+            raise RuntimeError("ComfyUI completed without returning any images")
         status(run_dir, state="completed", ended=now(), exit_code=0)
         write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})

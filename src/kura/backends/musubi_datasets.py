@@ -93,7 +93,7 @@ def _default_image_directory(destination: Path, dataset_id: str, *, workspace: P
     if _has_direct_images(dataset_root):
         return f"/workspace/datasets/{dataset_id}"
     if strict:
-        raise ValueError(f"Musubi dataset {dataset_id!r} has no images/ directory and no root-level image files")
+        raise ValueError(f"dataset {dataset_id} has no images/ directory and no image files at its root")
     return f"/workspace/datasets/{dataset_id}/images"
 
 
