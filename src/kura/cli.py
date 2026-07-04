@@ -1071,6 +1071,8 @@ def main() -> None:
     doctor_runpod = doctor_sub.add_parser("runpod", help="Check RunPod API, Pods, and Network Volumes")
     doctor_runpod.set_defaults(func=cmd_doctor_runpod)
     doctor_comfyui = doctor_sub.add_parser("comfyui", help="Check local ComfyUI endpoint and LoRA staging config")
+    doctor_comfyui.add_argument("--endpoint", help="Check this ComfyUI endpoint instead of comfyui.endpoint from workspace.yaml")
+    doctor_comfyui.add_argument("--probe-stage", action="store_true", help="Temporarily stage a probe LoRA file and verify the endpoint can see it")
     doctor_comfyui.set_defaults(func=cmd_doctor_comfyui)
     doctor_secrets = doctor_sub.add_parser("secrets", help="Check for obvious secret handling problems")
     doctor_secrets.set_defaults(func=cmd_doctor_secrets)

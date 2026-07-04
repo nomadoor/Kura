@@ -22,6 +22,8 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura doctor musubi` | Smoke-test Musubi adapter scripts in the configured image |
 | `uv run kura doctor runpod` | Check RunPod API, Pods, and Network Volumes |
 | `uv run kura doctor comfyui` | Check local ComfyUI endpoint and LoRA staging config |
+| `uv run kura doctor comfyui --endpoint http://127.0.0.1:8189` | Check a specific ComfyUI endpoint against the configured LoRA staging directory |
+| `uv run kura doctor comfyui --endpoint http://127.0.0.1:8189 --probe-stage` | Temporarily stage a probe LoRA and verify the endpoint can see `comfyui.lora_dir` |
 | `uv run kura doctor workspace` | Show which Kura workspace this command sees |
 
 ## Datasets

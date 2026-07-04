@@ -28,24 +28,34 @@ Default flow when the user asks to test-generate with a Kura-trained LoRA:
 
 1. Confirm ComfyUI is reachable at the endpoint (default `http://127.0.0.1:8188`).
    If not, ask the user to start it.
-2. Check whether the target file is already visible: GET `/object_info` and look at
-   the loader node's options (e.g. `LoraLoader.input.required.lora_name`). If the
-   name is in the list, skip to patching.
-3. If it is not visible and `workspace.yaml` has no `comfyui.lora_dir`, ask the
-   user for ComfyUI's `models/loras` directory and record it in local
-   `workspace.yaml`.
+2. Run `uv run kura doctor comfyui --endpoint <url> --probe-stage` when a LoRA
+   render will stage a local Kura output. This verifies the configured
+   `comfyui.lora_dir` is visible to that exact endpoint.
+3. If `lora_dir_configured` is false, ask the user once for ComfyUI's
+   `models/loras` directory and record it in local `workspace.yaml`.
    Ask plainly: "Where is your ComfyUI `models/loras` directory?" Do not guess
    or edit ComfyUI's own config.
    After changing `comfyui.lora_dir`, run `kura render compile <run-id>` again
    before launch; render compile freezes the ComfyUI staging settings into
    `resolved/manifest.lock.yaml`.
-4. With `comfyui.lora_dir` set, let `kura render launch` create the temporary
+4. If `lora_stage_visible` is false, explain that this endpoint is not seeing
+   the configured directory. With user approval, you may inspect their ComfyUI
+   files such as `extra_model_paths.yaml` and propose the correct `lora_dir`,
+   but do not let runtime code infer or silently retarget it.
+5. With `comfyui.lora_dir` set and probe-verified, let `kura render launch` create the temporary
    staged LoRA under `Kura_tmp/`, patch the loader's name field through
    `workflow_patches`, render, and remove the staged file/link afterward.
-5. If ComfyUI cached the old list, a refresh/restart may be needed before the new
+6. If ComfyUI cached the old list, a refresh/restart may be needed before the new
    file appears.
-6. To keep a LoRA permanently available, tell the user to place it in `models/loras`
+7. To keep a LoRA permanently available, tell the user to place it in `models/loras`
    themselves — that is a human decision, not a Kura mutation.
+
+Runtime Kura code must not inspect `/proc`, infer the ComfyUI cwd, parse a live
+instance's `extra_model_paths.yaml`, or silently stage into a different directory
+than the compiled `comfyui.lora_dir`. That ban applies to runtime fallback. It
+does not forbid an agent, during diagnosis and with user-visible reasoning, from
+reading the user's ComfyUI configuration and proposing a corrected local
+`workspace.yaml` value.
 
 Optional (only if transient symlinks in the user's daily ComfyUI become a nuisance):
 launch a dedicated test instance on a separate port with its own

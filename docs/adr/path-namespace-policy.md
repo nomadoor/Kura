@@ -40,6 +40,18 @@ best-effort: a broken or un-mappable link means "not cached", never a crash.
 Docker launch passes the resolved mount table to container helper scripts as
 data. Container scripts do not import Kura.
 
+Executor model-cache contract:
+
+- Executors that run model download helpers must set `HF_HOME` explicitly.
+- `HF_HOME` must either be under the container workspace root, normally
+  `/workspace/cache/huggingface`, or be covered by `KURA_WORKSPACE_PATH_MAPS`.
+- Container helpers must treat missing or unmappable `HF_HOME` as a contract
+  error before downloading. They must not fall back to private locations such as
+  `/root/.cache/huggingface` or `/tmp/...`.
+- Local Docker may continue to expose a legacy Hugging Face cache mount through
+  `KURA_WORKSPACE_PATH_MAPS`, but new executor paths should prefer a single
+  workspace-visible cache location.
+
 ## Enforcement
 
 - `src/kura/paths.py` owns namespace conversion helpers.

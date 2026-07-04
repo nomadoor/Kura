@@ -1,4 +1,4 @@
-"""Read-only environment diagnostics for Kura workspaces."""
+"""Environment diagnostics for Kura workspaces."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -654,15 +655,60 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _comfyui_lora_names(object_info: dict[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for class_type in ("LoraLoader", "LoraLoaderModelOnly"):
+        loader = object_info.get(class_type)
+        if not isinstance(loader, dict):
+            continue
+        required = loader.get("input", {}).get("required") if isinstance(loader.get("input"), dict) else None
+        lora_name = required.get("lora_name") if isinstance(required, dict) else None
+        if isinstance(lora_name, list) and lora_name and isinstance(lora_name[0], list):
+            names.update(str(item) for item in lora_name[0])
+    return names
+
+
 def _comfyui_lora_count(object_info: dict[str, Any]) -> int | None:
-    loader = object_info.get("LoraLoader")
-    if not isinstance(loader, dict):
-        return None
-    required = loader.get("input", {}).get("required") if isinstance(loader.get("input"), dict) else None
-    lora_name = required.get("lora_name") if isinstance(required, dict) else None
-    if isinstance(lora_name, list) and lora_name and isinstance(lora_name[0], list):
-        return len(lora_name[0])
-    return None
+    names = _comfyui_lora_names(object_info)
+    return len(names) if names else None
+
+
+def _fetch_comfyui_object_info(endpoint: str, *, timeout: float = 5) -> dict[str, Any]:
+    with urllib.request.urlopen(f"{endpoint}/object_info", timeout=timeout) as response:
+        object_info = json.loads(response.read().decode("utf-8"))
+    return object_info if isinstance(object_info, dict) else {}
+
+
+def _probe_comfyui_lora_stage(endpoint: str, stage_dir: Path, stage_subdir: str) -> tuple[bool, str]:
+    stage_dir_created = not stage_dir.exists()
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    probe_name = f"kura-doctor-probe-{uuid.uuid4().hex}.safetensors"
+    probe_path = stage_dir / probe_name
+    lora_name = f"{stage_subdir}/{probe_name}"
+    try:
+        with probe_path.open("xb") as handle:
+            handle.write(b"kura doctor ComfyUI LoRA visibility probe\n")
+        object_info = _fetch_comfyui_object_info(endpoint)
+        return lora_name in _comfyui_lora_names(object_info), lora_name
+    finally:
+        try:
+            probe_path.unlink()
+        except OSError:
+            pass
+        if stage_dir_created:
+            try:
+                stage_dir.rmdir()
+            except OSError:
+                pass
+
+
+def _kura_stage_files(stage_dir: Path | None) -> list[str]:
+    if stage_dir is None or not stage_dir.is_dir():
+        return []
+    try:
+        return sorted(item.name for item in stage_dir.iterdir() if item.is_file() or item.is_symlink())
+    except OSError:
+        return []
 
 
 def _redact_url_userinfo(value: str) -> str:
@@ -674,7 +720,7 @@ def _redact_url_userinfo(value: str) -> str:
     return urllib.parse.urlunparse(parsed._replace(netloc=f"***@{host}", **replacement))
 
 
-def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
+def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
         config = _workspace_config()
@@ -682,7 +728,7 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
         print(f"comfyui: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
-    endpoint = str(comfyui.get("endpoint") or "http://127.0.0.1:8188").rstrip("/")
+    endpoint = str(getattr(args, "endpoint", None) or comfyui.get("endpoint") or "http://127.0.0.1:8188").rstrip("/")
     parsed_endpoint = urllib.parse.urlparse(endpoint)
     lora_dir = _workspace_relative_path(str(comfyui["lora_dir"])) if isinstance(comfyui.get("lora_dir"), str) and comfyui.get("lora_dir") else None
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
@@ -694,34 +740,58 @@ def cmd_doctor_comfyui(_: argparse.Namespace) -> int:
         "lora_dir_exists": bool(lora_dir and lora_dir.is_dir()),
         "stage_dir_exists": bool(stage_dir and stage_dir.is_dir()),
         "stage_dir_writable": bool(stage_dir and stage_dir.is_dir() and os.access(stage_dir, os.W_OK)),
+        "lora_stage_visible": None,
     }
     diagnostics: dict[str, Any] = {
         "endpoint": _redact_url_userinfo(endpoint),
         "lora_dir": str(lora_dir) if lora_dir else None,
         "stage_dir": str(stage_dir) if stage_dir else None,
     }
+    stage_files = _kura_stage_files(stage_dir)
+    diagnostics["kura_stage_file_count"] = len(stage_files)
+    if stage_files:
+        diagnostics["kura_stage_file_samples"] = stage_files[:10]
     if parsed_endpoint.scheme not in ("http", "https"):
         diagnostics["object_info_error"] = f"unsupported comfyui.endpoint scheme: {parsed_endpoint.scheme or '(none)'}"
         diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
         print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
         return 1
     try:
-        with urllib.request.urlopen(f"{endpoint}/object_info", timeout=5) as response:
-            object_info = json.loads(response.read().decode("utf-8"))
+        object_info = _fetch_comfyui_object_info(endpoint)
         checks["endpoint_reachable"] = True
         checks["object_info"] = isinstance(object_info, dict)
         if isinstance(object_info, dict):
             diagnostics["lora_loader_count"] = _comfyui_lora_count(object_info)
     except Exception as exc:
         diagnostics["object_info_error"] = _redact_secret_text(str(exc))
+    if getattr(args, "probe_stage", False):
+        if not (stage_dir and lora_dir and lora_dir.is_dir()):
+            diagnostics["lora_stage_probe_error"] = "comfyui.lora_dir must exist before probing stage visibility"
+            checks["lora_stage_visible"] = False
+        elif not checks["endpoint_reachable"]:
+            diagnostics["lora_stage_probe_error"] = "ComfyUI endpoint must be reachable before probing stage visibility"
+            checks["lora_stage_visible"] = False
+        else:
+            try:
+                visible, lora_name = _probe_comfyui_lora_stage(endpoint, stage_dir, stage_subdir)
+                checks["stage_dir_exists"] = bool(stage_dir.is_dir())
+                checks["stage_dir_writable"] = bool(stage_dir.is_dir() and os.access(stage_dir, os.W_OK))
+                checks["lora_stage_visible"] = visible
+                diagnostics["lora_stage_probe_name"] = lora_name
+            except Exception as exc:
+                checks["lora_stage_visible"] = False
+                diagnostics["lora_stage_probe_error"] = _redact_secret_text(str(exc))
     if stage_dir and not stage_dir.exists() and lora_dir and lora_dir.is_dir():
         diagnostics["stage_parent_writable"] = os.access(lora_dir, os.W_OK)
-    if checks["endpoint_reachable"] and checks["object_info"]:
+    if checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False:
         diagnosis = "ComfyUI endpoint is reachable."
+    elif checks["lora_stage_visible"] is False:
+        diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
     else:
         diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."
     print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
-    return 0 if checks["endpoint_reachable"] and checks["object_info"] else 1
+    ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False
+    return 0 if ok else 1
 
 
 def cmd_doctor_secrets(_: argparse.Namespace) -> int:
