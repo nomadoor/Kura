@@ -29,6 +29,8 @@ for the complete, authoritative, up-to-date list of commands and options.
 | Command | Purpose |
 | --- | --- |
 | `uv run kura dataset validate <dataset>` | Validate a dataset manifest |
+| `uv run kura dataset inspect <dataset-id-or-path>` | Measure dataset facts without pass/fail judgment |
+| `uv run kura dataset inspect <dataset-id-or-path> --json` | Print dataset facts for an agent to read |
 
 ## Training runs
 

@@ -22,6 +22,7 @@ import yaml
 from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
+from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
@@ -182,6 +183,19 @@ def cmd_dataset_validate(args: argparse.Namespace) -> int:
             print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"dataset valid: {count} items")
+    return 0
+
+
+def cmd_dataset_inspect(args: argparse.Namespace) -> int:
+    try:
+        report = inspect_dataset(args.dataset, workspace=_workspace())
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot inspect dataset: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(format_dataset_inspect(report))
     return 0
 
 
@@ -922,6 +936,10 @@ def main() -> None:
     validate = dataset_sub.add_parser("validate", help="Validate a dataset manifest")
     validate.add_argument("dataset_dir")
     validate.set_defaults(func=cmd_dataset_validate)
+    inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")
+    inspect.add_argument("dataset", help="Dataset ID under datasets/ or a dataset directory path")
+    inspect.add_argument("--json", action="store_true", help="Print machine-readable inspection facts")
+    inspect.set_defaults(func=cmd_dataset_inspect)
 
     run = sub.add_parser("run", help="Create, launch, monitor, and clean up training runs")
     run_sub = run.add_subparsers(dest="run_command", required=True)
