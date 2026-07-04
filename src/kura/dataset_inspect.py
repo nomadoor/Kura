@@ -21,6 +21,8 @@ TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 
 def resolve_dataset_path(value: str, *, workspace: Path) -> Path:
     path = Path(value).expanduser()
+    if not path.is_absolute() and len(path.parts) == 1:
+        return workspace / "datasets" / value
     if path.exists() or path.is_absolute() or len(path.parts) > 1:
         return path if path.is_absolute() else (Path.cwd() / path)
     return workspace / "datasets" / value

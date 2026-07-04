@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import struct
 import tempfile
 import unittest
@@ -76,6 +77,26 @@ class DatasetInspectTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["dataset"]["input"], "example")
         self.assertEqual(payload["captions"]["trigger_word"], {"declared": False, "value": None})
+
+    def test_simple_dataset_id_prefers_workspace_datasets_over_cwd_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "docs"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("{}\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text(json.dumps({"id": "a", "path": "a.png", "caption": "dataset"}) + "\n", encoding="utf-8")
+            (dataset / "a.png").write_bytes(png_bytes(512, 512))
+            cwd = root / "docs"
+            cwd.mkdir()
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                report = inspect_dataset("docs", workspace=root)
+            finally:
+                os.chdir(previous)
+
+        self.assertEqual(report["dataset"]["path"], str(dataset))
+        self.assertEqual(report["images"]["directory_count"], 1)
 
     def test_dataset_inspect_missing_directory_exits_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
