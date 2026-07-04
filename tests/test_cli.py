@@ -2965,7 +2965,8 @@ class MusubiBackendTests(unittest.TestCase):
             stable_link_target(target, link_path),
             "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
         )
-        self.assertEqual(stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path), "/root/.cache/huggingface/weights.safetensors")
+        with self.assertRaisesRegex(SystemExit, "cannot map downloaded model path"):
+            stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path)
 
     def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}

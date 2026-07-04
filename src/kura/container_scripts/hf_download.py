@@ -89,6 +89,7 @@ def remove_incomplete_files(directories):
 
 def stable_link_target(path, link_path):
     try:
+        original_target = os.path.abspath(path)
         target = os.path.abspath(path)
         link = os.path.abspath(link_path)
         raw_maps = os.environ.get("KURA_WORKSPACE_PATH_MAPS") or "[]"
@@ -108,9 +109,11 @@ def stable_link_target(path, link_path):
         target_workspace = os.path.commonpath([target, "/workspace"]) == "/workspace"
         link_workspace = os.path.commonpath([link, "/workspace"]) == "/workspace"
     except ValueError:
-        return path
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}")
     if target_workspace and link_workspace:
         return os.path.relpath(target, os.path.dirname(link))
+    if os.path.isabs(original_target):
+        raise SystemExit(f"[kura] cannot map downloaded model path into workspace: {path}")
     return path
 
 
