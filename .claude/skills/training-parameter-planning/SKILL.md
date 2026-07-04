@@ -39,8 +39,12 @@ Gather these before proposing parameters:
 1. `uv run kura run plan <run-id>` — the Resources section (local GPU and
    VRAM, executor, architecture, artifact filenames, memory flags) and the
    model download estimate.
-2. The dataset: item count, resolution distribution, captions, task type.
-   Use `kura dataset validate` and the `dataset-prep` skill.
+2. The dataset facts, gathered **before** proposing anything: item count,
+   resolution distribution, caption statistics (empty / duplicates / trigger
+   word occurrences), pair integrity, task type. Use `kura dataset inspect`
+   once it exists; until then use `kura dataset validate` plus a manual look,
+   and the `dataset-prep` skill. Never propose parameters without this
+   material.
 3. Knowledge cards: read **only** the cards that match this run —
    `knowledge/<architecture>.md` (the architecture string from the plan's
    Resources section) and `knowledge/user-preferences.md`. Do not bulk-read
@@ -110,9 +114,30 @@ sufficient rung:
   character LoRAs, 768px is often a sufficient starting point; use 1024px or
   higher only when the task/model and hardware headroom justify the cost.
 
-After launch approval: if OOM still occurs, diagnose from the actual log,
-move exactly one rung, record the change in `run.yaml`, recompile, and show
-the plan again.
+After launch approval: if OOM still occurs, diagnose from the actual log and
+move exactly one rung. If the approved plan recorded a contingency envelope
+in `run.yaml` (e.g. "on OOM, enable gradient checkpointing and relaunch"),
+you may relaunch within that envelope without a second plan review; anything
+outside the envelope goes back through recompile and plan approval. When you
+expect an OOM risk, propose the envelope as part of the original plan — that
+is what keeps the approval count at one.
+
+## Last look (regret reminder)
+
+Immediately before presenting the plan for approval, read
+`knowledge/regrets.md` and check the run against it. This is not a review
+and not a gate — hard constraints:
+
+- Last look does **not** modify the plan or `run.yaml`.
+- Last look does **not** return a launch verdict.
+- Last look returns at most a few lines of note attached to the plan
+  summary, phrased as `trigger -> reminder`, never `trigger -> block`.
+
+Example tone: "Note: the trigger word 'myaku' appears in 0/40 captions —
+intentional?" or "A past run with these conditions was regretted (forced
+low-VRAM + heavy block swap, ~20 s/step). Continue if intentional." The user
+decides; you just make sure the regret is visible at the moment they are
+already looking.
 
 ## Autonomy boundaries
 
@@ -138,6 +163,8 @@ Layout under this skill directory:
 - `knowledge/user-preferences.md` — this user's own tested preferences and
   tendencies. Outranks baselines. Personal by nature: entries move to a
   baseline card only when the owner says they should apply generally.
+- `knowledge/regrets.md` — the mirror of the cards: things that were
+  regretted after a run. Read at Last look; grows one line per real regret.
 
 Every value carries a `source:` line — this is evidence, orthogonal to where
 the file sits (location = precedence, source = why we believe it):
@@ -163,3 +190,7 @@ the file sits (location = precedence, source = why we believe it):
    evidence contradicts an entry, keep both lines with their sources —
    contradictions are data.
 4. Keep cards terse and structured; they are lookup tables, not essays.
+5. When the user expresses regret about a finished run ("I wish I'd
+   noticed…"), add one `trigger -> reminder` line to `knowledge/regrets.md`
+   citing the run id. Successes feed cards; regrets feed the regret list —
+   the two halves of the same loop.
