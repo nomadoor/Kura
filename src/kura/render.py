@@ -19,6 +19,8 @@ import yaml
 
 from kura import __version__
 from kura.comfyui_models import merged_registry, resolve_model_specs
+from kura.fsio import atomic_write_json
+from kura.workspace import dump_yaml
 
 
 def now() -> str:
@@ -49,10 +51,6 @@ def _workflow_sidecar(path: Path) -> dict[str, Any]:
     return load_yaml(sidecar)
 
 
-def write_yaml(path: Path, value: Any) -> None:
-    path.write_text(yaml.safe_dump(value, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
 def event(run_dir: Path, payload: dict[str, Any]) -> None:
     with (run_dir / "logs" / "events.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -62,14 +60,14 @@ def status(run_dir: Path, **changes: Any) -> None:
     path = run_dir / "status.json"
     current = json.loads(path.read_text(encoding="utf-8"))
     current.update(changes)
-    path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, current)
 
 
 def write_realization(run_dir: Path, **details: Any) -> None:
     realization_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     path = run_dir / "realizations" / f"{realization_id}.json"
     path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps({"id": realization_id, "timestamp": now(), **details}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(path, {"id": realization_id, "timestamp": now(), **details})
     status(run_dir, last_realization=str(path.relative_to(run_dir)))
 
 
@@ -402,14 +400,14 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         elif not inputs.get("checkpoint", {}).get("hash"):
             print("warning: checkpoint hash is unavailable", flush=True)
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
-    write_yaml(resolved / "manifest.lock.yaml", frozen)
-    (resolved / "workflow_used.json").write_text(json.dumps(workflow, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    dump_yaml(resolved / "manifest.lock.yaml", frozen)
+    atomic_write_json(resolved / "workflow_used.json", workflow)
     if "comfyui_models" in frozen:
-        (resolved / "comfyui_models.json").write_text(json.dumps(frozen["comfyui_models"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(resolved / "comfyui_models.json", frozen["comfyui_models"])
     if "comfyui_model_registry" in frozen:
-        (resolved / "comfyui_model_registry.json").write_text(json.dumps(frozen["comfyui_model_registry"], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(resolved / "comfyui_model_registry.json", frozen["comfyui_model_registry"])
     shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
-    write_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
+    dump_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled")
 
 

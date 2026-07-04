@@ -232,7 +232,7 @@ SPECS: dict[str, SmokeSpec] = {
         model_downloads={
             "dit": {"repo": "black-forest-labs/FLUX.1-Kontext-dev", "filename": "flux1-kontext-dev.safetensors"},
             "vae": {"repo": "black-forest-labs/FLUX.1-Kontext-dev", "filename": "ae.safetensors"},
-            "text_encoder1": {"repo": "comfyanonymous/flux_text_encoders", "filename": "t5xxl_fp16.safetensors"},
+            "text_encoder1": {"repo": "comfyanonymous/flux_text_encoders", "filename": "t5xxl_fp8_e4m3fn.safetensors"},
             "text_encoder2": {"repo": "comfyanonymous/flux_text_encoders", "filename": "clip_l.safetensors"},
         },
         extra_override={
@@ -248,6 +248,7 @@ SPECS: dict[str, SmokeSpec] = {
             "gradient_checkpointing": True,
             "fp8_base": True,
             "fp8_scaled": True,
+            "fp8_t5": True,
             "text_encoder_batch_size": 1,
             "extra_args": ["--timestep_sampling", "flux_shift", "--weighting_scheme", "none", "--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
@@ -375,6 +376,7 @@ SPECS: dict[str, SmokeSpec] = {
             "fp8_scaled": True,
             "extra_args": ["--blocks_to_swap", "26"],
             "save_every_n_steps": 1,
+            "prune_checkpoints_before_step": 1,
         },
         params={
             "rank": 1,
@@ -644,6 +646,7 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         "params": dict(spec.params),
         "backend_overrides": {"musubi-tuner": override},
         "compute": {"executor": executor, "gpu": gpu},
+        "safety": {"allow_large_model_downloads": True},
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     (run_dir / "run.yaml").write_text(yaml.safe_dump(run_yaml, allow_unicode=True, sort_keys=False), encoding="utf-8")

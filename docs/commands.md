@@ -15,6 +15,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura cleanup all` | Preview local cache, run, and Docker cleanup targets |
 | `uv run kura cleanup cache --yes` | Delete Kura-managed local model/cache data after previewing it |
 | `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
+| `uv run kura fix-links` | Preview repair for Kura symlinks with container-private targets |
 | `uv run kura --version` | Print the installed Kura version |
 | `uv run kura doctor docker` | Check Docker / GPU / cache readiness |
 | `uv run kura doctor disk` | Report local disk, cache, Docker storage, and permission risks |
@@ -33,8 +34,8 @@ for the complete, authoritative, up-to-date list of commands and options.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura run new --experiment <name> --slug <slug>` | Create a train run |
-| `uv run kura run plan <run-id>` | Show the training settings that will be launched |
+| `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
+| `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
 | `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
 | `uv run kura run launch <run-id> --executor docker` | Run locally through Docker |

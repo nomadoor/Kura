@@ -9,13 +9,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "src" / "kura" / "cli.py"
-RUN_COMMANDS = ROOT / "src" / "kura" / "run_commands.py"
+RUN_COMMANDS = ROOT / "src" / "kura" / "run_commands"
 TESTS = ROOT / "tests" / "test_cli.py"
 
 
 def main() -> int:
     cli = CLI.read_text(encoding="utf-8")
-    run_commands = RUN_COMMANDS.read_text(encoding="utf-8")
+    run_commands = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(RUN_COMMANDS.glob("*.py"))
+    )
     runpod_source = cli + "\n" + run_commands
     tests = TESTS.read_text(encoding="utf-8")
     errors: list[str] = []

@@ -21,11 +21,14 @@ import yaml
 
 from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
+from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
+from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
+from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -101,6 +104,20 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _validate_train_compile_intent(run: dict[str, Any]) -> None:
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    backend_name = backend.get("name")
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    if not isinstance(model.get("base"), str) or not model.get("base").strip():
+        raise ValueError("training run model.base must be set before compile")
+    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
+    other_backend = "musubi-tuner" if backend_name == "ai-toolkit" else "ai-toolkit"
+    if isinstance(overrides.get(other_backend), dict) and overrides[other_backend]:
+        raise ValueError(f"backend is {backend_name} but backend_overrides.{other_backend} is set")
+    if backend_name == "musubi-tuner":
+        validate_musubi_dataset_layout(run, _workspace())
+
+
 def _now() -> datetime:
     return datetime.now().astimezone()
 
@@ -134,11 +151,27 @@ def cmd_dataset_validate(args: argparse.Namespace) -> int:
             continue
         if not isinstance(item, dict) or not item.get("id") or not item.get("path"):
             errors.append(f"items.jsonl:{number}: item requires id and path")
+            count += 1
+            continue
+        item_path = Path(str(item["path"]))
+        if item_path.is_absolute():
+            errors.append(f"items.jsonl:{number}: path must be relative to the dataset directory")
+        else:
+            candidate = (directory / item_path).resolve(strict=False)
+            try:
+                candidate.relative_to(directory.resolve())
+            except ValueError:
+                errors.append(f"items.jsonl:{number}: path must stay inside the dataset directory")
+            else:
+                if not candidate.is_file():
+                    errors.append(f"items.jsonl:{number}: referenced file does not exist: {item['path']}")
         if not item.get("caption"):
             warnings.append(f"items.jsonl:{number}: missing caption")
         if not item.get("hash"):
             warnings.append(f"items.jsonl:{number}: missing hash")
         count += 1
+    if count == 0:
+        errors.append("items.jsonl contains no items")
     declared = metadata.get("stats", {}).get("count")
     if declared != count:
         warnings.append(f"stats.count is {declared!r}, but items.jsonl contains {count} items")
@@ -166,15 +199,15 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run = {
         "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
-        "backend": {"name": "ai-toolkit", "version": None, "adapter_version": 1},
+        "backend": {"name": args.backend, "version": None, "adapter_version": 1},
         "model": {"base": "", "revision": None},
         "datasets": [{"id": "", "digest": None, "role": None}],
         "params": {key: None for key in ("rank", "alpha", "lr", "scheduler", "steps", "batch_size", "resolution", "seed")},
-        "backend_overrides": {}, "compute": {"executor": "docker", "gpu": None},
+        "backend_overrides": {}, "compute": {"executor": args.executor, "gpu": args.gpu},
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
-    (run_dir / "status.json").write_text(json.dumps({"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []}, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
     (run_dir / "plan.md").write_text("# Training plan\n\n", encoding="utf-8")
     (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
     for relative in ("logs/events.jsonl", "metrics/metrics.jsonl", "samples/samples.jsonl"):
@@ -193,7 +226,7 @@ def cmd_render_new(args: argparse.Namespace) -> int:
         (run_dir / relative).mkdir(parents=True, exist_ok=True)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "promptset": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
-    (run_dir / "status.json").write_text(json.dumps({"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []}, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
     (run_dir / "plan.md").write_text("# Render plan\n\n", encoding="utf-8"); (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
     (run_dir / "logs/events.jsonl").touch(); (run_dir / "samples/images.jsonl").touch()
     print(run_id); return 0
@@ -225,6 +258,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         print(f"unsupported backend: {backend.get('name')}", file=sys.stderr)
         return 1
     try:
+        _validate_train_compile_intent(run)
         datasets = _run_datasets(run)
         if not datasets:
             raise ValueError("training run requires datasets[]")
@@ -253,18 +287,19 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     if backend.get("name") == "ai-toolkit":
         compile_ai_toolkit(locked, resolved / "ai-toolkit.toml")
     else:
-        compile_musubi_tuner(locked, resolved / "musubi")
+        compile_musubi_tuner(locked, resolved / "musubi", workspace=_workspace(), strict=True)
     env = {
         "kura_version": __version__, "python_version": platform.python_version(),
         "platform": platform.platform(), "backend_name": backend.get("name"),
         "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
-        "declared_executor": "docker", "local_image": image["local"], "dockerfile": image["dockerfile"],
+        "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
+        "local_image": image["local"], "dockerfile": image["dockerfile"],
     }
     _dump_yaml(resolved / "env.lock", env)
     status_path = run_dir / "status.json"
     status = json.loads(status_path.read_text(encoding="utf-8"))
     status["state"] = "compiled"
-    status_path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+    atomic_write_json(status_path, status)
     print(f"compiled run: {args.run_id}")
     return 0
 
@@ -626,6 +661,58 @@ def cmd_fix_permissions(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix_links(args: argparse.Namespace) -> int:
+    workspace = _require_workspace()
+    config = _workspace_config()
+    docker = config.get("docker", {}) if isinstance(config.get("docker"), dict) else {}
+    mounts = docker.get("mounts", []) if isinstance(docker.get("mounts"), list) else []
+    inspected = inspect_workspace_symlinks(workspace, mounts=mounts)
+    actions: list[dict[str, Any]] = []
+    for item in inspected.get("unsafe", []):
+        if not isinstance(item, dict):
+            continue
+        link_rel = item.get("path")
+        target = item.get("target")
+        if not isinstance(link_rel, str) or not isinstance(target, str):
+            continue
+        mapped = to_workspace_relative(target, workspace=workspace, mounts=mounts)
+        action: dict[str, Any] = {
+            "path": link_rel,
+            "target": target,
+            "repairable": mapped is not None,
+        }
+        if mapped is not None:
+            action["workspace_target"] = mapped
+            action["new_target"] = relative_symlink_target(link_relative=link_rel, target_relative=mapped)
+        else:
+            action["reason"] = "target is not covered by the workspace mount table"
+        actions.append(action)
+
+    if args.yes:
+        try:
+            for action in actions:
+                if not action.get("repairable"):
+                    continue
+                link = workspace / str(action["path"])
+                if not link.is_symlink():
+                    continue
+                link.unlink()
+                link.symlink_to(str(action["new_target"]))
+        except OSError as exc:
+            print(f"cannot fix links: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+
+    print(json.dumps({
+        "dry_run": not args.yes,
+        "workspace_root": str(workspace),
+        "scanned_symlinks": inspected.get("scanned", 0),
+        "truncated": inspected.get("truncated", False),
+        "actions": actions,
+        "diagnosis": "Link repair rewrites only symlinks whose targets are covered by the workspace mount table.",
+    }, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_run_prune(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
@@ -772,9 +859,10 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
             entries.append(entry)
         except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
             print(f"warning: skipped {run_file.parent.name}: {_safe_error(exc)}", file=sys.stderr)
-    with (_workspace() / "index.jsonl").open("w", encoding="utf-8") as handle:
-        for entry in entries:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    atomic_write_text(
+        _workspace() / "index.jsonl",
+        "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries),
+    )
     print(f"rebuilt index: {len(entries)} runs")
     return 0
 
@@ -819,6 +907,10 @@ def main() -> None:
     fix_permissions.add_argument("--yes", action="store_true", help="Apply ownership repair; default is dry-run")
     fix_permissions.set_defaults(func=cmd_fix_permissions)
 
+    fix_links = sub.add_parser("fix-links", help="Repair Kura workspace symlinks with container-private targets")
+    fix_links.add_argument("--yes", action="store_true", help="Apply link repair; default is dry-run")
+    fix_links.set_defaults(func=cmd_fix_links)
+
     monitor = sub.add_parser("monitor", help="Open the run monitor TUI")
     monitor.add_argument("--interval", type=float, default=2.0)
     monitor.add_argument("--stale-after", type=float, default=90.0)
@@ -836,6 +928,9 @@ def main() -> None:
     new = run_sub.add_parser("new", help="Create a train run")
     new.add_argument("--experiment", required=True)
     new.add_argument("--slug", required=True)
+    new.add_argument("--backend", default="ai-toolkit", choices=("ai-toolkit", "musubi-tuner"))
+    new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
+    new.add_argument("--gpu")
     new.set_defaults(func=cmd_run_new)
     compile_parser = run_sub.add_parser("compile", help="Freeze run.yaml into resolved inputs")
     compile_parser.add_argument("run_id")

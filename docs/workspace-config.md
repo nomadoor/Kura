@@ -52,6 +52,19 @@ the referenced file sizes before local launch. The estimate is added on top of
 `docker.min_free_gb`, so the configured value remains a safety margin instead
 of being consumed by the download.
 
+Musubi automatic downloads store provenance in
+`resolved/musubi/model-bundle.lock.yaml`. The `cache/models/` tree is a
+Kura-managed convenience layer for container paths and may contain symlinks; the
+lock file is the reproducible source of truth for which Hugging Face repo/files
+were selected.
+
+Path namespace depends on the consumer. Container command specs may use
+`/workspace/...`, but host-consumed workspace artifacts should be
+workspace-relative or host-resolvable. `kura doctor disk` reports Kura symlinks
+that point at container-private paths such as `/root/...`; `kura fix-links`
+previews and can repair links whose targets are covered by the effective
+workspace mount table.
+
 ## ComfyUI
 
 | Key | Purpose | Default |
@@ -97,6 +110,12 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 
 If a run needs a specific GPU, set `compute.gpu` in that run. Kura will use that
 GPU before the workspace-level candidates.
+
+Training RunPod Pods are disposable. In `upload` mode, local model caches are
+not uploaded with the run bundle, so `kura run plan` reports model downloads as
+remote writes for RunPod even when the same files are cached locally. Before
+launch, Kura compares estimated remote model downloads plus the configured
+checkpoint estimate against `runpod.container_disk_gb`.
 
 ## Useful checks
 

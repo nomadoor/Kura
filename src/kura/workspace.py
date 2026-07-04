@@ -9,9 +9,11 @@ from typing import Any
 
 import yaml
 
+from kura.fsio import atomic_write_yaml
+
 
 def dump_yaml(path: Path, value: Any) -> None:
-    path.write_text(yaml.safe_dump(value, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    atomic_write_yaml(path, value)
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
