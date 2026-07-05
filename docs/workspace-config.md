@@ -21,6 +21,15 @@ wrong or unavailable.
 
 ## Docker
 
+Image references are Kura-managed defaults: images are pulled automatically
+when needed, move together with Kura releases, and users normally never build
+or change them. Overriding them (e.g. pointing at your own registry after
+`kura image build` / `kura image publish`) is an escape hatch for developing
+Kura itself, not part of normal use. Trainer freshness works differently per
+backend by design: AI-Toolkit rides the upstream official image, while the
+Musubi Tuner image is paired with Kura's Musubi adapters, because a newer
+Musubi alone cannot add model support without a matching Kura update.
+
 | Key | Purpose | Default |
 | --- | --- | --- |
 | `docker.images.ai-toolkit.local` | Local Docker image used for AI-Toolkit runs | `nomadoor/kura-ai-toolkit:dev` |

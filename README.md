@@ -127,6 +127,19 @@ uv run kura run prune --docker-containers --docker-volumes --yes  # also remove 
 
 To reclaim the model cache, delete `cache/huggingface/` (it re-downloads when needed).
 
+## Updating Kura
+
+```sh
+git pull
+```
+
+That is the whole update. Dependencies re-sync automatically on the next `uv run kura ...`, and the training Docker images are part of Kura: they are pulled automatically when needed and move forward together with Kura releases. You never build or manage images yourself.
+
+Two notes on how trainer versions work:
+
+- **AI-Toolkit** runs on the upstream official image (`ostris/aitoolkit:latest`), so new AI-Toolkit features generally arrive on their own.
+- **Musubi Tuner** has no official image, so Kura ships one that is tested against Kura's own Musubi support. A newer Musubi alone would not add new model support anyway — that always needs a Kura update too — so the image updates together with Kura, and "what does my Kura support?" always has one answer: whatever your current Kura supports.
+
 ## Learn more
 
 - [docs/commands.md](docs/commands.md): full command reference
