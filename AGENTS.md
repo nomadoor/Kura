@@ -1,19 +1,25 @@
 # Repository Guidelines
 
-## Start Here
+## First: what kind of session is this?
 
-On every new session or crash/reconnect recovery, read `AGENT_STATE.md` first if it exists. This file is crash-recovery working memory for **repository development sessions only** (changing Kura code, docs, skills, or doing PR/release work): update it after meaningful development work with the current goal, files changed, checks run, next action, and blockers. Do not create or update it during normal Kura usage — training, render, dataset work. Run facts belong in `runs/<id>/` (`status.json`, `realizations/`, `notes.md`) and must never be duplicated into `AGENT_STATE.md`. Do not commit `AGENT_STATE.md`, and do not rely on chat history as durable memory.
+Almost everyone who opens this repository is **using Kura as a tool** —
+training LoRAs, rendering images, preparing datasets. Assume that by default.
 
-Before changing code, inspect:
+**Using Kura (default):**
 
-```sh
-git status --short --branch
-git log --oneline -5
-```
+- Work through the `kura` CLI (`uv run kura ...`) and workspace files.
+- **Do not run git commands.** Do not modify Kura's source code, tests, or
+  checks. The workspace being a git repository is an implementation detail;
+  if the user explicitly asks to update Kura itself, treat that as a
+  maintenance action and confirm the update target before using git for that
+  update.
+- Skills may direct you to update knowledge files (training knowledge cards,
+  run `notes.md`). Edit those files; leave git entirely alone.
+- Read: Core Model and Using Kura below. Skip the Developing Kura section.
 
-Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
-
-If `/ops` exists, treat it as the single source of truth for information architecture, writing rules, design tokens, and contribution rules. New owner decisions that change behavior, IA, naming, writing rules, or design rules must be reflected in `/ops` or an ADR before implementation.
+**Developing Kura (only when the user explicitly asks to change Kura
+itself):** code, tests, docs, skills, or release work. Follow the Developing
+Kura section at the bottom, starting with the `kura-core` skill.
 
 ## Core Model
 
@@ -29,9 +35,7 @@ The decision model (see `docs/adr/kura-decision-model.md`): the CLI measures, th
 
 Smoke and training runs the user will watch belong in the current workspace. Do not create a second workspace for user-observed runs. A throwaway workspace is only for CI or isolated developer checks. If a separate workspace is unavoidable, say so up front, give the exact `kura monitor` / `kura run watch` command for it, and state where its `runs/` and `cache/` live.
 
-## Boundaries
-
-Keep backend adapters and executors separate. Backends compile native configuration and container-native command specifications; they do not launch runs. Executors launch, reconcile, and stop runs.
+## Using Kura
 
 Training uses Docker locally and RunPod remotely. Never run AI-Toolkit or Musubi directly on the host. Render runs are the explicit exception: they call a locally reachable ComfyUI endpoint.
 
@@ -45,13 +49,40 @@ Before any local run or real smoke that may download multi-GB models, run `uv ru
 
 Cleanup is intentionally guarded. Show `kura cleanup ...` dry-runs before deletion. Never delete datasets, outputs, downloads, or final artifacts unless the user explicitly asks; use `kura fix-permissions` before cleanup when root-owned Kura files block removal.
 
+Skills for usage sessions:
+
+- `training-parameter-planning` — proposing parameters, VRAM fit, trade-offs
+- `dataset-prep` — datasets, captions, trigger words, validation
+- `local-disk-safety` — disk, WSL2, Docker storage, cleanup, checkpoints
+- `runpod-lifecycle` — remote training, billing safety, Pod recovery
+- `comfyui-render-workflow` — render runs, workflows, comparisons
+- `monitor-tui` — reading `kura monitor` / `kura run watch`
+- `musubi-tuner-backend` / `ai-toolkit-backend` — trainer flag mechanics
+
 ## Secrets and Artifacts
 
 Never commit dataset payloads, model weights, checkpoints, outputs, downloads, caches, credentials, or generated workspace data. Commit small manifests, schemas, fixtures, examples, and documentation instead.
 
 Never bake secrets into Docker images or write them to `workspace.yaml`, `run.yaml`, `resolved/env.lock`, logs, README files, or run artifacts. Local secrets belong in ignored `.env.local` files or environment variables.
 
-## Layout
+## Developing Kura
+
+Everything below applies only when explicitly changing Kura itself.
+
+Before changing code, inspect:
+
+```sh
+git status --short --branch
+git log --oneline -5
+```
+
+Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
+
+If `/ops` exists, treat it as the single source of truth for information architecture, writing rules, design tokens, and contribution rules. New owner decisions that change behavior, IA, naming, writing rules, or design rules must be reflected in `/ops` or an ADR before implementation.
+
+Keep backend adapters and executors separate. Backends compile native configuration and container-native command specifications; they do not launch runs. Executors launch, reconcile, and stop runs.
+
+Layout:
 
 - Production code: `src/kura/`
 - Tests: `tests/`
@@ -63,26 +94,9 @@ Never bake secrets into Docker images or write them to `workspace.yaml`, `run.ya
 
 For local workspace configuration keys, see `docs/workspace-config.md`.
 
-## Task-Specific Skills
+Skills for development sessions: `kura-core` (start here), `musubi-adapter-smoke`, `readme-docs-update`, `release-check`, plus the usage skills above when the change touches their areas.
 
-Use the focused project skills under `.claude/skills/` for details that should not live in this always-loaded file:
-
-- `kura-core`
-- `training-parameter-planning`
-- `local-disk-safety`
-- `runpod-lifecycle`
-- `musubi-tuner-backend`
-- `musubi-adapter-smoke`
-- `ai-toolkit-backend`
-- `comfyui-render-workflow`
-- `monitor-tui`
-- `dataset-prep`
-- `readme-docs-update`
-- `release-check`
-
-## Validation
-
-Run focused tests for behavior changes. For broad changes, use:
+Validation — run focused tests for behavior changes; for broad changes:
 
 ```sh
 uv run python -m unittest discover -s tests
