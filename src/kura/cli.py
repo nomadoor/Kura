@@ -208,8 +208,6 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
     run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    for relative in ("resolved", "logs", "metrics", "samples", "checkpoints", "outputs"):
-        (run_dir / relative).mkdir()
     run = {
         "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
@@ -222,10 +220,8 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     }
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
-    (run_dir / "plan.md").write_text("# Training plan\n\n", encoding="utf-8")
-    (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
-    for relative in ("logs/events.jsonl", "metrics/metrics.jsonl", "samples/samples.jsonl"):
-        (run_dir / relative).touch()
+    atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
+    atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
     return 0
 
@@ -236,13 +232,11 @@ def cmd_render_new(args: argparse.Namespace) -> int:
         print("slug must contain letters or numbers", file=sys.stderr); return 1
     timestamp = _now(); run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    for relative in ("resolved", "logs", "samples/images", "outputs"):
-        (run_dir / relative).mkdir(parents=True, exist_ok=True)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "promptset": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
-    (run_dir / "plan.md").write_text("# Render plan\n\n", encoding="utf-8"); (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
-    (run_dir / "logs/events.jsonl").touch(); (run_dir / "samples/images.jsonl").touch()
+    atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
+    atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id); return 0
 
 

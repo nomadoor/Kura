@@ -118,6 +118,7 @@ def docker_command(
     if spec_secret_keys:
         raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
     runtime_env["KURA_LOG_PATH"] = log_path
+    runtime_env["KURA_RUN_ID"] = run_dir.name
     runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(workspace_mount_mappings(workspace, mounts, container_root=workspace_target), ensure_ascii=False, separators=(",", ":"))
     # Container output is redirected to a mounted file; force Python progress
     # messages through immediately instead of waiting for its file buffer.
@@ -132,7 +133,16 @@ def docker_command(
             command.extend(["--env", f"{key}={value}"])
     # The wrapper runs inside the container, so Docker's detached stdout is never
     # the source of truth. The mounted run log survives Docker log rotation.
-    command.extend([image, "sh", "-lc", 'exec "$@" >> "$KURA_LOG_PATH" 2>&1', "kura-job", *spec["argv"]])
+    quoted_root = workspace_target.rstrip("/")
+    wrapper = (
+        'mkdir -p "$(dirname "$KURA_LOG_PATH")" '
+        f'"{quoted_root}/runs/$KURA_RUN_ID/outputs" '
+        f'"{quoted_root}/runs/$KURA_RUN_ID/checkpoints" '
+        f'"{quoted_root}/runs/$KURA_RUN_ID/samples" '
+        f'"{quoted_root}/runs/$KURA_RUN_ID/metrics" && '
+        'exec "$@" >> "$KURA_LOG_PATH" 2>&1'
+    )
+    command.extend([image, "sh", "-lc", wrapper, "kura-job", *spec["argv"]])
     return command, runtime_env, name
 
 
