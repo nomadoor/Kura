@@ -2,8 +2,6 @@
 
 ## Start Here
 
-On every new session or crash/reconnect recovery, read `AGENT_STATE.md` first if it exists. This file is crash-recovery working memory for **repository development sessions only** (changing Kura code, docs, skills, or doing PR/release work): update it after meaningful development work with the current goal, files changed, checks run, next action, and blockers. Do not create or update it during normal Kura usage — training, render, dataset work. Run facts belong in `runs/<id>/` (`status.json`, `realizations/`, `notes.md`) and must never be duplicated into `AGENT_STATE.md`. Do not commit `AGENT_STATE.md`, and do not rely on chat history as durable memory.
-
 Before changing code, inspect:
 
 ```sh
