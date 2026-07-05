@@ -877,7 +877,7 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
 
 def cmd_monitor(args: argparse.Namespace) -> int:
     try:
-        return run_textual_monitor(_require_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit)
+        return run_textual_monitor(_require_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit, include_drafts=args.all)
     except ValueError as exc:
         print(f"cannot open monitor: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -923,6 +923,7 @@ def main() -> None:
     monitor.add_argument("--interval", type=float, default=2.0)
     monitor.add_argument("--stale-after", type=float, default=90.0)
     monitor.add_argument("--limit", type=int, default=30)
+    monitor.add_argument("--all", action="store_true", help="Show draft runs in the monitor")
     monitor.set_defaults(func=cmd_monitor)
 
     dataset = sub.add_parser("dataset", help="Dataset utilities")

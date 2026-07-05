@@ -63,6 +63,7 @@ Useful `run remote` flags:
 | Command | Purpose |
 | --- | --- |
 | `uv run kura monitor` | Open the run monitor TUI |
+| `uv run kura monitor --all` | Include draft runs in the monitor |
 | `uv run kura run watch <run-id>` | Watch one run in the TUI |
 
 ## Render (ComfyUI comparison images)

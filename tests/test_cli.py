@@ -912,11 +912,11 @@ class MonitorCommandTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.cli.run_textual_monitor", return_value=0) as monitor:
-                    code = cmd_monitor(argparse.Namespace(interval=1.5, stale_after=12.0, limit=7))
+                    code = cmd_monitor(argparse.Namespace(interval=1.5, stale_after=12.0, limit=7, all=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
-            monitor.assert_called_once_with(root, interval=1.5, stale_after=12.0, limit=7)
+            monitor.assert_called_once_with(root, interval=1.5, stale_after=12.0, limit=7, include_drafts=True)
 
 
 class TuiPathDisplayTests(unittest.TestCase):

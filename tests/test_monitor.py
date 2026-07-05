@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import io
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kura.monitor import _split_for_monitor, collect_run_summaries, loss_sparkline
+from rich.console import Console
+
+from kura.monitor import _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
 
 
 class MonitorProjectionTests(unittest.TestCase):
@@ -92,6 +95,33 @@ class MonitorProjectionTests(unittest.TestCase):
 
             self.assertEqual(active, [])
             self.assertEqual({summary.id for summary in history}, {"aware", "naive"})
+
+    def test_render_monitor_distinguishes_hidden_drafts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            draft = root / "runs" / "draft-run"
+            complete = root / "runs" / "complete-run"
+            draft.mkdir(parents=True)
+            complete.mkdir(parents=True)
+            (draft / "run.yaml").write_text("id: draft-run\ntype: train\n", encoding="utf-8")
+            (draft / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            (complete / "run.yaml").write_text("id: complete-run\ntype: train\n", encoding="utf-8")
+            (complete / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+
+            console = Console(file=io.StringIO(), record=True, width=120, color_system=None)
+            console.print(render_monitor(root))
+            hidden_text = console.export_text()
+
+            self.assertIn("complete-run", hidden_text)
+            self.assertNotIn("draft-run", hidden_text)
+            self.assertIn("1 draft run(s) hidden (--all to show)", hidden_text)
+
+            console = Console(file=io.StringIO(), record=True, width=120, color_system=None)
+            console.print(render_monitor(root, include_drafts=True))
+            all_text = console.export_text()
+
+            self.assertIn("draft-run", all_text)
+            self.assertNotIn("draft run(s) hidden", all_text)
 
     def test_render_samples_images_are_reported_as_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
