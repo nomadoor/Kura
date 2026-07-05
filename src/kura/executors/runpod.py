@@ -123,6 +123,25 @@ def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
     return [[gpu_type_id] for gpu_type_id in gpu_type_ids]
 
 
+def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_id: str) -> dict[str, str]:
+    log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
+    runtime_env = dict(spec_env)
+    runtime_env.update({"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/cache/huggingface"})
+    return runtime_env
+
+
+def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = 12 * 3600) -> dict[str, str]:
+    log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
+    return {
+        "KURA_LOG_PATH": log_path,
+        "PYTHONUNBUFFERED": "1",
+        "HF_HOME": f"{workspace_path}/cache/huggingface",
+        "KURA_WORKSPACE": workspace_path,
+        "KURA_RUN_ID": run_id,
+        "KURA_MAX_LEASE_SEC": str(max_lease_sec),
+    }
+
+
 def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
     object_store = config.get("object_store")
     if not isinstance(object_store, dict):
@@ -247,11 +266,10 @@ def launch_runpod(*, run_dir: Path, spec: dict[str, Any], image: str, config: di
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
-    runtime_env = dict(spec["env"])
+    runtime_env = _runpod_training_env(spec["env"], workspace_path=workspace_path, run_id=run_dir.name)
     secret_keys = [key for key in runtime_env if _is_secret(key)]
     if secret_keys:
         raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))
-    runtime_env.update({"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/cache/huggingface"})
     transfer_codes: dict[str, str] = {}
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is disabled until object-store credentials can be injected without Pod environment variables")
@@ -407,7 +425,7 @@ def launch_runpod_session(*, run_dir: Path, image: str, config: dict[str, Any], 
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
-    runtime_env = {"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/cache/huggingface", "KURA_WORKSPACE": workspace_path, "KURA_RUN_ID": run_dir.name, "KURA_MAX_LEASE_SEC": str(12 * 3600)}
+    runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name)
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"

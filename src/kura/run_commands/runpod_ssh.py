@@ -593,61 +593,17 @@ def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     return "\n".join([*lines, ""])
 
 
-def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
-    stage = _latest_runpod_stage(run_dir)
-    archive = stage.get("archive")
-    archive_name = stage.get("archive_name")
-    if not isinstance(archive, str) or not isinstance(archive_name, str):
-        raise ValueError("latest RunPod stage has no upload archive")
-    archive_path = run_dir / archive
-    if not archive_path.is_file():
-        raise ValueError(f"upload archive is missing: {archive_path}")
-    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    realization_ref = status.get("last_realization")
-    if not isinstance(realization_ref, str):
-        raise ValueError("run has no RunPod realization")
-    realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-    workspace = realization.get("request", {}).get("env", {}).get("KURA_WORKSPACE", "/workspace")
-    run_id = run_dir.name
-    cwd = realization.get("container_cwd")
-    argv = realization.get("backend_command")
-    if not isinstance(workspace, str) or not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
-        raise ValueError("latest realization has no runnable RunPod command")
-    details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
-    remote_archive = f"{workspace}/{archive_name}"
-    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(workspace)}"], context="ssh workspace preparation")
-    if prepared.returncode:
-        raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
-    scp = [
-        "scp",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-P", str(details["port"]),
-        "-i", str(details["key"]),
-        str(archive_path),
-        f"root@{details['ip']}:{remote_archive}",
-    ]
-    uploaded = _run_bounded(scp, context="scp upload")
-    if uploaded.returncode:
-        raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
-    command = " ".join(shlex.quote(arg) for arg in argv)
-    remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
-    secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
-    if secret_payload is not None:
-        install_secret_script = f"""
-set -euo pipefail
-umask 077
-mkdir -p /tmp/kura-secrets
-cat > {shlex.quote(remote_secret_path)}
-chmod 600 {shlex.quote(remote_secret_path)}
-""".strip()
-        installed = _run_bounded([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, context="ssh secret preparation")
-        if installed.returncode:
-            raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
-    lease_log_path = f"{workspace}/runs/{run_id}/logs/stdout.log"
-    pod_id = status.get("pod_id")
-    pod_id_value = pod_id if isinstance(pod_id, str) else ""
-    remote_job_script = f"""
+def _runpod_remote_job_script(
+    *,
+    workspace: str,
+    run_id: str,
+    remote_secret_path: str,
+    archive_name: str,
+    remote_archive: str,
+    cwd: str,
+    command: str,
+) -> str:
+    return f"""
 set -u
 secret_file={shlex.quote(remote_secret_path)}
 cleanup() {{
@@ -707,6 +663,71 @@ if os.environ.get("KURA_REMOTE_NOTIFY_NTFY") == "1" and os.environ.get("KURA_NTF
 PY
 exit "$exit_code"
 """.strip()
+
+
+def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+    stage = _latest_runpod_stage(run_dir)
+    archive = stage.get("archive")
+    archive_name = stage.get("archive_name")
+    if not isinstance(archive, str) or not isinstance(archive_name, str):
+        raise ValueError("latest RunPod stage has no upload archive")
+    archive_path = run_dir / archive
+    if not archive_path.is_file():
+        raise ValueError(f"upload archive is missing: {archive_path}")
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    realization_ref = status.get("last_realization")
+    if not isinstance(realization_ref, str):
+        raise ValueError("run has no RunPod realization")
+    realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+    workspace = realization.get("request", {}).get("env", {}).get("KURA_WORKSPACE", "/workspace")
+    run_id = run_dir.name
+    cwd = realization.get("container_cwd")
+    argv = realization.get("backend_command")
+    if not isinstance(workspace, str) or not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+        raise ValueError("latest realization has no runnable RunPod command")
+    details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
+    remote_archive = f"{workspace}/{archive_name}"
+    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(workspace)}"], context="ssh workspace preparation")
+    if prepared.returncode:
+        raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
+    scp = [
+        "scp",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-P", str(details["port"]),
+        "-i", str(details["key"]),
+        str(archive_path),
+        f"root@{details['ip']}:{remote_archive}",
+    ]
+    uploaded = _run_bounded(scp, context="scp upload")
+    if uploaded.returncode:
+        raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
+    command = " ".join(shlex.quote(arg) for arg in argv)
+    remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
+    secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
+    if secret_payload is not None:
+        install_secret_script = f"""
+set -euo pipefail
+umask 077
+mkdir -p /tmp/kura-secrets
+cat > {shlex.quote(remote_secret_path)}
+chmod 600 {shlex.quote(remote_secret_path)}
+""".strip()
+        installed = _run_bounded([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, context="ssh secret preparation")
+        if installed.returncode:
+            raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
+    lease_log_path = f"{workspace}/runs/{run_id}/logs/stdout.log"
+    pod_id = status.get("pod_id")
+    pod_id_value = pod_id if isinstance(pod_id, str) else ""
+    remote_job_script = _runpod_remote_job_script(
+        workspace=workspace,
+        run_id=run_id,
+        remote_secret_path=remote_secret_path,
+        archive_name=archive_name,
+        remote_archive=remote_archive,
+        cwd=cwd,
+        command=command,
+    )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"
     lease_guard = ""
