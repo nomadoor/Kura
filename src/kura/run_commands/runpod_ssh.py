@@ -619,6 +619,7 @@ export KURA_RUN_ID={shlex.quote(run_id)}
 export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
 export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
+mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
 mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"
 case "$HF_HOME" in "$KURA_WORKSPACE"/*) ;; *) echo "[kura] HF_HOME must be under KURA_WORKSPACE before remote job start: $HF_HOME" >&2; exit 1 ;; esac
 touch "$KURA_LOG_PATH"

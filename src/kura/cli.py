@@ -208,8 +208,6 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
     run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    for relative in ("resolved", "logs", "metrics", "samples", "checkpoints", "outputs"):
-        (run_dir / relative).mkdir()
     run = {
         "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
@@ -222,10 +220,8 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     }
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
-    (run_dir / "plan.md").write_text("# Training plan\n\n", encoding="utf-8")
-    (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
-    for relative in ("logs/events.jsonl", "metrics/metrics.jsonl", "samples/samples.jsonl"):
-        (run_dir / relative).touch()
+    atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
+    atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
     return 0
 
@@ -236,13 +232,11 @@ def cmd_render_new(args: argparse.Namespace) -> int:
         print("slug must contain letters or numbers", file=sys.stderr); return 1
     timestamp = _now(); run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    for relative in ("resolved", "logs", "samples/images", "outputs"):
-        (run_dir / relative).mkdir(parents=True, exist_ok=True)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "promptset": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
-    (run_dir / "plan.md").write_text("# Render plan\n\n", encoding="utf-8"); (run_dir / "notes.md").write_text("# Notes\n\n", encoding="utf-8")
-    (run_dir / "logs/events.jsonl").touch(); (run_dir / "samples/images.jsonl").touch()
+    atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
+    atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id); return 0
 
 
@@ -727,6 +721,72 @@ def cmd_fix_links(args: argparse.Namespace) -> int:
     return 0
 
 
+def _entry_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file() or path.is_symlink():
+        return 1
+    return sum(1 for _ in path.iterdir())
+
+
+def _file_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file() or path.is_symlink():
+        return 1
+    return sum(1 for item in path.rglob("*") if item.is_file() or item.is_symlink())
+
+
+def cmd_run_discard(args: argparse.Namespace) -> int:
+    workspace = _require_workspace()
+    run_id_path = Path(args.run_id)
+    if run_id_path.is_absolute() or len(run_id_path.parts) != 1 or run_id_path.parts[0] in {"", ".", ".."}:
+        print("cannot discard run: run_id must be a safe run directory name", file=sys.stderr)
+        return 1
+    runs_root = (workspace / "runs").resolve()
+    run_dir = (runs_root / args.run_id).resolve()
+    if not run_dir.is_relative_to(runs_root) or run_dir.parent != runs_root:
+        print("cannot discard run: run_id must stay under runs/", file=sys.stderr)
+        return 1
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        _load_yaml(run_dir / "run.yaml")
+    except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+        print(f"cannot discard run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+
+    state = str(status.get("state") or "unknown")
+    realizations = _entry_count(run_dir / "realizations")
+    outputs = _entry_count(run_dir / "outputs")
+    if state not in {"draft", "compiled"} or realizations or outputs:
+        print(
+            f"run has execution history (state={state}, {realizations} realizations, {outputs} output entries); "
+            "use kura run prune for old runs",
+            file=sys.stderr,
+        )
+        return 1
+
+    target = str(run_dir.relative_to(workspace))
+    result = {
+        "dry_run": not args.yes,
+        "id": args.run_id,
+        "state": state,
+        "target": target,
+        "file_count": _file_count(run_dir),
+    }
+    if args.yes:
+        try:
+            shutil.rmtree(run_dir)
+        except OSError as exc:
+            print(f"cannot discard run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        result["deleted"] = True
+    else:
+        result["diagnosis"] = "Use --yes to delete this draft or compiled run."
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_run_prune(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
@@ -883,7 +943,7 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
 
 def cmd_monitor(args: argparse.Namespace) -> int:
     try:
-        return run_textual_monitor(_require_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit)
+        return run_textual_monitor(_require_workspace(), interval=args.interval, stale_after=args.stale_after, limit=args.limit, include_drafts=args.all)
     except ValueError as exc:
         print(f"cannot open monitor: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -929,6 +989,7 @@ def main() -> None:
     monitor.add_argument("--interval", type=float, default=2.0)
     monitor.add_argument("--stale-after", type=float, default=90.0)
     monitor.add_argument("--limit", type=int, default=30)
+    monitor.add_argument("--all", action="store_true", help="Show draft runs in the monitor")
     monitor.set_defaults(func=cmd_monitor)
 
     dataset = sub.add_parser("dataset", help="Dataset utilities")
@@ -972,6 +1033,10 @@ def main() -> None:
     watch.add_argument("run_id")
     watch.add_argument("--interval", type=float, default=2.0)
     watch.set_defaults(func=cmd_run_watch)
+    discard = run_sub.add_parser("discard", help="Preview or delete a draft or unlaunched compiled run")
+    discard.add_argument("run_id")
+    discard.add_argument("--yes", action="store_true")
+    discard.set_defaults(func=cmd_run_discard)
     upload = run_sub.add_parser("upload", help="Upload a staged RunPod bundle")
     upload.add_argument("run_id")
     upload.set_defaults(func=cmd_run_upload)

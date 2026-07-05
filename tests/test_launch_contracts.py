@@ -130,6 +130,8 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
     def test_runpod_pod_env_satisfies_training_and_session_contracts(self) -> None:
         training_env = _runpod_training_env({}, workspace_path="/workspace", run_id="contract-run")
         self.assertEqual(training_env["HF_HOME"], "/workspace/cache/huggingface")
+        self.assertEqual(training_env["KURA_WORKSPACE"], "/workspace")
+        self.assertEqual(training_env["KURA_RUN_ID"], "contract-run")
         self.assertIn("KURA_LOG_PATH", training_env)
         self.assertTrue(_posix_prefix(training_env["HF_HOME"], "/workspace"))
 

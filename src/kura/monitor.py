@@ -19,6 +19,7 @@ import yaml
 
 
 ACTIVE_STATES = {"queued", "staged", "launching", "running"}
+DRAFT_STATE = "draft"
 AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 TRAIN_STDOUT_PROGRESS_RE = re.compile(
@@ -113,15 +114,16 @@ def loss_sparkline(values: Iterable[float | int], *, width: int = 24) -> str:
     return "".join(SPARK_BLOCKS[round((value - low) / (high - low) * scale)] for value in series)
 
 
-def render_monitor(workspace: Path, *, limit: int = 30, loss_tail: int = 80) -> Any:
+def render_monitor(workspace: Path, *, limit: int = 30, loss_tail: int = 80, include_drafts: bool = False) -> Any:
     from rich.console import Group
     from rich.table import Table
     from rich.text import Text
 
     all_summaries = collect_run_summaries(workspace, loss_tail=loss_tail)
-    active, history = _split_for_monitor(all_summaries, limit=limit)
+    visible_summaries, hidden_drafts = _partition_drafts(all_summaries, include_drafts=include_drafts)
+    active, history = _split_for_monitor(visible_summaries, limit=limit)
     width = shutil.get_terminal_size((120, 24)).columns
-    summary = _summary_bar(all_summaries)
+    summary = _summary_bar(visible_summaries)
     parts: list[Any] = [summary, Text("")]
     if active:
         parts.append(Text("active", style="bold"))
@@ -129,10 +131,13 @@ def render_monitor(workspace: Path, *, limit: int = 30, loss_tail: int = 80) -> 
         parts.append(Text(""))
     parts.append(Text(f"history  latest {len(history)}", style="bold dim"))
     parts.append(_monitor_table(history, terminal_width=width, active=False))
-    if all_summaries:
+    if visible_summaries:
         parts.append(Text(""))
         parts.append(Text("watch: uv run kura run watch <run-id>    interactive navigation is intentionally off", style="dim"))
-    if not all_summaries:
+    if hidden_drafts:
+        parts.append(Text(""))
+        parts.append(Text(f"{hidden_drafts} draft run(s) hidden (--all to show)", style="dim"))
+    if not visible_summaries and not hidden_drafts:
         parts.append(Text(""))
         parts.append(Text("No runs found. Create runs with `kura run new` or `kura render new`.", style="dim"))
     return Group(*parts)
@@ -160,14 +165,14 @@ def _monitor_table(summaries: list[RunSummary], *, terminal_width: int, active: 
     return table
 
 
-def run_monitor_loop(workspace: Path, *, interval: float = 2.0, limit: int = 30) -> int:
+def run_monitor_loop(workspace: Path, *, interval: float = 2.0, limit: int = 30, include_drafts: bool = False) -> int:
     from rich.live import Live
 
-    with Live(render_monitor(workspace, limit=limit), refresh_per_second=4, transient=False) as live:
+    with Live(render_monitor(workspace, limit=limit, include_drafts=include_drafts), refresh_per_second=4, transient=False) as live:
         try:
             while True:
                 time.sleep(max(interval, 0.1))
-                live.update(render_monitor(workspace, limit=limit))
+                live.update(render_monitor(workspace, limit=limit, include_drafts=include_drafts))
         except KeyboardInterrupt:
             return 0
 
@@ -907,6 +912,19 @@ def _split_for_monitor(summaries: list[RunSummary], *, limit: int) -> tuple[list
     active.sort(key=_recency_key, reverse=True)
     history.sort(key=_recency_key, reverse=True)
     return active, history[: max(limit, 0)]
+
+
+def _partition_drafts(summaries: list[RunSummary], *, include_drafts: bool) -> tuple[list[RunSummary], int]:
+    if include_drafts:
+        return summaries, 0
+    visible: list[RunSummary] = []
+    hidden = 0
+    for summary in summaries:
+        if (summary.state or "").lower() == DRAFT_STATE:
+            hidden += 1
+            continue
+        visible.append(summary)
+    return visible, hidden
 
 
 def _recency_key(summary: RunSummary) -> datetime:

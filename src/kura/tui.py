@@ -24,7 +24,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Static
 
-from kura.monitor import ACTIVE_STATES, RunDataset, RunSummary, _collect_one_run, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, loss_sparkline
+from kura.monitor import ACTIVE_STATES, DRAFT_STATE, RunDataset, RunSummary, _collect_one_run, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, loss_sparkline
 
 
 FG = "#c5cdf0"
@@ -228,13 +228,15 @@ class KuraMonitorApp(App[None]):
 
     BINDINGS = [("q", "quit", "quit"), ("?", "help", "help")]
 
-    def __init__(self, workspace: Path, *, interval: float = 2.0, stale_after: float = 90.0, initial_run_id: str | None = None, limit: int = 30):
+    def __init__(self, workspace: Path, *, interval: float = 2.0, stale_after: float = 90.0, initial_run_id: str | None = None, limit: int = 30, include_drafts: bool = False):
         super().__init__()
         self.workspace = Path(workspace)
         self.interval = interval
         self.stale_after = stale_after
         self.initial_run_id = initial_run_id
         self.limit = limit
+        self.include_drafts = include_drafts
+        self.hidden_draft_count = 0
         self.remote_metrics_interval = 30.0
         self._remote_metrics_cache: dict[str, tuple[float, HostMetrics]] = {}
         self._host_metrics_cache: tuple[float, HostMetrics] | None = None
@@ -272,7 +274,19 @@ class KuraMonitorApp(App[None]):
             summary = _collect_one_run(self.workspace, run_dir, run_id, loss_tail=80, stale_after=self.stale_after)
             self._summary_cache[run_id] = (fingerprint, summary)
             summaries.append(summary)
-        return summaries
+        self.hidden_draft_count = 0
+        if self.include_drafts:
+            return summaries
+        visible: list[RunSummary] = []
+        for summary in summaries:
+            if (summary.state or "").lower() == DRAFT_STATE:
+                if summary.id == self.initial_run_id:
+                    visible.append(summary)
+                    continue
+                self.hidden_draft_count += 1
+                continue
+            visible.append(summary)
+        return visible
 
     def metrics_for(self, summary: RunSummary | None) -> HostMetrics:
         if summary and summary.executor_info.kind == "remote":
@@ -872,6 +886,7 @@ class MonitorScreen(Screen[None]):
         ("down", "cursor_down", "select down"),
         ("enter", "watch", "watch"),
         ("w", "watch", "watch"),
+        ("a", "toggle_all", "all"),
         ("r", "runs", "runs"),
         ("d", "datasets", "datasets"),
         ("tab", "cycle_path", "path"),
@@ -957,7 +972,10 @@ class MonitorScreen(Screen[None]):
 
     def update_view(self) -> None:
         current = self.current_run
-        self.query_one("#status", Static).update(_status_bar(self.summaries, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
+        suffix = None
+        if self.app_ref.hidden_draft_count:
+            suffix = Text(f"{self.app_ref.hidden_draft_count} draft run(s) hidden (--all to show)", style=MUTED)
+        self.query_one("#status", Static).update(_status_bar(self.summaries, workspace=self.app_ref.workspace, width=max(self.size.width, 1), suffix=suffix))
         datasets = _all_datasets(self.summaries)
         dataset_keys = {_dataset_key(dataset) for dataset in datasets}
         if self.tab == "datasets" and self.selected_dataset_key not in dataset_keys:
@@ -1040,6 +1058,12 @@ class MonitorScreen(Screen[None]):
     def action_watch(self) -> None:
         if self.current_run:
             self.app.push_screen(WatchScreen(self.current_run.id))
+
+    def action_toggle_all(self) -> None:
+        self.app_ref.include_drafts = not self.app_ref.include_drafts
+        self.path_index = 0
+        self._run_selection_initialized = False
+        self.refresh_data()
 
     def action_cycle_path(self) -> None:
         if self.path_targets:
@@ -1154,8 +1178,8 @@ class WatchScreen(Screen[None]):
             self.notify(f"copied {self.path_targets[self.path_index].label}")
 
 
-def run_textual_monitor(workspace: Path, *, interval: float = 2.0, stale_after: float = 90.0, initial_run_id: str | None = None, limit: int = 30) -> int:
-    KuraMonitorApp(workspace, interval=interval, stale_after=stale_after, initial_run_id=initial_run_id, limit=limit).run()
+def run_textual_monitor(workspace: Path, *, interval: float = 2.0, stale_after: float = 90.0, initial_run_id: str | None = None, limit: int = 30, include_drafts: bool = False) -> int:
+    KuraMonitorApp(workspace, interval=interval, stale_after=stale_after, initial_run_id=initial_run_id, limit=limit, include_drafts=include_drafts).run()
     return 0
 
 

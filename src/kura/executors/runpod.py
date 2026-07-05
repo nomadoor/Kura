@@ -126,7 +126,13 @@ def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
 def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_id: str) -> dict[str, str]:
     log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
     runtime_env = dict(spec_env)
-    runtime_env.update({"KURA_LOG_PATH": log_path, "PYTHONUNBUFFERED": "1", "HF_HOME": f"{workspace_path}/cache/huggingface"})
+    runtime_env.update({
+        "KURA_LOG_PATH": log_path,
+        "PYTHONUNBUFFERED": "1",
+        "HF_HOME": f"{workspace_path}/cache/huggingface",
+        "KURA_WORKSPACE": workspace_path,
+        "KURA_RUN_ID": run_id,
+    })
     return runtime_env
 
 
@@ -298,6 +304,7 @@ def launch_runpod(*, run_dir: Path, spec: dict[str, Any], image: str, config: di
             upload_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
+mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
 touch "$KURA_LOG_PATH"
 if ! command -v sshd >/dev/null 2>&1; then
   apt-get update >> "$KURA_LOG_PATH" 2>&1
@@ -316,7 +323,15 @@ sleep infinity
             start_command = ["sh", "-lc", upload_script]
             workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
     else:
-        start_command = ["sh", "-lc", 'exec "$@" >> "$KURA_LOG_PATH" 2>&1', "kura-job", *spec["argv"]]
+        wrapper = (
+            'mkdir -p "$(dirname "$KURA_LOG_PATH")" '
+            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" '
+            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" '
+            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" '
+            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics" && '
+            'exec "$@" >> "$KURA_LOG_PATH" 2>&1'
+        )
+        start_command = ["sh", "-lc", wrapper, "kura-job", *spec["argv"]]
         workspace_contract = "Container disk only; caller must ensure inputs exist in the container workspace"
     request_body = {
         "name": f"kura-{run_dir.name}-{realization_id}",
