@@ -123,6 +123,21 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertIn("draft-run", all_text)
             self.assertNotIn("draft run(s) hidden", all_text)
 
+    def test_render_monitor_omits_watch_hint_when_only_drafts_are_hidden(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            draft = root / "runs" / "draft-run"
+            draft.mkdir(parents=True)
+            (draft / "run.yaml").write_text("id: draft-run\ntype: train\n", encoding="utf-8")
+            (draft / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+
+            console = Console(file=io.StringIO(), record=True, width=120, color_system=None)
+            console.print(render_monitor(root))
+            text = console.export_text()
+
+            self.assertIn("1 draft run(s) hidden (--all to show)", text)
+            self.assertNotIn("watch: uv run kura run watch", text)
+
     def test_render_samples_images_are_reported_as_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

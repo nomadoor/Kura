@@ -739,7 +739,15 @@ def _file_count(path: Path) -> int:
 
 def cmd_run_discard(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
-    run_dir = _run_path(args.run_id)
+    run_id_path = Path(args.run_id)
+    if run_id_path.is_absolute() or len(run_id_path.parts) != 1 or run_id_path.parts[0] in {"", ".", ".."}:
+        print("cannot discard run: run_id must be a safe run directory name", file=sys.stderr)
+        return 1
+    runs_root = (workspace / "runs").resolve()
+    run_dir = (runs_root / args.run_id).resolve()
+    if not run_dir.is_relative_to(runs_root) or run_dir.parent != runs_root:
+        print("cannot discard run: run_id must stay under runs/", file=sys.stderr)
+        return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         _load_yaml(run_dir / "run.yaml")

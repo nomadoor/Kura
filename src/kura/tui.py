@@ -275,11 +275,14 @@ class KuraMonitorApp(App[None]):
             self._summary_cache[run_id] = (fingerprint, summary)
             summaries.append(summary)
         self.hidden_draft_count = 0
-        if self.include_drafts or self.initial_run_id:
+        if self.include_drafts:
             return summaries
         visible: list[RunSummary] = []
         for summary in summaries:
             if (summary.state or "").lower() == DRAFT_STATE:
+                if summary.id == self.initial_run_id:
+                    visible.append(summary)
+                    continue
                 self.hidden_draft_count += 1
                 continue
             visible.append(summary)

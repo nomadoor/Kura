@@ -920,6 +920,27 @@ class MonitorCommandTests(unittest.TestCase):
 
 
 class TuiPathDisplayTests(unittest.TestCase):
+    def test_initial_watch_only_exempts_target_draft_from_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for run_id, state in (("draft-watch", "draft"), ("draft-other", "draft"), ("compiled", "compiled")):
+                run_dir = root / "runs" / run_id
+                run_dir.mkdir(parents=True)
+                (run_dir / "run.yaml").write_text(f"id: {run_id}\ntype: train\n", encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": state}), encoding="utf-8")
+
+            app = KuraMonitorApp(root, initial_run_id="draft-watch")
+            summaries = app.collect_summaries_cached()
+
+            self.assertEqual({summary.id for summary in summaries}, {"draft-watch", "compiled"})
+            self.assertEqual(app.hidden_draft_count, 1)
+
+            app.include_drafts = True
+            summaries = app.collect_summaries_cached()
+
+            self.assertEqual({summary.id for summary in summaries}, {"draft-watch", "draft-other", "compiled"})
+            self.assertEqual(app.hidden_draft_count, 0)
+
     def test_compact_path_keeps_tail_at_narrow_widths(self) -> None:
         path = Path("/home/nomax/working-linux/Development/Kura/runs/example/outputs")
         self.assertEqual(_compact_path(path, max_len=1), "…")
@@ -4022,6 +4043,26 @@ class RunDiscardTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertTrue(run_dir.exists())
             self.assertIn("1 output entries", stderr.getvalue())
+
+    def test_run_discard_rejects_unsafe_run_id(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            (outside / "run.yaml").write_text("id: outside\n", encoding="utf-8")
+            os.chdir(root)
+            stderr = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(stderr):
+                    status = cmd_run_discard(argparse.Namespace(run_id="../outside", yes=True))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(status, 1)
+            self.assertTrue(outside.exists())
+            self.assertIn("run_id must be a safe run directory name", stderr.getvalue())
 
 
 class RunPruneTests(unittest.TestCase):

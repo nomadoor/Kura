@@ -120,8 +120,7 @@ def render_monitor(workspace: Path, *, limit: int = 30, loss_tail: int = 80, inc
     from rich.text import Text
 
     all_summaries = collect_run_summaries(workspace, loss_tail=loss_tail)
-    visible_summaries = _filter_drafts(all_summaries, include_drafts=include_drafts)
-    hidden_drafts = _hidden_draft_count(all_summaries, include_drafts=include_drafts)
+    visible_summaries, hidden_drafts = _partition_drafts(all_summaries, include_drafts=include_drafts)
     active, history = _split_for_monitor(visible_summaries, limit=limit)
     width = shutil.get_terminal_size((120, 24)).columns
     summary = _summary_bar(visible_summaries)
@@ -132,7 +131,7 @@ def render_monitor(workspace: Path, *, limit: int = 30, loss_tail: int = 80, inc
         parts.append(Text(""))
     parts.append(Text(f"history  latest {len(history)}", style="bold dim"))
     parts.append(_monitor_table(history, terminal_width=width, active=False))
-    if all_summaries:
+    if visible_summaries:
         parts.append(Text(""))
         parts.append(Text("watch: uv run kura run watch <run-id>    interactive navigation is intentionally off", style="dim"))
     if hidden_drafts:
@@ -915,16 +914,17 @@ def _split_for_monitor(summaries: list[RunSummary], *, limit: int) -> tuple[list
     return active, history[: max(limit, 0)]
 
 
-def _filter_drafts(summaries: list[RunSummary], *, include_drafts: bool) -> list[RunSummary]:
+def _partition_drafts(summaries: list[RunSummary], *, include_drafts: bool) -> tuple[list[RunSummary], int]:
     if include_drafts:
-        return summaries
-    return [summary for summary in summaries if (summary.state or "").lower() != DRAFT_STATE]
-
-
-def _hidden_draft_count(summaries: list[RunSummary], *, include_drafts: bool) -> int:
-    if include_drafts:
-        return 0
-    return sum((summary.state or "").lower() == DRAFT_STATE for summary in summaries)
+        return summaries, 0
+    visible: list[RunSummary] = []
+    hidden = 0
+    for summary in summaries:
+        if (summary.state or "").lower() == DRAFT_STATE:
+            hidden += 1
+            continue
+        visible.append(summary)
+    return visible, hidden
 
 
 def _recency_key(summary: RunSummary) -> datetime:
