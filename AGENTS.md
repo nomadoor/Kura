@@ -10,7 +10,9 @@ training LoRAs, rendering images, preparing datasets. Assume that by default.
 - Work through the `kura` CLI (`uv run kura ...`) and workspace files.
 - **Do not run git commands.** Do not modify Kura's source code, tests, or
   checks. The workspace being a git repository is an implementation detail;
-  updating Kura is `git pull`, and only when the user asks for an update.
+  if the user explicitly asks to update Kura itself, treat that as a
+  maintenance action and confirm the update target before using git for that
+  update.
 - Skills may direct you to update knowledge files (training knowledge cards,
   run `notes.md`). Edit those files; leave git entirely alone.
 - Read: Core Model and Using Kura below. Skip the Developing Kura section.
