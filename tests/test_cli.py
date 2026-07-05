@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.request
 import json
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,8 @@ from kura.executors.common import _safe_env
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _model_download_safety_preflight
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _hf_file_size_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
+from kura.run_commands.plan import _model_download_safety_preflight, collect_run_preflight
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -1445,6 +1446,35 @@ class RunPlanTests(unittest.TestCase):
         )
         self.assertEqual(payload["bytes"], 0)
         self.assertIn("invalid musubi model download spec", payload["unknown"])
+
+    def test_krea2_download_estimate_uses_curated_sizes_when_hf_probe_fails(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "model": {"base": "krea/Krea-2-Raw"},
+            "backend_overrides": {"musubi-tuner": {"architecture": "krea2"}},
+        }
+        with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=None):
+            payload = _estimate_musubi_download_bytes(run)
+
+        self.assertEqual(payload["unknown"], [])
+        self.assertEqual(payload["bytes"], 26_283_332_608 + 253_806_246 + 8_875_719_384)
+        self.assertEqual([item["key"] for item in payload["items"]], ["dit", "vae", "text_encoder"])
+
+    def test_runpod_preflight_does_not_block_known_remote_model_downloads_above_local_threshold(self) -> None:
+        run = {
+            "type": "train",
+            "backend": {"name": "musubi-tuner"},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 500}},
+            "params": {"steps": 2000},
+            "compute": {"executor": "runpod"},
+        }
+        estimate = {"bytes": 33 * 1024**3, "total_bytes": 33 * 1024**3, "cached_bytes": 0, "items": [], "unknown": []}
+
+        records = collect_run_preflight(run, Path("/workspace"), config={"runpod": {"container_disk_gb": 150}}, executor="runpod", download_estimate=estimate)
+
+        self.assertFalse([record for record in records if record.get("severity") == "error"])
+        self.assertTrue(any(record.get("check") == "model-downloads" and "estimated remote model downloads" in str(record.get("fact")) for record in records))
 
     def test_runpod_plan_counts_remote_downloads_even_when_local_cache_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3570,6 +3600,29 @@ class DockerLifecycleTests(unittest.TestCase):
             _model_download_safety_preflight({"safety": {}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
 
         _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
+
+    def test_hf_file_size_reads_linked_size_and_standard_token_env(self) -> None:
+        class FakeResponse:
+            headers = {"x-linked-size": "1234"}
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        seen: list[urllib.request.Request] = []
+
+        def fake_urlopen(request: urllib.request.Request, timeout: int) -> FakeResponse:
+            seen.append(request)
+            self.assertEqual(timeout, 20)
+            return FakeResponse()
+
+        with patch.dict(os.environ, {"HUGGINGFACE_HUB_TOKEN": "hf-token"}, clear=False), patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=fake_urlopen):
+            size = _hf_file_size_bytes({"repo_id": "repo/model", "filename": "model.safetensors"})
+
+        self.assertEqual(size, 1234)
+        self.assertEqual(seen[0].headers["Authorization"], "Bearer hf-token")
 
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

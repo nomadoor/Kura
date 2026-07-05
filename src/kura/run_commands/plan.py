@@ -385,7 +385,7 @@ def _hf_cache_path(workspace: Path, mounts: list[dict[str, Any]]) -> Path:
     return workspace / "cache" / "huggingface"
 
 
-def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int | None:
+def _hf_file_size_bytes(item: dict[str, Any], *, timeout_sec: int = 20) -> int | None:
     repo_id = item.get("repo_id")
     filename = item.get("filename")
     if not repo_id or not filename:
@@ -396,13 +396,13 @@ def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int |
     quoted_filename = "/".join(urllib.parse.quote(part, safe="") for part in filename.split("/"))
     url = f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
     headers = {}
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, method="HEAD", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout_sec) as response:
-            length = response.headers.get("Content-Length")
+            length = response.headers.get("Content-Length") or response.headers.get("x-linked-size")
     except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
         return None
     try:
@@ -474,7 +474,10 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
         cache_path = _workspace_cache_file(workspace, item.get("link_path"))
         cached_size = _cached_file_size(cache_path, workspace=workspace)
         cached = cached_size is not None
-        size = cached_size if cached else _hf_file_size_bytes(item)
+        fallback_size = item.get("size_bytes")
+        if not isinstance(fallback_size, int):
+            fallback_size = None
+        size = cached_size if cached else (_hf_file_size_bytes(item) or fallback_size)
         download_size = 0 if cached else size
         record = {key: item.get(key) for key in ("key", "repo_id", "filename", "revision") if item.get(key)}
         record["size_bytes"] = size
@@ -547,25 +550,31 @@ def _preflight_bytes(value: Any) -> str:
     return _format_bytes(number)
 
 
-def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    remote_runpod = executor == "runpod"
     unknown = download_estimate.get("unknown")
     if isinstance(unknown, list) and unknown:
         labels = ", ".join(str(item) for item in unknown[:5])
         suffix = "" if len(unknown) <= 5 else f", and {len(unknown) - 5} more"
-        severity = "info" if safety.get("allow_large_model_downloads") is True else "error"
+        severity = "warning" if remote_runpod else ("info" if safety.get("allow_large_model_downloads") is True else "error")
         records.append(_preflight_record("model-downloads", severity, f"model download sizes are unknown for {labels}{suffix}", "run.yaml"))
         return records
     download_bytes = int(download_estimate.get("bytes") or 0)
     threshold_bytes = _model_download_threshold_bytes(run)
     if download_bytes > threshold_bytes:
-        severity = "info" if safety.get("allow_large_model_downloads") is True else "error"
+        severity = "info" if remote_runpod or safety.get("allow_large_model_downloads") is True else "error"
+        fact = (
+            f"estimated remote model downloads write about {_preflight_bytes(download_bytes)}; container disk fit is checked separately"
+            if remote_runpod
+            else f"estimated model downloads write about {_preflight_bytes(download_bytes)}; threshold is {_preflight_bytes(threshold_bytes)}"
+        )
         records.append(
             _preflight_record(
                 "model-downloads",
                 severity,
-                f"estimated model downloads write about {_preflight_bytes(download_bytes)}; threshold is {_preflight_bytes(threshold_bytes)}",
+                fact,
                 "run.yaml",
             )
         )
@@ -631,7 +640,7 @@ def collect_run_preflight(
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
-    records.extend(_model_download_preflight_report(run, estimate))
+    records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
     important = _important_backend_overrides(run)
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
