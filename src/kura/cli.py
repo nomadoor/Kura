@@ -721,6 +721,64 @@ def cmd_fix_links(args: argparse.Namespace) -> int:
     return 0
 
 
+def _entry_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file() or path.is_symlink():
+        return 1
+    return sum(1 for _ in path.iterdir())
+
+
+def _file_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_file() or path.is_symlink():
+        return 1
+    return sum(1 for item in path.rglob("*") if item.is_file() or item.is_symlink())
+
+
+def cmd_run_discard(args: argparse.Namespace) -> int:
+    workspace = _require_workspace()
+    run_dir = _run_path(args.run_id)
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        _load_yaml(run_dir / "run.yaml")
+    except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
+        print(f"cannot discard run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+
+    state = str(status.get("state") or "unknown")
+    realizations = _entry_count(run_dir / "realizations")
+    outputs = _entry_count(run_dir / "outputs")
+    if state not in {"draft", "compiled"} or realizations or outputs:
+        print(
+            f"run has execution history (state={state}, {realizations} realizations, {outputs} output entries); "
+            "use kura run prune for old runs",
+            file=sys.stderr,
+        )
+        return 1
+
+    target = str(run_dir.relative_to(workspace))
+    result = {
+        "dry_run": not args.yes,
+        "id": args.run_id,
+        "state": state,
+        "target": target,
+        "file_count": _file_count(run_dir),
+    }
+    if args.yes:
+        try:
+            shutil.rmtree(run_dir)
+        except OSError as exc:
+            print(f"cannot discard run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        result["deleted"] = True
+    else:
+        result["diagnosis"] = "Use --yes to delete this draft or compiled run."
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_run_prune(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     states = {state.strip() for state in args.states.split(",") if state.strip()}
@@ -967,6 +1025,10 @@ def main() -> None:
     watch.add_argument("run_id")
     watch.add_argument("--interval", type=float, default=2.0)
     watch.set_defaults(func=cmd_run_watch)
+    discard = run_sub.add_parser("discard", help="Preview or delete a draft or unlaunched compiled run")
+    discard.add_argument("run_id")
+    discard.add_argument("--yes", action="store_true")
+    discard.set_defaults(func=cmd_run_discard)
     upload = run_sub.add_parser("upload", help="Upload a staged RunPod bundle")
     upload.add_argument("run_id")
     upload.set_defaults(func=cmd_run_upload)

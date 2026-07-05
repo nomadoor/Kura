@@ -48,6 +48,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run pull <run-id> --step <step>` | Pull an intermediate checkpoint from a running RunPod run |
 | `uv run kura run stop <run-id>` | Stop the associated Pod/container |
 | `uv run kura run reconcile <run-id>` | Refresh observed external state |
+| `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 | `uv run kura run prune --docker-containers --docker-volumes` | Also clean up Kura-managed stopped containers/volumes (add `--yes` to delete) |
 

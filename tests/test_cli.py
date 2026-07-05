@@ -22,7 +22,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
@@ -3935,6 +3935,93 @@ class DockerLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             launch.assert_not_called()
             self.assertIn("docker.workspace_target must be /workspace", stderr.getvalue())
+
+
+class RunDiscardTests(unittest.TestCase):
+    def _make_run(self, root: Path, run_id: str, *, state: str) -> Path:
+        run_dir = root / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.yaml").write_text(f"id: {run_id}\n", encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({"state": state}), encoding="utf-8")
+        (run_dir / "notes.md").write_text("# Notes\n", encoding="utf-8")
+        return run_dir
+
+    def test_run_discard_defaults_to_dry_run(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = self._make_run(root, "draft", state="draft")
+            os.chdir(root)
+            stdout = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    status = cmd_run_discard(argparse.Namespace(run_id="draft", yes=False))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(status, 0)
+            self.assertTrue(run_dir.exists())
+            result = json.loads(stdout.getvalue())
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["target"], "runs/draft")
+            self.assertEqual(result["file_count"], 3)
+
+    def test_run_discard_deletes_unlaunched_compiled_run_with_yes(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = self._make_run(root, "compiled", state="compiled")
+            (run_dir / "realizations").mkdir()
+            (run_dir / "outputs").mkdir()
+            os.chdir(root)
+            stdout = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    status = cmd_run_discard(argparse.Namespace(run_id="compiled", yes=True))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(status, 0)
+            self.assertFalse(run_dir.exists())
+
+    def test_run_discard_rejects_realizations(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = self._make_run(root, "running", state="running")
+            (run_dir / "realizations").mkdir()
+            (run_dir / "realizations" / "r1.json").write_text("{}", encoding="utf-8")
+            os.chdir(root)
+            stderr = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(stderr):
+                    status = cmd_run_discard(argparse.Namespace(run_id="running", yes=True))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(status, 1)
+            self.assertTrue(run_dir.exists())
+            self.assertIn("run has execution history (state=running, 1 realizations", stderr.getvalue())
+            self.assertIn("use kura run prune for old runs", stderr.getvalue())
+
+    def test_run_discard_rejects_outputs(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = self._make_run(root, "compiled", state="compiled")
+            (run_dir / "outputs").mkdir()
+            (run_dir / "outputs" / "artifact.safetensors").write_text("artifact", encoding="utf-8")
+            os.chdir(root)
+            stderr = io.StringIO()
+            try:
+                with contextlib.redirect_stderr(stderr):
+                    status = cmd_run_discard(argparse.Namespace(run_id="compiled", yes=True))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(status, 1)
+            self.assertTrue(run_dir.exists())
+            self.assertIn("1 output entries", stderr.getvalue())
 
 
 class RunPruneTests(unittest.TestCase):
