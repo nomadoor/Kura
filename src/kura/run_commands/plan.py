@@ -20,6 +20,7 @@ import yaml
 from kura.backends import musubi_model_download_specs
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.executors import stage_runpod, stop_docker, stop_runpod
+from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
@@ -256,6 +257,7 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
             "architecture": _resource_architecture(backend_name, backend_override),
             "base": _plan_value(model.get("base")),
             "artifacts": _model_artifact_filenames(run, download_estimate),
+            "requirements": model_requirements(run, download_estimate),
         },
         "memory_flags": {
             "common": common_flags,
@@ -496,6 +498,7 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
         record["size_bytes"] = size
         record["download_bytes"] = download_size
         record["cached"] = cached
+        record["runtime_reference"] = item.get("link_path")
         record["size_status"] = probe.get("status")
         if probe.get("detail"):
             record["size_detail"] = probe["detail"]
@@ -585,6 +588,19 @@ def _preflight_bytes(value: Any) -> str:
 def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    requirements = model_requirements(run, download_estimate)
+    kura_managed = [item for item in requirements if item.get("acquisition") == "kura"]
+    backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
+    if backend_managed and not kura_managed:
+        roles = ", ".join(str(item.get("role") or "model") for item in backend_managed)
+        return [
+            _preflight_record(
+                "model-acquisition",
+                "info",
+                f"backend resolves {roles} at runtime; controller download size is not measured",
+                "run.yaml",
+            )
+        ]
     probe_failures = download_estimate.get("probe_failures")
     if isinstance(probe_failures, list) and probe_failures:
         first = probe_failures[0]
@@ -1055,11 +1071,31 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         model_resources = resources.get("model") if isinstance(resources.get("model"), dict) else {}
         lines.append("  model")
         for key, value in model_resources.items():
-            if key == "artifacts":
+            if key in {"artifacts", "requirements"}:
                 continue
             _append_kv(lines, key, value, indent=4)
+        requirements = model_resources.get("requirements") if isinstance(model_resources.get("requirements"), list) else []
+        if requirements:
+            lines.append("    requirements")
+            for item in requirements:
+                if not isinstance(item, dict):
+                    continue
+                role = item.get("role") or "model"
+                acquisition = item.get("acquisition") or NOT_SET
+                identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
+                source = identity.get("repo_id") or identity.get("path") or NOT_SET
+                filename = identity.get("filename")
+                if filename:
+                    source = f"{source}:{filename}"
+                lines.append(f"      - {_format_plan_value(role)}")
+                _append_kv(lines, "acquisition", acquisition, indent=8)
+                _append_kv(lines, "source", source, indent=8)
+                measurement = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
+                if measurement:
+                    _append_kv(lines, "measured_at", measurement.get("scope"), indent=8)
+                    _append_kv(lines, "status", measurement.get("status"), indent=8)
         artifacts = model_resources.get("artifacts") if isinstance(model_resources.get("artifacts"), list) else []
-        if artifacts:
+        if artifacts and not requirements:
             lines.append("    artifacts")
             for item in artifacts:
                 if not isinstance(item, dict):

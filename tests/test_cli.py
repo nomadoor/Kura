@@ -1304,6 +1304,9 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(resources["memory_flags"]["common"]["batch_size"], "(not set)")
         artifact_filenames = {item["filename"] for item in resources["model"]["artifacts"]}
         self.assertEqual(artifact_filenames, {"dit.safetensors", "vae.safetensors"})
+        requirements = resources["model"]["requirements"]
+        self.assertEqual({item["acquisition"] for item in requirements}, {"kura"})
+        self.assertEqual({item["measurement"]["scope"] for item in requirements}, {"controller"})
         checks = {(item["check"], item["severity"]) for item in payload["preflight"]}
         self.assertIn(("model-downloads", "info"), checks)
         self.assertIn(("dataset-images", "info"), checks)
@@ -1365,8 +1368,11 @@ class RunPlanTests(unittest.TestCase):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
                 os.chdir(previous)
-            output = stdout.getvalue()
+        output = stdout.getvalue()
         self.assertIn("Preflight", output)
+        self.assertIn("[info] model-acquisition", output)
+        self.assertIn("controller download size is not measured", output)
+        self.assertNotIn("estimated model downloads write 0 B", output)
         self.assertIn("[warning] disk", output)
         self.assertNotIn("Disk warnings", output)
 
