@@ -510,7 +510,7 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
             size_total += cached_size
         elif size is None:
             label = f"{item.get('repo_id')}:{item.get('filename')}"
-            if probe.get("status") in {"unreachable", "auth_error", "http_error"}:
+            if probe.get("status") in {"unreachable", "auth_error", "not_found", "http_error"}:
                 probe_failures.append({"artifact": label, "status": str(probe.get("status")), "detail": str(probe.get("detail") or "probe failed")})
             else:
                 unknown.append(label)

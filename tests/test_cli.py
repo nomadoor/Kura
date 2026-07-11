@@ -3588,11 +3588,14 @@ class DockerLifecycleTests(unittest.TestCase):
             auth = _hf_file_size_probe(item)
         with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.URLError("DNS failed")):
             unreachable = _hf_file_size_probe(item)
+        with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.HTTPError("https://huggingface.co", 404, "missing", {}, None)):
+            missing = _hf_file_size_probe(item)
 
         self.assertEqual(auth["status"], "auth_error")
         self.assertEqual(auth["detail"], "HTTP 401")
         self.assertEqual(unreachable["status"], "unreachable")
         self.assertIn("DNS failed", unreachable["detail"])
+        self.assertEqual(missing["status"], "not_found")
 
     def test_connectivity_failure_is_not_a_large_download_override(self) -> None:
         estimate = {
@@ -3619,6 +3622,28 @@ class DockerLifecycleTests(unittest.TestCase):
             _model_download_safety_preflight({}, auth_estimate, executor="runpod")
         auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod")
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
+
+    def test_missing_hf_artifact_is_not_collapsed_into_unknown_size(self) -> None:
+        run = {
+            "backend": {"name": "musubi-tuner"},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "model_bundle": "none",
+                    "model_downloads": {"dit": {"repo": "repo/model", "filename": "missing.safetensors"}},
+                }
+            },
+        }
+        with patch(
+            "kura.run_commands.plan._hf_file_size_probe",
+            return_value={"status": "not_found", "size_bytes": None, "detail": "HTTP 404"},
+        ):
+            estimate = _estimate_musubi_download_bytes(run)
+
+        self.assertEqual(estimate["unknown"], [])
+        self.assertEqual(estimate["probe_failures"][0]["status"], "not_found")
+        records = _model_download_preflight_report(run, estimate, executor="runpod")
+        self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in records})
 
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
