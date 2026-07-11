@@ -58,6 +58,11 @@ inside the same workspace. Advanced users can point `source` at a shared absolut
 path. Kura also maps the legacy `/root/.cache/huggingface` target into this
 workspace path so existing workspaces do not keep creating root-owned files.
 
+Executors set `HF_HOME=/workspace/cache/huggingface` and
+`HF_HUB_CACHE=/workspace/cache/huggingface/hub`. AI-Toolkit, Kura-managed
+Musubi downloads, and remote ComfyUI preparation therefore reuse the same
+repository snapshot and blob namespace.
+
 For Musubi runs with automatic Hugging Face downloads, Kura tries to estimate
 the referenced file sizes before local launch. The estimate is added on top of
 `docker.min_free_gb`, so the configured value remains a safety margin instead

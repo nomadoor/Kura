@@ -144,8 +144,8 @@ Validation completed during this audit:
   realization records, and host-user file ownership;
 - ran `kura doctor musubi` against the v0.3.4 image: all 36 expected adapter
   scripts existed and completed their help smoke;
-- passed Kura's release gate with 304 tests and all mechanical checks after the
-  variant adapter corrections.
+- passed Kura's release gate with 305 tests and all mechanical checks after the
+  variant adapter and shared Hugging Face cache corrections.
 
 Remaining follow-up order:
 

@@ -148,6 +148,7 @@ def docker_command(
     runtime_env.setdefault("PYTHONUNBUFFERED", "1")
     runtime_env.setdefault("HOME", "/tmp/kura-home")
     runtime_env.setdefault("HF_HOME", f"{workspace_target.rstrip('/')}/cache/huggingface")
+    runtime_env.setdefault("HF_HUB_CACHE", f"{runtime_env['HF_HOME'].rstrip('/')}/hub")
     if os.environ.get("HF_TOKEN"):
         runtime_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
     for key, value in sorted(runtime_env.items()):

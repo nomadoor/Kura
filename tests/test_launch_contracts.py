@@ -104,8 +104,8 @@ def _minimal_flux2_run() -> dict[str, Any]:
 
 class LaunchEnvironmentContractTests(unittest.TestCase):
     def test_container_env_inventory_is_derived_from_sources(self) -> None:
-        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HOME", "KURA_WORKSPACE_PATH_MAPS"})
-        self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HOME", "KURA_WORKSPACE"})
+        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
+        self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HUB_CACHE", "KURA_WORKSPACE"})
 
     def test_local_docker_env_satisfies_container_script_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -126,10 +126,12 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         self.assertIn("KURA_LOG_PATH", runtime_env)
         mappings = json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"])
         self.assertTrue(_hf_home_has_workspace_mapping(runtime_env["HF_HOME"], mappings))
+        self.assertEqual(runtime_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
 
     def test_runpod_pod_env_satisfies_training_and_session_contracts(self) -> None:
         training_env = _runpod_training_env({}, workspace_path="/workspace", run_id="contract-run")
         self.assertEqual(training_env["HF_HOME"], "/workspace/cache/huggingface")
+        self.assertEqual(training_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(training_env["KURA_WORKSPACE"], "/workspace")
         self.assertEqual(training_env["KURA_RUN_ID"], "contract-run")
         self.assertIn("KURA_LOG_PATH", training_env)
@@ -137,6 +139,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
 
         session_env = _runpod_session_env(workspace_path="/workspace", run_id="contract-run")
         self.assertEqual(session_env["HF_HOME"], "/workspace/cache/huggingface")
+        self.assertEqual(session_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(session_env["KURA_WORKSPACE"], "/workspace")
         self.assertEqual(session_env["KURA_RUN_ID"], "contract-run")
         self.assertIn("KURA_MAX_LEASE_SEC", session_env)
@@ -161,11 +164,13 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             self.fail(f"missing line containing {needle!r}")
 
         export_hf = line_index('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"')
-        mkdir_hf = line_index('mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"')
+        export_hub = line_index('export HF_HUB_CACHE="$HF_HOME/hub"')
+        mkdir_hf = line_index('mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"')
         contract_check = line_index("HF_HOME must be under KURA_WORKSPACE before remote job start")
         unpack = line_index("tar -xzf")
         backend_command = line_index("python -c hf_download.py")
-        self.assertLess(export_hf, mkdir_hf)
+        self.assertLess(export_hf, export_hub)
+        self.assertLess(export_hub, mkdir_hf)
         self.assertLess(mkdir_hf, contract_check)
         self.assertLess(contract_check, unpack)
         self.assertLess(contract_check, backend_command)

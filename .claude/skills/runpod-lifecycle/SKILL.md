@@ -44,7 +44,7 @@ stop Pod
 - `max-lease` is a billing safety fuse, not output preservation. Do not set it shorter than expected training plus review unless loss of container-disk outputs is acceptable.
 - Do not put `HF_TOKEN`, RunPod keys, ntfy tokens, or object-store credentials in Pod create environment.
 - Every remote execution path must establish the executor contract before any
-  work: `HF_HOME` set inside the workspace namespace (`$KURA_WORKSPACE/cache/huggingface`)
+  work: `HF_HOME` set inside the workspace namespace (`$KURA_WORKSPACE/cache/huggingface`) and `HF_HUB_CACHE` set to its `hub/` child
   and `KURA_*` variables the scripts consume. This applies to any revived or
   new path (object staging included) — a path that forgets this repeats the
   2026-07-05 "download lands in container-private /root/.cache" incident.

@@ -2113,7 +2113,7 @@ class RenderNotificationTests(unittest.TestCase):
         workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
         registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "requires HF_HOME or --cache-dir"):
+            with self.assertRaisesRegex(ValueError, "requires HF_HUB_CACHE or --cache-dir"):
                 module.prepare(workflow, comfyui_root=Path(directory) / "ComfyUI", cache_dir=None, registry=registry)
 
     def test_comfyui_prepare_rejects_private_cache_dir_before_download(self) -> None:
@@ -3559,8 +3559,8 @@ class MusubiBackendTests(unittest.TestCase):
         script = command["argv"][2]
         self.assertIn("hf_hub_download", script)
         self.assertIn("HF_HUB_DISABLE_XET", script)
-        self.assertIn('cache_dir = os.environ.get("HF_HOME")', script)
-        self.assertIn("HF_HOME is required before downloading models", script)
+        self.assertIn('cache_dir = os.environ.get("HF_HUB_CACHE")', script)
+        self.assertIn("HF_HUB_CACHE is required before downloading models", script)
         self.assertNotIn('or "/root/.cache/huggingface"', script)
         self.assertNotIn("local_dir", script)
         self.assertNotIn("/workspace/cache/hf-models/musubi", script)
@@ -3604,21 +3604,21 @@ class MusubiBackendTests(unittest.TestCase):
         require_cache_mappable = namespace["require_cache_mappable"]
         link_path = "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors"
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "HF_HOME must be inside /workspace"):
+            with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE must be inside /workspace"):
                 require_cache_mappable("/root/.cache/huggingface", link_path)
-        require_cache_mappable("/workspace/cache/huggingface", link_path)
+        require_cache_mappable("/workspace/cache/huggingface/hub", link_path)
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "HF_HOME must be inside /workspace"):
+            with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE must be inside /workspace"):
                 require_cache_mappable("/root/.cache/huggingface", "/tmp/model.safetensors")
 
-    def test_hf_download_requires_hf_home_before_download(self) -> None:
+    def test_hf_download_requires_hf_hub_cache_before_download(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
 
         run_one = namespace["run_one"]
         item = {"key": "dit", "repo_id": "owner/model", "filename": "weights.safetensors", "link_path": "/workspace/cache/models/musubi/owner--model/dit/weights.safetensors"}
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "HF_HOME is required"):
+            with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE is required"):
                 run_one(item)
 
     def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
@@ -3997,8 +3997,10 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertIn("io.kura.realization_id=r1", command)
         self.assertIn("PYTHONUNBUFFERED=1", command)
         self.assertEqual(runtime_env["HF_HOME"], "/workspace/cache/huggingface")
+        self.assertEqual(runtime_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(runtime_env["KURA_RUN_ID"], "example")
         self.assertIn("HF_HOME=/workspace/cache/huggingface", command)
+        self.assertIn("HF_HUB_CACHE=/workspace/cache/huggingface/hub", command)
         self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
         self.assertIn("HOME=/tmp/kura-home", command)
         self.assertIn("KURA_WORKSPACE_PATH_MAPS", runtime_env)
@@ -4788,6 +4790,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("KURA_UPLOAD_CODE", payload["env"])
             self.assertIn("KURA_DOWNLOAD_CODE", payload["env"])
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
+            self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
             self.assertEqual(payload["env"]["KURA_WORKSPACE"], "/workspace")
             self.assertEqual(payload["env"]["KURA_RUN_ID"], "example")
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs"', payload["dockerStartCmd"][2])
@@ -4836,6 +4839,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             payload = request.call_args.args[3]
             self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
+            self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
             self.assertIn("runpodctl pod delete", payload["dockerStartCmd"][2])
             self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
 
@@ -5013,9 +5017,10 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("runpodctl pod delete", argv_text)
             input_text = "\n".join(str(call[1].get("input") or "") for call in calls)
             self.assertIn('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"', input_text)
+            self.assertIn('export HF_HUB_CACHE="$HF_HOME/hub"', input_text)
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs"', input_text)
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints"', input_text)
-            self.assertIn('mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"', input_text)
+            self.assertIn('mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"', input_text)
             self.assertIn('HF_HOME must be under KURA_WORKSPACE before remote job start', input_text)
             self.assertIn('collect_runtime_diagnostics before_backend', input_text)
             self.assertIn('collect_runtime_diagnostics after_backend', input_text)
