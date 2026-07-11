@@ -23,6 +23,7 @@ from kura import __version__
 from kura.backends import compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
+from kura.data_contracts import project_dataset_facts
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
@@ -295,6 +296,11 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     resolved = run_dir / "resolved"
     try:
         requirements = declared_model_requirements(locked)
+        data_contracts = []
+        for dataset in locked_datasets:
+            projection = project_dataset_facts(_workspace() / "datasets" / dataset["id"])
+            projection["digest"] = dataset["digest"]
+            data_contracts.append(projection)
         resolved.mkdir(exist_ok=True)
         _dump_yaml(resolved / "manifest.lock.yaml", locked)
         _dump_yaml(
@@ -303,6 +309,14 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
                 "schema_version": 1,
                 "generated_from": "manifest.lock.yaml",
                 "requirements": requirements,
+            },
+        )
+        _dump_yaml(
+            resolved / "data-contract.lock.yaml",
+            {
+                "schema_version": 1,
+                "generated_from": "manifest.lock.yaml",
+                "datasets": data_contracts,
             },
         )
         if backend.get("name") == "ai-toolkit":

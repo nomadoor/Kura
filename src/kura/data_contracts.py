@@ -69,7 +69,7 @@ def project_dataset_facts(dataset_path: Path) -> dict[str, Any]:
 
     return {
         "schema_version": 1,
-        "dataset": str(dataset_path),
+        "dataset": dataset_path.name,
         "layout": {role: _relative(root, path) for role, path in directories.items()},
         "samples": samples,
         "facts": {
