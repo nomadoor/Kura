@@ -1,6 +1,6 @@
 # ADR: Common run envelope and opaque backend boundaries
 
-Status: proposed owner decision.
+Status: accepted owner decision.
 
 Date: 2026-07-12
 
@@ -144,6 +144,15 @@ Nevertheless, a frozen run must remain compilable or replayable without the
 original agent conversation. `run.yaml` must stay human-authorable, and adapter
 errors must be concrete enough to guide a human or CI caller. AI is an expert
 author and diagnostician, not a hidden runtime dependency.
+
+The invariant is: **Kura is agent-first, not agent-dependent. The agent authors
+and judges; files carry the decisions; the CLI executes without conversational
+state.** Manual authoring is supported but is not the primary user experience.
+
+Production CLI execution must not require an agent API, conversation identifier,
+or agent-private state. Tests must prove that workspace files, configured
+secrets, and external provider state are sufficient to compile, execute,
+observe, reconcile, stop, and recover a run.
 
 ## Decision 7: preflight remains bounded
 
