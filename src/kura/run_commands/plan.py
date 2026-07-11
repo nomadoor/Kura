@@ -20,6 +20,7 @@ import yaml
 from kura.backends import musubi_model_download_specs
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.executors import stage_runpod, stop_docker, stop_runpod
+from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
@@ -256,6 +257,7 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
             "architecture": _resource_architecture(backend_name, backend_override),
             "base": _plan_value(model.get("base")),
             "artifacts": _model_artifact_filenames(run, download_estimate),
+            "requirements": model_requirements(run, download_estimate),
         },
         "memory_flags": {
             "common": common_flags,
@@ -325,8 +327,6 @@ def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> 
         expected_checkpoints = max(steps // save_every, 1)
         if expected_checkpoints >= 10 and not has_retention_policy:
             warnings.append(f"checkpoint cadence may create about {expected_checkpoints} checkpoints; set prune_checkpoints_before_step or keep-last policy if this is not intentional")
-        elif save_every <= 100 and not has_retention_policy:
-            warnings.append("checkpoint save_every_n_steps is 100 or less with no prune policy")
     if steps and cadence:
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:
@@ -380,16 +380,16 @@ def _hf_cache_path(workspace: Path, mounts: list[dict[str, Any]]) -> Path:
     for mount in mounts:
         if not isinstance(mount, dict) or mount.get("mode") == "ro":
             continue
-        if mount.get("target") == "/root/.cache/huggingface" and isinstance(mount.get("source"), str):
+        if mount.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"} and isinstance(mount.get("source"), str):
             return _resolve_local_path(workspace, mount["source"])
     return workspace / "cache" / "huggingface"
 
 
-def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int | None:
+def _hf_file_size_probe(item: dict[str, str], *, timeout_sec: int = 20) -> dict[str, Any]:
     repo_id = item.get("repo_id")
     filename = item.get("filename")
     if not repo_id or not filename:
-        return None
+        return {"status": "invalid_spec", "size_bytes": None, "detail": "repo_id and filename are required"}
     revision = item.get("revision") or "main"
     quoted_repo = "/".join(urllib.parse.quote(part, safe="") for part in repo_id.split("/"))
     quoted_revision = urllib.parse.quote(revision, safe="")
@@ -403,12 +403,26 @@ def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int |
     try:
         with urllib.request.urlopen(request, timeout=timeout_sec) as response:
             length = response.headers.get("Content-Length")
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
-        return None
+    except urllib.error.HTTPError as exc:
+        status = "auth_error" if exc.code in (401, 403) else "not_found" if exc.code == 404 else "http_error"
+        return {"status": status, "size_bytes": None, "detail": f"HTTP {exc.code}"}
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", exc)
+        return {"status": "unreachable", "size_bytes": None, "detail": _safe_error(reason)}
+    if not length:
+        return {"status": "missing_metadata", "size_bytes": None, "detail": "Content-Length header is absent"}
     try:
-        return int(length) if length else None
+        size = int(length)
     except ValueError:
-        return None
+        return {"status": "missing_metadata", "size_bytes": None, "detail": "Content-Length header is invalid"}
+    if size < 0:
+        return {"status": "missing_metadata", "size_bytes": None, "detail": "Content-Length header is negative"}
+    return {"status": "ok", "size_bytes": size}
+
+
+def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int | None:
+    """Compatibility helper for callers that only need the measured size."""
+    return _hf_file_size_probe(item, timeout_sec=timeout_sec).get("size_bytes")
 
 
 def _workspace_cache_file(workspace: Path | None, container_path: str | None) -> Path | None:
@@ -451,10 +465,10 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if backend_name != "musubi-tuner":
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": []}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
     overrides = run.get("backend_overrides")
     if overrides is not None and not isinstance(overrides, dict):
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
     override = overrides.get("musubi-tuner", {}) if isinstance(overrides, dict) else {}
     existing_paths = {}
     if isinstance(override, dict):
@@ -464,22 +478,28 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     try:
         specs, _ = musubi_model_download_specs(run, existing_paths=existing_paths)
     except ValueError:
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"]}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
     download_total = 0
     size_total = 0
     cached_total = 0
     items: list[dict[str, Any]] = []
     unknown: list[str] = []
+    probe_failures: list[dict[str, str]] = []
     for item in specs:
         cache_path = _workspace_cache_file(workspace, item.get("link_path"))
         cached_size = _cached_file_size(cache_path, workspace=workspace)
         cached = cached_size is not None
-        size = cached_size if cached else _hf_file_size_bytes(item)
+        probe = {"status": "cached", "size_bytes": cached_size} if cached else _hf_file_size_probe(item)
+        size = probe.get("size_bytes")
         download_size = 0 if cached else size
         record = {key: item.get(key) for key in ("key", "repo_id", "filename", "revision") if item.get(key)}
         record["size_bytes"] = size
         record["download_bytes"] = download_size
         record["cached"] = cached
+        record["runtime_reference"] = item.get("link_path")
+        record["size_status"] = probe.get("status")
+        if probe.get("detail"):
+            record["size_detail"] = probe["detail"]
         if cache_path is not None:
             record["cache_path"] = str(cache_path)
         items.append(record)
@@ -487,11 +507,15 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
             cached_total += cached_size
             size_total += cached_size
         elif size is None:
-            unknown.append(f"{item.get('repo_id')}:{item.get('filename')}")
+            label = f"{item.get('repo_id')}:{item.get('filename')}"
+            if probe.get("status") in {"unreachable", "auth_error", "not_found", "http_error"}:
+                probe_failures.append({"artifact": label, "status": str(probe.get("status")), "detail": str(probe.get("detail") or "probe failed")})
+            else:
+                unknown.append(label)
         else:
             size_total += size
             download_total += size
-    return {"bytes": download_total, "total_bytes": size_total, "cached_bytes": cached_total, "items": items, "unknown": unknown}
+    return {"bytes": download_total, "total_bytes": size_total, "cached_bytes": cached_total, "items": items, "unknown": unknown, "probe_failures": probe_failures}
 
 
 def _download_estimate_workspace(run: dict[str, Any], workspace: Path, *, executor: str | None = None) -> Path | None:
@@ -507,12 +531,22 @@ def _model_download_threshold_bytes(run: dict[str, Any]) -> int:
     return _configured_gib(safety.get("large_model_download_gb"), default=25) * 1024**3
 
 
-def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dict[str, Any]) -> None:
+def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str = "docker") -> None:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    if safety.get("allow_large_model_downloads") is True:
-        return
+    probe_failures = download_estimate.get("probe_failures")
+    blocking_failures = [
+        item
+        for item in probe_failures if isinstance(item, dict) and (executor != "runpod" or item.get("status") in {"auth_error", "not_found"})
+    ] if isinstance(probe_failures, list) else []
+    if blocking_failures:
+        first = blocking_failures[0]
+        raise ValueError(
+            "Hugging Face metadata probe failed for "
+            f"{first.get('artifact')} ({first.get('status')}: {first.get('detail')}); "
+            "restore controller connectivity or credentials and run the plan again"
+        )
     unknown = download_estimate.get("unknown")
-    if isinstance(unknown, list) and unknown:
+    if isinstance(unknown, list) and unknown and safety.get("allow_large_model_downloads") is not True:
         labels = ", ".join(str(item) for item in unknown[:5])
         suffix = "" if len(unknown) <= 5 else f", and {len(unknown) - 5} more"
         raise ValueError(
@@ -520,6 +554,8 @@ def _model_download_safety_preflight(run: dict[str, Any], download_estimate: dic
             f"{labels}{suffix}; inspect `kura run plan`, choose explicit smaller/known artifacts, "
             "or set safety.allow_large_model_downloads: true if this unbounded download is intentional"
         )
+    if safety.get("allow_large_model_downloads") is True:
+        return
     download_bytes = int(download_estimate.get("bytes") or 0)
     threshold_bytes = _model_download_threshold_bytes(run)
     if download_bytes <= threshold_bytes:
@@ -547,9 +583,36 @@ def _preflight_bytes(value: Any) -> str:
     return _format_bytes(number)
 
 
-def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+def _model_download_preflight_report(run: dict[str, Any], download_estimate: dict[str, Any], *, executor: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    requirements = model_requirements(run, download_estimate)
+    kura_managed = [item for item in requirements if item.get("acquisition") == "kura"]
+    backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
+    if backend_managed and not kura_managed:
+        roles = ", ".join(str(item.get("role") or "model") for item in backend_managed)
+        return [
+            _preflight_record(
+                "model-acquisition",
+                "info",
+                f"backend resolves {roles} at runtime; controller download size is not measured",
+                "run.yaml",
+            )
+        ]
+    probe_failures = download_estimate.get("probe_failures")
+    if isinstance(probe_failures, list) and probe_failures:
+        first = probe_failures[0]
+        extra = "" if len(probe_failures) == 1 else f" and {len(probe_failures) - 1} more"
+        deterministic_failure = any(isinstance(item, dict) and item.get("status") in {"auth_error", "not_found"} for item in probe_failures)
+        severity = "warning" if executor == "runpod" and not deterministic_failure else "error"
+        scope = "remote Pod connectivity is not determined by this local probe" if severity == "warning" else "download readiness or disk requirement could not be established"
+        records.append(
+            _preflight_record(
+                "model-metadata-connectivity",
+                severity,
+                f"Hugging Face metadata probe failed for {first.get('artifact')}{extra} ({first.get('status')}: {first.get('detail')}); {scope}",
+            )
+        )
     unknown = download_estimate.get("unknown")
     if isinstance(unknown, list) and unknown:
         labels = ", ".join(str(item) for item in unknown[:5])
@@ -570,7 +633,8 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
             )
         )
     else:
-        records.append(_preflight_record("model-downloads", "info", f"estimated model downloads write {_preflight_bytes(download_bytes)}", "run.yaml"))
+        qualifier = "known portion of " if isinstance(probe_failures, list) and probe_failures else ""
+        records.append(_preflight_record("model-downloads", "info", f"estimated {qualifier}model downloads write {_preflight_bytes(download_bytes)}", "run.yaml"))
     return records
 
 
@@ -605,12 +669,14 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
         payload = _runpod_launch_disk_preflight(run, runpod_config, download_estimate)
     except ValueError as exc:
         return [_preflight_record("runpod-disk", "error", str(exc), "workspace.yaml")]
+    incomplete = bool(download_estimate.get("unknown") or download_estimate.get("probe_failures"))
+    suffix = "; estimate is incomplete because some model sizes are unavailable" if incomplete else ""
     return [
         _preflight_record(
             "runpod-disk",
             "info",
             "container_disk_gb="
-            f"{payload['container_disk_gib']}; estimated remote writes {_preflight_bytes(payload['estimated_write_bytes'])}",
+            f"{payload['container_disk_gib']}; estimated known remote writes {_preflight_bytes(payload['estimated_write_bytes'])}{suffix}",
             "workspace.yaml",
         )
     ]
@@ -631,7 +697,7 @@ def collect_run_preflight(
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
-    records.extend(_model_download_preflight_report(run, estimate))
+    records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
     important = _important_backend_overrides(run)
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
@@ -1003,11 +1069,31 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         model_resources = resources.get("model") if isinstance(resources.get("model"), dict) else {}
         lines.append("  model")
         for key, value in model_resources.items():
-            if key == "artifacts":
+            if key in {"artifacts", "requirements"}:
                 continue
             _append_kv(lines, key, value, indent=4)
+        requirements = model_resources.get("requirements") if isinstance(model_resources.get("requirements"), list) else []
+        if requirements:
+            lines.append("    requirements")
+            for item in requirements:
+                if not isinstance(item, dict):
+                    continue
+                role = item.get("role") or "model"
+                acquisition = item.get("acquisition") or NOT_SET
+                identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
+                source = identity.get("repo_id") or identity.get("path") or NOT_SET
+                filename = identity.get("filename")
+                if filename:
+                    source = f"{source}:{filename}"
+                lines.append(f"      - {_format_plan_value(role)}")
+                _append_kv(lines, "acquisition", acquisition, indent=8)
+                _append_kv(lines, "source", source, indent=8)
+                measurement = item.get("measurement") if isinstance(item.get("measurement"), dict) else {}
+                if measurement:
+                    _append_kv(lines, "measured_at", measurement.get("scope"), indent=8)
+                    _append_kv(lines, "status", measurement.get("status"), indent=8)
         artifacts = model_resources.get("artifacts") if isinstance(model_resources.get("artifacts"), list) else []
-        if artifacts:
+        if artifacts and not requirements:
             lines.append("    artifacts")
             for item in artifacts:
                 if not isinstance(item, dict):
@@ -1026,7 +1112,8 @@ def format_run_plan(payload: dict[str, Any]) -> str:
     downloads = payload.get("model_downloads") if isinstance(payload.get("model_downloads"), dict) else {}
     download_items = downloads.get("items") if isinstance(downloads.get("items"), list) else []
     unknown_downloads = downloads.get("unknown") if isinstance(downloads.get("unknown"), list) else []
-    if download_items or unknown_downloads:
+    probe_failures = downloads.get("probe_failures") if isinstance(downloads.get("probe_failures"), list) else []
+    if download_items or unknown_downloads or probe_failures:
         lines.append("")
         lines.append("Model downloads")
         _append_kv(lines, "download", _format_bytes(downloads.get("bytes")))
@@ -1046,6 +1133,14 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             lines.append("  - unknown-size files")
             for item in unknown_downloads:
                 lines.append(f"    - {item}")
+        if probe_failures:
+            lines.append("  - metadata probe failures")
+            for failure in probe_failures:
+                lines.append(
+                    "    - "
+                    f"{_format_plan_value(failure.get('artifact'))}: "
+                    f"{_format_plan_value(failure.get('status'))} ({_format_plan_value(failure.get('detail'))})"
+                )
     preflight = payload.get("preflight") if isinstance(payload.get("preflight"), list) else []
     if preflight:
         lines.append("")

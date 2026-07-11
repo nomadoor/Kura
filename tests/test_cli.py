@@ -29,8 +29,9 @@ from kura.executors.common import _safe_env
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _model_download_safety_preflight
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
+from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
+from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -76,7 +77,7 @@ class InitCommandTests(unittest.TestCase):
                             self.assertTrue((root / source).exists(), f"{dockerfile}: {source}")
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
-                self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/root/.cache/huggingface")
+                self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/workspace/cache/huggingface")
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
                 self.assertEqual(workspace["comfyui"]["lora_dir"], "")
@@ -185,6 +186,44 @@ class InitCommandTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("backend is ai-toolkit but backend_overrides.musubi-tuner is set", stderr.getvalue())
 
+    def test_run_compile_cleans_up_after_invalid_musubi_model_downloads(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.chdir(root)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                dataset = root / "datasets" / "tiny"
+                (dataset / "images").mkdir(parents=True)
+                (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
+                (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="bad-download", backend="musubi-tuner", executor="docker", gpu=None)), 0)
+                run_id = stdout.getvalue().strip()
+                run_path = root / "runs" / run_id / "run.yaml"
+                run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+                run["model"]["base"] = "example/model"
+                run["datasets"] = [{"id": "tiny"}]
+                run["backend_overrides"] = {
+                    "musubi-tuner": {
+                        "architecture": "flux2",
+                        "model_bundle": "none",
+                        "model_downloads": {"dit": "not-a-download-mapping"},
+                    }
+                }
+                run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
+                stderr = io.StringIO()
+                with patch("sys.stderr", stderr):
+                    code = cmd_run_compile(argparse.Namespace(run_id=run_id))
+                resolved_exists = (root / "runs" / run_id / "resolved").exists()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 1)
+        self.assertIn("model_downloads must map model keys to download mappings", stderr.getvalue())
+        self.assertFalse(resolved_exists)
+
     def test_dataset_validate_checks_referenced_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -243,6 +282,10 @@ class InitCommandTests(unittest.TestCase):
 
             env_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "env.lock").read_text(encoding="utf-8"))
             self.assertEqual(env_lock["declared_executor"], "runpod")
+            requirements_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "model-requirements.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(requirements_lock["schema_version"], 1)
+            self.assertEqual(requirements_lock["requirements"][0]["acquisition"], "backend")
+            self.assertEqual(requirements_lock["requirements"][0]["identity"]["repo_id"], "black-forest-labs/FLUX.2-klein-base-4B")
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1172,6 +1215,15 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 
 
 class RunPlanTests(unittest.TestCase):
+    def test_disk_warnings_do_not_flag_a_single_checkpoint_as_frequent(self) -> None:
+        run = {
+            "params": {"steps": 1},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 1}},
+            "compute": {"executor": "runpod"},
+        }
+
+        self.assertEqual(_disk_warnings(run, {"save_every_n_steps": 1}), [])
+
     def test_run_plan_prints_uncompiled_train_settings_from_run_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1219,7 +1271,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=None),
+                    patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "missing_metadata", "size_bytes": None, "detail": "Content-Length header is absent"}),
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "NVIDIA A40, 46068\n", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="plan-example", json=False)), 0)
@@ -1283,7 +1335,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=3 * 1024**3),
+                    patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 3 * 1024**3}),
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="download-plan", json=True)), 0)
@@ -1303,6 +1355,9 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(resources["memory_flags"]["common"]["batch_size"], "(not set)")
         artifact_filenames = {item["filename"] for item in resources["model"]["artifacts"]}
         self.assertEqual(artifact_filenames, {"dit.safetensors", "vae.safetensors"})
+        requirements = resources["model"]["requirements"]
+        self.assertEqual({item["acquisition"] for item in requirements}, {"kura"})
+        self.assertEqual({item["measurement"]["scope"] for item in requirements}, {"controller"})
         checks = {(item["check"], item["severity"]) for item in payload["preflight"]}
         self.assertIn(("model-downloads", "info"), checks)
         self.assertIn(("dataset-images", "info"), checks)
@@ -1364,8 +1419,11 @@ class RunPlanTests(unittest.TestCase):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
                 os.chdir(previous)
-            output = stdout.getvalue()
+        output = stdout.getvalue()
         self.assertIn("Preflight", output)
+        self.assertIn("[info] model-acquisition", output)
+        self.assertIn("controller download size is not measured", output)
+        self.assertNotIn("estimated model downloads write 0 B", output)
         self.assertIn("[warning] disk", output)
         self.assertNotIn("Disk warnings", output)
 
@@ -1399,7 +1457,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=50 * 1024**2),
+                    patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 50 * 1024**2}),
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="small-download-plan", json=True)), 0)
@@ -1470,7 +1528,7 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=200), patch("kura.run_commands._hf_file_size_bytes", return_value=200):
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}):
                     payload = plan_run("remote")
             finally:
                 os.chdir(previous)
@@ -1505,7 +1563,7 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=200), patch("kura.run_commands._hf_file_size_bytes", return_value=200):
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}):
                     payload = plan_run("local")
             finally:
                 os.chdir(previous)
@@ -1731,6 +1789,7 @@ class RenderNotificationTests(unittest.TestCase):
             output_run = root / "runs" / "train-1" / "outputs"
             for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
                 path.mkdir(parents=True)
+            (output_run.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
                 encoding="utf-8",
@@ -1752,6 +1811,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "schema_version": 1,
                     "type": "render",
                     "inputs": {
+                        "train_run": "train-1",
                         "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
                         "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
@@ -1795,8 +1855,39 @@ class RenderNotificationTests(unittest.TestCase):
             lora_name = captured["workflow"]["12"]["inputs"]["lora_name"]
             self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
             self.assertFalse(captured["staged_path"].exists())
-            images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
-            self.assertIn('"comfyui_lora_name":', images)
+            image_record = json.loads((run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(image_record["train_run"], "train-1")
+            self.assertIn("comfyui_lora_name", image_record)
+            realization_path = root / "runs" / "render-1" / json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["last_realization"]
+            realization = json.loads(realization_path.read_text(encoding="utf-8"))
+            self.assertEqual(realization["train_run"], "train-1")
+
+    def test_render_compile_validates_train_run_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            workflow = root / "workflows" / "wf.json"
+            prompts = root / "promptsets" / "prompts.jsonl"
+            for path in (run_dir, workflow.parent, prompts.parent):
+                path.mkdir(parents=True, exist_ok=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            workflow.write_text(json.dumps({"1": {"inputs": {"seed": 0}}}), encoding="utf-8")
+            prompts.write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {
+                        "train_run": "missing-train",
+                        "checkpoint": {"path": ""},
+                        "workflow": {"path": "workflows/wf.json"},
+                        "promptset": {"path": "promptsets/prompts.jsonl"},
+                    },
+                    "workflow_patches": {"seed": {"node": "1", "field": "inputs.seed"}},
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "does not exist: missing-train"):
+                compile_render(root, run_dir)
 
     def test_render_inserts_sidecar_lora_loader_when_checkpoint_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3571,6 +3662,69 @@ class DockerLifecycleTests(unittest.TestCase):
 
         _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
 
+    def test_hf_size_probe_preserves_http_and_connectivity_failures(self) -> None:
+        item = {"repo_id": "repo/model", "filename": "weights.safetensors"}
+        with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.HTTPError("https://huggingface.co", 401, "unauthorized", {}, None)):
+            auth = _hf_file_size_probe(item)
+        with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.URLError("DNS failed")):
+            unreachable = _hf_file_size_probe(item)
+        with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.HTTPError("https://huggingface.co", 404, "missing", {}, None)):
+            missing = _hf_file_size_probe(item)
+
+        self.assertEqual(auth["status"], "auth_error")
+        self.assertEqual(auth["detail"], "HTTP 401")
+        self.assertEqual(unreachable["status"], "unreachable")
+        self.assertIn("DNS failed", unreachable["detail"])
+        self.assertEqual(missing["status"], "not_found")
+
+    def test_connectivity_failure_is_not_a_large_download_override(self) -> None:
+        estimate = {
+            "bytes": 0,
+            "unknown": [],
+            "probe_failures": [{"artifact": "repo:model.safetensors", "status": "unreachable", "detail": "DNS failed"}],
+        }
+        with self.assertRaisesRegex(ValueError, "metadata probe failed"):
+            _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, estimate, executor="docker")
+
+        _model_download_safety_preflight({"safety": {}}, estimate, executor="runpod")
+        local_records = _model_download_preflight_report({}, estimate, executor="docker")
+        remote_records = _model_download_preflight_report({}, estimate, executor="runpod")
+        self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in local_records})
+        self.assertIn(("model-metadata-connectivity", "warning"), {(item["check"], item["severity"]) for item in remote_records})
+        self.assertTrue(any("known portion" in item["fact"] for item in remote_records if item["check"] == "model-downloads"))
+
+        auth_estimate = {
+            "bytes": 0,
+            "unknown": [],
+            "probe_failures": [{"artifact": "repo:model.safetensors", "status": "auth_error", "detail": "HTTP 401"}],
+        }
+        with self.assertRaisesRegex(ValueError, "auth_error"):
+            _model_download_safety_preflight({}, auth_estimate, executor="runpod")
+        auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod")
+        self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
+
+    def test_missing_hf_artifact_is_not_collapsed_into_unknown_size(self) -> None:
+        run = {
+            "backend": {"name": "musubi-tuner"},
+            "backend_overrides": {
+                "musubi-tuner": {
+                    "architecture": "flux2",
+                    "model_bundle": "none",
+                    "model_downloads": {"dit": {"repo": "repo/model", "filename": "missing.safetensors"}},
+                }
+            },
+        }
+        with patch(
+            "kura.run_commands.plan._hf_file_size_probe",
+            return_value={"status": "not_found", "size_bytes": None, "detail": "HTTP 404"},
+        ):
+            estimate = _estimate_musubi_download_bytes(run)
+
+        self.assertEqual(estimate["unknown"], [])
+        self.assertEqual(estimate["probe_failures"][0]["status"], "not_found")
+        records = _model_download_preflight_report(run, estimate, executor="runpod")
+        self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in records})
+
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3584,12 +3738,14 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertNotIn("--rm", command)
         self.assertIn("io.kura.realization_id=r1", command)
         self.assertIn("PYTHONUNBUFFERED=1", command)
-        self.assertEqual(runtime_env["HF_HOME"], "/root/.cache/huggingface")
+        self.assertEqual(runtime_env["HF_HOME"], "/workspace/cache/huggingface")
         self.assertEqual(runtime_env["KURA_RUN_ID"], "example")
-        self.assertIn("HF_HOME=/root/.cache/huggingface", command)
+        self.assertIn("HF_HOME=/workspace/cache/huggingface", command)
+        self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
+        self.assertIn("HOME=/tmp/kura-home", command)
         self.assertIn("KURA_WORKSPACE_PATH_MAPS", runtime_env)
         command_text = "\n".join(command)
-        self.assertIn('mkdir -p "$(dirname "$KURA_LOG_PATH")"', command_text)
+        self.assertIn('mkdir -p "$HOME" "$(dirname "$KURA_LOG_PATH")"', command_text)
         self.assertIn('"/workspace/runs/$KURA_RUN_ID/outputs"', command_text)
         self.assertIn('"/workspace/runs/$KURA_RUN_ID/checkpoints"', command_text)
         self.assertIn('exec "$@" >> "$KURA_LOG_PATH" 2>&1', command_text)
@@ -3601,11 +3757,11 @@ class DockerLifecycleTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
             command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", mounts, True, "r1")
-        self.assertIn(f"{root}/cache/huggingface:/root/.cache/huggingface", command)
+        self.assertIn(f"{root}/cache/huggingface:/workspace/cache/huggingface", command)
         self.assertEqual(
             json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"]),
             [
-                {"container": "/root/.cache/huggingface", "workspace": "/workspace/cache/huggingface"},
+                {"container": "/workspace/cache/huggingface", "workspace": "/workspace/cache/huggingface"},
                 {"container": "/workspace", "workspace": "/workspace"},
             ],
         )
@@ -3677,7 +3833,7 @@ class DockerLifecycleTests(unittest.TestCase):
             with (
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=20 * 1024**3),
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 20 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 70 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
@@ -3704,7 +3860,7 @@ class DockerLifecycleTests(unittest.TestCase):
             with (
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=30 * 1024**3),
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 30 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "allow_large_model_downloads"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
@@ -3753,7 +3909,7 @@ class DockerLifecycleTests(unittest.TestCase):
             with (
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=40 * 1024**3),
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 40 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
@@ -4284,6 +4440,36 @@ class RunPruneTests(unittest.TestCase):
 
 
 class RunPodLifecycleTests(unittest.TestCase):
+    def test_execute_run_uses_compiled_docker_executor_and_waits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("compute: {executor: docker}\n", encoding="utf-8")
+            with (
+                patch("kura.run_commands.launch._run_path", return_value=run_dir),
+                patch("kura.run_commands.launch.launch_run", return_value=0) as launch,
+            ):
+                self.assertEqual(execute_run("example"), 0)
+
+        launch.assert_called_once_with("example", executor="docker", dry_run=False, image=None, notify_channels=None, wait=True)
+
+    def test_execute_run_uses_compiled_runpod_executor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("compute: {executor: runpod}\n", encoding="utf-8")
+            with (
+                patch("kura.run_commands.launch._run_path", return_value=run_dir),
+                patch("kura.run_commands.launch.run_remote", return_value=0) as remote,
+            ):
+                self.assertEqual(execute_run("example", max_lease="3h"), 0)
+
+        self.assertEqual(remote.call_args.args, ("example",))
+        self.assertEqual(remote.call_args.kwargs["hold_for"], "0")
+        self.assertEqual(remote.call_args.kwargs["max_lease"], "3h")
+
     @staticmethod
     def _config() -> dict[str, object]:
         return {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}
@@ -4573,7 +4759,26 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints"', input_text)
             self.assertIn('mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"', input_text)
             self.assertIn('HF_HOME must be under KURA_WORKSPACE before remote job start', input_text)
+            self.assertIn('collect_runtime_diagnostics before_backend', input_text)
+            self.assertIn('collect_runtime_diagnostics after_backend', input_text)
+            self.assertIn('/sys/fs/cgroup/memory.events', input_text)
+            self.assertIn('/sys/fs/cgroup/memory/memory.oom_control', input_text)
+            self.assertIn('/sys/fs/cgroup/memory/memory.limit_in_bytes', input_text)
+            self.assertIn('"cgroup_oom_kill_delta"', input_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
+
+    def test_runpod_remote_job_diagnostics_script_has_valid_shell_syntax(self) -> None:
+        script = _runpod_remote_job_script(
+            workspace="/workspace",
+            run_id="example",
+            remote_secret_path="/tmp/kura-secrets/example.env",
+            archive_name="bundle.tar.gz",
+            remote_archive="/workspace/bundle.tar.gz",
+            cwd="/opt/tool",
+            command="true",
+        )
+        result = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

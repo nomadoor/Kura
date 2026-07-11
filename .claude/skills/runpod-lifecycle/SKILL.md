@@ -23,7 +23,10 @@ stop Pod
 
 ## Current defaults
 
-- `kura run remote <run-id>`
+- `kura run execute <run-id>` is the normal entry point and honors the RunPod
+  executor frozen in the compiled run.
+- `kura run remote <run-id>` remains the low-level entry point for advanced
+  lifecycle flags and recovery work.
 - `--hold-for 30m`: normal post-download review window.
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.
@@ -48,7 +51,9 @@ stop Pod
 - Treat compute choice as a constrained resource plan, not a convenience
   default. Start with the smallest candidate that should satisfy the declared
   training plan, then move up only when capacity, memory, or runtime evidence
-  justifies it.
+  justifies it. The agent may tune execution accommodations within the same
+  GPU class; a GPU-class/cost change or an expected elapsed-time increase beyond
+  roughly 2x requires user approval and a new plan.
 
 ## Recovery commands
 

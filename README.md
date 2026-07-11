@@ -70,13 +70,13 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 
 1. 🧑 Put your dataset under `datasets/`.
 2. 🧑 Tell the agent the goal — e.g. `Train a Krea 2 character LoRA with this dataset.` (You can also spell out exact parameters like `rank 16, lr 5e-5, ...` if you want.)
-3. 🤖 Propose the parameters and ask "does this config look right?" (filling in sensible values where you were vague).
-4. 🧑 Approve if it looks good, or tell the agent what to change.
-5. 🤖 Create and try a local smoke run.
-6. 🤖 If it passes, run locally or on RunPod.
-7. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
-8. 🤖 (Optional) Pull intermediate checkpoints and generate ComfyUI comparison images.
-9. 🧑 Review the results and decide whether to stop or keep training (🤖 carries out the instruction).
+3. 🤖 Inspect the dataset, write `run.yaml`, compile it, and show `kura run plan` with assumptions, resource facts, and trade-offs.
+4. 🧑 Approve that plan once, or tell the agent what to change.
+5. 🤖 Run `kura run execute <run-id>` using the local Docker or RunPod executor frozen in the plan. Infrastructure smoke checks are used when the backend or environment needs them; they are not a second user workflow.
+   For RunPod, `execute` stops the Pod immediately after outputs are downloaded. Use `kura run remote <run-id> --hold-for 30m` instead when you need a review window before shutdown.
+6. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
+7. 🤖 Generate ComfyUI comparison images in a render run linked to the training run and checkpoint.
+8. 🧑 Record your judgment in the render run's `notes.md` and decide whether to stop or run another experiment (🤖 carries out the instruction).
 
 > 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
 

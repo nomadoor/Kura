@@ -45,6 +45,25 @@ def load_optional_yaml(path: Path) -> dict[str, Any]:
     return load_yaml(path)
 
 
+def _validate_train_run_reference(workspace: Path, value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("render inputs.train_run must be a non-empty run ID or null")
+    train_run = value.strip()
+    if Path(train_run).name != train_run or train_run in {".", ".."}:
+        raise ValueError("render inputs.train_run must be a run ID, not a path")
+    source_path = workspace / "runs" / train_run / "run.yaml"
+    if not source_path.is_file():
+        raise ValueError(f"render inputs.train_run does not exist: {train_run}")
+    source = load_yaml(source_path)
+    if source.get("type") != "train":
+        raise ValueError(f"render inputs.train_run must reference a train run: {train_run}")
+    if source.get("id") not in (None, train_run):
+        raise ValueError(f"render inputs.train_run ID does not match its run.yaml: {train_run}")
+    return train_run
+
+
 def _workflow_sidecar(path: Path) -> dict[str, Any]:
     sidecar = path.with_suffix(".kura.yaml")
     if not sidecar.is_file():
@@ -416,6 +435,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     run = load_yaml(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
     inputs = run.get("inputs", {})
+    train_run = _validate_train_run_reference(workspace, inputs.get("train_run"))
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
     promptset_path = workspace / inputs.get("promptset", {}).get("path", "")
     if not workflow_path.is_file() or not promptset_path.is_file():
@@ -434,6 +454,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     resolved = run_dir / "resolved"
     resolved.mkdir(exist_ok=True)
     frozen = deepcopy(run)
+    frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
         frozen["lora_insert"] = lora_insert
@@ -495,6 +516,7 @@ def launch_render(
     if current_status.get("state") not in allowed_states:
         raise ValueError("render must be compiled and has already been launched or finalized")
     inputs = frozen.get("inputs", {})
+    train_run = inputs.get("train_run")
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
     promptset_path = workspace / inputs.get("promptset", {}).get("path", "")
     promptset_used_path = run_dir / "resolved" / "promptset_used.jsonl"
@@ -509,7 +531,7 @@ def launch_render(
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
     lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
-    details = {"endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if dry_run:
         print(json.dumps(details, ensure_ascii=False, indent=2))
         return 0
@@ -529,7 +551,7 @@ def launch_render(
         if lora_stage:
             _materialize_lora_stage(lora_stage)
             _ensure_lora_stage_visible(client, endpoint, lora_stage)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage})
+        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage})
         generated = 0
         for item, seed in pairs:
             patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name)
@@ -543,7 +565,7 @@ def launch_render(
                 image_path = run_dir / relative
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 image_path.write_bytes(client.download(image))
-                record = {"file": relative, "prompt_id": item["id"], "prompt": item["prompt"], "negative_prompt": item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "created": now()}
+                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": item["prompt"], "negative_prompt": item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
@@ -551,7 +573,7 @@ def launch_render(
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
         status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
@@ -560,7 +582,7 @@ def launch_render(
         with stdout_log.open("a", encoding="utf-8") as handle:
             handle.write(f"{type(exc).__name__}: {exc}\n")
         status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:

@@ -122,6 +122,62 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
     )
 
 
+def execute_run(
+    run_id: str,
+    *,
+    upload_timeout: int = 600,
+    job_timeout: int | None = 0,
+    download_attempts: int = 60,
+    download_interval: int = 20,
+    hold_for: Any = "0",
+    max_lease: Any = "12h",
+    notify_repeat_interval: Any = "10m",
+    notify_channels: Any = None,
+    image: str | None = None,
+) -> int:
+    """Execute using the executor frozen in the compiled manifest."""
+
+    try:
+        locked = _load_yaml(_run_path(run_id) / "resolved" / "manifest.lock.yaml")
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot execute run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
+        return 1
+    compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
+    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    if executor == "runpod":
+        return run_remote(
+            run_id,
+            upload_timeout=upload_timeout,
+            job_timeout=job_timeout,
+            download_attempts=download_attempts,
+            download_interval=download_interval,
+            hold_for=hold_for,
+            max_lease=max_lease,
+            notify_repeat_interval=notify_repeat_interval,
+            notify_channels=notify_channels,
+            image=image,
+        )
+    if executor == "docker":
+        return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
+    print(f"cannot execute run: unsupported compiled executor {executor!r}", file=sys.stderr)
+    return 1
+
+
+def cmd_run_execute(args: argparse.Namespace) -> int:
+    return execute_run(
+        args.run_id,
+        upload_timeout=getattr(args, "upload_timeout", 600),
+        job_timeout=getattr(args, "job_timeout", 0),
+        download_attempts=getattr(args, "download_attempts", 60),
+        download_interval=getattr(args, "download_interval", 20),
+        hold_for=getattr(args, "hold_for", "0"),
+        max_lease=getattr(args, "max_lease", "12h"),
+        notify_repeat_interval=getattr(args, "notify_repeat_interval", "10m"),
+        notify_channels=getattr(args, "notify", None),
+        image=getattr(args, "image", None),
+    )
+
+
 def _wait_for_docker_run(run_dir: Path) -> int:
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     identity = status.get("container_id") or status.get("container_name")

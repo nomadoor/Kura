@@ -43,6 +43,17 @@ launch.
 - Musubi model downloads above the safety threshold, 25GiB by default, require
   explicit run intent with `safety.allow_large_model_downloads: true`. A run can
   tune this threshold with `safety.large_model_download_gb`.
+- `safety.allow_large_model_downloads` approves download-size risk only. It does
+  not suppress DNS, timeout, HTTP, or authentication failures while measuring
+  Hugging Face metadata.
+- Hugging Face metadata results distinguish a known size, reachable metadata
+  without a usable size, and probe failures. For local Docker, a probe failure
+  blocks launch because Kura cannot calculate the cache write requirement. For
+  RunPod, controller-side DNS, timeout, and transient HTTP failures are warnings:
+  they do not prove that the remote Pod cannot reach Hugging Face. Authentication
+  failures and missing artifacts remain errors because the Pod receives the same
+  artifact intent and credentials. The RunPod disk estimate is marked incomplete
+  and still enforces any risk already established by known bytes.
 - When many checkpoints are explicitly allowed, local Docker launch adds a
   conservative checkpoint write budget to the workspace requirement.
 - On WSL2, Kura auto-detects the distro backing drive from the WSL registry when
@@ -60,7 +71,8 @@ launch.
 | --- | --- | --- |
 | `kura doctor disk` | read-only inventory | exits non-zero on warning-severity issues |
 | local Docker launch | `StorageStatus.effective_free_bytes` plus estimated writes for workspace, cache, and writable mounts | low effective free, unknown WSL2 backing, excessive Docker build cache |
-| large Musubi model download | estimated new Hugging Face/model-cache writes after Kura cache hits | above `safety.large_model_download_gb` without `safety.allow_large_model_downloads: true` |
+| large Musubi model download | estimated new Hugging Face/model-cache writes after Kura cache hits | known size above `safety.large_model_download_gb`, or reachable metadata without a usable size, without `safety.allow_large_model_downloads: true` |
+| Hugging Face metadata probe | DNS/network/timeout/HTTP/auth result, kept separate from size metadata | local Docker blocks when the required disk write cannot be measured; RunPod warns on environment-dependent reachability failures but blocks on authentication failure or a missing artifact |
 | checkpoint-heavy train run | run plan / launch preflight | many unpruned checkpoints unless explicitly allowed |
 | RunPod download/pull | local destination free space | insufficient space for downloaded artifacts |
 | cleanup | dry-run by default | destructive action requires `--yes`; final artifacts require extra flag |

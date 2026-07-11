@@ -27,6 +27,7 @@ from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_f
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
+from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
@@ -38,6 +39,7 @@ from kura.run_commands import _select_remote_outputs
 from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
+from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_run_launch
 from kura.run_commands import cmd_run_logs
 from kura.run_commands import cmd_run_plan
@@ -285,29 +287,43 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    resolved = run_dir / "resolved"
-    resolved.mkdir(exist_ok=True)
     locked = deepcopy(run)
     locked["datasets"] = locked_datasets
     locked.pop("dataset", None)
     locked["_kura"] = {"frozen_at": _now().isoformat(), "artifact": "manifest.lock"}
-    _dump_yaml(resolved / "manifest.lock.yaml", locked)
-    if backend.get("name") == "ai-toolkit":
-        compile_ai_toolkit(locked, resolved / "ai-toolkit.toml")
-    else:
-        compile_musubi_tuner(locked, resolved / "musubi", workspace=_workspace(), strict=True)
-    env = {
-        "kura_version": __version__, "python_version": platform.python_version(),
-        "platform": platform.platform(), "backend_name": backend.get("name"),
-        "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
-        "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
-        "local_image": image["local"], "dockerfile": image["dockerfile"],
-    }
-    _dump_yaml(resolved / "env.lock", env)
-    status_path = run_dir / "status.json"
-    status = json.loads(status_path.read_text(encoding="utf-8"))
-    status["state"] = "compiled"
-    atomic_write_json(status_path, status)
+    resolved = run_dir / "resolved"
+    try:
+        requirements = declared_model_requirements(locked)
+        resolved.mkdir(exist_ok=True)
+        _dump_yaml(resolved / "manifest.lock.yaml", locked)
+        _dump_yaml(
+            resolved / "model-requirements.lock.yaml",
+            {
+                "schema_version": 1,
+                "generated_from": "manifest.lock.yaml",
+                "requirements": requirements,
+            },
+        )
+        if backend.get("name") == "ai-toolkit":
+            compile_ai_toolkit(locked, resolved / "ai-toolkit.toml")
+        else:
+            compile_musubi_tuner(locked, resolved / "musubi", workspace=_workspace(), strict=True)
+        env = {
+            "kura_version": __version__, "python_version": platform.python_version(),
+            "platform": platform.platform(), "backend_name": backend.get("name"),
+            "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
+            "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
+            "local_image": image["local"], "dockerfile": image["dockerfile"],
+        }
+        _dump_yaml(resolved / "env.lock", env)
+        status_path = run_dir / "status.json"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        status["state"] = "compiled"
+        atomic_write_json(status_path, status)
+    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        shutil.rmtree(resolved, ignore_errors=True)
+        print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     print(f"compiled run: {args.run_id}")
     return 0
 
@@ -1021,6 +1037,9 @@ def main() -> None:
     plan.add_argument("run_id")
     plan.add_argument("--json", action="store_true", help="Print the plan as JSON")
     plan.set_defaults(func=cmd_run_plan)
+    execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run")
+    execute.add_argument("run_id")
+    execute.set_defaults(func=cmd_run_execute)
     stage = run_sub.add_parser("stage", help="Stage compiled inputs for a remote executor")
     stage.add_argument("run_id")
     stage.add_argument("--executor", default="runpod", choices=("runpod",))

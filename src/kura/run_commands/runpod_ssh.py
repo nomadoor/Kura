@@ -624,6 +624,69 @@ mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"
 case "$HF_HOME" in "$KURA_WORKSPACE"/*) ;; *) echo "[kura] HF_HOME must be under KURA_WORKSPACE before remote job start: $HF_HOME" >&2; exit 1 ;; esac
 touch "$KURA_LOG_PATH"
 echo "Kura controller uploaded {shlex.quote(archive_name)}" >> "$KURA_LOG_PATH"
+read_cgroup_value() {{
+  file="$1"
+  key="${{2:-}}"
+  if [ ! -r "$file" ]; then
+    printf '%s' "unknown"
+    return
+  fi
+  if [ -n "$key" ]; then
+    value=$(awk -v key="$key" '$1 == key {{ print $2; exit }}' "$file" 2>/dev/null || true)
+  else
+    value=$(cat "$file" 2>/dev/null || true)
+  fi
+  printf '%s' "${{value:-unknown}}"
+}}
+read_memory_current() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.current)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.usage_in_bytes); fi
+  printf '%s' "$value"
+}}
+read_memory_peak() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.peak)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.max_usage_in_bytes); fi
+  printf '%s' "$value"
+}}
+read_memory_max() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.max)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.limit_in_bytes); fi
+  printf '%s' "$value"
+}}
+read_oom_kill() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.events oom_kill)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.oom_control oom_kill); fi
+  printf '%s' "$value"
+}}
+collect_runtime_diagnostics() {{
+  phase="$1"
+  {{
+    echo "[kura] runtime diagnostics $phase"
+    echo "[kura] cgroup memory.current=$(read_memory_current)"
+    echo "[kura] cgroup memory.peak=$(read_memory_peak)"
+    echo "[kura] cgroup memory.max=$(read_memory_max)"
+    echo "[kura] cgroup memory.events"
+    if [ -r /sys/fs/cgroup/memory.events ]; then
+      sed 's/^/[kura]   /' /sys/fs/cgroup/memory.events
+    elif [ -r /sys/fs/cgroup/memory/memory.oom_control ]; then
+      sed 's/^/[kura]   /' /sys/fs/cgroup/memory/memory.oom_control
+      echo "[kura]   failcnt $(read_cgroup_value /sys/fs/cgroup/memory/memory.failcnt)"
+    else
+      echo "[kura]   unavailable"
+    fi
+    echo "[kura] proc meminfo"
+    if [ -r /proc/meminfo ]; then grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo | sed 's/^/[kura]   /'; else echo "[kura]   unavailable"; fi
+    echo "[kura] cpu_count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv,noheader,nounits 2>&1 | sed 's/^/[kura] gpu /'
+    else
+      echo "[kura] gpu nvidia-smi unavailable"
+    fi
+    df -Pk "$KURA_WORKSPACE" 2>&1 | sed 's/^/[kura] disk /'
+  }} >> "$KURA_LOG_PATH" 2>&1
+}}
+export KURA_CGROUP_OOM_KILL_BEFORE=$(read_oom_kill)
+collect_runtime_diagnostics before_backend
 exit_code=0
 tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?
 if [ "$exit_code" -eq 0 ]; then
@@ -633,6 +696,9 @@ if [ "$exit_code" -eq 0 ]; then
   {command} >> "$KURA_LOG_PATH" 2>&1
   exit_code=$?
 fi
+collect_runtime_diagnostics after_backend
+export KURA_CGROUP_OOM_KILL_AFTER=$(read_oom_kill)
+export KURA_CGROUP_MEMORY_PEAK=$(read_memory_peak)
 export KURA_EXIT_CODE="$exit_code"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/realizations"
 python - <<'PY'
@@ -642,9 +708,27 @@ run_id = os.environ["KURA_RUN_ID"]
 workspace = os.environ.get("KURA_WORKSPACE", "/workspace")
 now = datetime.now().astimezone().isoformat()
 exit_code = int(os.environ.get("KURA_EXIT_CODE", "0"))
+def optional_int(name):
+    try:
+        return int(os.environ.get(name, ""))
+    except ValueError:
+        return None
+oom_before = optional_int("KURA_CGROUP_OOM_KILL_BEFORE")
+oom_after = optional_int("KURA_CGROUP_OOM_KILL_AFTER")
+memory_peak = optional_int("KURA_CGROUP_MEMORY_PEAK")
 path = f"{{workspace}}/runs/{{run_id}}/realizations/remote-exit-{{now.replace(':', '').replace('.', '-')}}.json"
 with open(path, "w", encoding="utf-8") as handle:
-    json.dump({{"event": "remote_exit", "timestamp": now, "exit_code": exit_code}}, handle, ensure_ascii=False, indent=2)
+    json.dump({{
+        "event": "remote_exit",
+        "timestamp": now,
+        "exit_code": exit_code,
+        "diagnostics": {{
+            "cgroup_oom_kill_before": oom_before,
+            "cgroup_oom_kill_after": oom_after,
+            "cgroup_oom_kill_delta": oom_after - oom_before if oom_before is not None and oom_after is not None else None,
+            "cgroup_memory_peak_bytes": memory_peak,
+        }},
+    }}, handle, ensure_ascii=False, indent=2)
     handle.write("\\n")
 if os.environ.get("KURA_REMOTE_NOTIFY_NTFY") == "1" and os.environ.get("KURA_NTFY_TOPIC"):
     try:
