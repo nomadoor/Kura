@@ -3,6 +3,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -18,6 +19,7 @@ def env_int(name, default):
 ATTEMPTS = env_int("KURA_HF_DOWNLOAD_ATTEMPTS", 4)
 POLL_SEC = env_int("KURA_HF_DOWNLOAD_POLL_SEC", 15)
 NO_PROGRESS_SEC = env_int("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", 180)
+DOWNLOAD_RESERVE_BYTES = 1024**3
 
 
 CHILD = r"""
@@ -141,6 +143,74 @@ def require_cache_mappable(cache_dir, link_path):
         )
 
 
+def metadata_failure_kind(exc):
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code in (401, 403):
+        return "authentication"
+    if status_code == 404:
+        return "missing-artifact"
+    name = type(exc).__name__.lower()
+    if "timeout" in name or "connection" in name:
+        return "connectivity"
+    return "metadata"
+
+
+def preflight_downloads(items):
+    cache_dir = os.environ.get("HF_HOME")
+    if not cache_dir:
+        raise SystemExit("[kura] HF_HOME is required before downloading models")
+    os.makedirs(cache_dir, exist_ok=True)
+
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    from huggingface_hub import get_hf_file_metadata, hf_hub_url, try_to_load_from_cache
+
+    required_bytes = 0
+    for item in items:
+        require_cache_mappable(cache_dir, item["link_path"])
+        label = f"{item['key']}:{item['filename']}"
+        cached = try_to_load_from_cache(
+            item["repo_id"],
+            item["filename"],
+            cache_dir=cache_dir,
+            revision=item.get("revision") or "main",
+            repo_type=item.get("repo_type"),
+        )
+        if isinstance(cached, str) and os.path.isfile(cached):
+            size = os.path.getsize(cached)
+            print(f"[kura] hf preflight item {label} status=cached size_bytes={size}", flush=True)
+            continue
+        url = hf_hub_url(
+            repo_id=item["repo_id"],
+            filename=item["filename"],
+            revision=item.get("revision") or "main",
+            repo_type=item.get("repo_type"),
+        )
+        token = os.environ.get("HF_TOKEN")
+        try:
+            metadata = get_hf_file_metadata(url, token=token)
+        except Exception as exc:
+            kind = metadata_failure_kind(exc)
+            raise SystemExit(f"[kura] hf preflight {kind} failure for {label}: {type(exc).__name__}: {exc}") from exc
+        size = getattr(metadata, "size", None)
+        if not isinstance(size, int) or size < 0:
+            raise SystemExit(f"[kura] hf preflight metadata has no usable size for {label}")
+        required_bytes += size
+        print(f"[kura] hf preflight item {label} status=missing size_bytes={size}", flush=True)
+
+    free_bytes = shutil.disk_usage(cache_dir).free
+    print(
+        f"[kura] hf preflight summary files={len(items)} download_bytes={required_bytes} "
+        f"free_bytes={free_bytes} reserve_bytes={DOWNLOAD_RESERVE_BYTES}",
+        flush=True,
+    )
+    if required_bytes + DOWNLOAD_RESERVE_BYTES > free_bytes:
+        raise SystemExit(
+            "[kura] hf preflight insufficient disk: "
+            f"download_bytes={required_bytes} reserve_bytes={DOWNLOAD_RESERVE_BYTES} free_bytes={free_bytes}"
+        )
+
+
 def run_one(item):
     link_path = item["link_path"]
     cache_dir = os.environ.get("HF_HOME")
@@ -198,7 +268,9 @@ def run_one(item):
 
 
 def main():
-    for item in json.loads(sys.argv[1]):
+    items = json.loads(sys.argv[1])
+    preflight_downloads(items)
+    for item in items:
         run_one(item)
 
 
