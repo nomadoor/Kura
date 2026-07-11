@@ -60,8 +60,7 @@ launch.
 | --- | --- | --- |
 | `kura doctor disk` | read-only inventory | exits non-zero on warning-severity issues |
 | local Docker launch | `StorageStatus.effective_free_bytes` plus estimated writes for workspace, cache, and writable mounts | low effective free, unknown WSL2 backing, excessive Docker build cache |
-| local large Musubi model download | estimated new Hugging Face/model-cache writes after Kura cache hits | above `safety.large_model_download_gb` without `safety.allow_large_model_downloads: true` |
-| RunPod Musubi model download | estimated remote model downloads plus checkpoint writes against `runpod.container_disk_gb` | above container disk without `safety.allow_runpod_disk_risk: true` |
+| large Musubi model download | estimated new Hugging Face/model-cache writes after Kura cache hits | above `safety.large_model_download_gb` without `safety.allow_large_model_downloads: true` |
 | checkpoint-heavy train run | run plan / launch preflight | many unpruned checkpoints unless explicitly allowed |
 | RunPod download/pull | local destination free space | insufficient space for downloaded artifacts |
 | cleanup | dry-run by default | destructive action requires `--yes`; final artifacts require extra flag |

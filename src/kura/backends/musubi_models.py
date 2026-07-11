@@ -173,12 +173,12 @@ def _krea2_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     if bundle in ("none", "off", "false"):
         return {}
     downloads: dict[str, dict[str, Any]] = {
-        "dit": {"repo": "krea/Krea-2-Raw", "filename": "raw.safetensors", "size_bytes": 26_283_332_608},
-        "vae": {"repo": "Comfy-Org/Qwen-Image_ComfyUI", "filename": "split_files/vae/qwen_image_vae.safetensors", "size_bytes": 253_806_246},
-        "text_encoder": {"repo": "Comfy-Org/Qwen3-VL", "filename": "text_encoders/qwen3vl_4b_bf16.safetensors", "size_bytes": 8_875_719_384},
+        "dit": {"repo": "krea/Krea-2-Raw", "filename": "raw.safetensors"},
+        "vae": {"repo": "Comfy-Org/Qwen-Image_ComfyUI", "filename": "split_files/vae/qwen_image_vae.safetensors"},
+        "text_encoder": {"repo": "Comfy-Org/Qwen3-VL", "filename": "text_encoders/qwen3vl_4b_bf16.safetensors"},
     }
     if _truthy(override.get("include_turbo_dit")):
-        downloads["turbo_dit"] = {"repo": "krea/Krea-2-Turbo", "filename": "turbo.safetensors", "size_bytes": 26_283_332_608}
+        downloads["turbo_dit"] = {"repo": "krea/Krea-2-Turbo", "filename": "turbo.safetensors"}
     return downloads
 
 
@@ -188,7 +188,7 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return downloads
 
 
-def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[dict[str, Any]], dict[str, str]]:
+def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[dict[str, str]], dict[str, str]]:
     override = _musubi_backend_override(run)
     existing_paths = existing_paths or {}
     resolved_downloads: dict[str, Any] = _known_musubi_bundle(run)
@@ -215,18 +215,12 @@ def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, s
         if value.get("local_dir"):
             raise ValueError("Musubi Tuner model_downloads.local_dir is not supported; use HF_HOME cache or explicit model_paths")
         for item_filename in filenames:
-            item: dict[str, Any] = {
+            item = {
                 "key": key,
                 "repo_id": repo_id,
                 "filename": item_filename,
                 "link_path": _musubi_model_cache_path(repo_id, key, item_filename),
             }
-            size_bytes = value.get("size_bytes")
-            file_sizes = value.get("file_sizes")
-            if isinstance(file_sizes, dict) and isinstance(file_sizes.get(item_filename), int):
-                item["size_bytes"] = file_sizes[item_filename]
-            elif isinstance(size_bytes, int) and len(filenames) == 1:
-                item["size_bytes"] = size_bytes
             revision = value.get("revision")
             if isinstance(revision, str) and revision:
                 item["revision"] = revision
