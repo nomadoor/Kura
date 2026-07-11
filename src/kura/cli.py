@@ -39,6 +39,7 @@ from kura.run_commands import _select_remote_outputs
 from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
+from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_run_launch
 from kura.run_commands import cmd_run_logs
 from kura.run_commands import cmd_run_plan
@@ -1030,6 +1031,9 @@ def main() -> None:
     plan.add_argument("run_id")
     plan.add_argument("--json", action="store_true", help="Print the plan as JSON")
     plan.set_defaults(func=cmd_run_plan)
+    execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run")
+    execute.add_argument("run_id")
+    execute.set_defaults(func=cmd_run_execute)
     stage = run_sub.add_parser("stage", help="Stage compiled inputs for a remote executor")
     stage.add_argument("run_id")
     stage.add_argument("--executor", default="runpod", choices=("runpod",))

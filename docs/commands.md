@@ -41,6 +41,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
+| `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion and normal finalization |
 | `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
 | `uv run kura run launch <run-id> --executor docker` | Run locally through Docker |
 | `uv run kura run launch <run-id> --executor docker --wait` | Run locally and wait in the foreground until it finishes (auto-reconciles) |
@@ -52,7 +53,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 | `uv run kura run prune --docker-containers --docker-volumes` | Also clean up Kura-managed stopped containers/volumes (add `--yes` to delete) |
 
-Useful `run remote` flags:
+Useful low-level `run remote` flags for RunPod runs:
 
 - `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
   can inspect results. Use `--hold-for 0` to stop immediately.

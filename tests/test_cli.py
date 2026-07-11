@@ -29,7 +29,7 @@ from kura.executors.common import _safe_env
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
@@ -4358,6 +4358,36 @@ class RunPruneTests(unittest.TestCase):
 
 
 class RunPodLifecycleTests(unittest.TestCase):
+    def test_execute_run_uses_compiled_docker_executor_and_waits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("compute: {executor: docker}\n", encoding="utf-8")
+            with (
+                patch("kura.run_commands.launch._run_path", return_value=run_dir),
+                patch("kura.run_commands.launch.launch_run", return_value=0) as launch,
+            ):
+                self.assertEqual(execute_run("example"), 0)
+
+        launch.assert_called_once_with("example", executor="docker", dry_run=False, image=None, notify_channels=None, wait=True)
+
+    def test_execute_run_uses_compiled_runpod_executor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("compute: {executor: runpod}\n", encoding="utf-8")
+            with (
+                patch("kura.run_commands.launch._run_path", return_value=run_dir),
+                patch("kura.run_commands.launch.run_remote", return_value=0) as remote,
+            ):
+                self.assertEqual(execute_run("example", hold_for="0", max_lease="3h"), 0)
+
+        self.assertEqual(remote.call_args.args, ("example",))
+        self.assertEqual(remote.call_args.kwargs["hold_for"], "0")
+        self.assertEqual(remote.call_args.kwargs["max_lease"], "3h")
+
     @staticmethod
     def _config() -> dict[str, object]:
         return {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}
