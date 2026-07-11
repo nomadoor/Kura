@@ -48,13 +48,14 @@ Default Hugging Face cache mount:
 docker:
   mounts:
     - source: ./cache/huggingface
-      target: /root/.cache/huggingface
+      target: /workspace/cache/huggingface
       mode: rw
 ```
 
 `./cache/huggingface` stays outside Git and is reused across local Docker runs
 inside the same workspace. Advanced users can point `source` at a shared absolute
-path.
+path. Kura also maps the legacy `/root/.cache/huggingface` target into this
+workspace path so existing workspaces do not keep creating root-owned files.
 
 For Musubi runs with automatic Hugging Face downloads, Kura tries to estimate
 the referenced file sizes before local launch. The estimate is added on top of

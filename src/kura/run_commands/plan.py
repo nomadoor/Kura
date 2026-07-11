@@ -382,7 +382,7 @@ def _hf_cache_path(workspace: Path, mounts: list[dict[str, Any]]) -> Path:
     for mount in mounts:
         if not isinstance(mount, dict) or mount.get("mode") == "ro":
             continue
-        if mount.get("target") == "/root/.cache/huggingface" and isinstance(mount.get("source"), str):
+        if mount.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"} and isinstance(mount.get("source"), str):
             return _resolve_local_path(workspace, mount["source"])
     return workspace / "cache" / "huggingface"
 

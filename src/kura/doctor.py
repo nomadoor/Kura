@@ -306,7 +306,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             for item in docker_mounts
             if isinstance(item, dict)
             and isinstance(item.get("source"), str)
-            and item.get("target") == "/root/.cache/huggingface"
+            and item.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"}
         ),
         None,
     )
@@ -482,7 +482,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
                 if not checks["gpu_available"]:
                     diagnosis = "The local image cannot access a GPU. In WSL, confirm Docker Desktop WSL integration and NVIDIA Container Toolkit support."
     mounts = _workspace_config().get("docker", {}).get("mounts", [])
-    cache_path = next((_workspace_relative_path(item["source"]) for item in mounts if isinstance(item, dict) and isinstance(item.get("source"), str) and item.get("target") == "/root/.cache/huggingface"), None)
+    cache_path = next((_workspace_relative_path(item["source"]) for item in mounts if isinstance(item, dict) and isinstance(item.get("source"), str) and item.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"}), None)
     cache: dict[str, Any] = {"path": str(cache_path) if cache_path else None, "exists": bool(cache_path and cache_path.exists()), "default_path": str(_workspace_relative_path("./cache/huggingface"))}
     if cache_path:
         try:
@@ -496,7 +496,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         if not cache_path.exists():
             cache["note"] = "Kura will create this cache directory before local Docker launch. Change docker.mounts[].source in workspace.yaml if you want another location."
     else:
-        cache["note"] = "No Hugging Face cache mount is configured. Add docker.mounts source ./cache/huggingface target /root/.cache/huggingface to reuse downloads across local Docker runs."
+        cache["note"] = "No Hugging Face cache mount is configured. Add docker.mounts source ./cache/huggingface target /workspace/cache/huggingface to reuse downloads across local Docker runs."
     if checks["daemon_reachable"] and not diagnosis:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
     print(json.dumps({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))

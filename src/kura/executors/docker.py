@@ -87,6 +87,25 @@ def _container_name(run_id: str, realization_id: str) -> str:
     return f"kura-{clean_run}-{realization_id}"[:200]
 
 
+def _effective_mounts(mounts: list[dict[str, str]], workspace_target: str) -> list[dict[str, str]]:
+    """Map the legacy root-only HF cache target into the workspace namespace."""
+    effective: list[dict[str, str]] = []
+    for mount in mounts:
+        item = dict(mount)
+        if item.get("target") == "/root/.cache/huggingface":
+            item["target"] = f"{workspace_target.rstrip('/')}/cache/huggingface"
+        effective.append(item)
+    return effective
+
+
+def _host_user() -> str | None:
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if not callable(getuid) or not callable(getgid):
+        return None
+    return f"{getuid()}:{getgid()}"
+
+
 def docker_command(
     workspace: Path,
     run_dir: Path,
@@ -100,13 +119,17 @@ def docker_command(
     """Build a detached Docker command and direct container output into the run mount."""
     name = _container_name(run_dir.name, realization_id)
     log_path = f"{workspace_target}/runs/{run_dir.name}/logs/stdout.log"
+    mounts = _effective_mounts(mounts, workspace_target)
     command = [
         "docker", "run", "-d", "--init", "--stop-timeout", "30", "--name", name,
         "--label", "io.kura.managed=true",
         "--label", f"io.kura.run_id={run_dir.name}",
         "--label", f"io.kura.realization_id={realization_id}",
-        "--workdir", spec["cwd"], "--volume", f"{workspace.resolve()}:{workspace_target}",
     ]
+    host_user = _host_user()
+    if host_user:
+        command.extend(["--user", host_user])
+    command.extend(["--workdir", spec["cwd"], "--volume", f"{workspace.resolve()}:{workspace_target}"])
     for mount in mounts:
         source = _resolve_mount_source(workspace, mount["source"])
         suffix = ":ro" if mount.get("mode") == "ro" else ""
@@ -123,7 +146,8 @@ def docker_command(
     # Container output is redirected to a mounted file; force Python progress
     # messages through immediately instead of waiting for its file buffer.
     runtime_env.setdefault("PYTHONUNBUFFERED", "1")
-    runtime_env.setdefault("HF_HOME", "/root/.cache/huggingface")
+    runtime_env.setdefault("HOME", "/tmp/kura-home")
+    runtime_env.setdefault("HF_HOME", f"{workspace_target.rstrip('/')}/cache/huggingface")
     if os.environ.get("HF_TOKEN"):
         runtime_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
     for key, value in sorted(runtime_env.items()):
@@ -135,7 +159,7 @@ def docker_command(
     # the source of truth. The mounted run log survives Docker log rotation.
     quoted_root = workspace_target.rstrip("/")
     wrapper = (
-        'mkdir -p "$(dirname "$KURA_LOG_PATH")" '
+        'mkdir -p "$HOME" "$(dirname "$KURA_LOG_PATH")" '
         f'"{quoted_root}/runs/$KURA_RUN_ID/outputs" '
         f'"{quoted_root}/runs/$KURA_RUN_ID/checkpoints" '
         f'"{quoted_root}/runs/$KURA_RUN_ID/samples" '
@@ -149,8 +173,9 @@ def docker_command(
 def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, dockerfile: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, min_free_gb: int = MIN_FREE_SPACE_GIB) -> tuple[list[str], str | None]:
     """Start a detached Docker realization; completion is recovered by reconcile."""
     realization_id = _realization_id()
-    preflight = {} if dry_run else docker_preflight(workspace, mounts, min_free_gb=min_free_gb)
-    command, runtime_env, name = docker_command(workspace, run_dir, spec, image, mounts, gpu, realization_id, workspace_target)
+    effective_mounts = _effective_mounts(mounts, workspace_target)
+    preflight = {} if dry_run else docker_preflight(workspace, effective_mounts, min_free_gb=min_free_gb)
+    command, runtime_env, name = docker_command(workspace, run_dir, spec, image, effective_mounts, gpu, realization_id, workspace_target)
     safe_command = _safe_command(command)
     image_id = _docker_image_id(image)
     if dry_run:
@@ -175,7 +200,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "local_image": image, "image_id": image_id, "dockerfile": dockerfile,
         "container": {"id": container_id, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command, "workspace_mount": {"source": str(workspace.resolve()), "target": workspace_target},
-        "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in mounts],
+        "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in effective_mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},

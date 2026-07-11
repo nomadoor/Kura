@@ -77,7 +77,7 @@ class InitCommandTests(unittest.TestCase):
                             self.assertTrue((root / source).exists(), f"{dockerfile}: {source}")
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
-                self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/root/.cache/huggingface")
+                self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/workspace/cache/huggingface")
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
                 self.assertEqual(workspace["comfyui"]["lora_dir"], "")
@@ -3691,12 +3691,14 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertNotIn("--rm", command)
         self.assertIn("io.kura.realization_id=r1", command)
         self.assertIn("PYTHONUNBUFFERED=1", command)
-        self.assertEqual(runtime_env["HF_HOME"], "/root/.cache/huggingface")
+        self.assertEqual(runtime_env["HF_HOME"], "/workspace/cache/huggingface")
         self.assertEqual(runtime_env["KURA_RUN_ID"], "example")
-        self.assertIn("HF_HOME=/root/.cache/huggingface", command)
+        self.assertIn("HF_HOME=/workspace/cache/huggingface", command)
+        self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
+        self.assertIn("HOME=/tmp/kura-home", command)
         self.assertIn("KURA_WORKSPACE_PATH_MAPS", runtime_env)
         command_text = "\n".join(command)
-        self.assertIn('mkdir -p "$(dirname "$KURA_LOG_PATH")"', command_text)
+        self.assertIn('mkdir -p "$HOME" "$(dirname "$KURA_LOG_PATH")"', command_text)
         self.assertIn('"/workspace/runs/$KURA_RUN_ID/outputs"', command_text)
         self.assertIn('"/workspace/runs/$KURA_RUN_ID/checkpoints"', command_text)
         self.assertIn('exec "$@" >> "$KURA_LOG_PATH" 2>&1', command_text)
@@ -3708,11 +3710,11 @@ class DockerLifecycleTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
             command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", mounts, True, "r1")
-        self.assertIn(f"{root}/cache/huggingface:/root/.cache/huggingface", command)
+        self.assertIn(f"{root}/cache/huggingface:/workspace/cache/huggingface", command)
         self.assertEqual(
             json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"]),
             [
-                {"container": "/root/.cache/huggingface", "workspace": "/workspace/cache/huggingface"},
+                {"container": "/workspace/cache/huggingface", "workspace": "/workspace/cache/huggingface"},
                 {"container": "/workspace", "workspace": "/workspace"},
             ],
         )
