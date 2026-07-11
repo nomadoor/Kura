@@ -40,7 +40,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | --- | --- |
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
-| `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion and normal finalization |
+| `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 | `uv run kura run prune --docker-containers --docker-volumes` | Also clean up Kura-managed stopped containers/volumes (add `--yes` to delete) |

@@ -4417,7 +4417,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.launch._run_path", return_value=run_dir),
                 patch("kura.run_commands.launch.run_remote", return_value=0) as remote,
             ):
-                self.assertEqual(execute_run("example", hold_for="0", max_lease="3h"), 0)
+                self.assertEqual(execute_run("example", max_lease="3h"), 0)
 
         self.assertEqual(remote.call_args.args, ("example",))
         self.assertEqual(remote.call_args.kwargs["hold_for"], "0")
