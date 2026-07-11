@@ -1,5 +1,9 @@
 # Musubi Tuner adapters
 
+For the cross-backend version, adapter, and real-hardware summary, see
+[backend-support.md](backend-support.md). This document keeps the detailed
+Musubi adapter mechanics and historical smoke commands.
+
 Musubi Tuner and Kura's Musubi backend are not the same layer.
 
 - **Musubi Tuner support** means the upstream tool has training scripts,
