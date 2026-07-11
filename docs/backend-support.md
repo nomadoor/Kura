@@ -28,8 +28,8 @@ notes and upstream links are in
 
 | Backend | Version | Adapter coverage | Best verified path |
 | --- | --- | --- | --- |
-| AI-Toolkit | `0.10.22` | ⚠️ Generic native-config projection | ✅ SDXL local + RunPod |
-| Musubi Tuner | `v0.3.4` | ✅ All 12 top-level adapters | ✅ Wan local + RunPod; 🧪 all adapter families represented |
+| AI-Toolkit | `0.10.22` | ⚠️ | ✅ SDXL local + RunPod |
+| Musubi Tuner | `v0.3.4` | ✅ 12/12 | ✅ Wan local + RunPod; 🧪 all families |
 
 `🧪 Real smoke` and `✅ Operational` validate the execution path, not training
 quality. Quality requires generation and human evaluation from a meaningful
@@ -53,17 +53,17 @@ AI-Toolkit's model loader as a Kura model registry.
 
 | Model family | Status | Kura path | Real hardware evidence | Notes |
 | --- | --- | --- | --- | --- |
-| SDXL | ✅ Operational | Native-config projection | RTX 4070 Ti local; RTX A5000 RunPod | LoRA, config, optimizer recovery, and Pod cleanup verified. |
-| SD 1.5 | 🧩 Expressible | Native-config projection | — | Generic image-folder contract; no current real smoke. |
-| FLUX.1 / Kontext / Flex / Chroma | 🧩 Expressible | Native config + overrides | — | Model-specific defaults are not promoted as verified. |
-| Qwen Image | ⚠️ T2I expressible | Native config + overrides | — | Edit/control requires an explicit native dataset config. |
-| HiDream | 🧩 Expressible | Native config + overrides | — | No AI-Toolkit real smoke through Kura. |
-| FLUX.2 / Krea 2 | 🧩 Expressible | Native config + overrides | — | Musubi evidence does not transfer to this backend. |
-| Z-Image | ⚠️ Variant-dependent | Native config + overrides | — | Companion artifacts differ by variant. |
-| Wan 2.1 / 2.2 | ⚠️ No first-class video projection | Native override required | — | Simple image-folder projection is not a complete video contract. |
-| LTX-2 / LTX-2.3 | 📋 Upstream listed | Native override required | — | No first-class Kura video projection. |
-| ACE-Step | ❌ Out of scope | — | — | Audio is outside the current train-run dataset contract. |
-| Other image families | ⚠️ Review required | Native override only | — | OmniGen2, ERNIE-Image, Nucleus-Image, Ideogram 4, PRXPixel, and Boogu. |
+| SDXL | ✅ | Native-config projection | RTX 4070 Ti local; RTX A5000 RunPod | LoRA, config, optimizer recovery, and Pod cleanup verified. |
+| SD 1.5 | 🧩 | Native-config projection | — | Generic image-folder contract; no current real smoke. |
+| FLUX.1 / Kontext / Flex / Chroma | 🧩 | Native config + overrides | — | Model-specific defaults are not promoted as verified. |
+| Qwen Image | ⚠️ | Native config + overrides | — | T2I expressible; edit/control requires an explicit native dataset config. |
+| HiDream | 🧩 | Native config + overrides | — | No AI-Toolkit real smoke through Kura. |
+| FLUX.2 / Krea 2 | 🧩 | Native config + overrides | — | Musubi evidence does not transfer to this backend. |
+| Z-Image | ⚠️ | Native config + overrides | — | Companion artifacts differ by variant. |
+| Wan 2.1 / 2.2 | ⚠️ | Native override required | — | No first-class video projection. |
+| LTX-2 / LTX-2.3 | 📋 | Native override required | — | No first-class Kura video projection. |
+| ACE-Step | ❌ | — | — | Audio is outside the current train-run dataset contract. |
+| Other image families | ⚠️ | Native override only | — | Model-specific review required. |
 
 The default generated AI-Toolkit recipe is operationally verified for SDXL.
 Other families remain explicit, reviewable backend configurations until they
@@ -77,18 +77,18 @@ training entrypoints.
 
 | Architecture | Adapter | Variant compile coverage | Evidence | Real hardware evidence |
 | --- | --- | --- | --- | --- |
-| FLUX.2 | ✅ Built in | dev; Klein/base 4B and 9B; reference images | 🧪 Real smoke | Representative real smoke recorded |
-| Wan 2.1 / 2.2 | ✅ Built in | 2.1 T2V/I2V/Fun Control; 2.2 dual-DiT T2V/I2V; Single Frame | ✅ Operational | 1.3B local + RTX A6000 RunPod; Single Frame 14B on RTX 4070 Ti |
-| Krea 2 | ✅ Built in | Standard LoRA path | 🧪 Real smoke | Historical Kura smoke; broader validation remains separate |
-| Qwen-Image | ✅ Built in | Original; Edit; Edit-2509; Edit-2511; Layered | 🧪 Real smoke | Original path on RunPod A40 |
-| Z-Image | ✅ Built in | Standard LoRA path | 🧪 Real smoke | Representative real smoke recorded |
-| FLUX.1 Kontext | ✅ Built in | Paired/control data path | 🧪 Real smoke | Representative paired-data smoke recorded |
-| Ideogram 4 | ✅ Built in | Standard LoRA path | 🧪 Real smoke | Representative real smoke recorded |
-| HiDream-O1-Image | ✅ Built in | T2I; I2I control/reference | 🧪 Real smoke | T2I representative smoke recorded |
-| HunyuanVideo | ✅ Built in | Standard LoRA path | 🧪 Real smoke | Representative real smoke recorded |
-| HunyuanVideo 1.5 | ✅ Built in | T2V; I2V image-encoder path | 🧪 Real smoke | T2V representative smoke recorded |
-| FramePack | ✅ Built in | Normal; F1; Single Frame | 🧪 Real smoke | Normal representative smoke recorded |
-| Kandinsky 5 | ✅ Built in | Lite/Pro T2V; Pro I2V | ⚠️ Partial real smoke | Lite T2V recorded; Pro remains capacity-dependent |
+| FLUX.2 | ✅ | dev; Klein/base 4B and 9B; reference images | 🧪 | Representative real smoke recorded |
+| Wan 2.1 / 2.2 | ✅ | 2.1 T2V/I2V/Fun Control; 2.2 dual-DiT T2V/I2V; Single Frame | ✅ | 1.3B local + RTX A6000 RunPod; Single Frame 14B on RTX 4070 Ti |
+| Krea 2 | ✅ | Standard LoRA path | 🧪 | Historical Kura smoke; broader validation remains separate |
+| Qwen-Image | ✅ | Original; Edit; Edit-2509; Edit-2511; Layered | 🧪 | Original path on RunPod A40 |
+| Z-Image | ✅ | Standard LoRA path | 🧪 | Representative real smoke recorded |
+| FLUX.1 Kontext | ✅ | Paired/control data path | 🧪 | Representative paired-data smoke recorded |
+| Ideogram 4 | ✅ | Standard LoRA path | 🧪 | Representative real smoke recorded |
+| HiDream-O1-Image | ✅ | T2I; I2I control/reference | 🧪 | T2I representative smoke recorded |
+| HunyuanVideo | ✅ | Standard LoRA path | 🧪 | Representative real smoke recorded |
+| HunyuanVideo 1.5 | ✅ | T2V; I2V image-encoder path | 🧪 | T2V representative smoke recorded |
+| FramePack | ✅ | Normal; F1; Single Frame | 🧪 | Normal representative smoke recorded |
+| Kandinsky 5 | ✅ | Lite/Pro T2V; Pro I2V | ⚠️ | Lite T2V recorded; Pro remains capacity-dependent |
 
 Variant compile coverage means that Kura selects the correct cache scripts,
 training script, mandatory model roles, and variant flags. It does not mean
