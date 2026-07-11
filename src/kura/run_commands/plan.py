@@ -327,8 +327,6 @@ def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> 
         expected_checkpoints = max(steps // save_every, 1)
         if expected_checkpoints >= 10 and not has_retention_policy:
             warnings.append(f"checkpoint cadence may create about {expected_checkpoints} checkpoints; set prune_checkpoints_before_step or keep-last policy if this is not intentional")
-        elif save_every <= 100 and not has_retention_policy:
-            warnings.append("checkpoint save_every_n_steps is 100 or less with no prune policy")
     if steps and cadence:
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:

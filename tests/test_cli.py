@@ -30,7 +30,7 @@ from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
+from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
@@ -1177,6 +1177,15 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 
 
 class RunPlanTests(unittest.TestCase):
+    def test_disk_warnings_do_not_flag_a_single_checkpoint_as_frequent(self) -> None:
+        run = {
+            "params": {"steps": 1},
+            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 1}},
+            "compute": {"executor": "runpod"},
+        }
+
+        self.assertEqual(_disk_warnings(run, {"save_every_n_steps": 1}), [])
+
     def test_run_plan_prints_uncompiled_train_settings_from_run_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

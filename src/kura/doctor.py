@@ -532,6 +532,7 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
         "help_smoke": not args.skip_help,
         "gpu": not args.no_gpu,
         "script_timeout_seconds": args.script_timeout,
+        "parallel_help_workers": 4 if not args.skip_help else 0,
     }
     if not docker:
         diagnosis = "Docker CLI was not found on PATH."

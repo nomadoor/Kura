@@ -54,6 +54,15 @@ class ContainerScriptTests(unittest.TestCase):
             ):
                 namespace["DOWNLOAD_RESERVE_BYTES"] = 100
                 namespace["preflight_downloads"]([item])
+        self.assertEqual(item["_size_bytes"], 1234)
+
+    def test_hf_download_progress_is_scoped_and_capped_to_the_item(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        self.assertEqual(namespace["progress_bytes"](1050, 1000, 200), 50)
+        self.assertEqual(namespace["progress_bytes"](1400, 1000, 200), 200)
+        self.assertEqual(namespace["progress_bytes"](900, 1000, 200), 0)
 
     def test_hf_download_preflight_rejects_insufficient_disk_before_download(self) -> None:
         namespace = {"__name__": "__test__"}

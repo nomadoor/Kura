@@ -62,6 +62,13 @@ def tree_snapshot(directory):
     return total, newest, count
 
 
+def progress_bytes(total, baseline, expected_size):
+    downloaded = max(0, total - baseline)
+    if isinstance(expected_size, int):
+        downloaded = min(downloaded, expected_size)
+    return downloaded
+
+
 def repo_cache_dirs(cache_dir, item):
     repo_type = item.get("repo_type") or "model"
     prefix = {"model": "models", "dataset": "datasets", "space": "spaces"}.get(repo_type, f"{repo_type}s")
@@ -178,6 +185,7 @@ def preflight_downloads(items):
         )
         if isinstance(cached, str) and os.path.isfile(cached):
             size = os.path.getsize(cached)
+            item["_size_bytes"] = size
             print(f"[kura] hf preflight item {label} status=cached size_bytes={size}", flush=True)
             continue
         url = hf_hub_url(
@@ -195,6 +203,7 @@ def preflight_downloads(items):
         size = getattr(metadata, "size", None)
         if not isinstance(size, int) or size < 0:
             raise SystemExit(f"[kura] hf preflight metadata has no usable size for {label}")
+        item["_size_bytes"] = size
         required_bytes += size
         print(f"[kura] hf preflight item {label} status=missing size_bytes={size}", flush=True)
 
@@ -221,27 +230,41 @@ def run_one(item):
     os.makedirs(link_dir, exist_ok=True)
     os.makedirs(cache_dir, exist_ok=True)
     label = f"{item['key']}:{item['filename']}"
-    last_total, last_mtime, _ = tree_snapshot(cache_dir)
+    progress_dirs = repo_cache_dirs(cache_dir, item)
+    baseline_total = sum(tree_snapshot(directory)[0] for directory in progress_dirs)
+    baseline_count = sum(tree_snapshot(directory)[2] for directory in progress_dirs)
+    last_total = baseline_total
+    last_mtime = max((tree_snapshot(directory)[1] for directory in progress_dirs), default=0.0)
+    expected_size = item.get("_size_bytes")
     for attempt in range(1, ATTEMPTS + 1):
         print(f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}", flush=True)
         process = subprocess.Popen([sys.executable, "-c", CHILD, json.dumps(item, ensure_ascii=False)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         last_progress = time.monotonic()
         while process.poll() is None:
             time.sleep(POLL_SEC)
-            total, newest, count = tree_snapshot(cache_dir)
+            snapshots = [tree_snapshot(directory) for directory in progress_dirs]
+            total = sum(snapshot[0] for snapshot in snapshots)
+            newest = max((snapshot[1] for snapshot in snapshots), default=0.0)
+            count = sum(snapshot[2] for snapshot in snapshots)
+            downloaded = progress_bytes(total, baseline_total, expected_size)
+            created_files = max(0, count - baseline_count)
             if total != last_total or newest != last_mtime:
                 last_total, last_mtime = total, newest
                 last_progress = time.monotonic()
-                print(f"[kura] hf download progress {label} files={count} bytes={total}", flush=True)
+                print(f"[kura] hf download progress {label} files={created_files} bytes={downloaded}", flush=True)
                 continue
             idle = int(time.monotonic() - last_progress)
-            print(f"[kura] hf download idle {label} idle={idle}s bytes={total}", flush=True)
+            print(f"[kura] hf download idle {label} idle={idle}s bytes={downloaded}", flush=True)
             if idle >= NO_PROGRESS_SEC:
                 process.kill()
                 process.wait(timeout=30)
                 removed = remove_incomplete_files(repo_cache_dirs(cache_dir, item))
                 print(f"[kura] hf download stalled {label}; removed {removed} incomplete file(s); retrying", flush=True)
-                last_total, last_mtime, _ = tree_snapshot(cache_dir)
+                snapshots = [tree_snapshot(directory) for directory in progress_dirs]
+                last_total = sum(snapshot[0] for snapshot in snapshots)
+                last_mtime = max((snapshot[1] for snapshot in snapshots), default=0.0)
+                baseline_total = last_total
+                baseline_count = sum(snapshot[2] for snapshot in snapshots)
                 break
         output = ""
         if process.stdout is not None:
