@@ -142,6 +142,20 @@ Validation completed during this audit:
 - completed a real SDXL one-step local Docker run on an RTX 4070 Ti through
   `kura run execute`, including cache reuse, LoRA output, optimizer output,
   realization records, and host-user file ownership;
+- completed a real Wan 2.1 Single Frame 14B one-step local Docker run on an
+  RTX 4070 Ti after an empty-cache 30.5 GiB acquisition; AI-Toolkit and
+  Kura-managed Musubi downloads now share
+  `HF_HUB_CACHE=/workspace/cache/huggingface/hub`, while `cache/models` only
+  contains stable Kura links;
+- completed a real AI-Toolkit 0.10.22 SDXL one-step RunPod run on an RTX A5000;
+  the backend acquired 14.2 GB through the shared cache environment, produced
+  and recovered the LoRA/config/optimizer artifacts, and the disposable Pod
+  was stopped;
+- completed a real Musubi Wan 2.1 1.3B one-step RunPod run on an RTX A6000;
+  Kura preflighted and acquired 13.5 GiB through the same hub cache, validated
+  both LoRA outputs, recovered them locally, and stopped the disposable Pod;
+- confirmed after both remote runs that RunPod had zero Pods and zero Network
+  Volumes, with no cgroup OOM kills in either run;
 - ran `kura doctor musubi` against the v0.3.4 image: all 36 expected adapter
   scripts existed and completed their help smoke;
 - passed Kura's release gate with 305 tests and all mechanical checks after the
