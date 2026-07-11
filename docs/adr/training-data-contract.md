@@ -1,6 +1,6 @@
 # ADR: Training data contracts across backends
 
-Status: proposed owner decision.
+Status: accepted owner decision.
 
 Date: 2026-07-12
 
@@ -108,7 +108,63 @@ Compilation compares the requirements with the provided facts. The result is
 frozen under `resolved/` with the native backend configuration. It is not a
 second mutable dataset record.
 
-## Decision 3: user intent remains explicit
+## Decision 3: physical layouts normalize to logical samples
+
+The contract is independent of where matching files are stored. At minimum,
+Kura must be able to normalize equivalent layouts such as:
+
+```text
+dataset/
+  001.png
+  001.txt
+```
+
+and:
+
+```text
+dataset/
+  image/001.png
+  caption/001.txt
+```
+
+Paired and conditioned datasets follow the same rule:
+
+```text
+dataset/
+  target/001.png
+  source/001.png
+  caption/001.txt
+```
+
+Authored `items.jsonl` paths are the preferred unambiguous mapping. For a
+declared directory layout, matching stems such as `001` may provide the
+mapping. Backend compilers consume the resulting logical samples rather than
+each inventing their own folder discovery rules.
+
+Normalization does not copy, rename, or rearrange dataset payloads. The frozen
+contract records the authored paths and their logical roles. Backend-native
+JSONL or TOML generated under `resolved/` may reference those paths.
+
+Kura treats the following as structural failures:
+
+- a missing target, condition, or required caption
+- unequal member counts where the selected task requires one-to-one pairing
+- duplicate or ambiguous matches for the same logical item
+- a path escaping the dataset root
+- unreadable or unsupported payloads required by the selected task
+
+Image width, height, and aspect ratio are measured facts. A backend-task
+requirement declares whether paired members must match exactly, must share an
+aspect ratio, or may have independent sizes. Kura must not globally reject
+mixed-aspect datasets because normal bucketed training and some multi-control
+tasks support them. It must reject or clearly report mismatches when the
+selected task requires alignment.
+
+Directory names are hints only when the dataset metadata declares their roles.
+Kura does not infer user intent solely from names such as `image`, `source`,
+`reference`, or `control`.
+
+## Decision 4: user intent remains explicit
 
 Structural compatibility does not select the user's goal.
 
@@ -124,7 +180,7 @@ and backend overrides where possible. A new required user-authored mode enum is
 not justified merely to make compiler code tidy. If repeated authoring shows a
 stable cross-backend shorthand is useful, it may be proposed separately.
 
-## Decision 4: validation follows the pre-emption criterion
+## Decision 5: validation follows the pre-emption criterion
 
 Kura blocks only deterministic contract failures whose trainer failure would
 be expensive-late or cryptic. Examples include:
@@ -146,7 +202,7 @@ There is no quality gate. Resolution, captions, subject consistency, learning
 rate, rank, and expected output quality remain plan facts and agent/user
 judgment.
 
-## Decision 5: backend projection stays backend-owned
+## Decision 6: backend projection stays backend-owned
 
 The common contract does not create a universal trainer configuration.
 
@@ -163,7 +219,7 @@ Core owns only the common fact shape and comparison. Backend code owns the
 translation. This preserves the existing backend/executor separation and does
 not add a daemon, database, queue, or hidden state.
 
-## Decision 6: support evidence is contract-based
+## Decision 7: support evidence is contract-based
 
 Kura will not require a real training run for every checkpoint. Evidence is
 collected for execution contracts that materially differ.
@@ -213,7 +269,7 @@ A one-step smoke proves wiring and execution only. Meaningful training followed
 by fixed-prompt generation and human evaluation remains necessary for quality
 claims.
 
-## Decision 7: current claims are conservative
+## Decision 8: current claims are conservative
 
 Until this contract is implemented and the combined tests pass:
 
@@ -260,8 +316,10 @@ intent and backend task in the existing run.
 Each item is a separate reviewed change with focused tests followed by the
 release gate.
 
-1. Add a read-only dataset-provided-facts projection using existing dataset
-   metadata and inspection logic. Do not change backend output.
+1. Add a read-only logical-sample normalizer and dataset-provided-facts
+   projection using existing dataset metadata and inspection logic. Cover
+   colocated sidecar captions, separately declared image/caption directories,
+   and explicit `items.jsonl` mappings without changing backend output.
 2. Freeze the projection under `resolved/` and show it in the existing plan.
 3. Add declarative requirement tables for the currently claimed first-class
    Musubi tasks, beginning with Wan, and compare them at compile time.
