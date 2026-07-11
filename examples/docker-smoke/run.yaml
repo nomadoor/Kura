@@ -1,3 +1,4 @@
+schema_version: 2
 type: train
 dataset:
   id: replace-with-dataset-id

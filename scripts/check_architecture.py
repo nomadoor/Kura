@@ -14,6 +14,7 @@ PURE_OBSERVATION_MODULES = {
     SRC / "dataset_observations.py",
 }
 AGENT_RUNTIME_MODULES = {"anthropic", "claude_agent_sdk", "openai"}
+REMOVED_RUN_KEYS = {"backend_overrides", "params"}
 
 
 def imports(path: Path) -> set[str]:
@@ -25,6 +26,11 @@ def imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module)
     return names
+
+
+def exact_string_constants(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
 
 
 def main() -> int:
@@ -49,6 +55,13 @@ def main() -> int:
             root = name.split(".", 1)[0]
             if root in AGENT_RUNTIME_MODULES:
                 failures.append(f"{path.relative_to(ROOT)} makes the production CLI depend on agent runtime {name}")
+
+    for path in sorted(SRC.rglob("*.py")):
+        if path == SRC / "run_envelope.py":
+            continue
+        removed = REMOVED_RUN_KEYS & exact_string_constants(path)
+        if removed:
+            failures.append(f"{path.relative_to(ROOT)} references removed run key(s): {', '.join(sorted(removed))}")
 
     selector = "kura.backends.musubi_native_selectors"
     for path in sorted(SRC.rglob("*.py")):

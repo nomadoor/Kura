@@ -46,6 +46,10 @@ run.yaml -> resolved/ -> realization -> outputs -> render/evaluation
 Kura does not define a common model family tree, task enum, architecture enum,
 capability registry, or constraint language.
 
+Training runs using this contract are `schema_version: 2`. Version 1 training
+runs are rejected; this pre-release repository intentionally carries no
+compatibility reader or migration merge semantics.
+
 ## Decision 2: model and backend-native values are opaque
 
 `model.base` is an identity, not a node in a Kura taxonomy. FLUX.2 dev and each
@@ -65,10 +69,8 @@ backend:
     task: i2v-A14B
 ```
 
-Schema-v1 `backend_overrides.<backend>` remains readable for replay. A non-empty
-legacy and primary config may not coexist: Kura refuses to invent merge
-precedence. New runs author only `backend.config`, so this is one config with a
-compatibility reader, not two stores.
+Removed `backend_overrides.<backend>` input is rejected. Kura refuses to invent
+merge precedence or carry two spellings for the same native decision.
 
 ## Decision 3: common recipe fields require proven semantic identity
 
@@ -85,8 +87,7 @@ choice.
 The audit retains only requested optimizer-step count and seed in the common
 `recipe`. Rank, alpha, learning rate, scheduler, precision, accumulation,
 dataset resolution/batch, optimizer, and save cadence are backend-native.
-Existing `params` runs retain their old projection for replay; new runs do not
-author those ambiguous common-looking fields.
+Removed `params` input is rejected rather than silently reinterpreted.
 
 ## Decision 4: dataset observations contain no training verdict
 
@@ -262,7 +263,7 @@ separate process may duplicate the most expensive work.
 5. Record explicit pinning strength and observation state in model, compile,
    and realization provenance.
 6. Restrict new common `recipe` authoring to steps and seed.
-7. Make `backend.config` primary while retaining an unambiguous legacy reader.
+7. Make `backend.config` the only backend-native input and reject removed keys.
 8. Prove both training backends compile, plan, dry-launch, and report status
    from files alone, and mechanically reject production agent-SDK imports.
 

@@ -250,7 +250,7 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
         "unsupported Kura built-in Musubi adapter: "
         f"{architecture}. Musubi Tuner may support this architecture upstream, "
         "but Kura does not generate its command automatically yet. "
-        "Use backend_overrides.musubi-tuner.command for an explicit command, "
+        "Use backend.config.command for an explicit command, "
         "or add a Kura adapter."
     )
 
@@ -273,7 +273,7 @@ def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
         return "klein-base-4b"
     if candidates & {"black-forest-labs/flux.2-klein-4b", "flux.2-klein-4b", "flux2-klein-4b", "flux2-klein-4b-comfy", "comfy-flux2-klein-4b"}:
         return "klein-4b"
-    raise ValueError("Musubi FLUX.2 requires backend_overrides.musubi-tuner.model_version or a recognized model.base/model_bundle; refusing to default to 4B")
+    raise ValueError("Musubi FLUX.2 requires backend.config.model_version or a recognized model.base/model_bundle; refusing to default to 4B")
 
 
 def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:

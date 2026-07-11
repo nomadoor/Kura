@@ -24,17 +24,18 @@ PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 
 
 class AgentIndependentCliTests(unittest.TestCase):
-    def test_primary_and_legacy_backend_config_never_merge(self) -> None:
-        run = {
-            "backend": {"name": "musubi-tuner", "config": {"architecture": "wan"}},
-            "backend_overrides": {"musubi-tuner": {"architecture": "flux2"}},
-        }
-        with self.assertRaisesRegex(ValueError, "cannot both be set"):
+    def test_removed_backend_config_spelling_is_rejected(self) -> None:
+        run = {"backend": {"name": "musubi-tuner", "config": {}}, "backend_overrides": {}}
+        with self.assertRaisesRegex(ValueError, "is not supported"):
             backend_config(run)
 
     def test_recipe_rejects_backend_dependent_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "put them under backend.config"):
             common_recipe({"recipe": {"learning_rate": 0.0001}})
+
+    def test_removed_params_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "params is not supported"):
+            common_recipe({"params": {"steps": 1}})
 
     def test_model_requirement_exposes_pinning_strength(self) -> None:
         pinned = model_requirements({"backend": {"name": "ai-toolkit"}, "model": {"base": "org/model", "revision": "0123456789abcdef0123456789abcdef01234567"}})

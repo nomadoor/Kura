@@ -105,6 +105,7 @@ class InitCommandTests(unittest.TestCase):
             run_id = stdout.getvalue().strip()
             run = yaml.safe_load((Path(directory) / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
             self.assertEqual(run["backend"]["name"], "musubi-tuner")
+            self.assertEqual(run["schema_version"], 2)
             self.assertEqual(run["compute"]["executor"], "runpod")
             self.assertEqual(run["compute"]["gpu"], "NVIDIA RTX A5000")
             self.assertEqual(
@@ -149,7 +150,8 @@ class InitCommandTests(unittest.TestCase):
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
                 run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
                 run["datasets"] = [{"id": "tiny"}]
-                run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_paths": {"dit": "/models/dit.safetensors", "vae": "/models/vae.safetensors", "text_encoder": "/models/text.safetensors"}}}
+                run["recipe"] = {"steps": 1, "seed": 1}
+                run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2", "model_paths": {"dit": "/models/dit.safetensors", "vae": "/models/vae.safetensors", "text_encoder": "/models/text.safetensors"}}}
                 run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
                 stderr = io.StringIO()
                 with patch("sys.stderr", stderr):
@@ -161,7 +163,7 @@ class InitCommandTests(unittest.TestCase):
         self.assertIn("dataset tiny has no images/ directory and no image files at its root", stderr.getvalue())
         self.assertFalse(manifest_exists)
 
-    def test_run_compile_rejects_backend_override_mismatch(self) -> None:
+    def test_run_compile_rejects_removed_backend_overrides(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -189,7 +191,7 @@ class InitCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("backend is ai-toolkit but backend_overrides.musubi-tuner is set", stderr.getvalue())
+        self.assertIn("backend_overrides is not supported", stderr.getvalue())
 
     def test_run_compile_cleans_up_after_invalid_musubi_model_downloads(self) -> None:
         previous = Path.cwd()
@@ -211,8 +213,8 @@ class InitCommandTests(unittest.TestCase):
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
                 run["model"]["base"] = "example/model"
                 run["datasets"] = [{"id": "tiny"}]
-                run["backend_overrides"] = {
-                    "musubi-tuner": {
+                run["recipe"] = {"steps": 1, "seed": 1}
+                run["backend"] = {"name": "musubi-tuner", "config": {
                         "architecture": "flux2",
                         "model_bundle": "none",
                         "model_downloads": {"dit": "not-a-download-mapping"},
@@ -280,6 +282,7 @@ class InitCommandTests(unittest.TestCase):
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
                 run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
                 run["datasets"] = [{"id": "tiny"}]
+                run["recipe"] = {"steps": 1, "seed": 1}
                 run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
                 self.assertEqual(cmd_run_compile(argparse.Namespace(run_id=run_id)), 0)
             finally:
@@ -1065,7 +1068,7 @@ class TuiPathDisplayTests(unittest.TestCase):
             (run_dir / "logs").mkdir()
             (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nrecipe: {steps: 1}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
             (run_dir / "resolved" / "musubi" / "command.json").write_text(
                 json.dumps(
@@ -1095,7 +1098,7 @@ class TuiPathDisplayTests(unittest.TestCase):
             (run_dir / "realizations").mkdir()
             (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nrecipe: {steps: 1}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 1, "total_steps": 1}), encoding="utf-8")
             app = KuraMonitorApp(root)
             first = app.collect_summaries_cached()
@@ -1112,7 +1115,7 @@ class TuiPathDisplayTests(unittest.TestCase):
                 (run_dir / "realizations").mkdir()
                 (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
                 (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
-                (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nrecipe: {steps: 1}\n", encoding="utf-8")
                 (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 1, "total_steps": 1}), encoding="utf-8")
                 app = KuraMonitorApp(root, interval=999)
                 async with app.run_test(size=(100, 30)) as pilot:
@@ -1265,8 +1268,8 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
 class RunPlanTests(unittest.TestCase):
     def test_disk_warnings_do_not_flag_a_single_checkpoint_as_frequent(self) -> None:
         run = {
-            "params": {"steps": 1},
-            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 1}},
+            "recipe": {"steps": 1},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 1}},
             "compute": {"executor": "runpod"},
         }
 
@@ -1286,23 +1289,16 @@ class RunPlanTests(unittest.TestCase):
                     {
                         "id": "plan-example",
                         "type": "train",
-                        "backend": {"name": "musubi-tuner"},
-                        "model": {"base": "black-forest-labs/FLUX.2-klein-base-9B", "revision": "main"},
+                                                "model": {"base": "black-forest-labs/FLUX.2-klein-base-9B", "revision": "main"},
                         "compute": {"executor": "runpod", "gpu": "NVIDIA RTX A5000"},
                         "datasets": [{"id": "tiny", "role": "target", "digest": "sha256:abc"}],
-                        "params": {
-                            "rank": 16,
-                            "alpha": 1024,
-                            "lr": "0.00005",
-                            "scheduler": "constant",
-                            "steps": 1500,
-                            "batch_size": 2,
-                            "resolution": [768],
-                            "seed": 42,
-                        },
+                        "recipe": {"steps": 1500, "seed": 42},
                         "sampling": {"cadence_steps": 100},
-                        "backend_overrides": {
-                            "musubi-tuner": {
+                        "backend": {"name": "musubi-tuner", "config": {
+                            "network_dim": 16,
+                            "network_alpha": 1024,
+                            "learning_rate": "0.00005",
+                            "dataset_config": {"general": {"batch_size": 2, "resolution": [768]}},
                             "fp8_base": True,
                             "gradient_checkpointing": True,
                             "save_every_n_steps": 100,
@@ -1331,7 +1327,7 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("black-forest-labs/FLUX.2-klein-base-9B", output)
             self.assertIn("datasets/tiny", output)
             self.assertIn("items        2", output)
-            self.assertIn("lr           0.00005", output)
+            self.assertIn("learning_rate 0.00005", output)
             self.assertIn("extra_args   --blocks_to_swap, 3", output)
             self.assertIn("Model downloads", output)
             self.assertIn("unknown-size files", output)
@@ -1362,10 +1358,8 @@ class RunPlanTests(unittest.TestCase):
                     {
                         "id": "download-plan",
                         "type": "train",
-                        "backend": {"name": "musubi-tuner"},
-                        "model": {"base": "custom"},
-                        "backend_overrides": {
-                            "musubi-tuner": {
+                                                "model": {"base": "custom"},
+                        "backend": {"name": "musubi-tuner", "config": {
                                 "architecture": "flux_kontext",
                                 "model_downloads": {
                                     "dit": {"repo": "example/model", "filename": "dit.safetensors"},
@@ -1416,8 +1410,8 @@ class RunPlanTests(unittest.TestCase):
             run_dir = root / "runs" / "compiled-example"
             (run_dir / "resolved").mkdir(parents=True)
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
-            (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit}\nparams: {lr: 1e-4}\n", encoding="utf-8")
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner}\ndatasets: [{id: tiny}]\nparams: {lr: 0.00005}\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit, config: {config: {train: {lr: 1e-4}}}}\n", encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner, config: {learning_rate: 0.00005}}\ndatasets: [{id: tiny}]\n", encoding="utf-8")
             (run_dir / "resolved" / "dataset-observations.lock.yaml").write_text(
                 yaml.safe_dump({"schema_version": 1, "datasets": [{"dataset": "tiny", "observations": {"sample_count": 2, "captions_missing": 0, "condition_counts": {"source": 2}, "aspect_ratio_mismatches": {}}, "structural_findings": []}]}),
                 encoding="utf-8",
@@ -1435,7 +1429,7 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["intent_source"], "runs/compiled-example/run.yaml")
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
-            self.assertEqual(payload["params"]["lr"], 0.00005)
+            self.assertEqual(payload["backend"]["config"], {"learning_rate": 0.00005})
             self.assertEqual(payload["datasets"][0]["observations"]["samples"], 2)
             self.assertEqual(payload["datasets"][0]["observations"]["conditions"], {"source": 2})
             self.assertIn("preflight", payload)
@@ -1492,11 +1486,9 @@ class RunPlanTests(unittest.TestCase):
                     {
                         "id": "small-download-plan",
                         "type": "train",
-                        "backend": {"name": "musubi-tuner"},
-                        "model": {"base": "custom"},
+                                                "model": {"base": "custom"},
                         "safety": {"large_model_download_gb": 1},
-                        "backend_overrides": {
-                            "musubi-tuner": {
+                        "backend": {"name": "musubi-tuner", "config": {
                                 "architecture": "flux2",
                                 "model_downloads": {"dit": {"repo": "example/model", "filename": "small.safetensors"}},
                             }
@@ -1571,12 +1563,11 @@ class RunPlanTests(unittest.TestCase):
             run = {
                 "id": "remote",
                 "type": "train",
-                "backend": {"name": "musubi-tuner"},
-                "model": {"base": "repo/model"},
+                                "model": {"base": "repo/model"},
                 "datasets": [{"id": "tiny"}],
-                "params": {"steps": 1},
+                "recipe": {"steps": 1},
                 "compute": {"executor": "runpod"},
-                "backend_overrides": {"musubi-tuner": {"architecture": "flux2", "model_bundle": "none", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}}},
+                "backend": {"name": "musubi-tuner", "config": {"architecture": "flux2", "model_bundle": "none", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}}},
             }
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             previous = Path.cwd()
@@ -1606,12 +1597,11 @@ class RunPlanTests(unittest.TestCase):
             run = {
                 "id": "local",
                 "type": "train",
-                "backend": {"name": "musubi-tuner"},
-                "model": {"base": "repo/model"},
+                                "model": {"base": "repo/model"},
                 "datasets": [{"id": "tiny"}],
-                "params": {"steps": 1},
+                "recipe": {"steps": 1},
                 "compute": {"executor": "docker"},
-                "backend_overrides": {"musubi-tuner": {"architecture": "flux2", "model_bundle": "none", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}}},
+                "backend": {"name": "musubi-tuner", "config": {"architecture": "flux2", "model_bundle": "none", "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}}}},
             }
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             previous = Path.cwd()
@@ -1628,9 +1618,8 @@ class RunPlanTests(unittest.TestCase):
     def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {"steps": 20},
-            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 10}},
+                        "recipe": {"steps": 20},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 10}},
             "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
         }
         download_estimate = {"bytes": 8 * 1024**3}
@@ -1643,21 +1632,19 @@ class RunPlanTests(unittest.TestCase):
     def test_checkpoint_safety_preflight_rejects_many_unpruned_checkpoints(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {"steps": 3000},
-            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 100}},
+                        "recipe": {"steps": 3000},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
         }
         with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
             _checkpoint_safety_preflight(run)
-        run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
+        run["backend"]["config"]["prune_checkpoints_before_step"] = 1000
         _checkpoint_safety_preflight(run)
 
-    def test_checkpoint_safety_preflight_counts_backend_max_train_steps(self) -> None:
+    def test_checkpoint_safety_preflight_counts_common_recipe_steps(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {},
-            "backend_overrides": {"musubi-tuner": {"max_train_steps": 3000, "save_every_n_steps": 100}},
+                        "recipe": {"steps": 3000},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
         }
         with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
             _checkpoint_safety_preflight(run)
@@ -1665,25 +1652,22 @@ class RunPlanTests(unittest.TestCase):
     def test_checkpoint_safety_preflight_accepts_musubi_keep_last_policy(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {"steps": 3000},
-            "backend_overrides": {
-                "musubi-tuner": {
+                        "recipe": {"steps": 3000},
+            "backend": {"name": "musubi-tuner", "config": {
                     "save_every_n_steps": 100,
                     "extra_args": ["--save_last_n_steps", "300"],
                 }
             },
         }
         _checkpoint_safety_preflight(run)
-        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--save_last_n_epochs=2"]
+        run["backend"]["config"]["extra_args"] = ["--save_last_n_epochs=2"]
         _checkpoint_safety_preflight(run)
 
     def test_checkpoint_safety_preflight_can_be_explicitly_overridden(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {"steps": 3000},
-            "backend_overrides": {"musubi-tuner": {"save_every_n_steps": 100}},
+                        "recipe": {"steps": 3000},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
             "safety": {"allow_many_checkpoints": True},
         }
         _checkpoint_safety_preflight(run)
@@ -2924,11 +2908,10 @@ class AiToolkitBackendTests(unittest.TestCase):
         return {
             "id": "ai-toolkit-example",
             "type": "train",
-            "backend": {"name": "ai-toolkit", "adapter_version": 1},
+            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"config": {"network": {"linear": 4, "linear_alpha": 4}, "train": {"lr": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer": "adamw8bit"}, "model": {"quantize": False, "quantize_te": False, "low_vram": False}}, "dataset_folder": "/workspace/datasets/tiny/images"}},
             "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
             "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
-            "params": {"rank": 4, "alpha": 4, "lr": 1.0e-4, "steps": 1, "batch_size": 1, "resolution": 512, "seed": 42},
-            "backend_overrides": {},
+            "recipe": {"steps": 1, "seed": 42},
         }
 
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
@@ -2952,21 +2935,24 @@ class AiToolkitBackendTests(unittest.TestCase):
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {"ai-toolkit": {"config": ["not", "a", "mapping"]}}
+        run["backend"] = {"name": "ai-toolkit", "config": {"config": ["not", "a", "mapping"]}}
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "backend_overrides.ai-toolkit.config"):
+            with self.assertRaisesRegex(ValueError, "backend.config.config"):
                 compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
 
-    def test_malformed_backend_overrides_do_not_crash_ai_toolkit(self) -> None:
+    def test_compile_rejects_native_steps_that_duplicate_recipe(self) -> None:
+        run = self._run()
+        run["backend"]["config"]["config"]["train"]["steps"] = 2
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
+                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+
+    def test_removed_backend_overrides_are_rejected(self) -> None:
         run = self._run()
         run["backend_overrides"] = True
         with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "ai-toolkit"
-            compile_ai_toolkit(run, destination)
-            config = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))
-        command = command_ai_toolkit(run)
-        self.assertEqual(config["config"]["name"], "ai-toolkit-example")
-        self.assertEqual(command["cwd"], "/opt/ai-toolkit")
+            with self.assertRaisesRegex(ValueError, "backend_overrides is not supported"):
+                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
 
 
 class MusubiBackendTests(unittest.TestCase):
@@ -2974,14 +2960,16 @@ class MusubiBackendTests(unittest.TestCase):
         return {
             "id": "musubi-example",
             "type": "train",
-            "backend": {"name": "musubi-tuner", "adapter_version": 1},
-            "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
+                        "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
             "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
-            "params": {"rank": 4, "alpha": 4, "lr": 1.0e-4, "steps": 30, "batch_size": 1, "resolution": [512, 512], "seed": 42},
-            "backend_overrides": {
-                "musubi-tuner": {
+            "recipe": {"steps": 30, "seed": 42},
+            "backend": {"name": "musubi-tuner", "config": {
                     "architecture": "flux2",
                     "model_version": "klein-base-4b",
+                    "network_dim": 4,
+                    "network_alpha": 4,
+                    "learning_rate": 1.0e-4,
+                    "dataset_config": {"general": {"batch_size": 1, "resolution": [512, 512]}},
                     "model_paths": {
                         "dit": "/models/flux2-klein-base-4b.safetensors",
                         "vae": "/models/flux2-vae.safetensors",
@@ -3008,6 +2996,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("src/musubi_tuner/flux_2_train_network.py", command["argv"][2])
         self.assertIn("--max_train_steps 30", command["argv"][2])
         self.assertIn("--save_precision bf16", command["argv"][2])
+
         self.assertNotIn("--gradient_checkpointing", command["argv"][2])
         self.assertNotIn("--blocks_to_swap", command["argv"][2])
         self.assertNotIn("--fp8_base", command["argv"][2])
@@ -3022,6 +3011,18 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_4b_text_encoder")
         self.assertEqual(bundle["output"]["lora_format"], "comfyui")
+
+    def test_command_musubi_rejects_native_steps_that_duplicate_recipe(self) -> None:
+        run = self._run()
+        run["backend"]["config"]["max_train_steps"] = 2
+        with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_rejects_recipe_duplicates_in_extra_args(self) -> None:
+        run = self._run()
+        run["backend"]["config"]["extra_args"] = ["--max_train_steps=2"]
+        with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
+            command_musubi_tuner(run)
 
     def test_compile_musubi_uses_dataset_root_when_images_subdir_is_absent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3054,8 +3055,8 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_only_adds_memory_saving_flags_when_explicit(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["gradient_checkpointing"] = True
-        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--fp8_base", "--fp8_scaled", "--blocks_to_swap", "4"]
+        run["backend"]["config"]["gradient_checkpointing"] = True
+        run["backend"]["config"]["extra_args"] = ["--fp8_base", "--fp8_scaled", "--blocks_to_swap", "4"]
 
         script = command_musubi_tuner(run)["argv"][2]
 
@@ -3069,20 +3070,20 @@ class MusubiBackendTests(unittest.TestCase):
         script = command_musubi_tuner(run)["argv"][2]
         self.assertIn("--save_precision bf16", script)
 
-        run["backend_overrides"]["musubi-tuner"]["save_precision"] = "fp16"
+        run["backend"]["config"]["save_precision"] = "fp16"
         script = command_musubi_tuner(run)["argv"][2]
         self.assertIn("--save_precision fp16", script)
 
     def test_command_musubi_rejects_invalid_save_precision(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["save_precision"] = "int8"
+        run["backend"]["config"]["save_precision"] = "int8"
 
         with self.assertRaisesRegex(ValueError, "save_precision"):
             command_musubi_tuner(run)
 
     def test_command_musubi_rejects_h2d_block_swap_without_gradient_checkpointing(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["extra_args"] = ["--blocks_to_swap", "4", "--block_swap_h2d_only"]
+        run["backend"]["config"]["extra_args"] = ["--blocks_to_swap", "4", "--block_swap_h2d_only"]
 
         with self.assertRaisesRegex(ValueError, "H2D-only block swap requires explicit gradient_checkpointing"):
             command_musubi_tuner(run)
@@ -3091,8 +3092,7 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
         run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["params"]["batch_size"] = 4
-        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-9b"}}
+        run["backend"]["config"].update({"model_version": "klein-base-9b", "dataset_config": {"general": {"batch_size": 4, "resolution": [512, 512]}}})
 
         with self.assertRaisesRegex(ValueError, "batch_size=4 has been observed to OOM"):
             command_musubi_tuner(run)
@@ -3101,15 +3101,11 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
         run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["params"]["batch_size"] = 1
-        run["backend_overrides"] = {
-            "musubi-tuner": {
-                "architecture": "flux2",
+        run["backend"]["config"].update({
                 "model_version": "klein-base-9b",
                 "gradient_checkpointing": True,
                 "extra_args": ["--gradient_accumulation_steps", "4"],
-            }
-        }
+            })
 
         script = command_musubi_tuner(run)["argv"][2]
 
@@ -3120,22 +3116,21 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
         run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["params"].update({"rank": 32, "batch_size": 1, "resolution": [1024, 1024]})
-        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-9b"}}
+        run["backend"]["config"].update({"model_version": "klein-base-9b", "network_dim": 32, "dataset_config": {"general": {"batch_size": 1, "resolution": [1024, 1024]}}})
 
         with self.assertRaisesRegex(ValueError, "observed to OOM even with batch_size=1"):
             command_musubi_tuner(run)
 
     def test_command_musubi_rejects_secret_explicit_env(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["command"] = {"cwd": "/opt/musubi-tuner", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "secret"}}
+        run["backend"]["config"]["command"] = {"cwd": "/opt/musubi-tuner", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "secret"}}
 
         with self.assertRaisesRegex(ValueError, "env must not contain secrets"):
             command_musubi_tuner(run)
 
     def test_command_musubi_allows_non_secret_generated_env(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+        run["backend"]["config"]["env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
 
         command = command_musubi_tuner(run)
 
@@ -3143,14 +3138,14 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_rejects_secret_generated_env(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["env"] = {"HF_TOKEN": "secret"}
+        run["backend"]["config"]["env"] = {"HF_TOKEN": "secret"}
 
         with self.assertRaisesRegex(ValueError, "env must not contain secrets"):
             command_musubi_tuner(run)
 
     def test_command_musubi_rejects_invalid_extra_args_shape(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["extra_args"] = "--fp8_base"
+        run["backend"]["config"]["extra_args"] = "--fp8_base"
 
         with self.assertRaisesRegex(ValueError, "extra_args must be a list of strings"):
             command_musubi_tuner(run)
@@ -3168,7 +3163,7 @@ class MusubiBackendTests(unittest.TestCase):
             run = self._run()
             run["id"] = "paired-run"
             run["datasets"] = [{"id": "paired", "digest": "sha256:abc"}]
-            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+            run["backend"]["config"]["dataset_config"] = {
                 "general": {"resolution": [1024, 1024], "batch_size": 4},
                 "datasets": [
                     {
@@ -3210,7 +3205,7 @@ class MusubiBackendTests(unittest.TestCase):
             run = self._run()
             run["id"] = "paired-run"
             run["datasets"] = [{"id": "paired", "digest": "sha256:abc"}]
-            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+            run["backend"]["config"]["dataset_config"] = {
                 "datasets": [{"paired_jsonl": {"filename": "paired.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"}}],
             }
             destination = root / "scratch" / "musubi"
@@ -3233,7 +3228,7 @@ class MusubiBackendTests(unittest.TestCase):
             run = self._run()
             run["id"] = "paired-buckets"
             run["datasets"] = [{"id": "paired", "role": "paired-768"}, {"id": "paired", "role": "paired-1024"}]
-            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+            run["backend"]["config"]["dataset_config"] = {
                 "general": {"resolution": [1024, 1024], "batch_size": 4, "enable_bucket": True},
                 "datasets": [
                     {
@@ -3269,7 +3264,7 @@ class MusubiBackendTests(unittest.TestCase):
             run = self._run()
             run["id"] = "paired-buckets"
             run["datasets"] = [{"id": "paired", "role": "paired-768"}, {"id": "paired", "role": "paired-1024"}]
-            run["backend_overrides"]["musubi-tuner"]["dataset_config"] = {
+            run["backend"]["config"]["dataset_config"] = {
                 "general": {"resolution": [1024, 1024], "batch_size": 4, "enable_bucket": True},
                 "datasets": [
                     {
@@ -3317,14 +3312,13 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_requires_explicit_model_paths(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {"musubi-tuner": {"architecture": "wan"}}
+        run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "wan"}}
         with self.assertRaisesRegex(ValueError, "model_paths, model_downloads, or a known model.base bundle"):
             command_musubi_tuner(run)
 
     def test_command_musubi_unknown_architecture_names_kura_adapter_layer(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "sdxl",
                 "model_paths": {"unet": "/models/sdxl.safetensors"},
             }
@@ -3363,7 +3357,7 @@ class MusubiBackendTests(unittest.TestCase):
         for architecture, model_paths, expected in cases:
             with self.subTest(architecture=architecture):
                 run = self._run()
-                run["backend_overrides"] = {"musubi-tuner": {"architecture": architecture, "model_paths": model_paths}}
+                run["backend"] = {"name": "musubi-tuner", "config": {"architecture": architecture, "model_paths": model_paths}}
                 script = command_musubi_tuner(run)["argv"][2]
                 for text in expected:
                     self.assertIn(text, script)
@@ -3396,7 +3390,7 @@ class MusubiBackendTests(unittest.TestCase):
         for architecture, model_paths, expected in cases:
             with self.subTest(architecture=architecture):
                 run = self._run()
-                run["backend_overrides"] = {"musubi-tuner": {"architecture": architecture, "model_paths": model_paths}}
+                run["backend"] = {"name": "musubi-tuner", "config": {"architecture": architecture, "model_paths": model_paths}}
                 script = command_musubi_tuner(run)["argv"][2]
                 for text in expected:
                     self.assertIn(text, script)
@@ -3405,8 +3399,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_framepack_uses_current_fp8_base_flag(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "framepack",
                 "model_paths": {
                     "dit": "/models/framepack.safetensors",
@@ -3426,8 +3419,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_wan_22_supports_dual_noise_models(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "wan",
                 "task": "t2v-A14B",
                 "model_paths": {
@@ -3448,8 +3440,7 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
         run = self._run()
         run["model"]["base"] = "black-forest-labs/FLUX.2-dev"
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "flux2",
                 "model_version": "dev",
                 "model_paths": {
@@ -3479,15 +3470,14 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_flux2_dev_rejects_qwen_only_fp8_text_encoder(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"].update({"model_version": "dev", "fp8_text_encoder": True})
+        run["backend"]["config"].update({"model_version": "dev", "fp8_text_encoder": True})
 
         with self.assertRaisesRegex(ValueError, "does not support fp8_text_encoder"):
             command_musubi_tuner(run)
 
     def test_command_musubi_wan_one_frame_updates_cache_and_train(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "wan",
                 "task": "i2v-14B",
                 "one_frame": True,
@@ -3507,8 +3497,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_wan_21_i2v_requires_clip(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "wan",
                 "task": "i2v-14B",
                 "model_paths": {
@@ -3524,8 +3513,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_wan_flf2v_precache_uses_i2v_contract(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "wan",
                 "task": "flf2v-14B",
                 "model_paths": {
@@ -3545,8 +3533,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_wan_22_i2v_precache_uses_i2v_without_clip(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "wan",
                 "task": "i2v-A14B",
                 "model_paths": {
@@ -3564,8 +3551,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_wan_rejects_unknown_task_before_launch(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "wan",
                 "task": "future-task",
                 "model_paths": {
@@ -3581,8 +3567,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_framepack_one_frame_updates_cache_and_train(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "framepack",
                 "one_frame": True,
                 "one_frame_no_2x": True,
@@ -3607,8 +3592,7 @@ class MusubiBackendTests(unittest.TestCase):
         for model_version in ("original", "edit", "edit-2509", "edit-2511", "layered"):
             with self.subTest(model_version=model_version):
                 run = self._run()
-                run["backend_overrides"] = {
-                    "musubi-tuner": {
+                run["backend"] = {"name": "musubi-tuner", "config": {
                         "architecture": "qwen_image",
                         "model_version": model_version,
                         "model_paths": {
@@ -3625,8 +3609,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_hunyuan_15_i2v_updates_cache_and_train(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "hunyuan_video_1_5",
                 "task": "i2v",
                 "model_paths": {
@@ -3647,8 +3630,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_hidream_i2i_preserves_control_contract(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "hidream_o1",
                 "task": "i2i",
                 "model_type": "dev",
@@ -3666,8 +3648,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_kandinsky_i2v_preserves_task(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "kandinsky5",
                 "task": "k5-pro-i2v-5s-sd",
                 "model_paths": {
@@ -3685,8 +3666,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_kandinsky_can_quantize_qwen_cache(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "kandinsky5",
                 "model_paths": {
                     "dit": "/models/k5-dit.safetensors",
@@ -3705,8 +3685,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_can_download_models_from_huggingface(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "flux2",
                 "model_version": "klein-base-4b",
                 "model_downloads": {
@@ -3801,8 +3780,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_rejects_model_download_local_dir(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "flux2",
                 "model_version": "klein-base-4b",
                 "model_downloads": {
@@ -3819,7 +3797,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_resolves_known_flux2_klein_bundle(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-4b"}}
+        run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2", "model_version": "klein-base-4b"}}
         command = command_musubi_tuner(run)
         script = command["argv"][2]
         self.assertIn("Comfy-Org/vae-text-encorder-for-flux-klein-4b", script)
@@ -3831,7 +3809,7 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_resolves_known_flux2_klein_base_9b_bundle(self) -> None:
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
-        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2", "model_version": "klein-base-9b"}}
+        run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2", "model_version": "klein-base-9b"}}
         command = command_musubi_tuner(run)
         script = command["argv"][2]
 
@@ -3855,8 +3833,7 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
         run = self._run()
         run["model"] = {"base": "krea/Krea-2-Raw"}
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "krea2",
                 "gradient_checkpointing": True,
                 "fp8_base": True,
@@ -3893,8 +3870,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_krea2_can_include_turbo_for_samples(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "krea2",
                 "include_turbo_dit": True,
                 "extra_args": ["--sample_prompts", "/workspace/prompts.txt", "--sample_every_n_steps", "100"],
@@ -3909,8 +3885,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_krea2_rejects_paired_control_dataset(self) -> None:
         run = self._run()
-        run["backend_overrides"] = {
-            "musubi-tuner": {
+        run["backend"] = {"name": "musubi-tuner", "config": {
                 "architecture": "krea2",
                 "dataset_config": {
                     "datasets": [
@@ -3929,7 +3904,7 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_infers_flux2_model_version_from_model_base(self) -> None:
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
-        run["backend_overrides"] = {"musubi-tuner": {"architecture": "flux2"}}
+        run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
         command = command_musubi_tuner(run)
 
         self.assertIn("--model_version klein-base-9b", command["argv"][2])
@@ -3938,15 +3913,15 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_refuses_unknown_flux2_model_version_default(self) -> None:
         run = self._run()
         run["model"] = {"base": "custom/flux2-checkpoint"}
-        run["backend_overrides"]["musubi-tuner"].pop("model_version", None)
+        run["backend"]["config"].pop("model_version", None)
 
         with self.assertRaisesRegex(ValueError, "refusing to default to 4B"):
             command_musubi_tuner(run)
 
     def test_command_musubi_can_prune_early_step_checkpoints(self) -> None:
         run = self._run()
-        run["backend_overrides"]["musubi-tuner"]["save_every_n_steps"] = 100
-        run["backend_overrides"]["musubi-tuner"]["prune_checkpoints_before_step"] = 1000
+        run["backend"]["config"]["save_every_n_steps"] = 100
+        run["backend"]["config"]["prune_checkpoints_before_step"] = 1000
         command = command_musubi_tuner(run)
         script = command["argv"][2]
 
@@ -4124,9 +4099,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
     def test_missing_hf_artifact_is_not_collapsed_into_unknown_size(self) -> None:
         run = {
-            "backend": {"name": "musubi-tuner"},
-            "backend_overrides": {
-                "musubi-tuner": {
+                        "backend": {"name": "musubi-tuner", "config": {
                     "architecture": "flux2",
                     "model_bundle": "none",
                     "model_downloads": {"dit": {"repo": "repo/model", "filename": "missing.safetensors"}},
@@ -4237,10 +4210,8 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_local_launch_disk_preflight_counts_estimated_hf_downloads(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "model": {"base": "custom"},
-            "backend_overrides": {
-                "musubi-tuner": {
+                        "model": {"base": "custom"},
+            "backend": {"name": "musubi-tuner", "config": {
                     "architecture": "flux2",
                     "model_downloads": {
                         "dit": {"repo": "example/model", "filename": "dit.safetensors"},
@@ -4265,10 +4236,8 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_local_launch_disk_preflight_rejects_large_unapproved_model_downloads(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "model": {"base": "custom"},
-            "backend_overrides": {
-                "musubi-tuner": {
+                        "model": {"base": "custom"},
+            "backend": {"name": "musubi-tuner", "config": {
                     "architecture": "flux2",
                     "model_downloads": {
                         "dit": {"repo": "example/model", "filename": "dit.safetensors"},
@@ -4292,9 +4261,8 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_local_launch_disk_preflight_counts_allowed_checkpoint_budget(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {},
-            "backend_overrides": {"musubi-tuner": {"max_train_steps": 3000, "save_every_n_steps": 100}},
+                        "recipe": {"steps": 3000},
+            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
             "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -4310,12 +4278,9 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_local_launch_disk_preflight_sums_estimates_on_shared_backing(self) -> None:
         run = {
             "type": "train",
-            "backend": {"name": "musubi-tuner"},
-            "params": {},
-            "backend_overrides": {
-                "musubi-tuner": {
+                        "recipe": {"steps": 2000},
+            "backend": {"name": "musubi-tuner", "config": {
                     "architecture": "flux2",
-                    "max_train_steps": 2000,
                     "save_every_n_steps": 100,
                     "model_downloads": {
                         "dit": {"repo": "example/model", "filename": "dit.safetensors"},
@@ -4443,8 +4408,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     {
                         "id": "example",
                         "type": "train",
-                        "backend": {"name": "ai-toolkit"},
-                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                                                "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
                     }
                 ),
                 encoding="utf-8",
@@ -4481,8 +4445,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     {
                         "id": "example",
                         "type": "train",
-                        "backend": {"name": "ai-toolkit"},
-                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                                                "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
                     }
                 ),
                 encoding="utf-8",
@@ -4514,8 +4477,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     {
                         "id": "example",
                         "type": "train",
-                        "backend": {"name": "ai-toolkit"},
-                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                                                "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
                     }
                 ),
                 encoding="utf-8",
@@ -5066,9 +5028,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                     {
                         "id": "example",
                         "type": "train",
-                        "backend": {"name": "ai-toolkit"},
-                        "compute": {"executor": "runpod", "gpu": "NVIDIA A40"},
-                        "backend_overrides": {"ai-toolkit": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
+                                                "compute": {"executor": "runpod", "gpu": "NVIDIA A40"},
+                        "backend": {"name": "ai-toolkit", "config": {"command": {"cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}}},
                     }
                 ),
                 encoding="utf-8",

@@ -35,8 +35,7 @@ class ModelRequirementsTests(unittest.TestCase):
 
     def test_musubi_projects_kura_downloads_and_explicit_paths(self) -> None:
         run = {
-            "backend": {"name": "musubi-tuner"},
-            "backend_overrides": {"musubi-tuner": {"model_paths": {"vae": "/models/vae.safetensors"}}},
+                        "backend": {"name": "musubi-tuner", "config": {"model_paths": {"vae": "/models/vae.safetensors"}}},
         }
         estimate = {
             "items": [
@@ -64,9 +63,8 @@ class ModelRequirementsTests(unittest.TestCase):
     def test_declared_musubi_requirements_do_not_need_network_measurement(self) -> None:
         requirements = declared_model_requirements(
             {
-                "backend": {"name": "musubi-tuner"},
-                "model": {"base": "krea/Krea-2-Raw"},
-                "backend_overrides": {"musubi-tuner": {"architecture": "krea2"}},
+                                "model": {"base": "krea/Krea-2-Raw"},
+                "backend": {"name": "musubi-tuner", "config": {"architecture": "krea2"}},
             }
         )
 

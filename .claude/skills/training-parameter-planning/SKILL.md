@@ -199,7 +199,7 @@ the file sits (location = precedence, source = why we believe it):
 
 ### Update rules
 
-1. Evidence is recorded in the run's `notes.md` first (params, hardware,
+1. Evidence is recorded in the run's `notes.md` first (settings, hardware,
    flags, the user's quality judgment in their own words). That always
    happens; it needs no generalization decision.
 2. Promote to a card only what generalizes: after the user has evaluated a

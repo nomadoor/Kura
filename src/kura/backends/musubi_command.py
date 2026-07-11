@@ -14,11 +14,11 @@ from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import wan_native_selector
 from kura.fsio import atomic_write_json, atomic_write_yaml
-from kura.run_envelope import common_recipe, legacy_params
+from kura.run_envelope import common_recipe
 
 
-def _musubi_legacy_and_common(run: dict[str, Any]) -> dict[str, Any]:
-    return {**legacy_params(run), **common_recipe(run)}
+def _recipe_seed(recipe: dict[str, Any]) -> Any:
+    return 42 if recipe.get("seed") is None else recipe["seed"]
 
 
 def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
@@ -69,7 +69,7 @@ def _musubi_micro_batch(run: dict[str, Any], override: dict[str, Any]) -> int | 
                 batch_size = _int_or_none(item.get("batch_size"))
                 if batch_size is not None:
                     return batch_size
-    return _int_or_none(legacy_params(run).get("batch_size"))
+    return None
 
 
 def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int | None:
@@ -90,9 +90,6 @@ def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int
                     resolution = item.get(key)
                     if isinstance(resolution, list):
                         values.extend(value for part in resolution if (value := _int_or_none(part)) is not None)
-    params_resolution = legacy_params(run).get("resolution")
-    if isinstance(params_resolution, list):
-        values.extend(value for item in params_resolution if (value := _int_or_none(item)) is not None)
     return max(values) if values else None
 
 
@@ -111,7 +108,7 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
     micro_batch = _musubi_micro_batch(run, override)
     if micro_batch is None or micro_batch <= 1:
         max_resolution = _musubi_max_resolution(run, override)
-        rank = _int_or_none(legacy_params(run).get("rank")) or _int_or_none(override.get("network_dim"))
+        rank = _int_or_none(override.get("network_dim"))
         checkpointing = _truthy(override.get("gradient_checkpointing")) or "--gradient_checkpointing" in extra_args
         if max_resolution is not None and max_resolution >= 1024 and (rank is None or rank >= 32) and not checkpointing:
             if _truthy(override.get("allow_a40_uncheckpointed_9b")):
@@ -139,22 +136,22 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
 
 
 def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], output_dir: str, output_name: str, *, default_lr: str = "1e-4") -> list[str]:
-    params = _musubi_legacy_and_common(run)
+    recipe = common_recipe(run)
     args = [
         "--optimizer_type", str(override.get("optimizer_type") or "adamw8bit"),
-        "--learning_rate", str(params.get("lr") or override.get("learning_rate") or default_lr),
+        "--learning_rate", str(override.get("learning_rate") or default_lr),
         "--max_data_loader_n_workers", str(override.get("max_data_loader_n_workers") or 2),
         "--persistent_data_loader_workers",
-        "--network_dim", str(params.get("rank") or override.get("network_dim") or 32),
+        "--network_dim", str(override.get("network_dim") or 32),
     ]
-    alpha = params.get("alpha") if params.get("alpha") is not None else override.get("network_alpha")
+    alpha = override.get("network_alpha")
     if alpha is not None:
         args.extend(["--network_alpha", str(alpha)])
     args.extend([
-        "--max_train_steps", str(params.get("steps") or override.get("max_train_steps") or 1600),
-        "--save_every_n_steps", str(override.get("save_every_n_steps") or params.get("steps") or 1600),
+        "--max_train_steps", str(recipe.get("steps") or 1600),
+        "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe.get("steps") or 1600),
         "--save_precision", _musubi_save_precision(override),
-        "--seed", str(params.get("seed") or override.get("seed") or 42),
+        "--seed", str(_recipe_seed(recipe)),
         "--output_dir", output_dir,
         "--output_name", output_name,
     ])
@@ -188,6 +185,12 @@ def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
 def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Return a Musubi Tuner command spec without executing it."""
     override = _musubi_backend_override(run)
+    duplicated = sorted({"max_train_steps", "seed"} & set(override))
+    extra_args = _extra_args(override)
+    if any(arg in {"--max_train_steps", "--seed"} or arg.startswith(("--max_train_steps=", "--seed=")) for arg in extra_args):
+        duplicated.append("extra_args")
+    if duplicated:
+        raise ValueError("Musubi backend.config duplicates common recipe field(s): " + ", ".join(duplicated))
     explicit = override.get("command")
     if explicit is not None:
         if not isinstance(explicit, dict):
@@ -203,7 +206,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
 
     architecture = str(override.get("architecture") or override.get("model_arch") or "flux2").lower().replace("-", "_")
     _validate_musubi_resource_flags(run, override, architecture)
-    params = _musubi_legacy_and_common(run)
+    recipe = common_recipe(run)
     explicit_paths = _musubi_explicit_model_paths(override)
     paths = _musubi_model_paths(run)
     download_commands, _ = _musubi_model_downloads(run, existing_paths=explicit_paths)
@@ -228,15 +231,15 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--timestep_sampling", str(override.get("timestep_sampling") or "flux2_shift"),
             "--weighting_scheme", str(override.get("weighting_scheme") or "none"),
             "--optimizer_type", str(override.get("optimizer_type") or "adamw8bit"),
-            "--learning_rate", str(params.get("lr") or override.get("learning_rate") or "1e-4"),
+            "--learning_rate", str(override.get("learning_rate") or "1e-4"),
             "--max_data_loader_n_workers", str(override.get("max_data_loader_n_workers") or 2),
             "--persistent_data_loader_workers",
             "--network_module", "networks.lora_flux_2",
-            "--network_dim", str(params.get("rank") or override.get("network_dim") or 32),
-            "--max_train_steps", str(params.get("steps") or override.get("max_train_steps") or 1600),
-            "--save_every_n_steps", str(override.get("save_every_n_steps") or params.get("steps") or 1600),
+            "--network_dim", str(override.get("network_dim") or 32),
+            "--max_train_steps", str(recipe.get("steps") or 1600),
+            "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe.get("steps") or 1600),
             "--save_precision", _musubi_save_precision(override),
-            "--seed", str(params.get("seed") or override.get("seed") or 42),
+            "--seed", str(_recipe_seed(recipe)),
             "--output_dir", output_dir, "--output_name", output_name,
         ]
         if _truthy(override.get("gradient_checkpointing")):
@@ -245,7 +248,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         if override.get("vae_dtype"):
             train_argv.extend(["--vae_dtype", str(override["vae_dtype"])])
-        alpha = params.get("alpha") if params.get("alpha") is not None else override.get("network_alpha")
+        alpha = override.get("network_alpha")
         if alpha is not None:
             train_argv.extend(["--network_alpha", str(alpha)])
         train_argv.extend(_extra_args(override))
@@ -302,17 +305,17 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--dataset_config", dataset_config,
             "--sdpa", "--mixed_precision", "bf16",
             "--optimizer_type", str(override.get("optimizer_type") or "adamw8bit"),
-            "--learning_rate", str(params.get("lr") or override.get("learning_rate") or "2e-4"),
+            "--learning_rate", str(override.get("learning_rate") or "2e-4"),
             "--max_data_loader_n_workers", str(override.get("max_data_loader_n_workers") or 2),
             "--persistent_data_loader_workers",
             "--network_module", "networks.lora_wan",
-            "--network_dim", str(params.get("rank") or override.get("network_dim") or 32),
+            "--network_dim", str(override.get("network_dim") or 32),
             "--timestep_sampling", str(override.get("timestep_sampling") or "shift"),
             "--discrete_flow_shift", str(override.get("discrete_flow_shift") or "3.0"),
-            "--max_train_steps", str(params.get("steps") or override.get("max_train_steps") or 1600),
-            "--save_every_n_steps", str(override.get("save_every_n_steps") or params.get("steps") or 1600),
+            "--max_train_steps", str(recipe.get("steps") or 1600),
+            "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe.get("steps") or 1600),
             "--save_precision", _musubi_save_precision(override),
-            "--seed", str(params.get("seed") or override.get("seed") or 42),
+            "--seed", str(_recipe_seed(recipe)),
             "--output_dir", output_dir, "--output_name", output_name,
         ]
         if _truthy(override.get("fp8_base")):
@@ -325,7 +328,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 train_argv.extend(["--timestep_boundary", str(override["timestep_boundary"])])
         if one_frame:
             train_argv.append("--one_frame")
-        alpha = params.get("alpha") if params.get("alpha") is not None else override.get("network_alpha")
+        alpha = override.get("network_alpha")
         if alpha is not None:
             train_argv.extend(["--network_alpha", str(alpha)])
         train_argv.extend(_extra_args(override))
@@ -374,16 +377,16 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--timestep_sampling", str(override.get("timestep_sampling") or "krea2_shift"),
             "--weighting_scheme", str(override.get("weighting_scheme") or "none"),
             "--optimizer_type", str(override.get("optimizer_type") or "adamw8bit"),
-            "--learning_rate", str(params.get("lr") or override.get("learning_rate") or "1e-4"),
+            "--learning_rate", str(override.get("learning_rate") or "1e-4"),
             "--max_data_loader_n_workers", str(override.get("max_data_loader_n_workers") or 2),
             "--persistent_data_loader_workers",
             "--network_module", "networks.lora_krea2",
-            "--network_dim", str(params.get("rank") or override.get("network_dim") or 32),
-            "--network_alpha", str(params.get("alpha") or override.get("network_alpha") or params.get("rank") or override.get("network_dim") or 32),
-            "--max_train_steps", str(params.get("steps") or override.get("max_train_steps") or 1600),
-            "--save_every_n_steps", str(override.get("save_every_n_steps") or params.get("steps") or 1600),
+            "--network_dim", str(override.get("network_dim") or 32),
+            "--network_alpha", str(override.get("network_alpha") or override.get("network_dim") or 32),
+            "--max_train_steps", str(recipe.get("steps") or 1600),
+            "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe.get("steps") or 1600),
             "--save_precision", _musubi_save_precision(override),
-            "--seed", str(params.get("seed") or override.get("seed") or 42),
+            "--seed", str(_recipe_seed(recipe)),
             "--output_dir", output_dir, "--output_name", output_name,
         ]
         if _truthy(override.get("gradient_checkpointing")):

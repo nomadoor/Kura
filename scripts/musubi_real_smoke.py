@@ -31,7 +31,7 @@ class SmokeSpec:
     model_paths: dict[str, str] | None
     model_downloads: dict[str, dict[str, Any]] | None
     extra_override: dict[str, Any]
-    params: dict[str, Any]
+    smoke_values: dict[str, Any]
     expected_script: str
     expected_outputs: int = 1
 
@@ -70,7 +70,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "36"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -116,7 +116,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "51", "--vae_sample_size", "128", "--vae_enable_patch_conv"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -164,7 +164,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "36", "--latent_window_size", "9"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -211,7 +211,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "16"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -253,7 +253,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--timestep_sampling", "flux_shift", "--weighting_scheme", "none", "--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -286,7 +286,7 @@ SPECS: dict[str, SmokeSpec] = {
             "noise_clip_std": 2.5,
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -318,7 +318,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -350,7 +350,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -378,7 +378,7 @@ SPECS: dict[str, SmokeSpec] = {
             "save_every_n_steps": 1,
             "prune_checkpoints_before_step": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -411,7 +411,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "45"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -441,7 +441,7 @@ SPECS: dict[str, SmokeSpec] = {
             "fp8_base": True,
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -631,20 +631,20 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         override["model_paths"] = dict(spec.model_paths)
     if spec.model_downloads is not None:
         override["model_downloads"] = {key: dict(value) for key, value in spec.model_downloads.items()}
-    params = dict(spec.params)
+    smoke_values = dict(spec.smoke_values)
     for source, target in (("lr", "learning_rate"), ("rank", "network_dim"), ("alpha", "network_alpha")):
-        if params.get(source) is not None:
-            override.setdefault(target, params[source])
+        if smoke_values.get(source) is not None:
+            override.setdefault(target, smoke_values[source])
     general = {}
-    if params.get("resolution") is not None:
-        general["resolution"] = params["resolution"]
-    if params.get("batch_size") is not None:
-        general["batch_size"] = params["batch_size"]
+    if smoke_values.get("resolution") is not None:
+        general["resolution"] = smoke_values["resolution"]
+    if smoke_values.get("batch_size") is not None:
+        general["batch_size"] = smoke_values["batch_size"]
     if general:
         dataset_config = override.setdefault("dataset_config", {})
         dataset_config.setdefault("general", {}).update({key: value for key, value in general.items() if key not in dataset_config.get("general", {})})
     run_yaml = {
-        "schema_version": 1,
+        "schema_version": 2,
         "id": run_id,
         "type": "train",
         "experiment": "musubi-real-smoke",
@@ -654,7 +654,7 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         "intent": "real one-step Musubi adapter smoke with actual model files",
         "model": {"base": spec.model_base, "revision": None},
         "datasets": [{"id": spec.dataset_id, "digest": None, "role": None}],
-        "recipe": {key: params[key] for key in ("steps", "seed") if params.get(key) is not None},
+        "recipe": {key: smoke_values[key] for key in ("steps", "seed") if smoke_values.get(key) is not None},
         "backend": {"name": "musubi-tuner", "version": None, "adapter_version": 1, "config": override},
         "compute": {"executor": executor, "gpu": gpu},
         "safety": {"allow_large_model_downloads": True},

@@ -8,22 +8,20 @@ from typing import Any
 
 from kura.backends.common import _datasets, _int_or_none, _musubi_backend_override, _toml_scalar
 from kura.fsio import atomic_write_text
-from kura.run_envelope import legacy_params
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
-    params = legacy_params(run)
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
     if not datasets:
         raise ValueError("Musubi Tuner requires datasets[]")
     general = {
-        "resolution": params.get("resolution") or [960, 544],
+        "resolution": [960, 544],
         "caption_extension": ".txt",
-        "batch_size": params.get("batch_size") or 1,
+        "batch_size": 1,
         "enable_bucket": True,
         "bucket_no_upscale": False,
     }

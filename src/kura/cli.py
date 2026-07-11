@@ -33,7 +33,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config
+from kura.run_envelope import backend_config, common_recipe
 from kura.provenance import adapter_source_identity, image_reference_identity
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -112,16 +112,21 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _validate_train_compile_intent(run: dict[str, Any]) -> None:
+    if run.get("schema_version") != 2:
+        raise ValueError("training run schema_version must be 2")
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
     backend_config(run, backend_name)
-    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
-    other_backend = "musubi-tuner" if backend_name == "ai-toolkit" else "ai-toolkit"
-    if isinstance(overrides.get(other_backend), dict) and overrides[other_backend]:
-        raise ValueError(f"backend is {backend_name} but backend_overrides.{other_backend} is set")
+    recipe = common_recipe(run)
+    steps = recipe.get("steps")
+    if isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0:
+        raise ValueError("training run recipe.steps must be a positive integer")
+    seed = recipe.get("seed")
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+        raise ValueError("training run recipe.seed must be an integer or null")
     if backend_name == "musubi-tuner":
         validate_musubi_dataset_layout(run, _workspace())
 
@@ -216,7 +221,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
     run = {
-        "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
+        "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
         "backend": {"name": args.backend, "version": None, "adapter_version": 1, "config": {}},
         "model": {"base": "", "revision": None},

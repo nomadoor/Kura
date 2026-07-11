@@ -44,6 +44,7 @@ New training runs use `backend.name` plus opaque `backend.config`. Only
 optimizer-step count and seed currently have proven common recipe semantics:
 
 ```yaml
+schema_version: 2
 backend:
   name: musubi-tuner
   config:
@@ -55,9 +56,8 @@ recipe:
   seed: 42
 ```
 
-Older `params` and `backend_overrides` runs remain replayable. Kura does not
-merge a non-empty old and new backend config, because precedence would hide
-which native decision actually ran.
+`params` and `backend_overrides` are rejected. Accepting multiple spellings or
+merging config sources would hide which native decision actually ran.
 
 ## What Kura does not normalize
 

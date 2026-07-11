@@ -85,9 +85,8 @@ def _minimal_flux2_run() -> dict[str, Any]:
     return {
         "id": "contract-run",
         "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
-        "params": {"steps": 1},
-        "backend_overrides": {
-            "musubi-tuner": {
+        "recipe": {"steps": 1},
+        "backend": {"name": "musubi-tuner", "config": {
                 "architecture": "flux2",
                 "model_version": "klein-base-4b",
                 "model_downloads": {

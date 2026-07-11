@@ -17,7 +17,7 @@ from typing import Any, Iterable
 
 import yaml
 
-from kura.run_envelope import backend_config, common_recipe, legacy_params
+from kura.run_envelope import backend_config, common_recipe
 
 
 ACTIVE_STATES = {"queued", "staged", "launching", "running"}
@@ -449,30 +449,30 @@ def _key_config(run_type: str | None, config: dict[str, Any]) -> dict[str, Any]:
         checkpoint = inputs.get("checkpoint", {}) if isinstance(inputs.get("checkpoint"), dict) else {}
         workflow = inputs.get("workflow", {}) if isinstance(inputs.get("workflow"), dict) else {}
         return {"checkpoint": checkpoint.get("path"), "workflow": workflow.get("path")}
-    params = {**legacy_params(config), **common_recipe(config)}
+    recipe = common_recipe(config)
     dataset_ids = [dataset.id for dataset in _datasets(Path("."), config) if dataset.id]
     backend = config.get("backend", {}) if isinstance(config.get("backend"), dict) else {}
     model = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
     override = _backend_override(config, "musubi-tuner")
     network_args = _musubi_network_args(override)
-    micro_batch = _micro_batch_size(config, params)
+    micro_batch = _micro_batch_size(config)
     grad_accum = _gradient_accumulation_steps(config)
     effective_batch = micro_batch * grad_accum if micro_batch is not None and grad_accum is not None else None
     return {
         "backend": backend.get("name"),
         "base": model.get("base"),
-        "rank": params.get("rank"),
-        "alpha": params.get("alpha"),
+        "rank": override.get("network_dim") or _nested_config(override, "config", "network", "linear"),
+        "alpha": override.get("network_alpha") or _nested_config(override, "config", "network", "linear_alpha"),
         "conv_rank": network_args.get("conv_dim"),
         "conv_alpha": network_args.get("conv_alpha"),
-        "lr": params.get("lr"),
-        "scheduler": params.get("scheduler"),
-        "steps": params.get("steps"),
+        "lr": override.get("learning_rate") or _nested_config(override, "config", "train", "lr"),
+        "scheduler": _nested_config(override, "config", "train", "lr_scheduler"),
+        "steps": recipe.get("steps"),
         "batch_size": micro_batch,
         "gradient_accumulation_steps": grad_accum,
         "effective_batch_size": effective_batch,
         "save_precision": override.get("save_precision", "bf16") if backend.get("name") == "musubi-tuner" else None,
-        "seed": params.get("seed"),
+        "seed": recipe.get("seed"),
         "dataset": "+".join(dataset_ids) if dataset_ids else None,
     }
 
@@ -495,7 +495,16 @@ def _musubi_network_args(override: dict[str, Any]) -> dict[str, str]:
     return values
 
 
-def _micro_batch_size(config: dict[str, Any], params: dict[str, Any]) -> int | None:
+def _nested_config(config: dict[str, Any], *path: str) -> Any:
+    value: Any = config
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _micro_batch_size(config: dict[str, Any]) -> int | None:
     override = _backend_override(config, "musubi-tuner")
     dataset_config = override.get("dataset_config")
     if isinstance(dataset_config, dict):
@@ -512,7 +521,7 @@ def _micro_batch_size(config: dict[str, Any], params: dict[str, Any]) -> int | N
                 value = _int_or_none(item.get("batch_size"))
                 if value is not None:
                     return value
-    return _int_or_none(params.get("batch_size"))
+    return _int_or_none(_nested_config(override, "config", "train", "batch_size"))
 
 
 def _gradient_accumulation_steps(config: dict[str, Any]) -> int | None:
@@ -541,9 +550,9 @@ def _backend_override(config: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 def _progress(status: dict[str, Any], config: dict[str, Any], *, stdout_progress: RunProgress | None = None) -> RunProgress:
-    params = {**legacy_params(config), **common_recipe(config)}
+    recipe = common_recipe(config)
     step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
-    total = _int_or_none(_first_present(status.get("total_steps"), params.get("steps")))
+    total = _int_or_none(_first_present(status.get("total_steps"), recipe.get("steps")))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))
     if stdout_progress:
         if stdout_progress.step is not None and (step is None or stdout_progress.step > step):

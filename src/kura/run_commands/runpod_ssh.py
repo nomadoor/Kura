@@ -28,6 +28,7 @@ from kura.fsio import atomic_write_json
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
+from kura.run_envelope import common_recipe
 from kura.run_commands.common import _event, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 
@@ -157,8 +158,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             if exit_code == 0:
                 try:
                     manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-                    params = manifest.get("params") if isinstance(manifest.get("params"), dict) else {}
-                    steps = params.get("steps")
+                    steps = common_recipe(manifest).get("steps")
                     if isinstance(steps, int) and steps > 0:
                         status["last_step"] = steps
                         status["total_steps"] = steps

@@ -8,7 +8,7 @@ from typing import Any
 
 from kura.backends.common import _datasets
 from kura.fsio import atomic_write_yaml
-from kura.run_envelope import backend_config, common_recipe, legacy_params
+from kura.run_envelope import backend_config, common_recipe
 
 
 def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, resolution: Any) -> list[dict[str, Any]]:
@@ -27,11 +27,15 @@ def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
 def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
     """Write AI-Toolkit native YAML for configured training runs."""
     override = _ai_toolkit_backend_override(run)
-    params = legacy_params(run)
     recipe = common_recipe(run)
     model = run.get("model", {})
     datasets = _datasets(run)
     native = override.get("config")
+    if isinstance(native, dict):
+        native_train = native.get("train")
+        duplicated = sorted({"steps", "seed"} & set(native_train)) if isinstance(native_train, dict) else []
+        if duplicated:
+            raise ValueError("AI-Toolkit backend.config.config.train duplicates common recipe field(s): " + ", ".join(duplicated))
     config = {
         "job": "extension",
         "config": {
@@ -40,18 +44,17 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
                 "type": "sd_trainer",
                 "training_folder": f"/workspace/runs/{run['id']}/outputs",
                 "device": "cuda:0",
-                "network": {"type": "lora", "linear": params.get("rank"), "linear_alpha": params.get("alpha")},
+                "network": {"type": "lora"},
                 "save": {"dtype": "bf16", "save_every": 1, "max_step_saves_to_keep": 1},
-                "datasets": _ai_toolkit_datasets(datasets, override.get("dataset_folder"), params.get("resolution")),
-                "train": {"batch_size": params.get("batch_size"), "steps": recipe.get("steps"), "gradient_accumulation_steps": 1, "train_unet": True, "train_text_encoder": False, "gradient_checkpointing": False, "noise_scheduler": "flowmatch", "optimizer": "adamw8bit", "lr": params.get("lr"), "dtype": "bf16", "disable_sampling": True, "seed": recipe.get("seed")},
+                "datasets": _ai_toolkit_datasets(datasets, override.get("dataset_folder"), None),
+                "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
             }],
         },
     }
     process = config["config"]["process"][0]
     if "config" in override and not isinstance(native, dict):
-        location = "backend.config.config" if isinstance(run.get("backend"), dict) and run["backend"].get("config") else "backend_overrides.ai-toolkit.config"
-        raise ValueError(f"{location} must be a mapping.")
+        raise ValueError("backend.config.config must be a mapping for AI-Toolkit.")
     if isinstance(native, dict):
         for section, values in native.items():
             if section in process and isinstance(process[section], dict) and isinstance(values, dict):
@@ -63,6 +66,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
 
 def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Return a container-native command spec, without executing it."""
+    common_recipe(run)
     command = _ai_toolkit_backend_override(run).get("command")
     if command is None:
         return {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}

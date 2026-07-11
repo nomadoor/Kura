@@ -49,7 +49,8 @@ class MonitorProjectionTests(unittest.TestCase):
                         "experiment: exp",
                         "created: '2026-06-21T10:00:00+09:00'",
                         "dataset: {id: tiny}",
-                        "params: {rank: 4, lr: 0.0001, steps: 3}",
+                        "recipe: {steps: 3}",
+                        "backend: {name: musubi-tuner, config: {network_dim: 4, learning_rate: 0.0001}}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -212,7 +213,7 @@ class MonitorProjectionTests(unittest.TestCase):
                     [
                         "id: stdout-train",
                         "type: train",
-                        "params: {steps: 30}",
+                        "recipe: {steps: 30}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -245,7 +246,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: musubi-train",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {steps: 100}",
+                        "recipe: {steps: 100}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -279,7 +280,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: downloading",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {steps: 20}",
+                        "recipe: {steps: 20}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -310,7 +311,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: remote-train",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {steps: 1}",
+                        "recipe: {steps: 1}",
                         "compute: {executor: runpod}",
                     ]
                 ),
@@ -359,7 +360,8 @@ class MonitorProjectionTests(unittest.TestCase):
                         "datasets:",
                         "  - {id: cond, digest: sha256:aaa, role: cond}",
                         "  - {id: target, digest: sha256:bbb, role: target}",
-                        "params: {rank: 8, lr: 0.0001, steps: 10}",
+                        "recipe: {steps: 10}",
+                        "backend: {name: musubi-tuner, config: {network_dim: 8, learning_rate: 0.0001}}",
                         "compute: {executor: runpod}",
                     ]
                 ),
@@ -502,9 +504,10 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: musubi-batch",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {batch_size: 4, steps: 100}",
-                        "backend_overrides:",
-                        "  musubi-tuner:",
+                        "recipe: {steps: 100}",
+                        "backend:",
+                        "  name: musubi-tuner",
+                        "  config:",
                         "    extra_args:",
                         "      - --gradient_accumulation_steps",
                         "      - '2'",

@@ -29,7 +29,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _event, _run_datasets, _safe_error, _workspace_display_path
-from kura.run_envelope import backend_config, common_recipe, legacy_params
+from kura.run_envelope import backend_config, common_recipe
 
 
 NOT_SET = "(not set)"
@@ -128,12 +128,12 @@ def _local_gpu_payload() -> dict[str, Any]:
     return {"name": "unknown", "vram_total_mb": "unknown"}
 
 
-def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
+def _important_backend_config(run: dict[str, Any]) -> dict[str, Any]:
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if not isinstance(backend_name, str):
         return {}
-    backend_overrides = backend_config(run, backend_name)
+    native_config = backend_config(run, backend_name)
 
     important: dict[str, Any] = {}
     direct_keys = (
@@ -145,14 +145,17 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         "quantize_te",
         "blocks_to_swap",
         "extra_args",
-        "max_train_steps",
         "save_every_n_steps",
         "save_precision",
         "prune_checkpoints_before_step",
+        "learning_rate",
+        "network_dim",
+        "network_alpha",
+        "dataset_config",
     )
     for key in direct_keys:
-        if key in backend_overrides:
-            important[key] = backend_overrides[key]
+        if key in native_config:
+            important[key] = native_config[key]
 
     nested_keys = {
         "config.train.gradient_checkpointing": ("config", "train", "gradient_checkpointing"),
@@ -161,7 +164,7 @@ def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
         "config.model.quantize_te": ("config", "model", "quantize_te"),
     }
     for label, path in nested_keys.items():
-        value = _nested_get(backend_overrides, path)
+        value = _nested_get(native_config, path)
         if value is not None:
             important[label] = value
     return important
@@ -217,16 +220,15 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
     backend_name = backend.get("name")
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    params = legacy_params(run)
     backend_override = backend_config(run, backend_name) if isinstance(backend_name, str) else {}
     extra_args = backend_override.get("extra_args") if isinstance(backend_override, dict) else None
     executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
     common_flags = {
-        "batch_size": _plan_value(params.get("batch_size")),
-        "gradient_accumulation": _plan_value(params.get("gradient_accumulation") or params.get("gradient_accumulation_steps")),
-        "resolution": _plan_value(params.get("resolution")),
-        "rank": _plan_value(params.get("rank")),
-        "optimizer": _plan_value(params.get("optimizer")),
+        "batch_size": _plan_value(_nested_get(backend_override, ("dataset_config", "general", "batch_size")) or _nested_get(backend_override, ("config", "train", "batch_size"))),
+        "gradient_accumulation": _plan_value(backend_override.get("gradient_accumulation_steps") or _nested_get(backend_override, ("config", "train", "gradient_accumulation_steps"))),
+        "resolution": _plan_value(_nested_get(backend_override, ("dataset_config", "general", "resolution")) or _nested_get(backend_override, ("config", "datasets", "resolution"))),
+        "rank": _plan_value(backend_override.get("network_dim") or _nested_get(backend_override, ("config", "network", "linear"))),
+        "optimizer": _plan_value(backend_override.get("optimizer_type") or _nested_get(backend_override, ("config", "train", "optimizer"))),
     }
     ai_toolkit_flags = {
         "gradient_checkpointing": _plan_value(_nested_get(backend_override, ("config", "train", "gradient_checkpointing"))),
@@ -303,21 +305,21 @@ def _extra_args_has_keep_last_policy(extra_args: Any) -> bool:
     return False
 
 
-def _checkpoint_retention_policy_present(important_overrides: dict[str, Any]) -> bool:
+def _checkpoint_retention_policy_present(important_config: dict[str, Any]) -> bool:
     return bool(
-        _as_positive_int(important_overrides.get("prune_checkpoints_before_step"))
-        or _extra_args_has_keep_last_policy(important_overrides.get("extra_args"))
+        _as_positive_int(important_config.get("prune_checkpoints_before_step"))
+        or _extra_args_has_keep_last_policy(important_config.get("extra_args"))
     )
 
 
-def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> list[str]:
-    params = {**legacy_params(run), **common_recipe(run)}
+def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> list[str]:
+    run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     warnings: list[str] = []
-    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important_overrides.get("max_train_steps"))
-    save_every = _as_positive_int(important_overrides.get("save_every_n_steps"))
-    has_retention_policy = _checkpoint_retention_policy_present(important_overrides)
+    steps = _as_positive_int(run_recipe.get("steps"))
+    save_every = _as_positive_int(important_config.get("save_every_n_steps"))
+    has_retention_policy = _checkpoint_retention_policy_present(important_config)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
     if steps and save_every:
         expected_checkpoints = max(steps // save_every, 1)
@@ -336,9 +338,9 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is True:
         return
-    important = _important_backend_overrides(run)
-    params = {**legacy_params(run), **common_recipe(run)}
-    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    important = _important_backend_config(run)
+    run_recipe = common_recipe(run)
+    steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
         return
@@ -462,9 +464,6 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if backend_name != "musubi-tuner":
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
-    legacy_overrides = run.get("backend_overrides")
-    if legacy_overrides is not None and not isinstance(legacy_overrides, dict):
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
     try:
         override = backend_config(run, "musubi-tuner")
     except ValueError:
@@ -642,9 +641,9 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
         _checkpoint_safety_preflight(run)
     except ValueError as exc:
         return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
-    important = _important_backend_overrides(run)
-    params = {**legacy_params(run), **common_recipe(run)}
-    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    important = _important_backend_config(run)
+    run_recipe = common_recipe(run)
+    steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if steps and save_every:
         expected = max(steps // save_every, 1)
@@ -714,7 +713,7 @@ def collect_run_preflight(
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
-    important = _important_backend_overrides(run)
+    important = _important_backend_config(run)
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
     if resolved_executor == "runpod":
@@ -740,9 +739,9 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is not True:
         return {"bytes": 0, "count": 0}
-    important = _important_backend_overrides(run)
-    params = {**legacy_params(run), **common_recipe(run)}
-    steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
+    important = _important_backend_config(run)
+    run_recipe = common_recipe(run)
+    steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
         return {"bytes": 0, "count": 0}
@@ -901,7 +900,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    params = {**legacy_params(run), **common_recipe(run)}
+    run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     contract_path = run_dir / "resolved" / "dataset-observations.lock.yaml"
     contract_lock = _load_yaml(contract_path) if contract_path.is_file() else {}
@@ -935,25 +934,15 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             }
         datasets.append(dataset_payload)
 
-    plan_params = {
-        "optimizer": params.get("optimizer"),
-        "rank": params.get("rank"),
-        "alpha": params.get("alpha"),
-        "lr": params.get("lr"),
-        "scheduler": params.get("scheduler"),
-        "steps": params.get("steps"),
-        "batch_size": params.get("batch_size"),
-        "gradient_accumulation": params.get("gradient_accumulation"),
-        "gradient_accumulation_steps": params.get("gradient_accumulation_steps"),
-        "resolution": params.get("resolution"),
-        "dtype": params.get("dtype"),
-        "seed": params.get("seed"),
+    plan_recipe = {
+        "steps": run_recipe.get("steps"),
+        "seed": run_recipe.get("seed"),
     }
     sampling_payload = {}
     if sampling.get("cadence_steps") is not None:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
-    important_overrides = _important_backend_overrides(run)
+    important_config = _important_backend_config(run)
     download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
     resources = _resources_payload(run, _workspace_config(), download_estimate)
     preflight = collect_run_preflight(run, workspace, config=_workspace_config(), download_estimate=download_estimate)
@@ -966,7 +955,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resolved_manifest": _workspace_display_path(manifest) if manifest.is_file() else None,
         "backend": {
             "name": backend.get("name") if isinstance(backend, dict) else None,
-            "config": important_overrides,
+            "config": important_config,
         },
         "model": {
             "base": model.get("base") if isinstance(model, dict) else None,
@@ -977,7 +966,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
         },
         "datasets": datasets,
-        "params": {key: value for key, value in plan_params.items() if value is not None},
+        "recipe": {key: value for key, value in plan_recipe.items() if value is not None},
         "sampling": sampling_payload,
         "resources": resources,
         "model_downloads": download_estimate,
@@ -1070,10 +1059,10 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("  - none")
 
     lines.append("")
-    lines.append("Params")
-    params = {**legacy_params(payload), **common_recipe(payload)}
-    if params:
-        for key, value in params.items():
+    lines.append("Recipe")
+    recipe = common_recipe(payload)
+    if recipe:
+        for key, value in recipe.items():
             _append_kv(lines, key, value)
     else:
         lines.append("  - none")
