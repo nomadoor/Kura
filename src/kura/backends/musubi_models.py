@@ -281,20 +281,24 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
     model_version = str(override.get("model_version") or "").lower().replace("_", "-")
     model_base = str(run.get("model", {}).get("base") or "").lower().replace("_", "-")
-    text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version or "9b" in model_base else "qwen3_4b_text_encoder"
+    if model_version == "dev" or "flux.2-dev" in model_base or "flux2-dev" in model_base:
+        text_encoder_format = "safetensors"
+    else:
+        text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version or "9b" in model_base else "qwen3_4b_text_encoder"
     defaults: dict[str, dict[str, str]] = {
         "flux2": {
             "dit": "flux2_dit",
-            "vae": "flux2_vae",
+            "vae": "flux2_ae_or_vae",
             "text_encoder": text_encoder_format,
         },
         "flux_2": {
             "dit": "flux2_dit",
-            "vae": "flux2_vae",
+            "vae": "flux2_ae_or_vae",
             "text_encoder": text_encoder_format,
         },
         "wan": {
             "dit": "safetensors",
+            "dit_high_noise": "safetensors",
             "vae": "safetensors",
             "t5": "file",
             "clip": "file",

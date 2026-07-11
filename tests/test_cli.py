@@ -2915,7 +2915,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(sources["text_encoder"], "model_paths")
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
         self.assertEqual(expected["dit"], "flux2_dit")
-        self.assertEqual(expected["vae"], "flux2_vae")
+        self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_4b_text_encoder")
         self.assertEqual(bundle["output"]["lora_format"], "comfyui")
 
@@ -3320,6 +3320,208 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--fp8_base", script)
         self.assertNotIn("--fp8 ", script)
 
+    def test_command_musubi_wan_22_supports_dual_noise_models(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "t2v-A14B",
+                "model_paths": {
+                    "dit": "/models/wan22-low.safetensors",
+                    "dit_high_noise": "/models/wan22-high.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                },
+                "timestep_boundary": 0.875,
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--dit_high_noise /models/wan22-high.safetensors", script)
+        self.assertIn("--timestep_boundary 0.875", script)
+
+    def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
+        run = self._run()
+        run["model"]["base"] = "black-forest-labs/FLUX.2-dev"
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "flux2",
+                "model_version": "dev",
+                "model_paths": {
+                    "dit": "/models/flux2-dev.safetensors",
+                    "vae": "/models/ae.safetensors",
+                    "text_encoder": "/models/mistral-00001-of-00010.safetensors",
+                },
+                "fp8_base": True,
+                "fp8_scaled": True,
+                "vae_dtype": "bfloat16",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+            compile_musubi_tuner(run, destination)
+            bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
+            script = json.loads((destination / "command.json").read_text(encoding="utf-8"))["argv"][2]
+
+        expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
+        self.assertEqual(expected["vae"], "flux2_ae_or_vae")
+        self.assertEqual(expected["text_encoder"], "safetensors")
+        self.assertIn("--model_version dev", script)
+        self.assertIn("--fp8_base", script)
+        self.assertIn("--fp8_scaled", script)
+        self.assertIn("--vae_dtype bfloat16", script)
+
+    def test_command_musubi_flux2_dev_rejects_qwen_only_fp8_text_encoder(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"].update({"model_version": "dev", "fp8_text_encoder": True})
+
+        with self.assertRaisesRegex(ValueError, "does not support fp8_text_encoder"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_wan_one_frame_updates_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "i2v-14B",
+                "one_frame": True,
+                "model_paths": {
+                    "dit": "/models/wan-i2v.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                    "clip": "/models/clip.pth",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertGreaterEqual(script.count("--one_frame"), 2)
+        self.assertIn("--clip /models/clip.pth", script)
+
+    def test_command_musubi_wan_21_i2v_requires_clip(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "i2v-14B",
+                "model_paths": {
+                    "dit": "/models/wan-i2v.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                },
+            }
+        }
+
+        with self.assertRaisesRegex(ValueError, "requires model_paths.clip"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_framepack_one_frame_updates_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "one_frame_no_2x": True,
+                "one_frame_no_4x": True,
+                "model_paths": {
+                    "dit": "/models/framepack.safetensors",
+                    "vae": "/models/fpack-vae.safetensors",
+                    "text_encoder1": "hunyuanvideo-community/HunyuanVideo",
+                    "text_encoder2": "openai/clip-vit-large-patch14",
+                    "image_encoder": "/models/siglip.safetensors",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertGreaterEqual(script.count("--one_frame"), 4)
+        self.assertIn("--one_frame_no_2x", script)
+        self.assertIn("--one_frame_no_4x", script)
+
+    def test_command_musubi_qwen_model_versions_reach_all_three_stages(self) -> None:
+        for model_version in ("original", "edit", "edit-2509", "edit-2511", "layered"):
+            with self.subTest(model_version=model_version):
+                run = self._run()
+                run["backend_overrides"] = {
+                    "musubi-tuner": {
+                        "architecture": "qwen_image",
+                        "model_version": model_version,
+                        "model_paths": {
+                            "dit": "/models/qwen-dit.safetensors",
+                            "vae": "/models/qwen-vae.safetensors",
+                            "text_encoder": "/models/qwen-vl.safetensors",
+                        },
+                    }
+                }
+
+                script = command_musubi_tuner(run)["argv"][2]
+
+                self.assertEqual(script.count(f"--model_version {model_version}"), 3)
+
+    def test_command_musubi_hunyuan_15_i2v_updates_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "hunyuan_video_1_5",
+                "task": "i2v",
+                "model_paths": {
+                    "dit": "/models/hv15-i2v.safetensors",
+                    "vae": "/models/hv15-vae.safetensors",
+                    "text_encoder": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "byt5": "google/byt5-small",
+                    "image_encoder": "/models/bytedance-byt5-small.safetensors",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--task i2v", script)
+        self.assertGreaterEqual(script.count("--image_encoder /models/bytedance-byt5-small.safetensors"), 2)
+        self.assertIn("--i2v", script)
+
+    def test_command_musubi_hidream_i2i_preserves_control_contract(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "hidream_o1",
+                "task": "i2i",
+                "model_type": "dev",
+                "model_paths": {"dit": "/models/hidream-dev.safetensors"},
+                "dataset_config": {"datasets": [{"control_directory": "/workspace/datasets/tiny/control"}]},
+                "extra_args": ["--network_args", "conv_dim=4", "conv_alpha=1"],
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--task i2i", script)
+        self.assertIn("--model_type dev", script)
+        self.assertIn("--network_args conv_dim=4 conv_alpha=1", script)
+
+    def test_command_musubi_kandinsky_i2v_preserves_task(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "kandinsky5",
+                "task": "k5-pro-i2v-5s-sd",
+                "model_paths": {
+                    "dit": "/models/k5-i2v.safetensors",
+                    "vae": "/models/k5-vae.safetensors",
+                    "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "text_encoder_clip": "openai/clip-vit-large-patch14",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--task k5-pro-i2v-5s-sd", script)
+
     def test_command_musubi_kandinsky_can_quantize_qwen_cache(self) -> None:
         run = self._run()
         run["backend_overrides"] = {
@@ -3373,7 +3575,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
         self.assertIn("/workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
         self.assertIn("--dit /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
-        self.assertIn("flux2_vae", script)
+        self.assertIn("flux2_ae_or_vae", script)
         self.assertIn("qwen3_4b_text_encoder", script)
         self.assertIn("lora_unet_*", script)
         self.assertLess(script.index("hf_hub_download"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
@@ -3486,7 +3688,7 @@ class MusubiBackendTests(unittest.TestCase):
             compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
-        self.assertEqual(expected["vae"], "flux2_vae")
+        self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_8b_text_encoder")
 
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
@@ -3615,6 +3817,21 @@ class MusubiBackendTests(unittest.TestCase):
                 ],
             )
             spec = {"models": [{"role": "vae", "path": str(path), "expected_format": "flux2_vae"}]}
+            result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_safetensors_preflight_accepts_official_flux2_ae_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ae.safetensors"
+            _write_fake_safetensors(
+                path,
+                [
+                    "encoder.down.0.block.0.conv1.weight",
+                    "decoder.up.0.block.0.conv1.weight",
+                    "quant_conv.weight",
+                ],
+            )
+            spec = {"models": [{"role": "vae", "path": str(path), "expected_format": "flux2_ae_or_vae"}]}
             result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 

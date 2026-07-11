@@ -51,6 +51,21 @@ generator for it.
 This list should be checked against the current upstream Musubi Tuner README
 before adding adapters.
 
+## Variant coverage
+
+An architecture row is not a claim that every upstream variant has completed a
+real smoke. Kura audits variants when they change the generated execution
+contract: scripts, mandatory model roles, dataset shape, cache flags, training
+flags, or outputs. Checkpoint substitutions that keep the same contract do not
+need a separate adapter or exhaustive real-smoke run.
+
+The v0.3.4 audit identified and compile-tested distinct paths for Wan 2.2
+dual-noise training, Wan Single Frame, FramePack Single Frame, Qwen-Image
+Edit/Layered model versions, HunyuanVideo 1.5 I2V, HiDream-O1 I2I, and
+Kandinsky 5 I2V. These are not marked real-smoke verified until an actual model
+finishes one optimizer step through Kura. See
+`docs/upstream-model-support-audit.md` for the evidence boundary.
+
 ## Escape hatch
 
 For an upstream-supported architecture without a Kura built-in adapter, a run may

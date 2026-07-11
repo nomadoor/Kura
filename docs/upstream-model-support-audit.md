@@ -87,9 +87,25 @@ adapter:
 | FramePack | yes | yes | real smoke recorded |
 | Kandinsky 5 | yes | yes | Lite T2V real smoke recorded; Pro remains capacity-dependent |
 
-No upstream `v0.3.4` architecture is missing from Kura's built-in adapter list.
-The main risk is not a missing adapter but rebuilding from moving `main` and
-silently pairing newer Musubi command semantics with older Kura generators.
+No top-level upstream `v0.3.4` architecture is missing from Kura's built-in
+adapter list. That statement does not imply that every execution variant was
+already covered. Variant-level review found these distinct paths:
+
+| Architecture | Variant paths | Kura evidence after audit |
+| --- | --- | --- |
+| FLUX.2 | dev; klein/base 4B; klein/base 9B; optional reference images | common scripts supported; klein representative real-smoked; dev contract corrected for Mistral 3 and official AE, compile-tested |
+| Wan | 2.1 T2V/I2V/Fun Control; 2.2 low/high-noise T2V/I2V; Single Frame | 2.1 T2V real-smoked; I2V CLIP requirement, dual-DiT, and Single Frame cache/train paths compile-tested after audit fixes |
+| Qwen-Image | original; Edit; Edit-2509; Edit-2511; Layered | original real-smoked; every `model_version` reaches latent cache, text cache, and training in compile tests; dataset-specific control/multiple-target data remains user intent |
+| HunyuanVideo 1.5 | T2V; I2V | T2V real-smoked; I2V image-encoder cache/train path compile-tested |
+| FramePack | normal; F1; Single Frame | normal real-smoked; Single Frame cache/train path added and compile-tested; F1 already represented by its distinct flag |
+| HiDream-O1 | T2I; I2I control/reference | T2I real-smoked; I2I task, control dataset, and optional conv-network args compile-tested |
+| Kandinsky 5 | Lite/Pro T2V; Pro I2V | Lite T2V real-smoked; Pro/I2V task selection compile-tested but capacity-dependent |
+| Krea 2, Z-Image, FLUX.1 Kontext, Ideogram 4, HunyuanVideo | documented LoRA path does not change top-level cache/train scripts | representative real smoke recorded for each |
+
+The audit unit is an execution contract, not every checkpoint. A new real smoke
+is required when scripts, mandatory model roles, dataset shape, cache behavior,
+or output behavior change. Merely substituting weights within the same contract
+does not require a complete matrix rerun.
 
 ## Image findings and policy
 
@@ -128,15 +144,17 @@ Validation completed during this audit:
   realization records, and host-user file ownership;
 - ran `kura doctor musubi` against the v0.3.4 image: all 36 expected adapter
   scripts existed and completed their help smoke;
-- passed Kura's release gate with 293 tests and all mechanical checks.
+- passed Kura's release gate with 304 tests and all mechanical checks after the
+  variant adapter corrections.
 
 Remaining follow-up order:
 
 1. Publish the pinned images only as part of the normal reviewed release flow;
    a successful local build does not authorize a registry push.
-2. Add a small AI-Toolkit model capability registry only when it represents
-   configuration and dataset requirements, not merely upstream names.
-3. Choose new real-smoke candidates by user value and hardware cost. Do not
-   imply that all upstream-listed models are already safe Kura presets.
+2. Keep model requirements run-scoped in
+   `resolved/model-requirements.lock.yaml`; do not create a second global model
+   registry or duplicate upstream model lists in production code.
+3. Real-smoke only the newly added Musubi execution paths whose cache or train
+   contract differs from the existing representative evidence.
 4. Return to Krea 2 only after deciding whether its first supported path should
    be AI-Toolkit, Musubi, or both, with separate evidence for each backend.
