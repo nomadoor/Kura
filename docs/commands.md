@@ -34,26 +34,51 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura dataset inspect <dataset-id-or-path>` | Measure dataset facts without pass/fail judgment |
 | `uv run kura dataset inspect <dataset-id-or-path> --json` | Print dataset facts for an agent to read |
 
-## Training runs
+## Training runs: normal workflow
 
 | Command | Purpose |
 | --- | --- |
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
-| `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion and normal finalization |
-| `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
-| `uv run kura run launch <run-id> --executor docker` | Run locally through Docker |
-| `uv run kura run launch <run-id> --executor docker --wait` | Run locally and wait in the foreground until it finishes (auto-reconciles) |
-| `uv run kura run remote <run-id>` | Run on RunPod, download outputs, then auto-stop |
-| `uv run kura run pull <run-id> --step <step>` | Pull an intermediate checkpoint from a running RunPod run |
-| `uv run kura run stop <run-id>` | Stop the associated Pod/container |
-| `uv run kura run reconcile <run-id>` | Refresh observed external state |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 | `uv run kura run prune --docker-containers --docker-volumes` | Also clean up Kura-managed stopped containers/volumes (add `--yes` to delete) |
 
-Useful low-level `run remote` flags for RunPod runs:
+Compile after editing `run.yaml`, review `run plan`, obtain the single launch
+approval, then use `run execute`. The agent normally performs compile for the
+user; it is listed below as a low-level command for inspection and development.
+
+## Diagnosis and recovery
+
+Use these only when a normal execution was interrupted or needs inspection.
+They remain separate because stopping or forcing a download is a
+situation-dependent decision, not a safe universal `recover` action.
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura doctor docker` | Diagnose the local Docker/GPU execution environment |
+| `uv run kura doctor runpod` | Diagnose RunPod API access and remaining resources |
+| `uv run kura run reconcile <run-id>` | Refresh observed Pod/container state without changing it |
+| `uv run kura run pull <run-id> --step <step>` | Recover an intermediate checkpoint from a running RunPod run |
+| `uv run kura run download <run-id> --force` | Retry downloading a RunPod snapshot after inspecting remote state |
+| `uv run kura run stop <run-id>` | Explicitly stop the associated Pod/container |
+
+## Low-level execution commands
+
+These are retained for diagnosis, recovery, and Kura development. They are not
+additional steps in the normal workflow.
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
+| `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
+| `uv run kura run launch <run-id> --executor docker --wait` | Launch locally and wait in the foreground |
+| `uv run kura run stage <run-id>` | Build the transfer bundle for a remote executor |
+| `uv run kura run upload <run-id>` | Upload a staged bundle to an existing RunPod Pod |
+| `uv run kura run remote <run-id>` | Invoke the RunPod lifecycle directly with advanced flags |
+
+Useful low-level `run remote` flags:
 
 - `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
   can inspect results. Use `--hold-for 0` to stop immediately.

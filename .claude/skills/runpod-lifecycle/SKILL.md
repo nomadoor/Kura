@@ -23,7 +23,10 @@ stop Pod
 
 ## Current defaults
 
-- `kura run remote <run-id>`
+- `kura run execute <run-id>` is the normal entry point and honors the RunPod
+  executor frozen in the compiled run.
+- `kura run remote <run-id>` remains the low-level entry point for advanced
+  lifecycle flags and recovery work.
 - `--hold-for 30m`: normal post-download review window.
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.
