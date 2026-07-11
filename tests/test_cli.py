@@ -4615,6 +4615,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn('collect_runtime_diagnostics before_backend', input_text)
             self.assertIn('collect_runtime_diagnostics after_backend', input_text)
             self.assertIn('/sys/fs/cgroup/memory.events', input_text)
+            self.assertIn('/sys/fs/cgroup/memory/memory.oom_control', input_text)
+            self.assertIn('/sys/fs/cgroup/memory/memory.limit_in_bytes', input_text)
             self.assertIn('"cgroup_oom_kill_delta"', input_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
 

@@ -638,15 +638,42 @@ read_cgroup_value() {{
   fi
   printf '%s' "${{value:-unknown}}"
 }}
+read_memory_current() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.current)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.usage_in_bytes); fi
+  printf '%s' "$value"
+}}
+read_memory_peak() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.peak)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.max_usage_in_bytes); fi
+  printf '%s' "$value"
+}}
+read_memory_max() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.max)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.limit_in_bytes); fi
+  printf '%s' "$value"
+}}
+read_oom_kill() {{
+  value=$(read_cgroup_value /sys/fs/cgroup/memory.events oom_kill)
+  if [ "$value" = unknown ]; then value=$(read_cgroup_value /sys/fs/cgroup/memory/memory.oom_control oom_kill); fi
+  printf '%s' "$value"
+}}
 collect_runtime_diagnostics() {{
   phase="$1"
   {{
     echo "[kura] runtime diagnostics $phase"
-    echo "[kura] cgroup memory.current=$(read_cgroup_value /sys/fs/cgroup/memory.current)"
-    echo "[kura] cgroup memory.peak=$(read_cgroup_value /sys/fs/cgroup/memory.peak)"
-    echo "[kura] cgroup memory.max=$(read_cgroup_value /sys/fs/cgroup/memory.max)"
+    echo "[kura] cgroup memory.current=$(read_memory_current)"
+    echo "[kura] cgroup memory.peak=$(read_memory_peak)"
+    echo "[kura] cgroup memory.max=$(read_memory_max)"
     echo "[kura] cgroup memory.events"
-    if [ -r /sys/fs/cgroup/memory.events ]; then sed 's/^/[kura]   /' /sys/fs/cgroup/memory.events; else echo "[kura]   unavailable"; fi
+    if [ -r /sys/fs/cgroup/memory.events ]; then
+      sed 's/^/[kura]   /' /sys/fs/cgroup/memory.events
+    elif [ -r /sys/fs/cgroup/memory/memory.oom_control ]; then
+      sed 's/^/[kura]   /' /sys/fs/cgroup/memory/memory.oom_control
+      echo "[kura]   failcnt $(read_cgroup_value /sys/fs/cgroup/memory/memory.failcnt)"
+    else
+      echo "[kura]   unavailable"
+    fi
     echo "[kura] proc meminfo"
     if [ -r /proc/meminfo ]; then grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo | sed 's/^/[kura]   /'; else echo "[kura]   unavailable"; fi
     echo "[kura] cpu_count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown)"
@@ -658,7 +685,7 @@ collect_runtime_diagnostics() {{
     df -Pk "$KURA_WORKSPACE" 2>&1 | sed 's/^/[kura] disk /'
   }} >> "$KURA_LOG_PATH" 2>&1
 }}
-export KURA_CGROUP_OOM_KILL_BEFORE=$(read_cgroup_value /sys/fs/cgroup/memory.events oom_kill)
+export KURA_CGROUP_OOM_KILL_BEFORE=$(read_oom_kill)
 collect_runtime_diagnostics before_backend
 exit_code=0
 tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?
@@ -670,8 +697,8 @@ if [ "$exit_code" -eq 0 ]; then
   exit_code=$?
 fi
 collect_runtime_diagnostics after_backend
-export KURA_CGROUP_OOM_KILL_AFTER=$(read_cgroup_value /sys/fs/cgroup/memory.events oom_kill)
-export KURA_CGROUP_MEMORY_PEAK=$(read_cgroup_value /sys/fs/cgroup/memory.peak)
+export KURA_CGROUP_OOM_KILL_AFTER=$(read_oom_kill)
+export KURA_CGROUP_MEMORY_PEAK=$(read_memory_peak)
 export KURA_EXIT_CODE="$exit_code"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/realizations"
 python - <<'PY'
