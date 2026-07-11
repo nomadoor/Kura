@@ -1742,6 +1742,7 @@ class RenderNotificationTests(unittest.TestCase):
             output_run = root / "runs" / "train-1" / "outputs"
             for path in (workflow_dir, promptset_dir, run_dir / "resolved", output_run):
                 path.mkdir(parents=True)
+            (output_run.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
                 encoding="utf-8",
@@ -1763,6 +1764,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "schema_version": 1,
                     "type": "render",
                     "inputs": {
+                        "train_run": "train-1",
                         "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
                         "workflow": {"path": "workflows/wf.json", "digest": None},
                         "promptset": {"path": "promptsets/prompts.jsonl", "digest": None},
@@ -1806,8 +1808,39 @@ class RenderNotificationTests(unittest.TestCase):
             lora_name = captured["workflow"]["12"]["inputs"]["lora_name"]
             self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
             self.assertFalse(captured["staged_path"].exists())
-            images = (run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8")
-            self.assertIn('"comfyui_lora_name":', images)
+            image_record = json.loads((run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(image_record["train_run"], "train-1")
+            self.assertIn("comfyui_lora_name", image_record)
+            realization_path = root / "runs" / "render-1" / json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["last_realization"]
+            realization = json.loads(realization_path.read_text(encoding="utf-8"))
+            self.assertEqual(realization["train_run"], "train-1")
+
+    def test_render_compile_validates_train_run_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            workflow = root / "workflows" / "wf.json"
+            prompts = root / "promptsets" / "prompts.jsonl"
+            for path in (run_dir, workflow.parent, prompts.parent):
+                path.mkdir(parents=True, exist_ok=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            workflow.write_text(json.dumps({"1": {"inputs": {"seed": 0}}}), encoding="utf-8")
+            prompts.write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump({
+                    "type": "render",
+                    "inputs": {
+                        "train_run": "missing-train",
+                        "checkpoint": {"path": ""},
+                        "workflow": {"path": "workflows/wf.json"},
+                        "promptset": {"path": "promptsets/prompts.jsonl"},
+                    },
+                    "workflow_patches": {"seed": {"node": "1", "field": "inputs.seed"}},
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "does not exist: missing-train"):
+                compile_render(root, run_dir)
 
     def test_render_inserts_sidecar_lora_loader_when_checkpoint_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
