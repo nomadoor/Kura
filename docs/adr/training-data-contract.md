@@ -145,7 +145,8 @@ Normalization does not copy, rename, or rearrange dataset payloads. The frozen
 contract records the authored paths and their logical roles. Backend-native
 JSONL or TOML generated under `resolved/` may reference those paths.
 
-Kura treats the following as structural failures:
+When Kura has conclusive facts and the selected task requires the relationship,
+it treats the following as structural failures:
 
 - a missing target, condition, or required caption
 - unequal member counts where the selected task requires one-to-one pairing
@@ -163,6 +164,13 @@ selected task requires alignment.
 Directory names are hints only when the dataset metadata declares their roles.
 Kura does not infer user intent solely from names such as `image`, `source`,
 `reference`, or `control`.
+
+Layout discovery is a convenience, not a new authoring standard. An unknown or
+partially understood layout is reported as incomplete evidence rather than
+rejected merely for being unfamiliar. The agent may make the mapping explicit
+in `items.jsonl`, dataset metadata, or a backend-native override. Kura only
+blocks when a required member is conclusively absent and the accepted
+pre-emption criterion applies.
 
 ## Decision 4: user intent remains explicit
 
@@ -316,10 +324,11 @@ intent and backend task in the existing run.
 Each item is a separate reviewed change with focused tests followed by the
 release gate.
 
-1. Add a read-only logical-sample normalizer and dataset-provided-facts
+1. Add a permissive, read-only logical-sample normalizer and dataset-provided-facts
    projection using existing dataset metadata and inspection logic. Cover
    colocated sidecar captions, separately declared image/caption directories,
-   and explicit `items.jsonl` mappings without changing backend output.
+   and explicit `items.jsonl` mappings without changing backend output. Unknown
+   layouts remain incomplete facts, not compile errors.
 2. Freeze the projection under `resolved/` and show it in the existing plan.
 3. Add declarative requirement tables for the currently claimed first-class
    Musubi tasks, beginning with Wan, and compare them at compile time.
