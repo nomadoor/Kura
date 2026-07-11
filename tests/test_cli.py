@@ -30,7 +30,7 @@ from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _model_download_safety_preflight
+from kura.run_commands.plan import _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -1219,7 +1219,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=None),
+                    patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "missing_metadata", "size_bytes": None, "detail": "Content-Length header is absent"}),
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "NVIDIA A40, 46068\n", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="plan-example", json=False)), 0)
@@ -1283,7 +1283,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=3 * 1024**3),
+                    patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 3 * 1024**3}),
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="download-plan", json=True)), 0)
@@ -1399,7 +1399,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
-                    patch("kura.run_commands.plan._hf_file_size_bytes", return_value=50 * 1024**2),
+                    patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 50 * 1024**2}),
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="small-download-plan", json=True)), 0)
@@ -1470,7 +1470,7 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=200), patch("kura.run_commands._hf_file_size_bytes", return_value=200):
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}):
                     payload = plan_run("remote")
             finally:
                 os.chdir(previous)
@@ -1505,7 +1505,7 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.plan._hf_file_size_bytes", return_value=200), patch("kura.run_commands._hf_file_size_bytes", return_value=200):
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}):
                     payload = plan_run("local")
             finally:
                 os.chdir(previous)
@@ -3571,6 +3571,44 @@ class DockerLifecycleTests(unittest.TestCase):
 
         _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, {"bytes": 0, "unknown": ["repo:file.safetensors"]})
 
+    def test_hf_size_probe_preserves_http_and_connectivity_failures(self) -> None:
+        item = {"repo_id": "repo/model", "filename": "weights.safetensors"}
+        with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.HTTPError("https://huggingface.co", 401, "unauthorized", {}, None)):
+            auth = _hf_file_size_probe(item)
+        with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=__import__("urllib").error.URLError("DNS failed")):
+            unreachable = _hf_file_size_probe(item)
+
+        self.assertEqual(auth["status"], "auth_error")
+        self.assertEqual(auth["detail"], "HTTP 401")
+        self.assertEqual(unreachable["status"], "unreachable")
+        self.assertIn("DNS failed", unreachable["detail"])
+
+    def test_connectivity_failure_is_not_a_large_download_override(self) -> None:
+        estimate = {
+            "bytes": 0,
+            "unknown": [],
+            "probe_failures": [{"artifact": "repo:model.safetensors", "status": "unreachable", "detail": "DNS failed"}],
+        }
+        with self.assertRaisesRegex(ValueError, "metadata probe failed"):
+            _model_download_safety_preflight({"safety": {"allow_large_model_downloads": True}}, estimate, executor="docker")
+
+        _model_download_safety_preflight({"safety": {}}, estimate, executor="runpod")
+        local_records = _model_download_preflight_report({}, estimate, executor="docker")
+        remote_records = _model_download_preflight_report({}, estimate, executor="runpod")
+        self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in local_records})
+        self.assertIn(("model-metadata-connectivity", "warning"), {(item["check"], item["severity"]) for item in remote_records})
+        self.assertTrue(any("known portion" in item["fact"] for item in remote_records if item["check"] == "model-downloads"))
+
+        auth_estimate = {
+            "bytes": 0,
+            "unknown": [],
+            "probe_failures": [{"artifact": "repo:model.safetensors", "status": "auth_error", "detail": "HTTP 401"}],
+        }
+        with self.assertRaisesRegex(ValueError, "auth_error"):
+            _model_download_safety_preflight({}, auth_estimate, executor="runpod")
+        auth_records = _model_download_preflight_report({}, auth_estimate, executor="runpod")
+        self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in auth_records})
+
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3677,7 +3715,7 @@ class DockerLifecycleTests(unittest.TestCase):
             with (
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=20 * 1024**3),
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 20 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 70 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
@@ -3704,7 +3742,7 @@ class DockerLifecycleTests(unittest.TestCase):
             with (
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=30 * 1024**3),
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 30 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "allow_large_model_downloads"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
@@ -3753,7 +3791,7 @@ class DockerLifecycleTests(unittest.TestCase):
             with (
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
-                patch("kura.run_commands.plan._hf_file_size_bytes", return_value=40 * 1024**3),
+                patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 40 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
                     _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
