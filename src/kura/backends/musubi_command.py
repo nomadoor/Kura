@@ -278,7 +278,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         clip = paths.get("clip")
         one_frame = _truthy(override.get("one_frame"))
         wan21_i2v_tasks = {"i2v-14B", "i2v-14B-FC", "flf2v-14B"}
-        if task in wan21_i2v_tasks and not clip:
+        is_wan21_i2v = task in wan21_i2v_tasks
+        if is_wan21_i2v and not clip:
             raise ValueError(f"Musubi Wan task {task} requires model_paths.clip or model_downloads.clip")
         if one_frame and task not in {"i2v-14B", "flf2v-14B"}:
             raise ValueError("Musubi Wan one_frame requires task i2v-14B or flf2v-14B")
@@ -337,7 +338,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 "--batch_size", str(override.get("text_encoder_batch_size") or 1),
                 "--skip_existing",
             ]
-            if "i2v" in task:
+            if is_wan21_i2v:
                 latent_argv.append("--i2v")
             if clip:
                 latent_argv.extend(["--clip", clip])

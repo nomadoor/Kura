@@ -3511,6 +3511,27 @@ class MusubiBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires model_paths.clip"):
             command_musubi_tuner(run)
 
+    def test_command_musubi_wan_flf2v_precache_uses_i2v_contract(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "flf2v-14B",
+                "model_paths": {
+                    "dit": "/models/wan-flf2v.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                    "clip": "/models/clip.pth",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("wan_cache_latents.py", script)
+        self.assertEqual(script.count("--i2v"), 1)
+        self.assertIn("--clip /models/clip.pth", script)
+
     def test_command_musubi_framepack_one_frame_updates_cache_and_train(self) -> None:
         run = self._run()
         run["backend_overrides"] = {

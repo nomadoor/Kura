@@ -160,7 +160,7 @@ Validation completed during this audit:
   Volumes, with no cgroup OOM kills in either run;
 - ran `kura doctor musubi` against the v0.3.4 image: all 36 expected adapter
   scripts existed and completed their help smoke;
-- passed Kura's release gate with 309 tests and all mechanical checks after the
+- passed Kura's release gate with 310 tests and all mechanical checks after the
   variant adapter and shared Hugging Face cache corrections.
 
 Remaining follow-up order:
