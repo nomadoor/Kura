@@ -73,6 +73,7 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 3. 🤖 Inspect the dataset, write `run.yaml`, compile it, and show `kura run plan` with assumptions, resource facts, and trade-offs.
 4. 🧑 Approve that plan once, or tell the agent what to change.
 5. 🤖 Run `kura run execute <run-id>` using the local Docker or RunPod executor frozen in the plan. Infrastructure smoke checks are used when the backend or environment needs them; they are not a second user workflow.
+   For RunPod, `execute` stops the Pod immediately after outputs are downloaded. Use `kura run remote <run-id> --hold-for 30m` instead when you need a review window before shutdown.
 6. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
 7. 🤖 Generate ComfyUI comparison images in a render run linked to the training run and checkpoint.
 8. 🧑 Record your judgment in the render run's `notes.md` and decide whether to stop or run another experiment (🤖 carries out the instruction).

@@ -186,6 +186,44 @@ class InitCommandTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("backend is ai-toolkit but backend_overrides.musubi-tuner is set", stderr.getvalue())
 
+    def test_run_compile_cleans_up_after_invalid_musubi_model_downloads(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.chdir(root)
+            try:
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
+                dataset = root / "datasets" / "tiny"
+                (dataset / "images").mkdir(parents=True)
+                (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
+                (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="bad-download", backend="musubi-tuner", executor="docker", gpu=None)), 0)
+                run_id = stdout.getvalue().strip()
+                run_path = root / "runs" / run_id / "run.yaml"
+                run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+                run["model"]["base"] = "example/model"
+                run["datasets"] = [{"id": "tiny"}]
+                run["backend_overrides"] = {
+                    "musubi-tuner": {
+                        "architecture": "flux2",
+                        "model_bundle": "none",
+                        "model_downloads": {"dit": "not-a-download-mapping"},
+                    }
+                }
+                run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
+                stderr = io.StringIO()
+                with patch("sys.stderr", stderr):
+                    code = cmd_run_compile(argparse.Namespace(run_id=run_id))
+                resolved_exists = (root / "runs" / run_id / "resolved").exists()
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 1)
+        self.assertIn("model_downloads must map model keys to download mappings", stderr.getvalue())
+        self.assertFalse(resolved_exists)
+
     def test_dataset_validate_checks_referenced_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

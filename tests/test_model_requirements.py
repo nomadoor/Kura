@@ -31,6 +31,7 @@ class ModelRequirementsTests(unittest.TestCase):
 
         self.assertEqual(requirements[0]["acquisition"], "local-path")
         self.assertEqual(requirements[0]["identity"], {"kind": "path", "path": "./models/example"})
+        self.assertEqual(requirements[0]["expected_format"], "backend-native-path")
 
     def test_musubi_projects_kura_downloads_and_explicit_paths(self) -> None:
         run = {

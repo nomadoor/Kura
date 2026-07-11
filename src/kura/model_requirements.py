@@ -33,8 +33,10 @@ def _ai_toolkit_requirements(run: dict[str, Any]) -> list[dict[str, Any]]:
     if base.startswith(("/", "./", "../", "~")):
         acquisition = "local-path"
         identity: dict[str, Any] = {"kind": "path", "path": base}
+        expected_format = "backend-native-path"
     else:
         identity = {"kind": "huggingface-repository", "repo_id": base}
+        expected_format = "backend-native-repository"
         if isinstance(revision, str) and revision:
             identity["revision"] = revision
     return [
@@ -43,7 +45,7 @@ def _ai_toolkit_requirements(run: dict[str, Any]) -> list[dict[str, Any]]:
             "acquisition": acquisition,
             "identity": identity,
             "runtime_reference": base,
-            "expected_format": "backend-native-repository",
+            "expected_format": expected_format,
             "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"},
         }
     ]
