@@ -34,7 +34,7 @@ Mutable `latest` is not a supported default.
 | Backend | Model family | Adapter | Status | Notes |
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified |
-| AI-Toolkit | SD 1.5 | Generic native-config projection | 🧩 | No current real smoke |
+| AI-Toolkit | SD 1.5 | Generic native-config projection | 🧪 | Local one-step path verified |
 | AI-Toolkit | FLUX.1 / Kontext / Flex / Chroma | Generic native-config projection | 🧩 | Model-specific defaults not verified |
 | AI-Toolkit | Qwen Image | Generic native-config projection | ⚠️ | T2I expressible; edit/control needs explicit dataset config |
 | AI-Toolkit | HiDream | Generic native-config projection | 🧩 | No current real smoke |
@@ -64,8 +64,9 @@ every checkpoint has been trained.
 
 AI-Toolkit owns model acquisition and model-specific configuration. Kura keeps
 one generic native-config projection rather than duplicating AI-Toolkit's model
-catalog. SDXL is the currently verified default path; other families remain
-explicit configurations until representative tests promote them.
+catalog. SDXL is the verified default path; SD 1.5 also verifies that this
+projection is not SDXL-specific. Other families remain explicit configurations
+until representative tests promote them.
 
 Real smoke validates execution, not LoRA quality. Quality still requires a
 meaningful training run followed by generation and human evaluation.

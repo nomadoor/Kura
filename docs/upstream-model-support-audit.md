@@ -47,7 +47,7 @@ variants that use the same model class or workflow shape.
 
 | Family | Upstream choices in the audited image | Kura status |
 | --- | --- | --- |
-| Stable Diffusion | SD 1.5, SDXL | SDXL operationally verified in local Docker and RunPod; SD 1.5 only expressible |
+| Stable Diffusion | SD 1.5, SDXL | SDXL operationally verified in local Docker and RunPod; SD 1.5 verified in local Docker |
 | FLUX / Flex / Chroma | FLUX.1, FLUX.1 Kontext, Flex.1, Flex.2, Chroma, Zeta Chroma | expressible through `model_arch` and native overrides; not model-by-model verified |
 | Wan video | Wan 2.1 T2V/I2V, Wan 2.2 T2V/I2V/TI2V | upstream listed; Kura's simple image-folder projection is not a sufficient video contract |
 | Qwen Image | Qwen-Image, 2512, Edit, Edit-2509, Edit-2511 | text-to-image form is expressible; edit/control dataset forms need explicit native dataset configuration |
@@ -139,6 +139,8 @@ Validation completed during this audit:
   `nomadoor/kura-ai-toolkit:dev` and confirmed its embedded upstream commit is
   `a4bbe167ce03521bf9052d2349f01b2997d67ac7`;
 - started the image's `run.py --help` path successfully;
+- completed a real SD 1.5 one-step local Docker run through Kura's same generic
+  native-config projection, confirming that the adapter is not SDXL-specific;
 - completed a real SDXL one-step local Docker run on an RTX 4070 Ti through
   `kura run execute`, including cache reuse, LoRA output, optimizer output,
   realization records, and host-user file ownership;
@@ -158,7 +160,7 @@ Validation completed during this audit:
   Volumes, with no cgroup OOM kills in either run;
 - ran `kura doctor musubi` against the v0.3.4 image: all 36 expected adapter
   scripts existed and completed their help smoke;
-- passed Kura's release gate with 305 tests and all mechanical checks after the
+- passed Kura's release gate with 309 tests and all mechanical checks after the
   variant adapter and shared Hugging Face cache corrections.
 
 Remaining follow-up order:
