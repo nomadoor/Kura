@@ -904,7 +904,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     params = run.get("params") if isinstance(run.get("params"), dict) else {}
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
-    contract_path = run_dir / "resolved" / "data-contract.lock.yaml"
+    contract_path = run_dir / "resolved" / "dataset-observations.lock.yaml"
     contract_lock = _load_yaml(contract_path) if contract_path.is_file() else {}
     contract_datasets = contract_lock.get("datasets") if isinstance(contract_lock, dict) else []
     contract_by_id = {
@@ -925,14 +925,14 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             }
         contract = contract_by_id.get(dataset.get("id"))
         if isinstance(contract, dict):
-            facts = contract.get("facts") if isinstance(contract.get("facts"), dict) else {}
-            issues = contract.get("issues") if isinstance(contract.get("issues"), list) else []
-            dataset_payload["contract"] = {
+            facts = contract.get("observations") if isinstance(contract.get("observations"), dict) else {}
+            issues = contract.get("structural_findings") if isinstance(contract.get("structural_findings"), list) else []
+            dataset_payload["observations"] = {
                 "samples": facts.get("sample_count"),
                 "captions_missing": facts.get("captions_missing"),
                 "conditions": facts.get("condition_counts") or {},
                 "aspect_ratio_mismatches": facts.get("aspect_ratio_mismatches") or {},
-                "issues": len(issues),
+                "structural_findings": len(issues),
             }
         datasets.append(dataset_payload)
 
@@ -1064,9 +1064,9 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             for key in ("role", "path", "items", "digest"):
                 if dataset.get(key) is not None:
                     _append_kv(lines, key, dataset.get(key), indent=4)
-            contract = dataset.get("contract") if isinstance(dataset.get("contract"), dict) else None
+            contract = dataset.get("observations") if isinstance(dataset.get("observations"), dict) else None
             if contract is not None:
-                _append_kv(lines, "contract", contract, indent=4)
+                _append_kv(lines, "observed", contract, indent=4)
     else:
         lines.append("  - none")
 

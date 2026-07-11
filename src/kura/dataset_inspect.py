@@ -11,9 +11,7 @@ from typing import Any
 
 import yaml
 
-from kura.backends.musubi_datasets import IMAGE_SUFFIXES
-
-
+IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")

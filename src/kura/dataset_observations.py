@@ -1,4 +1,4 @@
-"""Normalize authored dataset layouts into backend-independent sample facts."""
+"""Observe authored dataset layouts without assigning training meaning."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from typing import Any
 
 import yaml
 
-from kura.backends.musubi_datasets import IMAGE_SUFFIXES
 from kura.dataset_inspect import _image_size
 
 
+IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 CONDITION_KEYS = {
     "source": ("source", "source_path"),
@@ -21,8 +21,8 @@ CONDITION_KEYS = {
 }
 
 
-def project_dataset_facts(dataset_path: Path) -> dict[str, Any]:
-    """Return logical sample and pairing facts without changing dataset files."""
+def observe_dataset(dataset_path: Path) -> dict[str, Any]:
+    """Return file and correspondence observations without changing files."""
 
     root = dataset_path.resolve()
     metadata = _mapping_yaml(root / "dataset.yaml")
@@ -72,16 +72,15 @@ def project_dataset_facts(dataset_path: Path) -> dict[str, Any]:
         "dataset": dataset_path.name,
         "layout": {role: _relative(root, path) for role, path in directories.items()},
         "samples": samples,
-        "facts": {
+        "observations": {
             "sample_count": len(samples),
             "declared_count": declared_count,
-            "target_modality": "image" if samples else None,
             "captions_present": len(samples) - missing_captions,
             "captions_missing": missing_captions,
             "condition_counts": dict(sorted(condition_counts.items())),
             "aspect_ratio_mismatches": dict(sorted(aspect_mismatches.items())),
         },
-        "issues": issues,
+        "structural_findings": issues,
     }
 
 

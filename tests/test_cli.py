@@ -291,10 +291,10 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(requirements_lock["schema_version"], 1)
             self.assertEqual(requirements_lock["requirements"][0]["acquisition"], "backend")
             self.assertEqual(requirements_lock["requirements"][0]["identity"]["repo_id"], "black-forest-labs/FLUX.2-klein-base-4B")
-            contract_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "data-contract.lock.yaml").read_text(encoding="utf-8"))
+            contract_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "dataset-observations.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(contract_lock["schema_version"], 1)
             self.assertEqual(contract_lock["datasets"][0]["dataset"], "tiny")
-            self.assertEqual(contract_lock["datasets"][0]["facts"]["sample_count"], 1)
+            self.assertEqual(contract_lock["datasets"][0]["observations"]["sample_count"], 1)
             self.assertEqual(contract_lock["datasets"][0]["samples"][0]["target"], "images/001.png")
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
@@ -1418,8 +1418,8 @@ class RunPlanTests(unittest.TestCase):
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit}\nparams: {lr: 1e-4}\n", encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner}\ndatasets: [{id: tiny}]\nparams: {lr: 0.00005}\n", encoding="utf-8")
-            (run_dir / "resolved" / "data-contract.lock.yaml").write_text(
-                yaml.safe_dump({"schema_version": 1, "datasets": [{"dataset": "tiny", "facts": {"sample_count": 2, "captions_missing": 0, "condition_counts": {"source": 2}, "aspect_ratio_mismatches": {}}, "issues": []}]}),
+            (run_dir / "resolved" / "dataset-observations.lock.yaml").write_text(
+                yaml.safe_dump({"schema_version": 1, "datasets": [{"dataset": "tiny", "observations": {"sample_count": 2, "captions_missing": 0, "condition_counts": {"source": 2}, "aspect_ratio_mismatches": {}}, "structural_findings": []}]}),
                 encoding="utf-8",
             )
             previous = Path.cwd()
@@ -1436,8 +1436,8 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(payload["resolved_manifest"], "runs/compiled-example/resolved/manifest.lock.yaml")
             self.assertEqual(payload["backend"]["name"], "musubi-tuner")
             self.assertEqual(payload["params"]["lr"], 0.00005)
-            self.assertEqual(payload["datasets"][0]["contract"]["samples"], 2)
-            self.assertEqual(payload["datasets"][0]["contract"]["conditions"], {"source": 2})
+            self.assertEqual(payload["datasets"][0]["observations"]["samples"], 2)
+            self.assertEqual(payload["datasets"][0]["observations"]["conditions"], {"source": 2})
             self.assertIn("preflight", payload)
             disk_records = [item for item in payload["preflight"] if item["check"] == "disk"]
             self.assertTrue(disk_records)
@@ -3576,7 +3576,7 @@ class MusubiBackendTests(unittest.TestCase):
             }
         }
 
-        with self.assertRaisesRegex(ValueError, "unsupported Musubi Wan task"):
+        with self.assertRaisesRegex(ValueError, "unsupported Musubi Wan native selector"):
             command_musubi_tuner(run)
 
     def test_command_musubi_framepack_one_frame_updates_cache_and_train(self) -> None:

@@ -7,14 +7,14 @@ from pathlib import Path
 
 import yaml
 
-from kura.data_contracts import project_dataset_facts
+from kura.dataset_observations import observe_dataset
 
 
 PNG_2X1 = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + (2).to_bytes(4, "big") + (1).to_bytes(4, "big")
 PNG_1X1 = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + (1).to_bytes(4, "big") + (1).to_bytes(4, "big")
 
 
-class TrainingDataContractTests(unittest.TestCase):
+class DatasetObservationTests(unittest.TestCase):
     def test_colocated_sidecar_layout_normalizes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -22,12 +22,12 @@ class TrainingDataContractTests(unittest.TestCase):
             (root / "001.txt").write_text("caption", encoding="utf-8")
             (root / "dataset.yaml").write_text(yaml.safe_dump({"stats": {"count": 1}}), encoding="utf-8")
 
-            result = project_dataset_facts(root)
+            result = observe_dataset(root)
 
-        self.assertEqual(result["facts"]["sample_count"], 1)
+        self.assertEqual(result["observations"]["sample_count"], 1)
         self.assertEqual(result["samples"][0]["target"], "001.png")
         self.assertEqual(result["samples"][0]["caption_path"], "001.txt")
-        self.assertEqual(result["issues"], [])
+        self.assertEqual(result["structural_findings"], [])
 
     def test_declared_separate_image_caption_layout_normalizes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -39,11 +39,11 @@ class TrainingDataContractTests(unittest.TestCase):
             metadata = {"stats": {"count": 1}, "layout": {"image_dir": "image", "caption_dir": "caption"}}
             (root / "dataset.yaml").write_text(yaml.safe_dump(metadata), encoding="utf-8")
 
-            result = project_dataset_facts(root)
+            result = observe_dataset(root)
 
         self.assertEqual(result["samples"][0]["target"], "image/001.png")
         self.assertEqual(result["samples"][0]["caption_path"], "caption/001.txt")
-        self.assertEqual(result["facts"]["captions_missing"], 0)
+        self.assertEqual(result["observations"]["captions_missing"], 0)
 
     def test_items_jsonl_paths_override_directory_matching(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -56,7 +56,7 @@ class TrainingDataContractTests(unittest.TestCase):
             (root / "items.jsonl").write_text(json.dumps(item) + "\n", encoding="utf-8")
             (root / "dataset.yaml").write_text(yaml.safe_dump({"stats": {"count": 1}}), encoding="utf-8")
 
-            result = project_dataset_facts(root)
+            result = observe_dataset(root)
 
         sample = result["samples"][0]
         self.assertEqual(sample["target"], "target/different.png")
@@ -76,20 +76,20 @@ class TrainingDataContractTests(unittest.TestCase):
             metadata = {"stats": {"count": 2}, "layout": {"target_dir": "target", "source_dir": "source", "caption_dir": "caption"}}
             (root / "dataset.yaml").write_text(yaml.safe_dump(metadata), encoding="utf-8")
 
-            result = project_dataset_facts(root)
+            result = observe_dataset(root)
 
-        self.assertEqual(result["facts"]["condition_counts"], {"source": 1})
-        self.assertEqual(result["facts"]["aspect_ratio_mismatches"], {"source": 1})
-        self.assertEqual(result["facts"]["sample_count"], 2)
+        self.assertEqual(result["observations"]["condition_counts"], {"source": 1})
+        self.assertEqual(result["observations"]["aspect_ratio_mismatches"], {"source": 1})
+        self.assertEqual(result["observations"]["sample_count"], 2)
 
     def test_escaping_explicit_path_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "items.jsonl").write_text(json.dumps({"id": "bad", "path": "../outside.png"}) + "\n", encoding="utf-8")
 
-            result = project_dataset_facts(root)
+            result = observe_dataset(root)
 
-        codes = {item["code"] for item in result["issues"]}
+        codes = {item["code"] for item in result["structural_findings"]}
         self.assertIn("path_outside_dataset", codes)
         self.assertIn("missing_target", codes)
 

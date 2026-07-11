@@ -12,7 +12,7 @@ from kura.container_scripts import script_source
 from kura.backends.common import _append_flag, _extra_args, _int_or_none, _musubi_backend_override, _require_paths, _script_command, _truthy
 from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
-from kura.backends.musubi_tasks import wan_task_contract
+from kura.backends.musubi_native_selectors import wan_native_selector
 from kura.fsio import atomic_write_json, atomic_write_yaml
 
 
@@ -276,15 +276,15 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     elif architecture == "wan":
         dit, vae, t5 = _require_paths(paths, ("dit", "vae", "t5"))
         task = str(override.get("task") or "t2v-1.3B")
-        task_contract = wan_task_contract(task)
+        native_selector = wan_native_selector(task)
         clip = paths.get("clip")
         one_frame = _truthy(override.get("one_frame"))
-        if task_contract.clip_required and not clip:
+        if native_selector.clip_required and not clip:
             raise ValueError(f"Musubi Wan task {task} requires model_paths.clip or model_downloads.clip")
-        if one_frame and not task_contract.one_frame_allowed:
+        if one_frame and not native_selector.one_frame_allowed:
             raise ValueError("Musubi Wan one_frame requires task i2v-14B or flf2v-14B")
         dit_high_noise = paths.get("dit_high_noise")
-        if dit_high_noise and not task_contract.dual_dit_allowed:
+        if dit_high_noise and not native_selector.dual_dit_allowed:
             raise ValueError("Musubi Wan dit_high_noise is supported only for Wan 2.2 task t2v-A14B or i2v-A14B")
         if "timestep_boundary" in override and not dit_high_noise:
             raise ValueError("Musubi Wan timestep_boundary requires model_paths.dit_high_noise or model_downloads.dit_high_noise")
@@ -338,7 +338,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 "--batch_size", str(override.get("text_encoder_batch_size") or 1),
                 "--skip_existing",
             ]
-            if task_contract.i2v_cache:
+            if native_selector.i2v_cache:
                 latent_argv.append("--i2v")
             if clip:
                 latent_argv.extend(["--clip", clip])
