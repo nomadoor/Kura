@@ -6,6 +6,8 @@ import json
 import shlex
 from typing import Any
 
+from kura.run_envelope import backend_config
+
 
 def _datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     datasets = run.get("datasets")
@@ -28,11 +30,7 @@ def _toml_scalar(value: Any) -> str:
 
 
 def _musubi_backend_override(run: dict[str, Any]) -> dict[str, Any]:
-    overrides = run.get("backend_overrides")
-    if not isinstance(overrides, dict):
-        return {}
-    override = overrides.get("musubi-tuner")
-    return override if isinstance(override, dict) else {}
+    return backend_config(run, "musubi-tuner")
 
 
 def _require_paths(paths: dict[str, str], names: tuple[str, ...]) -> list[str]:

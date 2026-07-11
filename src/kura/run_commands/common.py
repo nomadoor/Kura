@@ -35,9 +35,9 @@ def _backend_image_name(backend_name: Any) -> str:
 def _command_for_backend(run: dict[str, Any]) -> dict[str, Any]:
     backend_name = run.get("backend", {}).get("name") if isinstance(run.get("backend"), dict) else None
     if backend_name == "ai-toolkit":
-        return command_ai_toolkit(run)
+        return {**command_ai_toolkit(run), "backend": backend_name}
     if backend_name == "musubi-tuner":
-        return command_musubi_tuner(run)
+        return {**command_musubi_tuner(run), "backend": backend_name}
     raise ValueError(f"unsupported backend: {backend_name}")
 
 

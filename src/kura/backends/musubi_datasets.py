@@ -8,13 +8,14 @@ from typing import Any
 
 from kura.backends.common import _datasets, _int_or_none, _musubi_backend_override, _toml_scalar
 from kura.fsio import atomic_write_text
+from kura.run_envelope import legacy_params
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
-    params = run.get("params", {})
+    params = legacy_params(run)
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
     if not datasets:

@@ -14,6 +14,11 @@ from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import wan_native_selector
 from kura.fsio import atomic_write_json, atomic_write_yaml
+from kura.run_envelope import common_recipe, legacy_params
+
+
+def _musubi_legacy_and_common(run: dict[str, Any]) -> dict[str, Any]:
+    return {**legacy_params(run), **common_recipe(run)}
 
 
 def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
@@ -64,7 +69,7 @@ def _musubi_micro_batch(run: dict[str, Any], override: dict[str, Any]) -> int | 
                 batch_size = _int_or_none(item.get("batch_size"))
                 if batch_size is not None:
                     return batch_size
-    return _int_or_none(run.get("params", {}).get("batch_size"))
+    return _int_or_none(legacy_params(run).get("batch_size"))
 
 
 def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int | None:
@@ -85,7 +90,7 @@ def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int
                     resolution = item.get(key)
                     if isinstance(resolution, list):
                         values.extend(value for part in resolution if (value := _int_or_none(part)) is not None)
-    params_resolution = run.get("params", {}).get("resolution")
+    params_resolution = legacy_params(run).get("resolution")
     if isinstance(params_resolution, list):
         values.extend(value for item in params_resolution if (value := _int_or_none(item)) is not None)
     return max(values) if values else None
@@ -106,14 +111,14 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
     micro_batch = _musubi_micro_batch(run, override)
     if micro_batch is None or micro_batch <= 1:
         max_resolution = _musubi_max_resolution(run, override)
-        rank = _int_or_none(run.get("params", {}).get("rank")) or _int_or_none(override.get("network_dim"))
+        rank = _int_or_none(legacy_params(run).get("rank")) or _int_or_none(override.get("network_dim"))
         checkpointing = _truthy(override.get("gradient_checkpointing")) or "--gradient_checkpointing" in extra_args
         if max_resolution is not None and max_resolution >= 1024 and (rank is None or rank >= 32) and not checkpointing:
             if _truthy(override.get("allow_a40_uncheckpointed_9b")):
                 return
             raise ValueError(
                 "Musubi FLUX.2 9B on NVIDIA A40 at 1024-class resolution/rank32 has been observed to OOM "
-                "even with batch_size=1. Set backend_overrides.musubi-tuner.gradient_checkpointing: true, "
+                "even with batch_size=1. Set backend.config.gradient_checkpointing: true, "
                 "or set allow_a40_uncheckpointed_9b: true to accept the risk."
             )
         return
@@ -122,7 +127,7 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
             "Musubi FLUX.2 9B on NVIDIA A40 treats batch_size as GPU micro-batch; "
             f"batch_size={micro_batch} has been observed to OOM before step 1. "
             "Use batch_size: 1 and keep the intended effective batch with explicit "
-            "--gradient_accumulation_steps, or set backend_overrides.musubi-tuner."
+            "--gradient_accumulation_steps, or set backend.config."
             "allow_a40_large_micro_batch: true to accept the risk."
         )
 
@@ -134,7 +139,7 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
 
 
 def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], output_dir: str, output_name: str, *, default_lr: str = "1e-4") -> list[str]:
-    params = run.get("params", {})
+    params = _musubi_legacy_and_common(run)
     args = [
         "--optimizer_type", str(override.get("optimizer_type") or "adamw8bit"),
         "--learning_rate", str(params.get("lr") or override.get("learning_rate") or default_lr),
@@ -142,8 +147,9 @@ def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], out
         "--persistent_data_loader_workers",
         "--network_dim", str(params.get("rank") or override.get("network_dim") or 32),
     ]
-    if params.get("alpha") is not None:
-        args.extend(["--network_alpha", str(params["alpha"])])
+    alpha = params.get("alpha") if params.get("alpha") is not None else override.get("network_alpha")
+    if alpha is not None:
+        args.extend(["--network_alpha", str(alpha)])
     args.extend([
         "--max_train_steps", str(params.get("steps") or override.get("max_train_steps") or 1600),
         "--save_every_n_steps", str(override.get("save_every_n_steps") or params.get("steps") or 1600),
@@ -197,7 +203,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
 
     architecture = str(override.get("architecture") or override.get("model_arch") or "flux2").lower().replace("-", "_")
     _validate_musubi_resource_flags(run, override, architecture)
-    params = run.get("params", {})
+    params = _musubi_legacy_and_common(run)
     explicit_paths = _musubi_explicit_model_paths(override)
     paths = _musubi_model_paths(run)
     download_commands, _ = _musubi_model_downloads(run, existing_paths=explicit_paths)
@@ -239,8 +245,9 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_scaled")
         if override.get("vae_dtype"):
             train_argv.extend(["--vae_dtype", str(override["vae_dtype"])])
-        if params.get("alpha") is not None:
-            train_argv.extend(["--network_alpha", str(params["alpha"])])
+        alpha = params.get("alpha") if params.get("alpha") is not None else override.get("network_alpha")
+        if alpha is not None:
+            train_argv.extend(["--network_alpha", str(alpha)])
         train_argv.extend(_extra_args(override))
         commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
@@ -318,8 +325,9 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 train_argv.extend(["--timestep_boundary", str(override["timestep_boundary"])])
         if one_frame:
             train_argv.append("--one_frame")
-        if params.get("alpha") is not None:
-            train_argv.extend(["--network_alpha", str(params["alpha"])])
+        alpha = params.get("alpha") if params.get("alpha") is not None else override.get("network_alpha")
+        if alpha is not None:
+            train_argv.extend(["--network_alpha", str(alpha)])
         train_argv.extend(_extra_args(override))
         commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):

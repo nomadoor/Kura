@@ -17,6 +17,8 @@ from typing import Any, Iterable
 
 import yaml
 
+from kura.run_envelope import backend_config, common_recipe, legacy_params
+
 
 ACTIVE_STATES = {"queued", "staged", "launching", "running"}
 DRAFT_STATE = "draft"
@@ -447,7 +449,7 @@ def _key_config(run_type: str | None, config: dict[str, Any]) -> dict[str, Any]:
         checkpoint = inputs.get("checkpoint", {}) if isinstance(inputs.get("checkpoint"), dict) else {}
         workflow = inputs.get("workflow", {}) if isinstance(inputs.get("workflow"), dict) else {}
         return {"checkpoint": checkpoint.get("path"), "workflow": workflow.get("path")}
-    params = config.get("params", {}) if isinstance(config.get("params"), dict) else {}
+    params = {**legacy_params(config), **common_recipe(config)}
     dataset_ids = [dataset.id for dataset in _datasets(Path("."), config) if dataset.id]
     backend = config.get("backend", {}) if isinstance(config.get("backend"), dict) else {}
     model = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
@@ -535,15 +537,11 @@ def _gradient_accumulation_steps(config: dict[str, Any]) -> int | None:
 
 
 def _backend_override(config: dict[str, Any], name: str) -> dict[str, Any]:
-    overrides = config.get("backend_overrides")
-    if not isinstance(overrides, dict):
-        return {}
-    value = overrides.get(name)
-    return value if isinstance(value, dict) else {}
+    return backend_config(config, name)
 
 
 def _progress(status: dict[str, Any], config: dict[str, Any], *, stdout_progress: RunProgress | None = None) -> RunProgress:
-    params = config.get("params", {}) if isinstance(config.get("params"), dict) else {}
+    params = {**legacy_params(config), **common_recipe(config)}
     step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
     total = _int_or_none(_first_present(status.get("total_steps"), params.get("steps")))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))

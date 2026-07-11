@@ -29,6 +29,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _event, _run_datasets, _safe_error, _workspace_display_path
+from kura.run_envelope import backend_config, common_recipe, legacy_params
 
 
 NOT_SET = "(not set)"
@@ -130,12 +131,9 @@ def _local_gpu_payload() -> dict[str, Any]:
 def _important_backend_overrides(run: dict[str, Any]) -> dict[str, Any]:
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
-    overrides = run.get("backend_overrides")
-    if not isinstance(backend_name, str) or not isinstance(overrides, dict):
+    if not isinstance(backend_name, str):
         return {}
-    backend_overrides = overrides.get(backend_name)
-    if not isinstance(backend_overrides, dict):
-        return {}
+    backend_overrides = backend_config(run, backend_name)
 
     important: dict[str, Any] = {}
     direct_keys = (
@@ -192,10 +190,9 @@ def _model_artifact_filenames(run: dict[str, Any], download_estimate: dict[str, 
                 "source": _plan_value(item.get("repo_id")),
             }
         )
-    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
-    backend_override = overrides.get(backend_name) if isinstance(backend_name, str) and isinstance(overrides.get(backend_name), dict) else {}
+    backend_override = backend_config(run, backend_name) if isinstance(backend_name, str) else {}
     paths = backend_override.get("model_paths") if isinstance(backend_override, dict) else None
     if isinstance(paths, dict):
         for role, value in sorted(paths.items()):
@@ -220,9 +217,8 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
     backend_name = backend.get("name")
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    params = run.get("params") if isinstance(run.get("params"), dict) else {}
-    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
-    backend_override = overrides.get(backend_name) if isinstance(backend_name, str) and isinstance(overrides.get(backend_name), dict) else {}
+    params = legacy_params(run)
+    backend_override = backend_config(run, backend_name) if isinstance(backend_name, str) else {}
     extra_args = backend_override.get("extra_args") if isinstance(backend_override, dict) else None
     executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
     common_flags = {
@@ -315,7 +311,7 @@ def _checkpoint_retention_policy_present(important_overrides: dict[str, Any]) ->
 
 
 def _disk_warnings(run: dict[str, Any], important_overrides: dict[str, Any]) -> list[str]:
-    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    params = {**legacy_params(run), **common_recipe(run)}
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     warnings: list[str] = []
@@ -341,7 +337,7 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
     if safety.get("allow_many_checkpoints") is True:
         return
     important = _important_backend_overrides(run)
-    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    params = {**legacy_params(run), **common_recipe(run)}
     steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
@@ -350,7 +346,7 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
     if expected >= 10:
         raise ValueError(
             f"checkpoint policy may create about {expected} checkpoints without pruning; "
-            "set backend_overrides.<backend>.prune_checkpoints_before_step, reduce save frequency, "
+            "set backend.config.prune_checkpoints_before_step, reduce save frequency, "
             "or set safety.allow_many_checkpoints: true if intentional"
         )
 
@@ -466,10 +462,13 @@ def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | No
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if backend_name != "musubi-tuner":
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
-    overrides = run.get("backend_overrides")
-    if overrides is not None and not isinstance(overrides, dict):
+    legacy_overrides = run.get("backend_overrides")
+    if legacy_overrides is not None and not isinstance(legacy_overrides, dict):
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
-    override = overrides.get("musubi-tuner", {}) if isinstance(overrides, dict) else {}
+    try:
+        override = backend_config(run, "musubi-tuner")
+    except ValueError:
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
     existing_paths = {}
     if isinstance(override, dict):
         paths = override.get("model_paths")
@@ -644,7 +643,7 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     except ValueError as exc:
         return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
     important = _important_backend_overrides(run)
-    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    params = {**legacy_params(run), **common_recipe(run)}
     steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if steps and save_every:
@@ -742,7 +741,7 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     if safety.get("allow_many_checkpoints") is not True:
         return {"bytes": 0, "count": 0}
     important = _important_backend_overrides(run)
-    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    params = {**legacy_params(run), **common_recipe(run)}
     steps = _as_positive_int(params.get("steps")) or _as_positive_int(important.get("max_train_steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
@@ -902,7 +901,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    params = run.get("params") if isinstance(run.get("params"), dict) else {}
+    params = {**legacy_params(run), **common_recipe(run)}
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     contract_path = run_dir / "resolved" / "dataset-observations.lock.yaml"
     contract_lock = _load_yaml(contract_path) if contract_path.is_file() else {}
@@ -967,6 +966,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resolved_manifest": _workspace_display_path(manifest) if manifest.is_file() else None,
         "backend": {
             "name": backend.get("name") if isinstance(backend, dict) else None,
+            "config": important_overrides,
         },
         "model": {
             "base": model.get("base") if isinstance(model, dict) else None,
@@ -979,7 +979,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "datasets": datasets,
         "params": {key: value for key, value in plan_params.items() if value is not None},
         "sampling": sampling_payload,
-        "backend_overrides": important_overrides,
         "resources": resources,
         "model_downloads": download_estimate,
         "preflight": preflight,
@@ -1072,7 +1071,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
 
     lines.append("")
     lines.append("Params")
-    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    params = {**legacy_params(payload), **common_recipe(payload)}
     if params:
         for key, value in params.items():
             _append_kv(lines, key, value)
@@ -1086,11 +1085,12 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         for key, value in sampling.items():
             _append_kv(lines, key, value)
 
-    overrides = payload.get("backend_overrides") if isinstance(payload.get("backend_overrides"), dict) else {}
-    if overrides:
+    selected_backend = payload.get("backend") if isinstance(payload.get("backend"), dict) else {}
+    native = backend_config(payload, selected_backend.get("name")) if isinstance(selected_backend.get("name"), str) else {}
+    if native:
         lines.append("")
-        lines.append("Backend overrides")
-        for key, value in overrides.items():
+        lines.append("Backend config")
+        for key, value in native.items():
             _append_kv(lines, key, value)
 
     resources = payload.get("resources") if isinstance(payload.get("resources"), dict) else {}

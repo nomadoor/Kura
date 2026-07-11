@@ -73,7 +73,7 @@ finishes one optimizer step through Kura. See
 ## Escape hatch
 
 For an upstream-supported architecture without a Kura built-in adapter, a run may
-still use `backend_overrides.musubi-tuner.command` to provide the exact command.
+still use `backend.config.command` to provide the exact command.
 That keeps Kura responsible for workspace files, Docker/RunPod execution,
 monitoring, downloads, and cleanup, while the Musubi command itself is explicit.
 

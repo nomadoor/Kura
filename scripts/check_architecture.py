@@ -13,6 +13,7 @@ PURE_OBSERVATION_MODULES = {
     SRC / "dataset_inspect.py",
     SRC / "dataset_observations.py",
 }
+AGENT_RUNTIME_MODULES = {"anthropic", "claude_agent_sdk", "openai"}
 
 
 def imports(path: Path) -> set[str]:
@@ -42,6 +43,12 @@ def main() -> int:
         for name in imports(path):
             if name == "kura.backends" or name.startswith("kura.backends."):
                 failures.append(f"{path.relative_to(ROOT)} must not compile through backend {name}")
+
+    for path in sorted(SRC.rglob("*.py")):
+        for name in imports(path):
+            root = name.split(".", 1)[0]
+            if root in AGENT_RUNTIME_MODULES:
+                failures.append(f"{path.relative_to(ROOT)} makes the production CLI depend on agent runtime {name}")
 
     selector = "kura.backends.musubi_native_selectors"
     for path in sorted(SRC.rglob("*.py")):

@@ -121,7 +121,7 @@ or WSL/VHDX/Windows-side operations.
   `safety.allow_storage_risk: true`.
 - Lower those gates only when the user understands the trade-off.
 - Frequent unpruned checkpoints are blocked before launch unless:
-  - `backend_overrides.<backend>.prune_checkpoints_before_step` is set, or
+  - `backend.config.prune_checkpoints_before_step` is set, or
   - the backend has an explicit keep-last checkpoint policy, or
   - `safety.allow_many_checkpoints: true` is explicitly accepted
 

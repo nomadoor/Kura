@@ -36,7 +36,7 @@ Use this skill for `backend.name: musubi-tuner` work.
 Use this ladder when logs or doctor output show the run does not fit available
 VRAM. The agent may choose execution accommodations automatically while
 drafting, but must expose them in the plan and record them in `run.yaml` under
-`backend_overrides.musubi-tuner` before recompiling. Ask separately when the
+`backend.config` before recompiling. Ask separately when the
 change affects the training recipe, GPU cost, or is expected to increase
 elapsed time beyond roughly 2x.
 
@@ -57,7 +57,7 @@ fits one FLUX.2/Krea-class model can be invalid for another.
 
 - Kura does not need a friendly bundle entry for every new model. If the model is
   not in Kura's known bundle map, use explicit
-  `backend_overrides.musubi-tuner.model_downloads` or `model_paths`.
+  `backend.config.model_downloads` or `model_paths`.
 - A bundle miss should be treated as a configuration task, not as permission to
   silently substitute another model size or family.
 - Distinguish upstream Musubi support from Kura built-in adapter support. Do not
@@ -72,7 +72,7 @@ fits one FLUX.2/Krea-class model can be invalid for another.
   generation is not enough; verify the configured Docker image with
   `uv run kura doctor musubi`, and mark real training smoke separately.
 - For an upstream-supported architecture without a Kura adapter, use explicit
-  `backend_overrides.musubi-tuner.command` as a temporary escape hatch.
+  `backend.config.command` as a temporary escape hatch.
 - Validate model roles by safetensors headers after adding explicit paths or
   downloads.
 

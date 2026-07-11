@@ -1,0 +1,122 @@
+schema_version: 1
+description: >-
+  Historical execution observations. Records are evidence for the stated
+  identity tuple, not declarations of backend capability.
+records:
+  - id: ai-toolkit-sdxl-local-2026-07-02
+    backend: ai-toolkit
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: embedded-upstream-commit, value: a4bbe167ce03521bf9052d2349f01b2997d67ac7, reference: "ostris/aitoolkit:0.10.22"}
+    native_path: {model_arch: sdxl, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-02"
+    artifact: upstream-model-support-audit.md
+  - id: ai-toolkit-sdxl-runpod-2026-07-02
+    backend: ai-toolkit
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: embedded-upstream-commit, value: a4bbe167ce03521bf9052d2349f01b2997d67ac7, reference: "ostris/aitoolkit:0.10.22"}
+    native_path: {model_arch: sdxl, executor: runpod}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-02"
+    artifact: upstream-model-support-audit.md
+  - id: musubi-wan-docker-2026-06-30
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: wan, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-06-30"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-krea2-docker-2026-06-30
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: krea2, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-06-30"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-qwen-image-runpod-2026-06-30
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: qwen_image, executor: runpod}
+    evidence_kind: real-optimizer-step
+    outcome: passed-on-a40
+    observed_at: "2026-06-30"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-zimage-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: zimage, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-hidream-o1-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: hidream_o1, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-ideogram4-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: ideogram4, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-flux-kontext-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: flux_kontext, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-hunyuan-video-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: hunyuan_video, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-hunyuan-video-1-5-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: hunyuan_video_1_5, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-framepack-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: framepack, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md
+  - id: musubi-kandinsky5-lite-docker-2026-07-01
+    backend: musubi-tuner
+    adapter_source: {kind: git-commit, value: eda480826f4031149c1f7db14be94653a116670e}
+    runtime_image: {kind: content-hash, value: "sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c", reference: "nomadoor/kura-musubi-tuner:dev"}
+    native_path: {architecture: kandinsky5, variant: lite, executor: docker}
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: "2026-07-01"
+    artifact: musubi-real-smoke-plan.md

@@ -55,10 +55,7 @@ selections to Kura.
 Backend-native values remain in a namespace owned by their adapter. Core may
 persist, display, hash, and pass these values without interpreting them.
 
-The current `backend_overrides.<backend>` shape already provides namespace
-isolation, but the name `overrides` incorrectly implies that a complete common
-default exists. A future schema revision should prefer a primary description
-such as:
+The primary schema uses:
 
 ```yaml
 backend:
@@ -68,8 +65,10 @@ backend:
     task: i2v-A14B
 ```
 
-The migration must be backward compatible. Renaming is not justification for a
-second config store or an immediate breaking rewrite of existing runs.
+Schema-v1 `backend_overrides.<backend>` remains readable for replay. A non-empty
+legacy and primary config may not coexist: Kura refuses to invent merge
+precedence. New runs author only `backend.config`, so this is one config with a
+compatibility reader, not two stores.
 
 ## Decision 3: common recipe fields require proven semantic identity
 
@@ -83,8 +82,11 @@ can state their semantics precisely. When meanings differ or are uncertain,
 the value belongs in the backend namespace and the plan displays the native
 choice.
 
-This rule is applied incrementally. Existing fields are audited before being
-declared stable; this ADR does not silently reinterpret existing run files.
+The audit retains only requested optimizer-step count and seed in the common
+`recipe`. Rank, alpha, learning rate, scheduler, precision, accumulation,
+dataset resolution/batch, optimizer, and save cadence are backend-native.
+Existing `params` runs retain their old projection for replay; new runs do not
+author those ambiguous common-looking fields.
 
 ## Decision 4: dataset observations contain no training verdict
 
@@ -247,9 +249,7 @@ criterion.
 Rejected because startup and acquisition cost can equal the intended run and a
 separate process may duplicate the most expensive work.
 
-## Implementation sequence
-
-Each item is independently reviewed and followed by the release gate.
+## Implemented sequence
 
 1. Rename the experimental data-contract artifacts to dataset observations and
    remove backend imports and training verdicts from the observation layer.
@@ -257,13 +257,13 @@ Each item is independently reviewed and followed by the release gate.
    confirmed Wan 2.2 I2V cache fix without presenting the selector table as a
    common contract.
 3. Add focused architecture dependency checks.
-4. Define a versioned, machine-readable smoke evidence record keyed by adapter
-   source and backend image identity; do not turn it into a capability list.
-5. Add pinning-strength fields to model/runtime observations where the actual
-   strength is known.
-6. Audit existing common recipe fields and document exact cross-backend
-   semantics or leave them in the backend namespace in a future schema.
-7. Design a backward-compatible migration from `backend_overrides` to primary
-   `backend.config`; do not perform a flag-day rewrite.
+4. Define the versioned `docs/backend-smoke-evidence.yaml`, keyed by adapter
+   source, runtime identity, and opaque native path.
+5. Record explicit pinning strength and observation state in model, compile,
+   and realization provenance.
+6. Restrict new common `recipe` authoring to steps and seed.
+7. Make `backend.config` primary while retaining an unambiguous legacy reader.
+8. Prove both training backends compile, plan, dry-launch, and report status
+   from files alone, and mechanically reject production agent-SDK imports.
 
 No new user-facing command is required by this ADR.

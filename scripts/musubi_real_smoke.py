@@ -631,6 +631,18 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         override["model_paths"] = dict(spec.model_paths)
     if spec.model_downloads is not None:
         override["model_downloads"] = {key: dict(value) for key, value in spec.model_downloads.items()}
+    params = dict(spec.params)
+    for source, target in (("lr", "learning_rate"), ("rank", "network_dim"), ("alpha", "network_alpha")):
+        if params.get(source) is not None:
+            override.setdefault(target, params[source])
+    general = {}
+    if params.get("resolution") is not None:
+        general["resolution"] = params["resolution"]
+    if params.get("batch_size") is not None:
+        general["batch_size"] = params["batch_size"]
+    if general:
+        dataset_config = override.setdefault("dataset_config", {})
+        dataset_config.setdefault("general", {}).update({key: value for key, value in general.items() if key not in dataset_config.get("general", {})})
     run_yaml = {
         "schema_version": 1,
         "id": run_id,
@@ -640,11 +652,10 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         "created_by": "agent",
         "parent_run": None,
         "intent": "real one-step Musubi adapter smoke with actual model files",
-        "backend": {"name": "musubi-tuner", "version": None, "adapter_version": 1},
         "model": {"base": spec.model_base, "revision": None},
         "datasets": [{"id": spec.dataset_id, "digest": None, "role": None}],
-        "params": dict(spec.params),
-        "backend_overrides": {"musubi-tuner": override},
+        "recipe": {key: params[key] for key in ("steps", "seed") if params.get(key) is not None},
+        "backend": {"name": "musubi-tuner", "version": None, "adapter_version": 1, "config": override},
         "compute": {"executor": executor, "gpu": gpu},
         "safety": {"allow_large_model_downloads": True},
         "sampling": {"prompts": [], "cadence_steps": None},

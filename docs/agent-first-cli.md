@@ -40,6 +40,25 @@ uv run kura run watch <run-id>
 Manual authoring is supported, but it is not the primary UX. The important
 guarantee is that the files an agent produces are complete, readable CLI input.
 
+New training runs use `backend.name` plus opaque `backend.config`. Only
+optimizer-step count and seed currently have proven common recipe semantics:
+
+```yaml
+backend:
+  name: musubi-tuner
+  config:
+    architecture: wan
+    task: i2v-A14B
+    learning_rate: 0.0001
+recipe:
+  steps: 1600
+  seed: 42
+```
+
+Older `params` and `backend_overrides` runs remain replayable. Kura does not
+merge a non-empty old and new backend config, because precedence would hide
+which native decision actually ran.
+
 ## What Kura does not normalize
 
 Kura gives all backends the same run lifecycle. It does not give them a fake

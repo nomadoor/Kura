@@ -33,6 +33,8 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
+from kura.run_envelope import backend_config
+from kura.provenance import adapter_source_identity, image_reference_identity
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
 from kura.run_commands import _runpod_secret_env_payload
@@ -115,6 +117,7 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
+    backend_config(run, backend_name)
     overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
     other_backend = "musubi-tuner" if backend_name == "ai-toolkit" else "ai-toolkit"
     if isinstance(overrides.get(other_backend), dict) and overrides[other_backend]:
@@ -215,11 +218,11 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run = {
         "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
-        "backend": {"name": args.backend, "version": None, "adapter_version": 1},
+        "backend": {"name": args.backend, "version": None, "adapter_version": 1, "config": {}},
         "model": {"base": "", "revision": None},
         "datasets": [{"id": "", "digest": None, "role": None}],
-        "params": {key: None for key in ("rank", "alpha", "lr", "scheduler", "steps", "batch_size", "resolution", "seed")},
-        "backend_overrides": {}, "compute": {"executor": args.executor, "gpu": args.gpu},
+        "recipe": {"steps": None, "seed": None},
+        "compute": {"executor": args.executor, "gpu": args.gpu},
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
@@ -329,6 +332,9 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
             "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
             "local_image": image["local"], "dockerfile": image["dockerfile"],
+            "adapter_source": adapter_source_identity(backend.get("name")),
+            "local_image_identity": image_reference_identity(image["local"]),
+            "remote_image_identity": image_reference_identity(image["remote"]),
         }
         _dump_yaml(resolved / "env.lock", env)
         status_path = run_dir / "status.json"

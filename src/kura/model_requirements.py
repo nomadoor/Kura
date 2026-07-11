@@ -8,19 +8,36 @@ from __future__ import annotations
 
 from typing import Any
 
+from kura.run_envelope import backend_config, backend_name
+
+
+def _pinning(identity: dict[str, Any], *, observable: bool) -> dict[str, Any]:
+    if isinstance(identity.get("sha256"), str):
+        return {"strength": "content-hash", "observation": "observed"}
+    revision = identity.get("revision")
+    if isinstance(revision, str) and len(revision) >= 40 and all(char in "0123456789abcdefABCDEF" for char in revision):
+        return {"strength": "immutable-revision", "observation": "observed"}
+    if revision:
+        return {"strength": "mutable-reference", "observation": "observed", "detail": "revision is not proven immutable"}
+    if identity.get("kind") == "path":
+        return {
+            "strength": "external-unobserved",
+            "observation": "not-observed" if observable else "not-observable",
+            "detail": "Kura did not hash the external model path during compile",
+        }
+    return {
+        "strength": "mutable-reference",
+        "observation": "not-observed" if observable else "not-observable",
+        "detail": "no immutable revision or content hash was observed",
+    }
+
 
 def _backend_name(run: dict[str, Any]) -> str | None:
-    backend = run.get("backend")
-    name = backend.get("name") if isinstance(backend, dict) else None
-    return name if isinstance(name, str) and name else None
+    return backend_name(run)
 
 
 def _backend_override(run: dict[str, Any], backend_name: str) -> dict[str, Any]:
-    overrides = run.get("backend_overrides")
-    if not isinstance(overrides, dict):
-        return {}
-    value = overrides.get(backend_name)
-    return value if isinstance(value, dict) else {}
+    return backend_config(run, backend_name)
 
 
 def _ai_toolkit_requirements(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -47,6 +64,7 @@ def _ai_toolkit_requirements(run: dict[str, Any]) -> list[dict[str, Any]]:
             "runtime_reference": base,
             "expected_format": expected_format,
             "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"},
+            "pinning": _pinning(identity, observable=False),
         }
     ]
 
@@ -81,6 +99,7 @@ def _musubi_requirements(run: dict[str, Any], download_estimate: dict[str, Any])
                     "runtime_reference": item.get("runtime_reference"),
                     "expected_format": "backend-role-file",
                     "measurement": measurement,
+                    "pinning": _pinning(identity, observable=True),
                 }
             )
 
@@ -98,6 +117,7 @@ def _musubi_requirements(run: dict[str, Any], download_estimate: dict[str, Any])
                     "runtime_reference": path,
                     "expected_format": "backend-role-file",
                     "measurement": {"scope": "compile", "status": "declared"},
+                    "pinning": _pinning({"kind": "path", "path": path}, observable=True),
                 }
             )
     return requirements

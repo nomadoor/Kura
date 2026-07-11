@@ -8,6 +8,7 @@ from typing import Any
 
 from kura.backends.common import _datasets
 from kura.fsio import atomic_write_yaml
+from kura.run_envelope import backend_config, common_recipe, legacy_params
 
 
 def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, resolution: Any) -> list[dict[str, Any]]:
@@ -20,17 +21,14 @@ def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, r
 
 
 def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
-    overrides = run.get("backend_overrides")
-    if not isinstance(overrides, dict):
-        return {}
-    override = overrides.get("ai-toolkit")
-    return override if isinstance(override, dict) else {}
+    return backend_config(run, "ai-toolkit")
 
 
 def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
     """Write AI-Toolkit native YAML for configured training runs."""
     override = _ai_toolkit_backend_override(run)
-    params = run.get("params", {})
+    params = legacy_params(run)
+    recipe = common_recipe(run)
     model = run.get("model", {})
     datasets = _datasets(run)
     native = override.get("config")
@@ -45,14 +43,15 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
                 "network": {"type": "lora", "linear": params.get("rank"), "linear_alpha": params.get("alpha")},
                 "save": {"dtype": "bf16", "save_every": 1, "max_step_saves_to_keep": 1},
                 "datasets": _ai_toolkit_datasets(datasets, override.get("dataset_folder"), params.get("resolution")),
-                "train": {"batch_size": params.get("batch_size"), "steps": params.get("steps"), "gradient_accumulation_steps": 1, "train_unet": True, "train_text_encoder": False, "gradient_checkpointing": False, "noise_scheduler": "flowmatch", "optimizer": "adamw8bit", "lr": params.get("lr"), "dtype": "bf16", "disable_sampling": True},
+                "train": {"batch_size": params.get("batch_size"), "steps": recipe.get("steps"), "gradient_accumulation_steps": 1, "train_unet": True, "train_text_encoder": False, "gradient_checkpointing": False, "noise_scheduler": "flowmatch", "optimizer": "adamw8bit", "lr": params.get("lr"), "dtype": "bf16", "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
             }],
         },
     }
     process = config["config"]["process"][0]
     if "config" in override and not isinstance(native, dict):
-        raise ValueError("backend_overrides.ai-toolkit.config must be a mapping.")
+        location = "backend.config.config" if isinstance(run.get("backend"), dict) and run["backend"].get("config") else "backend_overrides.ai-toolkit.config"
+        raise ValueError(f"{location} must be a mapping.")
     if isinstance(native, dict):
         for section, values in native.items():
             if section in process and isinstance(process[section], dict) and isinstance(values, dict):
@@ -70,7 +69,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(command, dict):
         raise ValueError(
             "AI-Toolkit command is not configured. "
-            "Set backend_overrides.ai-toolkit.command."
+            "Set backend.config.command."
         )
     cwd, argv, env = command.get("cwd"), command.get("argv"), command.get("env", {})
     if not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
