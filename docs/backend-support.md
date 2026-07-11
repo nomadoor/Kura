@@ -1,132 +1,71 @@
-# Backend support matrix
+# Backend support
 
-Snapshot date: 2026-07-11.
+Snapshot: 2026-07-11.
 
-This is the operational support summary for Kura's training backends. It keeps
-three different facts separate:
+This page answers three questions: which upstream version Kura uses, whether
+Kura has an adapter, and how far that path has been tested. It intentionally
+does not record personal run IDs, hardware inventories, or experiment history.
+See [upstream-model-support-audit.md](upstream-model-support-audit.md) for the
+detailed audit and [musubi-adapters.md](musubi-adapters.md) for Musubi mechanics.
 
-1. the upstream version Kura actually pins;
-2. whether Kura has an adapter or native-config projection for the model;
-3. what has completed a real run through Kura.
+## Versions
 
-An upstream model name or a successful compile is not, by itself, a claim that
-training works or that the resulting LoRA has useful quality. Detailed audit
-notes and upstream links are in
-[upstream-model-support-audit.md](upstream-model-support-audit.md).
-
-## Status legend
-
-| Mark | Level | Meaning |
+| Backend | Version used by Kura | Identity |
 | --- | --- | --- |
-| ✅ | Operational | Real run, output recovery, and disposable-compute cleanup verified. |
-| 🧪 | Real smoke | A real model completed at least one optimizer step through Kura. |
-| 🔧 | Image smoke | Required entrypoints exist in the pinned image and start. |
-| 🧩 | Expressible | Kura can freeze the native config or command; no real-run claim. |
-| 📋 | Listed | The pinned upstream advertises it; Kura support is not established. |
-| ⚠️ | Limited | Only the stated subset or explicit native override is supported. |
-| ❌ | Out of scope | The current Kura train-run contract does not support this workflow. |
+| AI-Toolkit | Docker `0.10.22` | `ostris/aitoolkit:0.10.22`; embedded commit `a4bbe167ce03521bf9052d2349f01b2997d67ac7` |
+| Musubi Tuner | Git tag `v0.3.4` | commit `30c658c4f4b0bf05038b3346eff9670259b10fc7` |
 
-| Backend | Version | Adapter coverage | Best verified path |
-| --- | --- | --- | --- |
-| AI-Toolkit | `0.10.22` | ⚠️ | ✅ SDXL local + RunPod |
-| Musubi Tuner | `v0.3.4` | ✅ 12/12 | ✅ Wan local + RunPod; 🧪 all families |
+Mutable `latest` is not a supported default.
 
-`🧪 Real smoke` and `✅ Operational` validate the execution path, not training
-quality. Quality requires generation and human evaluation from a meaningful
-training run.
+## Status
 
-## Versions in use
+| Mark | Meaning |
+| --- | --- |
+| ✅ | Local and RunPod execution, output recovery, and cleanup verified |
+| 🧪 | At least one real one-step training smoke passed |
+| 🔧 | Adapter compiles and image entrypoints start |
+| 🧩 | Native configuration can be expressed; no real smoke claim |
+| 📋 | Upstream lists the family; Kura support is not established |
+| ⚠️ | Only the stated subset is covered |
+| ❌ | Outside the current Kura training contract |
 
-| Backend | Kura pin | Local image | RunPod image | Verified upstream identity |
+## Support matrix
+
+| Backend | Model family | Adapter | Status | Notes |
 | --- | --- | --- | --- | --- |
-| AI-Toolkit | Docker `0.10.22` | `nomadoor/kura-ai-toolkit:dev`, built from `ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438` | `ostris/aitoolkit:0.10.22` | embedded commit `a4bbe167ce03521bf9052d2349f01b2997d67ac7` |
-| Musubi Tuner | Git tag `v0.3.4` | `nomadoor/kura-musubi-tuner:dev` | `nomadoor/kura-musubi-tuner:dev` | commit `30c658c4f4b0bf05038b3346eff9670259b10fc7` |
+| AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified |
+| AI-Toolkit | SD 1.5 | Generic native-config projection | 🧩 | No current real smoke |
+| AI-Toolkit | FLUX.1 / Kontext / Flex / Chroma | Generic native-config projection | 🧩 | Model-specific defaults not verified |
+| AI-Toolkit | Qwen Image | Generic native-config projection | ⚠️ | T2I expressible; edit/control needs explicit dataset config |
+| AI-Toolkit | HiDream | Generic native-config projection | 🧩 | No current real smoke |
+| AI-Toolkit | FLUX.2 / Krea 2 | Generic native-config projection | 🧩 | Musubi evidence does not apply to this backend |
+| AI-Toolkit | Z-Image | Generic native-config projection | ⚠️ | Companion artifacts vary by variant |
+| AI-Toolkit | Wan 2.1 / 2.2 | Native override only | ⚠️ | No first-class video dataset projection |
+| AI-Toolkit | LTX-2 / LTX-2.3 | — | 📋 | No first-class video dataset projection |
+| AI-Toolkit | ACE-Step | — | ❌ | Audio is outside the current training contract |
+| AI-Toolkit | Other image families | Native override only | ⚠️ | Model-specific review required |
+| Musubi Tuner | FLUX.2 | Built-in | 🧪 | dev; Klein/base 4B and 9B; reference-image path compiles |
+| Musubi Tuner | Wan 2.1 / 2.2 | Built-in | ✅ | T2V/I2V, Fun Control, dual-DiT, and Single Frame covered |
+| Musubi Tuner | Krea 2 | Built-in | 🧪 | Broader Krea validation remains separate |
+| Musubi Tuner | Qwen-Image | Built-in | 🧪 | Original, Edit, 2509, 2511, and Layered compile paths covered |
+| Musubi Tuner | Z-Image | Built-in | 🧪 | — |
+| Musubi Tuner | FLUX.1 Kontext | Built-in | 🧪 | Paired/control dataset path covered |
+| Musubi Tuner | Ideogram 4 | Built-in | 🧪 | — |
+| Musubi Tuner | HiDream-O1-Image | Built-in | 🧪 | T2I and I2I compile paths covered |
+| Musubi Tuner | HunyuanVideo | Built-in | 🧪 | — |
+| Musubi Tuner | HunyuanVideo 1.5 | Built-in | 🧪 | T2V and I2V compile paths covered |
+| Musubi Tuner | FramePack | Built-in | 🧪 | Normal, F1, and Single Frame compile paths covered |
+| Musubi Tuner | Kandinsky 5 | Built-in | ⚠️ | Lite real-smoked; Pro remains capacity-dependent |
 
-The AI-Toolkit digest is pinned in `docker/ai-toolkit/Dockerfile`. Mutable
-`latest` is not the supported default.
+Musubi `v0.3.4` has no missing top-level Kura adapter. All 36 expected cache
+and training entrypoints pass image smoke. Variant coverage means Kura selects
+the correct scripts, model roles, dataset shape, and flags; it does not mean
+every checkpoint has been trained.
 
-## AI-Toolkit
+AI-Toolkit owns model acquisition and model-specific configuration. Kura keeps
+one generic native-config projection rather than duplicating AI-Toolkit's model
+catalog. SDXL is the currently verified default path; other families remain
+explicit configurations until representative tests promote them.
 
-AI-Toolkit owns base-model and companion-model acquisition. Kura generates its
-native YAML and passes backend-specific overrides; it does not duplicate
-AI-Toolkit's model loader as a Kura model registry.
-
-| Model family | Adapter | Coverage | Status | Limits |
-| --- | --- | --- | --- | --- |
-| SDXL | Generic projection | Native config | ✅ | — |
-| SD 1.5 | Generic projection | Native config | 🧩 | No current real smoke |
-| FLUX.1 / Kontext / Flex / Chroma | Generic projection | Native config + overrides | 🧩 | Defaults not verified |
-| Qwen Image | Generic projection | T2I; edit/control via overrides | ⚠️ | Explicit dataset config required for edit/control |
-| HiDream | Generic projection | Native config + overrides | 🧩 | No current real smoke |
-| FLUX.2 / Krea 2 | Generic projection | Native config + overrides | 🧩 | Musubi evidence does not transfer |
-| Z-Image | Generic projection | Variant-specific overrides | ⚠️ | Companion artifacts differ by variant |
-| Wan 2.1 / 2.2 | Generic projection | Native override only | ⚠️ | No first-class video projection |
-| LTX-2 / LTX-2.3 | — | Upstream listed | 📋 | No first-class video projection |
-| ACE-Step | — | — | ❌ | Audio is outside the train-run contract |
-| Other image families | Generic projection | Native override only | ⚠️ | Model-specific review required |
-
-The default generated AI-Toolkit recipe is operationally verified for SDXL.
-Other families remain explicit, reviewable backend configurations until they
-gain representative evidence.
-
-## Musubi Tuner
-
-Kura has a built-in adapter for every top-level architecture in the pinned
-Musubi Tuner `v0.3.4` release. The image smoke checks all 36 expected cache and
-training entrypoints.
-
-| Model family | Adapter | Coverage | Status | Limits |
-| --- | --- | --- | --- | --- |
-| FLUX.2 | Built-in | dev; Klein/base 4B and 9B; reference images | 🧪 | — |
-| Wan 2.1 / 2.2 | Built-in | 2.1 T2V/I2V/Fun Control; 2.2 dual-DiT T2V/I2V; Single Frame | ✅ | — |
-| Krea 2 | Built-in | Standard LoRA path | 🧪 | Broader validation remains separate |
-| Qwen-Image | Built-in | Original; Edit; Edit-2509; Edit-2511; Layered | 🧪 | — |
-| Z-Image | Built-in | Standard LoRA path | 🧪 | — |
-| FLUX.1 Kontext | Built-in | Paired/control data path | 🧪 | — |
-| Ideogram 4 | Built-in | Standard LoRA path | 🧪 | — |
-| HiDream-O1-Image | Built-in | T2I; I2I control/reference | 🧪 | — |
-| HunyuanVideo | Built-in | Standard LoRA path | 🧪 | — |
-| HunyuanVideo 1.5 | Built-in | T2V; I2V image-encoder path | 🧪 | — |
-| FramePack | Built-in | Normal; F1; Single Frame | 🧪 | — |
-| Kandinsky 5 | Built-in | Lite/Pro T2V; Pro I2V | ⚠️ | Pro remains capacity-dependent |
-
-Variant compile coverage means that Kura selects the correct cache scripts,
-training script, mandatory model roles, and variant flags. It does not mean
-that every checkpoint in the variant family was downloaded and trained.
-
-## Real-run evidence ledger
-
-Hardware and executor evidence belongs here, not in the capability matrices.
-Add one row for each execution contract that materially changes model roles,
-dataset shape, cache scripts, training scripts, or output recovery.
-
-| Backend | Model / variant | Executor | GPU | Result | Run / evidence |
-| --- | --- | --- | --- | --- | --- |
-| AI-Toolkit | SDXL | Local Docker | RTX 4070 Ti | ✅ 1 step + LoRA | `20260711-1906_ai-toolkit-01022-sdxl-local-1step_c95d` |
-| AI-Toolkit | SDXL | RunPod | RTX A5000 | ✅ 1 step + recovery + Pod cleanup | `20260711-2208_ai-toolkit-sdxl-runpod-cache-contract_b44b` |
-| Musubi | Wan 2.1 T2V 1.3B | Local Docker | RTX 4070 Ti | 🧪 1 step + LoRA | `20260711-1456_musubi-wan-local-1step_4b1b` |
-| Musubi | Wan 2.1 T2V 1.3B | RunPod | RTX A6000 | ✅ 1 step + recovery + Pod cleanup | `20260711-2211_musubi-wan13b-runpod-cache-contract_e03a` |
-| Musubi | Wan 2.1 Single Frame I2V 14B | Local Docker | RTX 4070 Ti | ✅ 30.5 GiB acquisition + 1 step + LoRA validation | `20260711-2122_wan21-one-frame-local-1step-cache-approved_8565` |
-| Musubi | Qwen-Image original | RunPod | RTX A40 | 🧪 1 step | See [musubi-adapters.md](musubi-adapters.md) |
-| Musubi | Other built-in families | Local / RunPod | See detailed record | 🧪 Representative smoke | See [musubi-adapters.md](musubi-adapters.md) |
-
-## Shared execution contract
-
-The current local and RunPod paths use the same Hugging Face cache contract:
-
-```text
-HF_HOME=/workspace/cache/huggingface
-HF_HUB_CACHE=/workspace/cache/huggingface/hub
-```
-
-The latest RunPod acceptance rows recovered outputs, left zero Pods and Network
-Volumes, and recorded zero cgroup OOM kills.
-
-## Updating this matrix
-
-Update a backend pin and this matrix together. A new upstream family starts at
-`Listed`; it reaches `Expressible` only after Kura can compile its real native
-contract. Promote it to `Real smoke` or `Operational` only with run artifacts
-that identify the image/revision, dataset shape, hardware, output, and cleanup
-result. Do not add a second global model registry merely to mirror upstream
-model names.
+Real smoke validates execution, not LoRA quality. Quality still requires a
+meaningful training run followed by generation and human evaluation.
