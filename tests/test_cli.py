@@ -31,6 +31,7 @@ from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
+from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -4611,7 +4612,24 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints"', input_text)
             self.assertIn('mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"', input_text)
             self.assertIn('HF_HOME must be under KURA_WORKSPACE before remote job start', input_text)
+            self.assertIn('collect_runtime_diagnostics before_backend', input_text)
+            self.assertIn('collect_runtime_diagnostics after_backend', input_text)
+            self.assertIn('/sys/fs/cgroup/memory.events', input_text)
+            self.assertIn('"cgroup_oom_kill_delta"', input_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
+
+    def test_runpod_remote_job_diagnostics_script_has_valid_shell_syntax(self) -> None:
+        script = _runpod_remote_job_script(
+            workspace="/workspace",
+            run_id="example",
+            remote_secret_path="/tmp/kura-secrets/example.env",
+            archive_name="bundle.tar.gz",
+            remote_archive="/workspace/bundle.tar.gz",
+            cwd="/opt/tool",
+            command="true",
+        )
+        result = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
