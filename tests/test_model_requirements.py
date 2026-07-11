@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from kura.model_requirements import model_requirements
+from kura.model_requirements import declared_model_requirements, model_requirements
 
 
 class ModelRequirementsTests(unittest.TestCase):
@@ -59,6 +59,20 @@ class ModelRequirementsTests(unittest.TestCase):
         self.assertEqual(requirements[0]["measurement"], {"scope": "controller", "status": "ok", "size_bytes": 123, "cached": False})
         self.assertEqual(requirements[1]["acquisition"], "local-path")
         self.assertEqual(requirements[1]["measurement"]["scope"], "compile")
+
+    def test_declared_musubi_requirements_do_not_need_network_measurement(self) -> None:
+        requirements = declared_model_requirements(
+            {
+                "backend": {"name": "musubi-tuner"},
+                "model": {"base": "krea/Krea-2-Raw"},
+                "backend_overrides": {"musubi-tuner": {"architecture": "krea2"}},
+            }
+        )
+
+        self.assertEqual([item["role"] for item in requirements], ["dit", "vae", "text_encoder"])
+        self.assertEqual({item["acquisition"] for item in requirements}, {"kura"})
+        self.assertEqual({item["measurement"]["scope"] for item in requirements}, {"compile"})
+        self.assertEqual({item["measurement"]["status"] for item in requirements}, {"not-measured"})
 
 
 if __name__ == "__main__":

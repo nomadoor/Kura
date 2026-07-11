@@ -244,6 +244,10 @@ class InitCommandTests(unittest.TestCase):
 
             env_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "env.lock").read_text(encoding="utf-8"))
             self.assertEqual(env_lock["declared_executor"], "runpod")
+            requirements_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "model-requirements.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(requirements_lock["schema_version"], 1)
+            self.assertEqual(requirements_lock["requirements"][0]["acquisition"], "backend")
+            self.assertEqual(requirements_lock["requirements"][0]["identity"]["repo_id"], "black-forest-labs/FLUX.2-klein-base-4B")
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

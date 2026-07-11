@@ -27,6 +27,7 @@ from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_f
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
+from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
@@ -292,6 +293,14 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     locked.pop("dataset", None)
     locked["_kura"] = {"frozen_at": _now().isoformat(), "artifact": "manifest.lock"}
     _dump_yaml(resolved / "manifest.lock.yaml", locked)
+    _dump_yaml(
+        resolved / "model-requirements.lock.yaml",
+        {
+            "schema_version": 1,
+            "generated_from": "manifest.lock.yaml",
+            "requirements": declared_model_requirements(locked),
+        },
+    )
     if backend.get("name") == "ai-toolkit":
         compile_ai_toolkit(locked, resolved / "ai-toolkit.toml")
     else:

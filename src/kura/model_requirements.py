@@ -64,7 +64,7 @@ def _musubi_requirements(run: dict[str, Any], download_estimate: dict[str, Any])
             if item.get("revision"):
                 identity["revision"] = item["revision"]
             measurement = {
-                "scope": "controller",
+                "scope": item.get("measurement_scope") or "controller",
                 "status": item.get("size_status") or "unknown",
                 "size_bytes": item.get("size_bytes"),
                 "cached": bool(item.get("cached")),
@@ -110,3 +110,40 @@ def model_requirements(run: dict[str, Any], download_estimate: dict[str, Any] | 
     if backend_name == "musubi-tuner":
         return _musubi_requirements(run, download_estimate or {})
     return []
+
+
+def declared_model_requirements(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """Project compile-time requirements without network measurement."""
+
+    backend_name = _backend_name(run)
+    if backend_name != "musubi-tuner":
+        return model_requirements(run)
+
+    override = _backend_override(run, "musubi-tuner")
+    model_paths = override.get("model_paths")
+    existing_paths = {
+        role: path
+        for role, path in model_paths.items()
+        if isinstance(role, str) and isinstance(path, str) and path
+    } if isinstance(model_paths, dict) else {}
+
+    from kura.backends.musubi_models import musubi_model_download_specs
+
+    specs, _ = musubi_model_download_specs(run, existing_paths=existing_paths)
+    estimate = {
+        "items": [
+            {
+                "key": item.get("key"),
+                "repo_id": item.get("repo_id"),
+                "filename": item.get("filename"),
+                "revision": item.get("revision"),
+                "runtime_reference": item.get("link_path"),
+                "size_status": "not-measured",
+                "measurement_scope": "compile",
+                "size_bytes": None,
+                "cached": False,
+            }
+            for item in specs
+        ]
+    }
+    return _musubi_requirements(run, estimate)
