@@ -3543,6 +3543,42 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(script.count("--i2v"), 1)
         self.assertIn("--clip /models/clip.pth", script)
 
+    def test_command_musubi_wan_22_i2v_precache_uses_i2v_without_clip(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "i2v-A14B",
+                "model_paths": {
+                    "dit": "/models/wan22-i2v-low.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertEqual(script.count("--i2v"), 1)
+        self.assertNotIn("--clip", script)
+
+    def test_command_musubi_wan_rejects_unknown_task_before_launch(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "future-task",
+                "model_paths": {
+                    "dit": "/models/wan.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                },
+            }
+        }
+
+        with self.assertRaisesRegex(ValueError, "unsupported Musubi Wan task"):
+            command_musubi_tuner(run)
+
     def test_command_musubi_framepack_one_frame_updates_cache_and_train(self) -> None:
         run = self._run()
         run["backend_overrides"] = {
