@@ -210,6 +210,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     if architecture in ("flux2", "flux_2"):
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         model_version = _musubi_flux2_model_version(run)
+        if model_version == "dev" and _truthy(override.get("fp8_text_encoder")):
+            raise ValueError("Musubi FLUX.2 dev uses Mistral 3 and does not support fp8_text_encoder")
         train_argv = [
             *common, "src/musubi_tuner/flux_2_train_network.py",
             "--model_version", model_version,
@@ -232,6 +234,10 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         ]
         if _truthy(override.get("gradient_checkpointing")):
             train_argv.append("--gradient_checkpointing")
+        _append_flag(train_argv, override, "fp8_base")
+        _append_flag(train_argv, override, "fp8_scaled")
+        if override.get("vae_dtype"):
+            train_argv.extend(["--vae_dtype", str(override["vae_dtype"])])
         if params.get("alpha") is not None:
             train_argv.extend(["--network_alpha", str(params["alpha"])])
         train_argv.extend(_extra_args(override))
@@ -269,6 +275,19 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     elif architecture == "wan":
         dit, vae, t5 = _require_paths(paths, ("dit", "vae", "t5"))
         task = str(override.get("task") or "t2v-1.3B")
+        clip = paths.get("clip")
+        one_frame = _truthy(override.get("one_frame"))
+        wan21_i2v_tasks = {"i2v-14B", "i2v-14B-FC", "flf2v-14B"}
+        is_wan21_i2v = task in wan21_i2v_tasks
+        if is_wan21_i2v and not clip:
+            raise ValueError(f"Musubi Wan task {task} requires model_paths.clip or model_downloads.clip")
+        if one_frame and task not in {"i2v-14B", "flf2v-14B"}:
+            raise ValueError("Musubi Wan one_frame requires task i2v-14B or flf2v-14B")
+        dit_high_noise = paths.get("dit_high_noise")
+        if dit_high_noise and task not in {"t2v-A14B", "i2v-A14B"}:
+            raise ValueError("Musubi Wan dit_high_noise is supported only for Wan 2.2 task t2v-A14B or i2v-A14B")
+        if "timestep_boundary" in override and not dit_high_noise:
+            raise ValueError("Musubi Wan timestep_boundary requires model_paths.dit_high_noise or model_downloads.dit_high_noise")
         train_argv = [
             *common, "src/musubi_tuner/wan_train_network.py",
             "--task", task,
@@ -293,6 +312,12 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             train_argv.append("--fp8_base")
         if _truthy(override.get("gradient_checkpointing")):
             train_argv.append("--gradient_checkpointing")
+        if dit_high_noise:
+            train_argv.extend(["--dit_high_noise", dit_high_noise])
+            if "timestep_boundary" in override:
+                train_argv.extend(["--timestep_boundary", str(override["timestep_boundary"])])
+        if one_frame:
+            train_argv.append("--one_frame")
         if params.get("alpha") is not None:
             train_argv.extend(["--network_alpha", str(params["alpha"])])
         train_argv.extend(_extra_args(override))
@@ -313,10 +338,12 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 "--batch_size", str(override.get("text_encoder_batch_size") or 1),
                 "--skip_existing",
             ]
-            if "i2v" in task:
+            if is_wan21_i2v:
                 latent_argv.append("--i2v")
-            if paths.get("clip"):
-                latent_argv.extend(["--clip", paths["clip"]])
+            if clip:
+                latent_argv.extend(["--clip", clip])
+            if one_frame:
+                latent_argv.append("--one_frame")
             if override.get("fp8_t5"):
                 text_argv.append("--fp8_t5")
             commands.extend([latent_argv, text_argv])
@@ -739,6 +766,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         ]
         if _truthy(override.get("f1")):
             train_argv.append("--f1")
+        if _truthy(override.get("one_frame")):
+            train_argv.append("--one_frame")
         _append_flag(train_argv, override, "gradient_checkpointing")
         if _truthy(override.get("fp8_base")) or _truthy(override.get("fp8")):
             train_argv.append("--fp8_base")
@@ -758,6 +787,12 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             ]
             if _truthy(override.get("f1")):
                 latent_argv.append("--f1")
+            if _truthy(override.get("one_frame")):
+                latent_argv.append("--one_frame")
+                if _truthy(override.get("one_frame_no_2x")):
+                    latent_argv.append("--one_frame_no_2x")
+                if _truthy(override.get("one_frame_no_4x")):
+                    latent_argv.append("--one_frame_no_4x")
             if override.get("vae_chunk_size"):
                 latent_argv.extend(["--vae_chunk_size", str(override["vae_chunk_size"])])
             text_argv = [

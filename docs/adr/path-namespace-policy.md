@@ -42,10 +42,13 @@ data. Container scripts do not import Kura.
 
 Executor model-cache contract:
 
-- Executors that run model download helpers must set `HF_HOME` explicitly.
-- `HF_HOME` must either be under the container workspace root, normally
-  `/workspace/cache/huggingface`, or be covered by `KURA_WORKSPACE_PATH_MAPS`.
-- Container helpers must treat missing or unmappable `HF_HOME` as a contract
+- Executors that run model download helpers must set `HF_HOME` and
+  `HF_HUB_CACHE` explicitly. `HF_HOME` is the Hugging Face state root;
+  repository snapshots and blobs use `HF_HUB_CACHE`.
+- `HF_HOME` must be under the container workspace root, normally
+  `/workspace/cache/huggingface`. `HF_HUB_CACHE` must be its `hub/` child or be
+  covered by `KURA_WORKSPACE_PATH_MAPS`.
+- Container helpers must treat missing or unmappable `HF_HUB_CACHE` as a contract
   error before downloading. They must not fall back to private locations such as
   `/root/.cache/huggingface` or `/tmp/...`.
 - Local Docker may continue to expose a legacy Hugging Face cache mount through

@@ -70,9 +70,9 @@ def validate_model(role, path, expected):
     base = os.path.basename(path).lower()
     if expected == "safetensors":
         return
-    if expected in ("flux2_vae", "flux2_ae"):
+    if expected in ("flux2_vae", "flux2_ae", "flux2_ae_or_vae"):
         if base == "ae.safetensors":
-            if expected != "flux2_ae":
+            if expected == "flux2_vae":
                 die(f"{role} uses ae.safetensors; this filename is only accepted for explicit FLUX.2 AE bundles")
         diffusers = has_prefix(keys, "encoder.down_blocks.") and has_prefix(keys, "decoder.up_blocks.") and has_prefix(keys, "quant_conv.")
         native = (

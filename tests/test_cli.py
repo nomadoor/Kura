@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
+import time
 import unittest
 import json
 from pathlib import Path
@@ -30,8 +32,8 @@ from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
-from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_image_preflight_report
+from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -80,8 +82,11 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/workspace/cache/huggingface")
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
+                self.assertEqual(workspace["runpod"]["default_image"]["ai-toolkit"], "ostris/aitoolkit:0.10.22")
                 self.assertEqual(workspace["comfyui"]["lora_dir"], "")
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
+                self.assertIn("AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.10.22@sha256:", (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8"))
+                self.assertIn("MUSUBI_TUNER_REF=v0.3.4", (root / "docker/musubi-tuner/Dockerfile").read_text(encoding="utf-8"))
             finally:
                 os.chdir(previous)
 
@@ -360,7 +365,45 @@ class ImageCommandTests(unittest.TestCase):
             self.assertGreaterEqual(len(calls), 1)
             build = calls[0]
             self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
+            self.assertIn(
+                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438",
+                build,
+            )
             self.assertEqual(build[-1], str(root))
+
+    def test_ai_toolkit_image_build_ref_overrides_upstream_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({
+                    "docker": {
+                        "images": {
+                            "ai-toolkit": {
+                                "local": "kura/ai-toolkit:test",
+                                "remote": "registry.example/kura/ai-toolkit:test",
+                                "dockerfile": "docker/ai-toolkit/Dockerfile",
+                                "context": ".",
+                            },
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            commands: list[list[str]] = []
+
+            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                commands.append(command)
+                return subprocess.CompletedProcess(command, 0, "sha256:image\n" if capture else "", "")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                    self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref="ostris/aitoolkit:custom")), 0)
+            finally:
+                os.chdir(previous)
+
+            self.assertIn("AI_TOOLKIT_IMAGE=ostris/aitoolkit:custom", commands[0])
 
     def test_image_build_rejects_large_build_cache_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2072,7 +2115,7 @@ class RenderNotificationTests(unittest.TestCase):
         workflow = {"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}
         registry = {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}}
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "requires HF_HOME or --cache-dir"):
+            with self.assertRaisesRegex(ValueError, "requires HF_HUB_CACHE or --cache-dir"):
                 module.prepare(workflow, comfyui_root=Path(directory) / "ComfyUI", cache_dir=None, registry=registry)
 
     def test_comfyui_prepare_rejects_private_cache_dir_before_download(self) -> None:
@@ -2747,6 +2790,97 @@ class RunPodLiveSyncTests(unittest.TestCase):
             self.assertEqual(status["remote_log_bytes"], 77)
             self.assertIn("avr_loss=0.123", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
 
+    def test_concurrent_remote_stdout_sync_does_not_duplicate_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "remote-run"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            first_remote_call = threading.Event()
+            observed_offsets: list[int] = []
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+                script = command[-1]
+                offset = int(script.split("offset=", 1)[1].splitlines()[0])
+                observed_offsets.append(offset)
+                if len(observed_offsets) == 1:
+                    first_remote_call.set()
+                    time.sleep(0.05)
+                payload = b"one line\n" if offset == 0 else b""
+                return subprocess.CompletedProcess(command, 0, payload + b"\n__KURA_LOG_SIZE__:9\n", b"")
+
+            results: list[bool] = []
+            details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+            with patch("kura.cli.subprocess.run", side_effect=fake_run):
+                first = threading.Thread(target=lambda: results.append(_sync_runpod_remote_stdout(run_dir, details, workspace="/workspace", run_id="remote-run")))
+                second = threading.Thread(target=lambda: results.append(_sync_runpod_remote_stdout(run_dir, details, workspace="/workspace", run_id="remote-run")))
+                first.start()
+                self.assertTrue(first_remote_call.wait(timeout=1))
+                second.start()
+                first.join(timeout=1)
+                second.join(timeout=1)
+
+            self.assertEqual(results, [True, True])
+            self.assertEqual(observed_offsets, [0, 9])
+            self.assertEqual((run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"), "one line\n")
+
+    def test_download_lock_rejects_a_second_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with _run_operation_lock(run_dir, "download", blocking=False):
+                    stderr = io.StringIO()
+                    with patch("sys.stderr", stderr):
+                        code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertIn("another download operation is already active", stderr.getvalue())
+
+    def test_remote_exit_observation_records_recovery_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+
+            _record_remote_exit_observation(
+                run_dir,
+                {"event": "remote_exit", "exit_code": 0, "timestamp": "2026-01-01T00:00:00+00:00"},
+            )
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "running")
+            self.assertEqual(status["remote_state"], "completed")
+            self.assertEqual(status["remote_exit_code"], 0)
+            self.assertTrue(status["recovery_required"])
+            observation = run_dir / status["last_remote_exit_observation"]
+            self.assertEqual(json.loads(observation.read_text(encoding="utf-8"))["event"], "remote_exit_observed")
+
+    def test_runpod_image_preflight_warns_for_mutable_latest(self) -> None:
+        records = _runpod_image_preflight_report(
+            {"backend": {"name": "ai-toolkit"}},
+            {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest"}},
+        )
+
+        self.assertEqual(records[0]["severity"], "warning")
+        self.assertIn("mutable tag", records[0]["fact"])
+        self.assertEqual(
+            _runpod_image_preflight_report(
+                {"backend": {"name": "ai-toolkit"}},
+                {"default_image": {"ai-toolkit": "ostris/aitoolkit:0.10.22"}},
+            ),
+            [],
+        )
+
 
 class RunPodPullSelectionTests(unittest.TestCase):
     def test_duration_parser_accepts_common_suffixes(self) -> None:
@@ -2874,7 +3008,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(sources["text_encoder"], "model_paths")
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
         self.assertEqual(expected["dit"], "flux2_dit")
-        self.assertEqual(expected["vae"], "flux2_vae")
+        self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_4b_text_encoder")
         self.assertEqual(bundle["output"]["lora_format"], "comfyui")
 
@@ -3279,6 +3413,229 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--fp8_base", script)
         self.assertNotIn("--fp8 ", script)
 
+    def test_command_musubi_wan_22_supports_dual_noise_models(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "t2v-A14B",
+                "model_paths": {
+                    "dit": "/models/wan22-low.safetensors",
+                    "dit_high_noise": "/models/wan22-high.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                },
+                "timestep_boundary": 0.875,
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--dit_high_noise /models/wan22-high.safetensors", script)
+        self.assertIn("--timestep_boundary 0.875", script)
+
+    def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
+        run = self._run()
+        run["model"]["base"] = "black-forest-labs/FLUX.2-dev"
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "flux2",
+                "model_version": "dev",
+                "model_paths": {
+                    "dit": "/models/flux2-dev.safetensors",
+                    "vae": "/models/ae.safetensors",
+                    "text_encoder": "/models/mistral-00001-of-00010.safetensors",
+                },
+                "fp8_base": True,
+                "fp8_scaled": True,
+                "vae_dtype": "bfloat16",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+            compile_musubi_tuner(run, destination)
+            bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
+            script = json.loads((destination / "command.json").read_text(encoding="utf-8"))["argv"][2]
+
+        expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
+        self.assertEqual(expected["vae"], "flux2_ae_or_vae")
+        self.assertEqual(expected["text_encoder"], "safetensors")
+        self.assertIn("--model_version dev", script)
+        self.assertIn("--fp8_base", script)
+        self.assertIn("--fp8_scaled", script)
+        self.assertIn("--vae_dtype bfloat16", script)
+
+    def test_command_musubi_flux2_dev_rejects_qwen_only_fp8_text_encoder(self) -> None:
+        run = self._run()
+        run["backend_overrides"]["musubi-tuner"].update({"model_version": "dev", "fp8_text_encoder": True})
+
+        with self.assertRaisesRegex(ValueError, "does not support fp8_text_encoder"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_wan_one_frame_updates_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "i2v-14B",
+                "one_frame": True,
+                "model_paths": {
+                    "dit": "/models/wan-i2v.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                    "clip": "/models/clip.pth",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertGreaterEqual(script.count("--one_frame"), 2)
+        self.assertIn("--clip /models/clip.pth", script)
+
+    def test_command_musubi_wan_21_i2v_requires_clip(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "i2v-14B",
+                "model_paths": {
+                    "dit": "/models/wan-i2v.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                },
+            }
+        }
+
+        with self.assertRaisesRegex(ValueError, "requires model_paths.clip"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_wan_flf2v_precache_uses_i2v_contract(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "wan",
+                "task": "flf2v-14B",
+                "model_paths": {
+                    "dit": "/models/wan-flf2v.safetensors",
+                    "vae": "/models/wan-vae.safetensors",
+                    "t5": "/models/umt5.pth",
+                    "clip": "/models/clip.pth",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("wan_cache_latents.py", script)
+        self.assertEqual(script.count("--i2v"), 1)
+        self.assertIn("--clip /models/clip.pth", script)
+
+    def test_command_musubi_framepack_one_frame_updates_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "one_frame_no_2x": True,
+                "one_frame_no_4x": True,
+                "model_paths": {
+                    "dit": "/models/framepack.safetensors",
+                    "vae": "/models/fpack-vae.safetensors",
+                    "text_encoder1": "hunyuanvideo-community/HunyuanVideo",
+                    "text_encoder2": "openai/clip-vit-large-patch14",
+                    "image_encoder": "/models/siglip.safetensors",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertGreaterEqual(script.count("--one_frame"), 4)
+        self.assertIn("--one_frame_no_2x", script)
+        self.assertIn("--one_frame_no_4x", script)
+
+    def test_command_musubi_qwen_model_versions_reach_all_three_stages(self) -> None:
+        for model_version in ("original", "edit", "edit-2509", "edit-2511", "layered"):
+            with self.subTest(model_version=model_version):
+                run = self._run()
+                run["backend_overrides"] = {
+                    "musubi-tuner": {
+                        "architecture": "qwen_image",
+                        "model_version": model_version,
+                        "model_paths": {
+                            "dit": "/models/qwen-dit.safetensors",
+                            "vae": "/models/qwen-vae.safetensors",
+                            "text_encoder": "/models/qwen-vl.safetensors",
+                        },
+                    }
+                }
+
+                script = command_musubi_tuner(run)["argv"][2]
+
+                self.assertEqual(script.count(f"--model_version {model_version}"), 3)
+
+    def test_command_musubi_hunyuan_15_i2v_updates_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "hunyuan_video_1_5",
+                "task": "i2v",
+                "model_paths": {
+                    "dit": "/models/hv15-i2v.safetensors",
+                    "vae": "/models/hv15-vae.safetensors",
+                    "text_encoder": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "byt5": "google/byt5-small",
+                    "image_encoder": "/models/bytedance-byt5-small.safetensors",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--task i2v", script)
+        self.assertGreaterEqual(script.count("--image_encoder /models/bytedance-byt5-small.safetensors"), 2)
+        self.assertIn("--i2v", script)
+
+    def test_command_musubi_hidream_i2i_preserves_control_contract(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "hidream_o1",
+                "task": "i2i",
+                "model_type": "dev",
+                "model_paths": {"dit": "/models/hidream-dev.safetensors"},
+                "dataset_config": {"datasets": [{"control_directory": "/workspace/datasets/tiny/control"}]},
+                "extra_args": ["--network_args", "conv_dim=4", "conv_alpha=1"],
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--task i2i", script)
+        self.assertIn("--model_type dev", script)
+        self.assertIn("--network_args conv_dim=4 conv_alpha=1", script)
+
+    def test_command_musubi_kandinsky_i2v_preserves_task(self) -> None:
+        run = self._run()
+        run["backend_overrides"] = {
+            "musubi-tuner": {
+                "architecture": "kandinsky5",
+                "task": "k5-pro-i2v-5s-sd",
+                "model_paths": {
+                    "dit": "/models/k5-i2v.safetensors",
+                    "vae": "/models/k5-vae.safetensors",
+                    "text_encoder_qwen": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "text_encoder_clip": "openai/clip-vit-large-patch14",
+                },
+            }
+        }
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertIn("--task k5-pro-i2v-5s-sd", script)
+
     def test_command_musubi_kandinsky_can_quantize_qwen_cache(self) -> None:
         run = self._run()
         run["backend_overrides"] = {
@@ -3316,8 +3673,8 @@ class MusubiBackendTests(unittest.TestCase):
         script = command["argv"][2]
         self.assertIn("hf_hub_download", script)
         self.assertIn("HF_HUB_DISABLE_XET", script)
-        self.assertIn('cache_dir = os.environ.get("HF_HOME")', script)
-        self.assertIn("HF_HOME is required before downloading models", script)
+        self.assertIn('cache_dir = os.environ.get("HF_HUB_CACHE")', script)
+        self.assertIn("HF_HUB_CACHE is required before downloading models", script)
         self.assertNotIn('or "/root/.cache/huggingface"', script)
         self.assertNotIn("local_dir", script)
         self.assertNotIn("/workspace/cache/hf-models/musubi", script)
@@ -3332,7 +3689,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("black-forest-labs/FLUX.2-klein-base-4B", script)
         self.assertIn("/workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
         self.assertIn("--dit /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-4B/dit/flux2-klein-base-4b.safetensors", script)
-        self.assertIn("flux2_vae", script)
+        self.assertIn("flux2_ae_or_vae", script)
         self.assertIn("qwen3_4b_text_encoder", script)
         self.assertIn("lora_unet_*", script)
         self.assertLess(script.index("hf_hub_download"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
@@ -3361,21 +3718,21 @@ class MusubiBackendTests(unittest.TestCase):
         require_cache_mappable = namespace["require_cache_mappable"]
         link_path = "/workspace/cache/models/musubi/repo--model/dit/weights.safetensors"
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "HF_HOME must be inside /workspace"):
+            with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE must be inside /workspace"):
                 require_cache_mappable("/root/.cache/huggingface", link_path)
-        require_cache_mappable("/workspace/cache/huggingface", link_path)
+        require_cache_mappable("/workspace/cache/huggingface/hub", link_path)
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "HF_HOME must be inside /workspace"):
+            with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE must be inside /workspace"):
                 require_cache_mappable("/root/.cache/huggingface", "/tmp/model.safetensors")
 
-    def test_hf_download_requires_hf_home_before_download(self) -> None:
+    def test_hf_download_requires_hf_hub_cache_before_download(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
 
         run_one = namespace["run_one"]
         item = {"key": "dit", "repo_id": "owner/model", "filename": "weights.safetensors", "link_path": "/workspace/cache/models/musubi/owner--model/dit/weights.safetensors"}
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "HF_HOME is required"):
+            with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE is required"):
                 run_one(item)
 
     def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
@@ -3445,7 +3802,7 @@ class MusubiBackendTests(unittest.TestCase):
             compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
-        self.assertEqual(expected["vae"], "flux2_vae")
+        self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_8b_text_encoder")
 
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
@@ -3574,6 +3931,21 @@ class MusubiBackendTests(unittest.TestCase):
                 ],
             )
             spec = {"models": [{"role": "vae", "path": str(path), "expected_format": "flux2_vae"}]}
+            result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_safetensors_preflight_accepts_official_flux2_ae_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ae.safetensors"
+            _write_fake_safetensors(
+                path,
+                [
+                    "encoder.down.0.block.0.conv1.weight",
+                    "decoder.up.0.block.0.conv1.weight",
+                    "quant_conv.weight",
+                ],
+            )
+            spec = {"models": [{"role": "vae", "path": str(path), "expected_format": "flux2_ae_or_vae"}]}
             result = subprocess.run([sys.executable, "-c", _safetensors_validator_code(), json.dumps(spec)], text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -3739,8 +4111,10 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertIn("io.kura.realization_id=r1", command)
         self.assertIn("PYTHONUNBUFFERED=1", command)
         self.assertEqual(runtime_env["HF_HOME"], "/workspace/cache/huggingface")
+        self.assertEqual(runtime_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(runtime_env["KURA_RUN_ID"], "example")
         self.assertIn("HF_HOME=/workspace/cache/huggingface", command)
+        self.assertIn("HF_HUB_CACHE=/workspace/cache/huggingface/hub", command)
         self.assertIn(f"{os.getuid()}:{os.getgid()}", command)
         self.assertIn("HOME=/tmp/kura-home", command)
         self.assertIn("KURA_WORKSPACE_PATH_MAPS", runtime_env)
@@ -4530,6 +4904,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("KURA_UPLOAD_CODE", payload["env"])
             self.assertIn("KURA_DOWNLOAD_CODE", payload["env"])
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
+            self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
             self.assertEqual(payload["env"]["KURA_WORKSPACE"], "/workspace")
             self.assertEqual(payload["env"]["KURA_RUN_ID"], "example")
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs"', payload["dockerStartCmd"][2])
@@ -4578,6 +4953,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             payload = request.call_args.args[3]
             self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
+            self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
             self.assertIn("runpodctl pod delete", payload["dockerStartCmd"][2])
             self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
 
@@ -4755,9 +5131,10 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("runpodctl pod delete", argv_text)
             input_text = "\n".join(str(call[1].get("input") or "") for call in calls)
             self.assertIn('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"', input_text)
+            self.assertIn('export HF_HUB_CACHE="$HF_HOME/hub"', input_text)
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs"', input_text)
             self.assertIn('"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints"', input_text)
-            self.assertIn('mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"', input_text)
+            self.assertIn('mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"', input_text)
             self.assertIn('HF_HOME must be under KURA_WORKSPACE before remote job start', input_text)
             self.assertIn('collect_runtime_diagnostics before_backend', input_text)
             self.assertIn('collect_runtime_diagnostics after_backend', input_text)

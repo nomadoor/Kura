@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -31,6 +33,25 @@ from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_
 
 
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
+
+
+@contextlib.contextmanager
+def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
+    """Serialize controller-side mutations without creating another truth store."""
+
+    lock_dir = run_dir / ".locks"
+    lock_dir.mkdir(exist_ok=True)
+    lock_path = lock_dir / f"{name}.lock"
+    with lock_path.open("a+b") as handle:
+        operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle.fileno(), operation)
+        except BlockingIOError as exc:
+            raise ValueError(f"another {name} operation is already active for run {run_dir.name}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _run_bounded(command: list[str], *, context: str, timeout: int = RUNPOD_TRANSFER_TIMEOUT_SEC, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
@@ -85,6 +106,16 @@ def cmd_run_upload(args: argparse.Namespace) -> int:
 def download_run(run_id: str, *, force: bool = False) -> int:
     try:
         run_dir = _run_path(run_id)
+        with _run_operation_lock(run_dir, "download", blocking=False):
+            return _download_run_unlocked(run_id, force=force)
+    except (OSError, ValueError) as exc:
+        print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+
+
+def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
+    try:
+        run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
         downloaded_run = destination / run_id
 
@@ -122,7 +153,7 @@ def download_run(run_id: str, *, force: bool = False) -> int:
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             output_dir = downloaded_run / "outputs"
             outputs = materialize_primary_outputs(output_dir)
-            status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir))})
+            status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
             if exit_code == 0:
                 try:
                     manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
@@ -476,6 +507,16 @@ touch {shlex.quote(log_path)}
 def _sync_runpod_remote_stdout(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> bool:
     """Mirror remote stdout progress into local run artifacts."""
 
+    try:
+        with _run_operation_lock(run_dir, "remote-log"):
+            return _sync_runpod_remote_stdout_unlocked(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=timeout_sec)
+    except (OSError, ValueError):
+        return False
+
+
+def _sync_runpod_remote_stdout_unlocked(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> bool:
+    """Perform one remote-log sync while the per-run log lock is held."""
+
     status_path = run_dir / "status.json"
     try:
         status = json.loads(status_path.read_text(encoding="utf-8"))
@@ -573,6 +614,62 @@ fi
     return data if isinstance(data, dict) else None
 
 
+def _record_remote_exit_observation(run_dir: Path, exit_record: dict[str, Any]) -> None:
+    """Append a remote-completion fact while local output recovery is pending."""
+
+    status_path = run_dir / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    exit_code = exit_record.get("exit_code")
+    if not isinstance(exit_code, int):
+        return
+    if status.get("remote_exit_code") == exit_code and status.get("last_remote_exit_observation"):
+        return
+    realization_ref = status.get("last_realization")
+    realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else "runpod"
+    observed_at = datetime.now().astimezone().isoformat()
+    compact = re.sub(r"[^0-9]", "", observed_at)[:20]
+    observation_path = run_dir / "realizations" / f"{realization_id}.remote-exit-observed-{compact}.json"
+    observation = {
+        "event": "remote_exit_observed",
+        "realization_id": realization_id,
+        "observed_at": observed_at,
+        "remote_state": "completed" if exit_code == 0 else "failed",
+        "exit_code": exit_code,
+        "remote_timestamp": exit_record.get("timestamp"),
+        "recovery_required": True,
+    }
+    atomic_write_json(observation_path, _redact_secrets(observation))
+    status.update({
+        "remote_state": observation["remote_state"],
+        "remote_exit_code": exit_code,
+        "remote_ended": exit_record.get("timestamp"),
+        "recovery_required": True,
+        "last_remote_exit_observation": str(observation_path.relative_to(run_dir)),
+    })
+    atomic_write_json(status_path, _redact_secrets(status))
+    _event(run_dir / "logs" / "events.jsonl", observation)
+
+
+def _try_observe_runpod_remote_exit(run_dir: Path, *, ssh_timeout_sec: int = 10) -> bool:
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        realization_ref = status.get("last_realization")
+        if not isinstance(realization_ref, str):
+            return False
+        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+        workspace = realization.get("request", {}).get("env", {}).get("KURA_WORKSPACE", "/workspace")
+        if not isinstance(workspace, str):
+            workspace = "/workspace"
+        details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=2)
+        exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_dir.name, timeout_sec=30)
+        if exit_record is None:
+            return False
+        _record_remote_exit_observation(run_dir, exit_record)
+        return True
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
 def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     lines: list[str] = []
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
@@ -618,10 +715,12 @@ export KURA_WORKSPACE={shlex.quote(workspace)}
 export KURA_RUN_ID={shlex.quote(run_id)}
 export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
 export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
-mkdir -p "$HF_HOME" "$KURA_WORKSPACE/cache/models"
+mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"
 case "$HF_HOME" in "$KURA_WORKSPACE"/*) ;; *) echo "[kura] HF_HOME must be under KURA_WORKSPACE before remote job start: $HF_HOME" >&2; exit 1 ;; esac
+case "$HF_HUB_CACHE" in "$HF_HOME"/*) ;; *) echo "[kura] HF_HUB_CACHE must be under HF_HOME before remote job start: $HF_HUB_CACHE" >&2; exit 1 ;; esac
 touch "$KURA_LOG_PATH"
 echo "Kura controller uploaded {shlex.quote(archive_name)}" >> "$KURA_LOG_PATH"
 read_cgroup_value() {{
@@ -865,6 +964,7 @@ echo $!
             exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
             if exit_record is not None:
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
+                _record_remote_exit_observation(run_dir, exit_record)
                 exit_code = exit_record.get("exit_code")
                 return int(exit_code) if isinstance(exit_code, int) else 1
             next_sync = now + sync_interval_sec

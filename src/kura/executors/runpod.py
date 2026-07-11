@@ -130,6 +130,7 @@ def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_i
         "KURA_LOG_PATH": log_path,
         "PYTHONUNBUFFERED": "1",
         "HF_HOME": f"{workspace_path}/cache/huggingface",
+        "HF_HUB_CACHE": f"{workspace_path}/cache/huggingface/hub",
         "KURA_WORKSPACE": workspace_path,
         "KURA_RUN_ID": run_id,
     })
@@ -142,6 +143,7 @@ def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int 
         "KURA_LOG_PATH": log_path,
         "PYTHONUNBUFFERED": "1",
         "HF_HOME": f"{workspace_path}/cache/huggingface",
+        "HF_HUB_CACHE": f"{workspace_path}/cache/huggingface/hub",
         "KURA_WORKSPACE": workspace_path,
         "KURA_RUN_ID": run_id,
         "KURA_MAX_LEASE_SEC": str(max_lease_sec),

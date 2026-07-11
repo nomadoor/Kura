@@ -173,7 +173,7 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
     if unknown:
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
     if specs and cache_dir is None:
-        raise ValueError("ComfyUI model prepare requires HF_HOME or --cache-dir before downloading models")
+        raise ValueError("ComfyUI model prepare requires HF_HUB_CACHE or --cache-dir before downloading models")
     if specs and cache_dir is not None:
         _require_workspace_cache_dir(cache_dir)
     for spec in specs:
@@ -194,7 +194,7 @@ def main() -> int:
     parser.add_argument("workflow_json")
     parser.add_argument("--registry-json")
     parser.add_argument("--comfyui-root", default=os.environ.get("COMFYUI_ROOT", "/opt/ComfyUI"))
-    parser.add_argument("--cache-dir", default=os.environ.get("HF_HOME"))
+    parser.add_argument("--cache-dir", default=os.environ.get("HF_HUB_CACHE"))
     args = parser.parse_args()
     workflow = json.loads(Path(args.workflow_json).read_text(encoding="utf-8"))
     if not isinstance(workflow, dict):

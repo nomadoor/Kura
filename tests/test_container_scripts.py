@@ -48,7 +48,7 @@ class ContainerScriptTests(unittest.TestCase):
             mapping = json.dumps([{"container": str(cache), "workspace": "/workspace/cache/huggingface"}])
             usage = SimpleNamespace(total=10_000, used=1_000, free=9_000)
             with (
-                patch.dict(os.environ, {"HF_HOME": str(cache), "KURA_WORKSPACE_PATH_MAPS": mapping}, clear=True),
+                patch.dict(os.environ, {"HF_HUB_CACHE": str(cache), "KURA_WORKSPACE_PATH_MAPS": mapping}, clear=True),
                 patch.dict(sys.modules, {"huggingface_hub": fake_hub}),
                 patch.object(namespace["shutil"], "disk_usage", return_value=usage),
             ):
@@ -63,6 +63,21 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertEqual(namespace["progress_bytes"](1050, 1000, 200), 50)
         self.assertEqual(namespace["progress_bytes"](1400, 1000, 200), 200)
         self.assertEqual(namespace["progress_bytes"](900, 1000, 200), 0)
+
+    def test_hf_download_progress_uses_the_hub_cache_layout(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+        item = {"repo_id": "owner/model"}
+
+        directories = namespace["repo_cache_dirs"]("/cache/hf", item)
+
+        self.assertEqual(
+            directories,
+            [
+                "/cache/hf/models--owner--model",
+                "/cache/hf/.locks/models--owner--model",
+            ],
+        )
 
     def test_hf_download_preflight_rejects_insufficient_disk_before_download(self) -> None:
         namespace = {"__name__": "__test__"}
@@ -83,7 +98,7 @@ class ContainerScriptTests(unittest.TestCase):
             mapping = json.dumps([{"container": str(cache), "workspace": "/workspace/cache/huggingface"}])
             usage = SimpleNamespace(total=1_000, used=900, free=100)
             with (
-                patch.dict(os.environ, {"HF_HOME": str(cache), "KURA_WORKSPACE_PATH_MAPS": mapping}, clear=True),
+                patch.dict(os.environ, {"HF_HUB_CACHE": str(cache), "KURA_WORKSPACE_PATH_MAPS": mapping}, clear=True),
                 patch.dict(sys.modules, {"huggingface_hub": fake_hub}),
                 patch.object(namespace["shutil"], "disk_usage", return_value=usage),
             ):

@@ -615,8 +615,14 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         "rest_pods": False,
         "pods_empty": None,
         "network_volumes_empty": None,
+        "default_images_pinned": True,
     }
     diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "api_key_env": api_key_env, "config": {key: value for key, value in config.items() if "key" not in key.lower() and "secret" not in key.lower()}}
+    default_images = config.get("default_image") if isinstance(config.get("default_image"), dict) else {}
+    mutable_images = {str(key): value for key, value in default_images.items() if isinstance(value, str) and value.strip().lower().endswith(":latest")}
+    checks["default_images_pinned"] = not mutable_images
+    if mutable_images:
+        diagnostics["mutable_default_images"] = mutable_images
     if checks["runpodctl_command"]:
         version = subprocess.run(["runpodctl", "version"], text=True, capture_output=True, check=False)
         diagnostics["runpodctl_version"] = _redact_secret_text((version.stdout or version.stderr).strip())
@@ -644,7 +650,9 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         except Exception as exc:  # read-only doctor; keep diagnosis broad.
             diagnostics["network_volumes_error"] = _redact_secret_text(str(exc))
     ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["rest_pods"] and checks["pods_empty"] is not False and checks["network_volumes_empty"] is True)
-    if ok:
+    if ok and mutable_images:
+        diagnosis = "RunPod CLI/API are ready, but mutable default image tags should be pinned before reproducible runs."
+    elif ok:
         diagnosis = "RunPod CLI/API are ready."
     elif checks["pods_empty"] is False:
         diagnosis = "RunPod has Pods remaining; delete stopped/exited Pods if they should not persist."

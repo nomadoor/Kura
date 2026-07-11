@@ -26,9 +26,10 @@ when needed, move together with Kura releases, and users normally never build
 or change them. Overriding them (e.g. pointing at your own registry after
 `kura image build` / `kura image publish`) is an escape hatch for developing
 Kura itself, not part of normal use. Trainer freshness works differently per
-backend by design: AI-Toolkit rides the upstream official image, while the
-Musubi Tuner image is paired with Kura's Musubi adapters, because a newer
-Musubi alone cannot add model support without a matching Kura update.
+backend by design. AI-Toolkit extends a versioned upstream official image,
+while the Musubi Tuner image is paired with Kura's Musubi adapters. Both
+defaults move only after compatibility checks; a mutable upstream tag is not a
+reproducible run contract.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
@@ -56,6 +57,11 @@ docker:
 inside the same workspace. Advanced users can point `source` at a shared absolute
 path. Kura also maps the legacy `/root/.cache/huggingface` target into this
 workspace path so existing workspaces do not keep creating root-owned files.
+
+Executors set `HF_HOME=/workspace/cache/huggingface` and
+`HF_HUB_CACHE=/workspace/cache/huggingface/hub`. AI-Toolkit, Kura-managed
+Musubi downloads, and remote ComfyUI preparation therefore reuse the same
+repository snapshot and blob namespace.
 
 For Musubi runs with automatic Hugging Face downloads, Kura tries to estimate
 the referenced file sizes before local launch. The estimate is added on top of
@@ -99,7 +105,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `runpod.default_image.ai-toolkit` | Default AI-Toolkit remote image/template image | `ostris/aitoolkit:latest` |
+| `runpod.default_image.ai-toolkit` | Default AI-Toolkit remote image/template image | `ostris/aitoolkit:0.10.22` |
 | `runpod.default_image.musubi-tuner` | Default Musubi remote image | `nomadoor/kura-musubi-tuner:dev` |
 | `runpod.default_image.comfyui` | Default ComfyUI remote render image | `nomadoor/kura-comfyui:dev` |
 | `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |

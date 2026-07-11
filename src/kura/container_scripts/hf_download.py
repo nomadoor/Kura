@@ -32,9 +32,9 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 from huggingface_hub import hf_hub_download
 
 item = json.loads(sys.argv[1])
-cache_dir = os.environ.get("HF_HOME")
+cache_dir = os.environ.get("HF_HUB_CACHE")
 if not cache_dir:
-    raise SystemExit("[kura] HF_HOME is required before downloading models")
+    raise SystemExit("[kura] HF_HUB_CACHE is required before downloading models")
 kwargs = dict(repo_id=item["repo_id"], filename=item["filename"], cache_dir=cache_dir)
 if item.get("revision"):
     kwargs["revision"] = item["revision"]
@@ -73,10 +73,9 @@ def repo_cache_dirs(cache_dir, item):
     repo_type = item.get("repo_type") or "model"
     prefix = {"model": "models", "dataset": "datasets", "space": "spaces"}.get(repo_type, f"{repo_type}s")
     repo_dir = f"{prefix}--{item['repo_id'].replace('/', '--')}"
-    hub_dir = os.path.join(cache_dir, "hub")
     return [
-        os.path.join(hub_dir, repo_dir),
-        os.path.join(hub_dir, ".locks", repo_dir),
+        os.path.join(cache_dir, repo_dir),
+        os.path.join(cache_dir, ".locks", repo_dir),
     ]
 
 
@@ -145,7 +144,7 @@ def require_cache_mappable(cache_dir, link_path):
         cache_workspace = False
     if not cache_workspace:
         raise SystemExit(
-            "[kura] HF_HOME must be inside /workspace or covered by KURA_WORKSPACE_PATH_MAPS before downloading models: "
+            "[kura] HF_HUB_CACHE must be inside /workspace or covered by KURA_WORKSPACE_PATH_MAPS before downloading models: "
             f"{cache_dir}"
         )
 
@@ -164,9 +163,9 @@ def metadata_failure_kind(exc):
 
 
 def preflight_downloads(items):
-    cache_dir = os.environ.get("HF_HOME")
+    cache_dir = os.environ.get("HF_HUB_CACHE")
     if not cache_dir:
-        raise SystemExit("[kura] HF_HOME is required before downloading models")
+        raise SystemExit("[kura] HF_HUB_CACHE is required before downloading models")
     os.makedirs(cache_dir, exist_ok=True)
 
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
@@ -222,9 +221,9 @@ def preflight_downloads(items):
 
 def run_one(item):
     link_path = item["link_path"]
-    cache_dir = os.environ.get("HF_HOME")
+    cache_dir = os.environ.get("HF_HUB_CACHE")
     if not cache_dir:
-        raise SystemExit("[kura] HF_HOME is required before downloading models")
+        raise SystemExit("[kura] HF_HUB_CACHE is required before downloading models")
     require_cache_mappable(cache_dir, link_path)
     link_dir = os.path.dirname(link_path)
     os.makedirs(link_dir, exist_ok=True)

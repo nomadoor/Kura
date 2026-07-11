@@ -37,6 +37,7 @@ from kura.run_commands import _runpod_run_over_ssh
 from kura.run_commands import _runpod_secret_env_payload
 from kura.run_commands import _select_remote_outputs
 from kura.run_commands import _sync_runpod_remote_stdout
+from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
 from kura.run_commands import cmd_run_execute
@@ -367,6 +368,7 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
                 print(f"warning: skipped RunPod API reconcile because {_safe_error(exc)}; synced remote log over SSH only", file=sys.stderr)
             else:
                 _try_sync_runpod_remote_stdout(run_dir)
+            _try_observe_runpod_remote_exit(run_dir)
             print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
         else:
             print(json.dumps(reconcile_docker(run_dir), indent=2))
@@ -882,10 +884,14 @@ def cmd_image_build(args: argparse.Namespace) -> int:
             if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
                 print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
                 return 1
-    ref_args = {"musubi-tuner": "MUSUBI_TUNER_REF", "comfyui": "COMFYUI_REF"}
-    default_refs = {"musubi-tuner": "main", "comfyui": "50e5270b86765bac2da70248d61050abba72b19f"}
-    ref_arg = ref_args.get(args.name, "AI_TOOLKIT_REF")
-    default_ref = default_refs.get(args.name, "548a286992261fbef40c380e82495d21fd3bca86")
+    ref_args = {"ai-toolkit": "AI_TOOLKIT_IMAGE", "musubi-tuner": "MUSUBI_TUNER_REF", "comfyui": "COMFYUI_REF"}
+    default_refs = {
+        "ai-toolkit": "ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438",
+        "musubi-tuner": "v0.3.4",
+        "comfyui": "50e5270b86765bac2da70248d61050abba72b19f",
+    }
+    ref_arg = ref_args[args.name]
+    default_ref = default_refs[args.name]
     dockerfile = _workspace_relative_path(image["dockerfile"])
     context = _workspace_relative_path(image["context"])
     command = ["docker", "build", "--tag", image["local"], "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(context)]

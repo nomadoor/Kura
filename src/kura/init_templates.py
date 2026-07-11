@@ -249,7 +249,7 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
     if unknown:
         raise RuntimeError("unknown ComfyUI model loader entries: " + ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in unknown))
     if specs and cache_dir is None:
-        raise ValueError("ComfyUI model prepare requires HF_HOME or --cache-dir before downloading models")
+        raise ValueError("ComfyUI model prepare requires HF_HUB_CACHE or --cache-dir before downloading models")
     if specs and cache_dir is not None:
         workspace = Path(os.environ.get("KURA_WORKSPACE", "/workspace")).resolve()
         try:
@@ -276,7 +276,7 @@ def main() -> int:
     parser.add_argument("workflow_json")
     parser.add_argument("--registry-json")
     parser.add_argument("--comfyui-root", default=os.environ.get("COMFYUI_ROOT", "/opt/ComfyUI"))
-    parser.add_argument("--cache-dir", default=os.environ.get("HF_HOME"))
+    parser.add_argument("--cache-dir", default=os.environ.get("HF_HUB_CACHE"))
     args = parser.parse_args()
     workflow = json.loads(Path(args.workflow_json).read_text(encoding="utf-8"))
     if not isinstance(workflow, dict):
@@ -303,7 +303,7 @@ def cmd_init(_: argparse.Namespace) -> int:
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
-        dump_yaml(workspace, {"schema_version": 1, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"images": {"ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}, "comfyui": {"local": "nomadoor/kura-comfyui:dev", "remote": "nomadoor/kura-comfyui:dev", "dockerfile": "docker/comfyui/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev", "comfyui": "nomadoor/kura-comfyui:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
+        dump_yaml(workspace, {"schema_version": 1, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"images": {"ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}, "comfyui": {"local": "nomadoor/kura-comfyui:dev", "remote": "nomadoor/kura-comfyui:dev", "dockerfile": "docker/comfyui/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:0.10.22", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev", "comfyui": "nomadoor/kura-comfyui:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
     agents = root / "AGENTS.md"
     if not agents.exists():
         agents.write_text("# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n", encoding="utf-8")
@@ -311,7 +311,7 @@ def cmd_init(_: argparse.Namespace) -> int:
     dockerfile = root / "docker/ai-toolkit/Dockerfile"
     if not dockerfile.exists():
         dockerfile.write_text(
-            "FROM ostris/aitoolkit:latest\n\nCOPY docker/ai-toolkit/kura_runpod_object_job.py /opt/kura_runpod_object_job.py\nRUN ln -sfn /app/ai-toolkit /opt/ai-toolkit\nWORKDIR /workspace\nCMD [\"/start.sh\"]\n",
+            "ARG AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438\nFROM ${AI_TOOLKIT_IMAGE}\n\nCOPY docker/ai-toolkit/kura_runpod_object_job.py /opt/kura_runpod_object_job.py\nRUN ln -sfn /app/ai-toolkit /opt/ai-toolkit\nWORKDIR /workspace\nCMD [\"/start.sh\"]\n",
             encoding="utf-8",
         )
     runpod_object_job = root / "docker/ai-toolkit/kura_runpod_object_job.py"
@@ -320,7 +320,7 @@ def cmd_init(_: argparse.Namespace) -> int:
     musubi_dockerfile = root / "docker/musubi-tuner/Dockerfile"
     if not musubi_dockerfile.exists():
         musubi_dockerfile.write_text(
-            "ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime\nFROM ${PYTORCH_BASE}\n\nARG MUSUBI_TUNER_REF=main\nENV DEBIAN_FRONTEND=noninteractive\nENV PIP_DEFAULT_TIMEOUT=180\nENV PIP_RETRIES=5\n\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \\\n    && rm -rf /var/lib/apt/lists/*\n\nRUN git clone https://github.com/kohya-ss/musubi-tuner.git /opt/musubi-tuner \\\n    && cd /opt/musubi-tuner \\\n    && git checkout \"$MUSUBI_TUNER_REF\" \\\n    && pip install --no-cache-dir -e .\n\nCOPY docker/musubi-tuner/patch_flux2_diffusers_vae.py /tmp/patch_flux2_diffusers_vae.py\nRUN python /tmp/patch_flux2_diffusers_vae.py \\\n    && rm /tmp/patch_flux2_diffusers_vae.py\n\nCOPY docker/ai-toolkit/kura_runpod_object_job.py /opt/kura_runpod_object_job.py\nWORKDIR /workspace\nCMD [\"sleep\", \"infinity\"]\n",
+            "ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime\nFROM ${PYTORCH_BASE}\n\nARG MUSUBI_TUNER_REF=v0.3.4\nENV DEBIAN_FRONTEND=noninteractive\nENV PIP_DEFAULT_TIMEOUT=180\nENV PIP_RETRIES=5\n\nRUN apt-get update \\\n    && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \\\n    && rm -rf /var/lib/apt/lists/*\n\nRUN git clone https://github.com/kohya-ss/musubi-tuner.git /opt/musubi-tuner \\\n    && cd /opt/musubi-tuner \\\n    && git checkout \"$MUSUBI_TUNER_REF\" \\\n    && pip install --no-cache-dir -e .\n\nCOPY docker/musubi-tuner/patch_flux2_diffusers_vae.py /tmp/patch_flux2_diffusers_vae.py\nRUN python /tmp/patch_flux2_diffusers_vae.py \\\n    && rm /tmp/patch_flux2_diffusers_vae.py\n\nCOPY docker/ai-toolkit/kura_runpod_object_job.py /opt/kura_runpod_object_job.py\nWORKDIR /workspace\nCMD [\"sleep\", \"infinity\"]\n",
             encoding="utf-8",
         )
     musubi_patch = root / "docker/musubi-tuner/patch_flux2_diffusers_vae.py"
