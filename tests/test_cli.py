@@ -13,6 +13,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
+import time
 import unittest
 import json
 from pathlib import Path
@@ -30,8 +32,8 @@ from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight
-from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_image_preflight_report
+from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, _compact_path
 
@@ -2787,6 +2789,97 @@ class RunPodLiveSyncTests(unittest.TestCase):
             self.assertEqual(status["total_steps"], 30)
             self.assertEqual(status["remote_log_bytes"], 77)
             self.assertIn("avr_loss=0.123", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+
+    def test_concurrent_remote_stdout_sync_does_not_duplicate_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "remote-run"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            first_remote_call = threading.Event()
+            observed_offsets: list[int] = []
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
+                script = command[-1]
+                offset = int(script.split("offset=", 1)[1].splitlines()[0])
+                observed_offsets.append(offset)
+                if len(observed_offsets) == 1:
+                    first_remote_call.set()
+                    time.sleep(0.05)
+                payload = b"one line\n" if offset == 0 else b""
+                return subprocess.CompletedProcess(command, 0, payload + b"\n__KURA_LOG_SIZE__:9\n", b"")
+
+            results: list[bool] = []
+            details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+            with patch("kura.cli.subprocess.run", side_effect=fake_run):
+                first = threading.Thread(target=lambda: results.append(_sync_runpod_remote_stdout(run_dir, details, workspace="/workspace", run_id="remote-run")))
+                second = threading.Thread(target=lambda: results.append(_sync_runpod_remote_stdout(run_dir, details, workspace="/workspace", run_id="remote-run")))
+                first.start()
+                self.assertTrue(first_remote_call.wait(timeout=1))
+                second.start()
+                first.join(timeout=1)
+                second.join(timeout=1)
+
+            self.assertEqual(results, [True, True])
+            self.assertEqual(observed_offsets, [0, 9])
+            self.assertEqual((run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"), "one line\n")
+
+    def test_download_lock_rejects_a_second_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with _run_operation_lock(run_dir, "download", blocking=False):
+                    stderr = io.StringIO()
+                    with patch("sys.stderr", stderr):
+                        code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertIn("another download operation is already active", stderr.getvalue())
+
+    def test_remote_exit_observation_records_recovery_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+
+            _record_remote_exit_observation(
+                run_dir,
+                {"event": "remote_exit", "exit_code": 0, "timestamp": "2026-01-01T00:00:00+00:00"},
+            )
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "running")
+            self.assertEqual(status["remote_state"], "completed")
+            self.assertEqual(status["remote_exit_code"], 0)
+            self.assertTrue(status["recovery_required"])
+            observation = run_dir / status["last_remote_exit_observation"]
+            self.assertEqual(json.loads(observation.read_text(encoding="utf-8"))["event"], "remote_exit_observed")
+
+    def test_runpod_image_preflight_warns_for_mutable_latest(self) -> None:
+        records = _runpod_image_preflight_report(
+            {"backend": {"name": "ai-toolkit"}},
+            {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest"}},
+        )
+
+        self.assertEqual(records[0]["severity"], "warning")
+        self.assertIn("mutable tag", records[0]["fact"])
+        self.assertEqual(
+            _runpod_image_preflight_report(
+                {"backend": {"name": "ai-toolkit"}},
+                {"default_image": {"ai-toolkit": "ostris/aitoolkit:0.10.22"}},
+            ),
+            [],
+        )
 
 
 class RunPodPullSelectionTests(unittest.TestCase):

@@ -37,6 +37,7 @@ from kura.run_commands import _runpod_run_over_ssh
 from kura.run_commands import _runpod_secret_env_payload
 from kura.run_commands import _select_remote_outputs
 from kura.run_commands import _sync_runpod_remote_stdout
+from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
 from kura.run_commands import cmd_run_execute
@@ -367,6 +368,7 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
                 print(f"warning: skipped RunPod API reconcile because {_safe_error(exc)}; synced remote log over SSH only", file=sys.stderr)
             else:
                 _try_sync_runpod_remote_stdout(run_dir)
+            _try_observe_runpod_remote_exit(run_dir)
             print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
         else:
             print(json.dumps(reconcile_docker(run_dir), indent=2))

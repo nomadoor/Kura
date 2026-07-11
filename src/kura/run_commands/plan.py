@@ -682,6 +682,23 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
     ]
 
 
+def _runpod_image_preflight_report(run: dict[str, Any], runpod_config: dict[str, Any]) -> list[dict[str, Any]]:
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    backend_name = backend.get("name")
+    default_images = runpod_config.get("default_image") if isinstance(runpod_config.get("default_image"), dict) else {}
+    image = default_images.get(backend_name) if isinstance(backend_name, str) else None
+    if isinstance(image, str) and image.strip().lower().endswith(":latest"):
+        return [
+            _preflight_record(
+                "runpod-image",
+                "warning",
+                f"runpod.default_image.{backend_name} uses mutable tag {image}; pin the audited version before relying on reproducible behavior",
+                "workspace.yaml",
+            )
+        ]
+    return []
+
+
 def collect_run_preflight(
     run: dict[str, Any],
     workspace: Path,
@@ -703,6 +720,7 @@ def collect_run_preflight(
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
     if resolved_executor == "runpod":
         runpod_config = workspace_config.get("runpod") if isinstance(workspace_config.get("runpod"), dict) else {}
+        records.extend(_runpod_image_preflight_report(run, runpod_config))
         records.extend(_runpod_disk_preflight_report(run, runpod_config, estimate))
     return records
 
