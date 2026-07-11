@@ -137,7 +137,7 @@ That is the whole update. Dependencies re-sync automatically on the next `uv run
 
 Two notes on how trainer versions work:
 
-- **AI-Toolkit** runs on the upstream official image (`ostris/aitoolkit:latest`), so new AI-Toolkit features generally arrive on their own.
+- **AI-Toolkit** runs on a Kura-tested version of the upstream official image. Kura updates that pin deliberately after compatibility checks; it does not follow the mutable `latest` tag during normal runs.
 - **Musubi Tuner** has no official image, so Kura ships one that is tested against Kura's own Musubi support. A newer Musubi alone would not add new model support anyway — that always needs a Kura update too — so the image updates together with Kura, and "what does my Kura support?" always has one answer: whatever your current Kura supports.
 
 ## Learn more

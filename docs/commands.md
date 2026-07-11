@@ -108,6 +108,6 @@ Image names are set in `workspace.yaml`. Build only when needed.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura image build ai-toolkit --ref <ref>` | Build the AI-Toolkit image |
-| `uv run kura image build musubi-tuner --ref <ref>` | Build the Musubi Tuner image |
+| `uv run kura image build ai-toolkit [--ref <upstream-image>]` | Build the AI-Toolkit image; `--ref` overrides the pinned upstream image reference |
+| `uv run kura image build musubi-tuner [--ref <git-ref>]` | Build the Musubi Tuner image; `--ref` overrides the pinned upstream release |
 | `uv run kura image build comfyui --ref <ref>` | Build the ComfyUI render image |

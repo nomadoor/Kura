@@ -80,8 +80,11 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/workspace/cache/huggingface")
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
+                self.assertEqual(workspace["runpod"]["default_image"]["ai-toolkit"], "ostris/aitoolkit:0.10.22")
                 self.assertEqual(workspace["comfyui"]["lora_dir"], "")
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
+                self.assertIn("AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.10.22@sha256:", (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8"))
+                self.assertIn("MUSUBI_TUNER_REF=v0.3.4", (root / "docker/musubi-tuner/Dockerfile").read_text(encoding="utf-8"))
             finally:
                 os.chdir(previous)
 
@@ -360,7 +363,45 @@ class ImageCommandTests(unittest.TestCase):
             self.assertGreaterEqual(len(calls), 1)
             build = calls[0]
             self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
+            self.assertIn(
+                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438",
+                build,
+            )
             self.assertEqual(build[-1], str(root))
+
+    def test_ai_toolkit_image_build_ref_overrides_upstream_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({
+                    "docker": {
+                        "images": {
+                            "ai-toolkit": {
+                                "local": "kura/ai-toolkit:test",
+                                "remote": "registry.example/kura/ai-toolkit:test",
+                                "dockerfile": "docker/ai-toolkit/Dockerfile",
+                                "context": ".",
+                            },
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            commands: list[list[str]] = []
+
+            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                commands.append(command)
+                return subprocess.CompletedProcess(command, 0, "sha256:image\n" if capture else "", "")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                    self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref="ostris/aitoolkit:custom")), 0)
+            finally:
+                os.chdir(previous)
+
+            self.assertIn("AI_TOOLKIT_IMAGE=ostris/aitoolkit:custom", commands[0])
 
     def test_image_build_rejects_large_build_cache_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
