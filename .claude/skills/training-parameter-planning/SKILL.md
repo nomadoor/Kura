@@ -121,9 +121,11 @@ sufficient rung:
   reduction **with** a matching `gradient_accumulation` increase so the
   effective batch is preserved; then offload/swap (`blocks_to_swap`, CPU
   offload). Gradient checkpointing and accumulation may go straight into the
-  proposal with the expected slowdown stated. Offload/swap — or anything
-  expected to slow training beyond roughly 2x — needs the user's go-ahead
-  first.
+  proposal with the expected slowdown stated. Offload/swap may also go into
+  the proposal without a separate question when it is the least
+  meaning-changing fit and the expected elapsed-time increase stays below
+  roughly 2x. Ask first when any execution accommodation is expected to cross
+  that threshold.
 - **Rung 3 — quality-touching.** Resolution, effective batch size, rank,
   learning rate, training precision below established practice, dataset
   reduction. **Never silently.** Present two or three concrete options with
@@ -162,13 +164,14 @@ already looking.
 - **Propose freely (provenance line always):** card lookup and selection,
   rung 1 artifact choices, gradient checkpointing,
   accumulation-preserving micro-batch changes, deviations from cards with a
-  stated reason.
-- **Ask before proposing:** offload/swap or any >~2x slowdown, every rung 3
+  stated reason, offload/swap below the ~2x elapsed-time threshold.
+- **Ask before proposing:** any >~2x slowdown, every rung 3
   option, extrapolating an untested hypothesis into an expensive run,
   changing the RunPod GPU class (cost).
 - **Never:** changing anything between the approved plan and launch; leaving
-  an applied trade-off or card deviation out of the plan discussion and
-  `notes.md`.
+  an applied trade-off or card deviation out of `run.yaml` and the plan
+  discussion. Reserve `notes.md` for human evaluation and observations after
+  the run.
 
 ## Knowledge cards
 

@@ -22,8 +22,10 @@ Use this skill for AI-Toolkit-specific backend and image work.
 ## Resource-fit ladder
 
 Use this ladder when logs or doctor output show the run does not fit available
-VRAM. Do not apply it silently; propose the change, then record the accepted
-choice in `run.yaml` before recompiling.
+VRAM. The agent may choose recipe-preserving execution accommodations while
+drafting, but must expose them in the plan and record them in `run.yaml` before
+recompiling. Ask separately when the change affects the training recipe, GPU
+cost, or is expected to increase elapsed time beyond roughly 2x.
 
 1. Prefer execution accommodations that preserve the recipe: `quantize`,
    `quantize_te`, and backend-supported `low_vram` options.

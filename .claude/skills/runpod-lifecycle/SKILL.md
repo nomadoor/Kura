@@ -48,7 +48,9 @@ stop Pod
 - Treat compute choice as a constrained resource plan, not a convenience
   default. Start with the smallest candidate that should satisfy the declared
   training plan, then move up only when capacity, memory, or runtime evidence
-  justifies it.
+  justifies it. The agent may tune execution accommodations within the same
+  GPU class; a GPU-class/cost change or an expected elapsed-time increase beyond
+  roughly 2x requires user approval and a new plan.
 
 ## Recovery commands
 

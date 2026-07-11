@@ -34,15 +34,18 @@ Use this skill for `backend.name: musubi-tuner` work.
 ## Resource-fit ladder
 
 Use this ladder when logs or doctor output show the run does not fit available
-VRAM. Do not apply it silently; propose the change, then record the accepted
-choice in `run.yaml` under `backend_overrides.musubi-tuner` before recompiling.
+VRAM. The agent may choose execution accommodations automatically while
+drafting, but must expose them in the plan and record them in `run.yaml` under
+`backend_overrides.musubi-tuner` before recompiling. Ask separately when the
+change affects the training recipe, GPU cost, or is expected to increase
+elapsed time beyond roughly 2x.
 
 1. Enable recipe-preserving memory aids first: `gradient_checkpointing`, then
    architecture-appropriate `fp8_base` / `fp8_scaled` when compatible.
 2. If the effective batch matters, reduce Musubi `batch_size` as micro-batch and
    raise `gradient_accumulation_steps` to preserve effective batch.
-3. Use offload/swap options such as `--blocks_to_swap` only when the slower
-   runtime is acceptable. H2D-only swap requires explicit gradient checkpointing.
+3. Use offload/swap options such as `--blocks_to_swap` when needed to fit while
+   preserving the recipe. H2D-only swap requires explicit gradient checkpointing.
 4. Reduce resolution, rank, or model size only after explaining that this changes
    the training recipe itself.
 
