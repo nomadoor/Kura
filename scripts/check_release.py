@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKS = [
     [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
     [sys.executable, "scripts/check_python.py"],
+    [sys.executable, "scripts/check_architecture.py"],
+    [sys.executable, "scripts/check_smoke_evidence.py"],
     [sys.executable, "scripts/check_no_artifacts.py"],
     [sys.executable, "scripts/check_model_artifacts.py"],
     [sys.executable, "scripts/check_secrets.py"],

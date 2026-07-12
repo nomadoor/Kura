@@ -7,15 +7,59 @@ import io
 import subprocess
 import tempfile
 import unittest
+import yaml
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from rich.console import Console
 
-from kura.monitor import _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
+from kura.monitor import RunSummary, _format_time_cell, _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
 
 
 class MonitorProjectionTests(unittest.TestCase):
+    def test_active_time_shows_total_elapsed_and_update_age(self) -> None:
+        now = datetime.now().astimezone()
+        summary = RunSummary(
+            id="local",
+            experiment=None,
+            type="train",
+            executor="docker",
+            state="running",
+            started=now - timedelta(minutes=10),
+            last_updated=now - timedelta(seconds=5),
+        )
+
+        rendered = _format_time_cell(summary)
+
+        self.assertIn("10m0s elapsed", rendered)
+        self.assertIn("ago", rendered)
+
+    def test_legacy_run_is_isolated_as_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "runs" / "legacy"
+            current = root / "runs" / "current"
+            legacy.mkdir(parents=True)
+            current.mkdir(parents=True)
+            (legacy / "run.yaml").write_text("id: legacy\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (current / "run.yaml").write_text("id: current\ntype: train\nrecipe: {steps: 1, seed: 1}\n", encoding="utf-8")
+            summaries = {item.id: item for item in collect_run_summaries(root)}
+        self.assertEqual(summaries["legacy"].state, "unreadable")
+        self.assertNotEqual(summaries["current"].state, "unreadable")
+
+    def test_ai_toolkit_display_projection_is_not_read_as_musubi(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "ai"
+            run_dir.mkdir(parents=True)
+            run = {"id": "ai", "type": "train", "recipe": {"steps": 10, "seed": 1}, "backend": {"name": "ai-toolkit", "config": {"config": {"network": {"linear": 8, "linear_alpha": 4}, "train": {"lr": 0.0001, "batch_size": 2}}}}}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            summary = collect_run_summaries(root)[0]
+        self.assertEqual(summary.key_config["rank"], 8)
+        self.assertEqual(summary.key_config["alpha"], 4)
+        self.assertEqual(summary.key_config["lr"], 0.0001)
+        self.assertEqual(summary.key_config["batch_size"], 2)
     def test_sparkline_tracks_increasing_values(self) -> None:
         line = loss_sparkline([1, 2, 3, 4], width=4)
         self.assertEqual(line, "▁▃▆█")
@@ -48,8 +92,9 @@ class MonitorProjectionTests(unittest.TestCase):
                         "type: train",
                         "experiment: exp",
                         "created: '2026-06-21T10:00:00+09:00'",
-                        "dataset: {id: tiny}",
-                        "params: {rank: 4, lr: 0.0001, steps: 3}",
+                        "datasets: [{id: tiny}]",
+                        "recipe: {steps: 3}",
+                        "backend: {name: musubi-tuner, config: {network_dim: 4, learning_rate: 0.0001}}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -212,7 +257,7 @@ class MonitorProjectionTests(unittest.TestCase):
                     [
                         "id: stdout-train",
                         "type: train",
-                        "params: {steps: 30}",
+                        "recipe: {steps: 30}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -245,7 +290,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: musubi-train",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {steps: 100}",
+                        "recipe: {steps: 100}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -279,7 +324,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: downloading",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {steps: 20}",
+                        "recipe: {steps: 20}",
                         "compute: {executor: docker}",
                     ]
                 ),
@@ -310,7 +355,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: remote-train",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {steps: 1}",
+                        "recipe: {steps: 1}",
                         "compute: {executor: runpod}",
                     ]
                 ),
@@ -359,7 +404,8 @@ class MonitorProjectionTests(unittest.TestCase):
                         "datasets:",
                         "  - {id: cond, digest: sha256:aaa, role: cond}",
                         "  - {id: target, digest: sha256:bbb, role: target}",
-                        "params: {rank: 8, lr: 0.0001, steps: 10}",
+                        "recipe: {steps: 10}",
+                        "backend: {name: musubi-tuner, config: {network_dim: 8, learning_rate: 0.0001}}",
                         "compute: {executor: runpod}",
                     ]
                 ),
@@ -502,9 +548,10 @@ class MonitorProjectionTests(unittest.TestCase):
                         "id: musubi-batch",
                         "type: train",
                         "backend: {name: musubi-tuner}",
-                        "params: {batch_size: 4, steps: 100}",
-                        "backend_overrides:",
-                        "  musubi-tuner:",
+                        "recipe: {steps: 100}",
+                        "backend:",
+                        "  name: musubi-tuner",
+                        "  config:",
                         "    extra_args:",
                         "      - --gradient_accumulation_steps",
                         "      - '2'",

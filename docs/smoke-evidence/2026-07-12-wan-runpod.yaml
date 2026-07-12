@@ -1,0 +1,18 @@
+schema_version: 1
+run_id: 20260712-1705_musubi-real-smoke-wan_b76b
+executor: runpod
+observed:
+  optimizer_steps: 1
+  loss: 0.0135
+  output_safetensors: 2
+  remote_exit_code: 0
+  recovery_required: false
+  pod_stopped_at: 2026-07-12T17:09:27.929203+09:00
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  loss_seen: true
+  outputs_seen: true
+  recovery_complete: true
+  pod_stopped: true

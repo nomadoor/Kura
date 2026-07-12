@@ -21,9 +21,10 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _backend_image_name, _command_for_backend, _image_config, _safe_error
+from kura.run_commands.common import _backend_image_name, _image_config, _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
+from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
 
 
@@ -217,6 +218,15 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             if not dry_run:
                 _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
             return 1
+    compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
+    compiled_executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    if executor != compiled_executor:
+        print(
+            f"cannot launch run: manifest was compiled for executor.name={compiled_executor}; "
+            f"set executor.name={executor} in run.yaml and recompile before launching with {executor}",
+            file=sys.stderr,
+        )
+        return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         if status.get("state") == "running":
@@ -225,13 +235,14 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             raise ValueError("run must be compiled before launch")
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
-        spec = _command_for_backend(locked)
+        spec = _load_frozen_command(run_dir, locked)
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     try:
         config = _workspace_config()
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
+        adapter = get_backend(backend_name)
         image_name = _backend_image_name(backend_name)
         image_config = _image_config(image_name)
         if executor == "docker":
@@ -263,17 +274,14 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
                 raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
-            remote_spec = dict(spec)
             remote_image = image_config["remote"]
-            if image_name == "ai-toolkit" and isinstance(runpod_config.get("container_cwd"), str):
-                remote_spec["cwd"] = runpod_config["container_cwd"]
-            if image_name != "ai-toolkit":
+            if not adapter.runpod_template_compatible:
                 runpod_config.pop("template_id", None)
                 backend_ports = runpod_config.get("backend_ports")
                 if isinstance(backend_ports, dict) and isinstance(backend_ports.get(image_name), list):
                     runpod_config["ports"] = backend_ports[image_name]
                 else:
-                    runpod_config["ports"] = ["22/tcp"]
+                    runpod_config["ports"] = list(adapter.default_ports)
             default_image = runpod_config.get("default_image")
             if isinstance(default_image, dict) and isinstance(default_image.get(image_name), str):
                 remote_image = default_image[image_name]
@@ -287,7 +295,7 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             elif isinstance(gpu_override, list) and all(isinstance(item, str) and item for item in gpu_override):
                 runpod_config["gpu_type_ids"] = list(gpu_override)
                 runpod_config["gpu_type_priority"] = "custom"
-            launch_runpod(run_dir=run_dir, spec=remote_spec, image=remote_image, config=runpod_config, dry_run=dry_run)
+            launch_runpod(run_dir=run_dir, spec=spec, image=remote_image, config=runpod_config, dry_run=dry_run)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1

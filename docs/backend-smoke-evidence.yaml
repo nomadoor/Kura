@@ -1,0 +1,53 @@
+schema_version: 1
+description: >-
+  Historical execution observations. Records are evidence for the stated
+  identity tuple, not declarations of backend capability.
+records:
+  - id: musubi-framepack-video-docker-2026-07-12
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 029a144f81be5b1babdb1c7d6221a2cfd3d25dafc316ce8cff9ccdf204b2c8d3
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c
+    native_path:
+      architecture: framepack
+      source: video_directory
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-07-12
+    artifact: smoke-evidence/2026-07-12-framepack-docker.yaml
+  - id: musubi-wan-t2v-1.3b-runpod-2026-07-12
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 029a144f81be5b1babdb1c7d6221a2cfd3d25dafc316ce8cff9ccdf204b2c8d3
+    runtime_image:
+      kind: mutable-image-reference
+      value: nomadoor/kura-musubi-tuner:dev
+    native_path:
+      architecture: wan
+      task: t2v-1.3B
+      executor: runpod
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-07-12
+    artifact: smoke-evidence/2026-07-12-wan-runpod.yaml
+  - id: musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 6783ef1ce3d092d6f77c08292b7643a95615e8c95b58d652b579e3728d15cb00
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c
+    native_path:
+      architecture: flux_kontext
+      optional_flag: fp8_t5
+      phase: cache_text_encoder_outputs
+    evidence_kind: real-runtime
+    outcome: failed-before-training
+    observed_at: 2026-07-12
+    artifact: smoke-evidence/2026-07-12-flux-kontext-fp8-t5-failure.yaml

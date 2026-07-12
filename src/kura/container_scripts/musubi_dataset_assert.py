@@ -11,17 +11,18 @@ import tomllib
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
 
 
 def die(message):
     raise SystemExit(f"[kura] {message}")
 
 
-def image_count(directory):
+def media_count(directory, suffixes, label):
     try:
-        return sum(1 for item in directory.iterdir() if item.is_file() and item.suffix.lower() in IMAGE_SUFFIXES)
+        return sum(1 for item in directory.iterdir() if item.is_file() and item.suffix.lower() in suffixes)
     except OSError as exc:
-        die(f"cannot read Musubi image_directory {directory}: {exc}")
+        die(f"cannot read Musubi {label} {directory}: {exc}")
 
 
 def jsonl_count(path):
@@ -48,12 +49,20 @@ def main():
         if not isinstance(item, dict):
             die(f"Musubi dataset entry #{index} is not a table")
         image_directory = item.get("image_directory")
+        video_directory = item.get("video_directory")
         image_jsonl_file = item.get("image_jsonl_file")
+        video_jsonl_file = item.get("video_jsonl_file")
         if isinstance(image_directory, str) and image_directory:
-            count = image_count(Path(image_directory))
+            count = media_count(Path(image_directory), IMAGE_SUFFIXES, "image_directory")
             if count <= 0:
                 die(f"Musubi dataset entry #{index} has no images in image_directory: {image_directory}")
             summary.append({"index": index, "image_directory": image_directory, "images": count})
+            continue
+        if isinstance(video_directory, str) and video_directory:
+            count = media_count(Path(video_directory), VIDEO_SUFFIXES, "video_directory")
+            if count <= 0:
+                die(f"Musubi dataset entry #{index} has no videos in video_directory: {video_directory}")
+            summary.append({"index": index, "video_directory": video_directory, "videos": count})
             continue
         if isinstance(image_jsonl_file, str) and image_jsonl_file:
             count = jsonl_count(Path(image_jsonl_file))
@@ -61,7 +70,13 @@ def main():
                 die(f"Musubi dataset entry #{index} has no rows in image_jsonl_file: {image_jsonl_file}")
             summary.append({"index": index, "image_jsonl_file": image_jsonl_file, "rows": count})
             continue
-        die(f"Musubi dataset entry #{index} must set image_directory or image_jsonl_file")
+        if isinstance(video_jsonl_file, str) and video_jsonl_file:
+            count = jsonl_count(Path(video_jsonl_file))
+            if count <= 0:
+                die(f"Musubi dataset entry #{index} has no rows in video_jsonl_file: {video_jsonl_file}")
+            summary.append({"index": index, "video_jsonl_file": video_jsonl_file, "rows": count})
+            continue
+        summary.append({"index": index, "source": "unknown; deferred to Musubi"})
     print(f"[kura] musubi dataset ok {json.dumps(summary, ensure_ascii=False)}", flush=True)
 
 

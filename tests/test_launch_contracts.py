@@ -12,6 +12,7 @@ from typing import Any
 from kura.backends import command_musubi_tuner
 from kura.executors.docker import docker_command
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
+from kura.run_commands.common import _load_frozen_command
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 
 
@@ -85,9 +86,8 @@ def _minimal_flux2_run() -> dict[str, Any]:
     return {
         "id": "contract-run",
         "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
-        "params": {"steps": 1},
-        "backend_overrides": {
-            "musubi-tuner": {
+        "recipe": {"steps": 1, "seed": 1},
+        "backend": {"name": "musubi-tuner", "config": {
                 "architecture": "flux2",
                 "model_version": "klein-base-4b",
                 "model_downloads": {
@@ -103,8 +103,16 @@ def _minimal_flux2_run() -> dict[str, Any]:
 
 
 class LaunchEnvironmentContractTests(unittest.TestCase):
+    def test_launch_requires_a_frozen_backend_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "recompile the run"):
+                _load_frozen_command(
+                    Path(directory),
+                    {"backend": {"name": "ai-toolkit"}},
+                )
+
     def test_container_env_inventory_is_derived_from_sources(self) -> None:
-        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
+        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HOME", "HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
         self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HUB_CACHE", "KURA_WORKSPACE"})
 
     def test_local_docker_env_satisfies_container_script_contract(self) -> None:

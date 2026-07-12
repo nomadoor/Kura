@@ -1,0 +1,17 @@
+schema_version: 1
+run_id: 20260712-1717_musubi-real-smoke-framepack_2bb4
+executor: docker
+dataset_source:
+  video_directory: /workspace/datasets/musubi-video-smoke/videos
+  image_directory_sentinel_used: false
+observed:
+  optimizer_steps: 1
+  loss: 0.0143
+  output_safetensors: 2
+  exit_code: 0
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  loss_seen: true
+  outputs_seen: true

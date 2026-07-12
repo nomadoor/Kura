@@ -102,8 +102,8 @@ No local GPU? `uv run kura render launch <run-id> --executor runpod` runs the sa
 RunPod runs use **disposable Pods**. Kura uploads only the inputs it needs, trains, downloads the outputs, and then **stops the Pod automatically**, so you don't leave GPUs billing in the background.
 
 - By default it does not use Network Volumes (no persistent storage left behind, flexible GPU placement).
-- After download it keeps the Pod for `--hold-for 30m` by default so you can inspect the LoRA.
-- It then terminates automatically unless you tell it otherwise.
+- Normal `kura run execute` stops the Pod immediately after confirmed output recovery.
+- Use the low-level `kura run remote <run-id> --hold-for 30m` only when you intentionally need a review window.
 - A Pod-side `--max-lease 12h` guard is a last billing fuse if the local controller dies.
 
 ## Where files live & cleanup
@@ -143,6 +143,8 @@ Two notes on how trainer versions work:
 ## Learn more
 
 - [docs/commands.md](docs/commands.md): full command reference
+- [docs/agent-first-cli.md](docs/agent-first-cli.md): what the agent authors, what the CLI guarantees, and how runs work without conversational state
+- [docs/backend-support.md](docs/backend-support.md): pinned backend versions and verified support paths
 - [AGENTS.md](AGENTS.md) and [.claude/skills/](.claude/skills/): always-loaded agent rules and task-specific instructions (have your agent read `AGENTS.md` first)
 - [docs/smoke-test.md](docs/smoke-test.md): smoke test notes
 - [README.ja.md](README.ja.md): Japanese version

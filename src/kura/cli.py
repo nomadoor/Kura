@@ -20,9 +20,9 @@ from copy import deepcopy
 import yaml
 
 from kura import __version__
-from kura.backends import compile_ai_toolkit, compile_musubi_tuner
-from kura.backends.musubi_datasets import validate_musubi_dataset_layout
+from kura.backends import backend_names, get_backend
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
+from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
@@ -32,6 +32,8 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
+from kura.run_envelope import backend_config, validated_recipe
+from kura.provenance import adapter_source_identity, image_reference_identity
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
 from kura.run_commands import _runpod_secret_env_payload
@@ -71,9 +73,7 @@ def _image_config(name: str) -> dict[str, Any]:
 
 
 def _backend_image_name(backend_name: Any) -> str:
-    if backend_name == "musubi-tuner":
-        return "musubi-tuner"
-    return "ai-toolkit"
+    return get_backend(backend_name).image_name
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -102,24 +102,24 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     datasets = run.get("datasets")
     if isinstance(datasets, list):
         return [item for item in datasets if isinstance(item, dict)]
-    dataset = run.get("dataset")
-    if isinstance(dataset, dict):
-        return [dataset]
+    if "dataset" in run:
+        raise ValueError("training run dataset is not supported; use datasets[]")
     return []
 
 
 def _validate_train_compile_intent(run: dict[str, Any]) -> None:
+    if run.get("schema_version") != 2:
+        raise ValueError("training run schema_version must be 2")
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
-    overrides = run.get("backend_overrides") if isinstance(run.get("backend_overrides"), dict) else {}
-    other_backend = "musubi-tuner" if backend_name == "ai-toolkit" else "ai-toolkit"
-    if isinstance(overrides.get(other_backend), dict) and overrides[other_backend]:
-        raise ValueError(f"backend is {backend_name} but backend_overrides.{other_backend} is set")
-    if backend_name == "musubi-tuner":
-        validate_musubi_dataset_layout(run, _workspace())
+    native = backend_config(run, backend_name)
+    validated_recipe(run, required=native.get("command") is None)
+    adapter = get_backend(backend_name)
+    if adapter.validate_dataset is not None:
+        adapter.validate_dataset(run, _workspace())
 
 
 def _now() -> datetime:
@@ -212,13 +212,13 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
     run = {
-        "schema_version": 1, "id": run_id, "type": "train", "experiment": args.experiment,
+        "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
-        "backend": {"name": args.backend, "version": None, "adapter_version": 1},
+        "backend": {"name": args.backend, "version": None, "adapter_version": 1, "config": {}},
         "model": {"base": "", "revision": None},
         "datasets": [{"id": "", "digest": None, "role": None}],
-        "params": {key: None for key in ("rank", "alpha", "lr", "scheduler", "steps", "batch_size", "resolution", "seed")},
-        "backend_overrides": {}, "compute": {"executor": args.executor, "gpu": args.gpu},
+        "recipe": {"steps": None, "seed": None},
+        "compute": {"executor": args.executor, "gpu": args.gpu},
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
@@ -265,8 +265,10 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             print(f"cannot compile render: {_safe_error(exc)}", file=sys.stderr); return 1
         print(f"compiled render: {args.run_id}"); return 0
     backend = run.get("backend", {})
-    if backend.get("name") not in ("ai-toolkit", "musubi-tuner"):
-        print(f"unsupported backend: {backend.get('name')}", file=sys.stderr)
+    try:
+        adapter = get_backend(backend.get("name"))
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
     try:
         _validate_train_compile_intent(run)
@@ -295,6 +297,11 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     resolved = run_dir / "resolved"
     try:
         requirements = declared_model_requirements(locked)
+        dataset_observations = []
+        for dataset in locked_datasets:
+            projection = observe_dataset(_workspace() / "datasets" / dataset["id"])
+            projection["digest"] = dataset["digest"]
+            dataset_observations.append(projection)
         resolved.mkdir(exist_ok=True)
         _dump_yaml(resolved / "manifest.lock.yaml", locked)
         _dump_yaml(
@@ -305,16 +312,27 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
                 "requirements": requirements,
             },
         )
-        if backend.get("name") == "ai-toolkit":
-            compile_ai_toolkit(locked, resolved / "ai-toolkit.toml")
-        else:
-            compile_musubi_tuner(locked, resolved / "musubi", workspace=_workspace(), strict=True)
+        _dump_yaml(
+            resolved / "dataset-observations.lock.yaml",
+            {
+                "schema_version": 1,
+                "generated_from": "manifest.lock.yaml",
+                "datasets": dataset_observations,
+            },
+        )
+        command_spec = adapter.compile(locked, resolved, _workspace(), True)
+        source_identity = adapter_source_identity(backend.get("name"))
+        atomic_write_json(resolved / "backend-display.lock.json", adapter.display(locked))
+        atomic_write_json(resolved / "backend-command.lock.json", {**command_spec, "backend": backend.get("name"), "adapter_source": source_identity})
         env = {
             "kura_version": __version__, "python_version": platform.python_version(),
             "platform": platform.platform(), "backend_name": backend.get("name"),
             "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
             "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
             "local_image": image["local"], "dockerfile": image["dockerfile"],
+            "adapter_source": source_identity,
+            "local_image_identity": image_reference_identity(image["local"]),
+            "remote_image_identity": image_reference_identity(image["remote"]),
         }
         _dump_yaml(resolved / "env.lock", env)
         status_path = run_dir / "status.json"
@@ -422,7 +440,7 @@ def _docker_cleanup_image() -> str:
     images = _workspace_config().get("docker", {}).get("images", {})
     candidates: list[str] = []
     if isinstance(images, dict):
-        for name in ("ai-toolkit", "musubi-tuner"):
+        for name in backend_names():
             image = images.get(name)
             if isinstance(image, dict):
                 for key in ("local", "remote"):
@@ -1029,7 +1047,7 @@ def main() -> None:
     new = run_sub.add_parser("new", help="Create a train run")
     new.add_argument("--experiment", required=True)
     new.add_argument("--slug", required=True)
-    new.add_argument("--backend", default="ai-toolkit", choices=("ai-toolkit", "musubi-tuner"))
+    new.add_argument("--backend", default="ai-toolkit", choices=backend_names())
     new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
     new.add_argument("--gpu")
     new.set_defaults(func=cmd_run_new)

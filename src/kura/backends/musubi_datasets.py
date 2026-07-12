@@ -11,18 +11,18 @@ from kura.fsio import atomic_write_text
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+NATIVE_SOURCE_KEYS = {"image_directory", "image_jsonl_file", "video_directory", "video_jsonl_file", "paired_jsonl"}
 
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
-    params = run.get("params", {})
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
     if not datasets:
         raise ValueError("Musubi Tuner requires datasets[]")
     general = {
-        "resolution": params.get("resolution") or [960, 544],
+        "resolution": [960, 544],
         "caption_extension": ".txt",
-        "batch_size": params.get("batch_size") or 1,
+        "batch_size": 1,
         "enable_bucket": True,
         "bucket_no_upscale": False,
     }
@@ -65,12 +65,12 @@ def _musubi_dataset_items(
             overrides = dataset_config.get("datasets")
             if isinstance(overrides, list) and index < len(overrides) and isinstance(overrides[index], dict):
                 override_item = {key: value for key, value in overrides[index].items() if isinstance(key, str)}
-        uses_jsonl = "image_jsonl_file" in override_item or "paired_jsonl" in override_item
+        has_native_source = any(key in override_item for key in NATIVE_SOURCE_KEYS)
         item = {
             "cache_directory": f"/workspace/runs/{run['id']}/cache/musubi/{dataset_id}",
             "num_repeats": dataset.get("num_repeats") or dataset.get("repeats") or 1,
         }
-        if not uses_jsonl:
+        if not has_native_source:
             item["image_directory"] = _default_image_directory(destination, dataset_id, workspace=workspace, strict=strict)
         if "paired_jsonl" in override_item:
             paired = override_item.pop("paired_jsonl")
@@ -78,7 +78,7 @@ def _musubi_dataset_items(
                 item["_kura_paired_key"] = _paired_dataset_key(dataset_id, paired)
             item["image_jsonl_file"] = _write_musubi_paired_jsonl(run, destination, dataset_id, paired, workspace=workspace)
         item.update(override_item)
-        if strict and not uses_jsonl and isinstance(item.get("image_directory"), str):
+        if strict and isinstance(item.get("image_directory"), str):
             _validate_image_directory(workspace or _workspace_from_resolved_path(destination), dataset_id, item["image_directory"])
         raw_items.append((dataset, item))
     return _collapse_duplicate_musubi_bucket_items(raw_items)

@@ -1,8 +1,10 @@
+schema_version: 2
 type: train
-dataset:
-  id: replace-with-dataset-id
-backend_overrides:
-  ai-toolkit:
+datasets:
+  - id: replace-with-dataset-id
+backend:
+  name: ai-toolkit
+  config:
     command:
       cwd: /workspace
       argv: [python, -c, "print('kura docker smoke')"]

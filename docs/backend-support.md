@@ -7,6 +7,9 @@ Kura has an adapter, and how far that path has been tested. It intentionally
 does not record personal run IDs, hardware inventories, or experiment history.
 See [upstream-model-support-audit.md](upstream-model-support-audit.md) for the
 detailed audit and [musubi-adapters.md](musubi-adapters.md) for Musubi mechanics.
+Machine-readable historical observations live in
+[backend-smoke-evidence.yaml](backend-smoke-evidence.yaml); they are
+identity-bound evidence, not a second capability registry.
 
 ## Versions
 

@@ -1,0 +1,14 @@
+schema_version: 1
+run_id: 20260712-1157_musubi-real-smoke-flux_kontext_85b7
+executor: docker
+observed:
+  outcome: failed-before-training
+  exit_code: 1
+  optimizer_steps: 0
+  failing_phase: flux_kontext_cache_text_encoder_outputs.py
+  optional_flag: fp8_t5
+  error: "AttributeError: module 'torch' has no attribute 'float8e4m3fn'"
+note: >-
+  This is an identity-bound upstream observation. Kura does not patch the
+  trainer or reject the option globally; the representative smoke omits this
+  optional path for this image identity.

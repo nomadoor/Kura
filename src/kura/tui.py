@@ -9,6 +9,7 @@ import platform
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -239,6 +240,7 @@ class KuraMonitorApp(App[None]):
         self.hidden_draft_count = 0
         self.remote_metrics_interval = 30.0
         self._remote_metrics_cache: dict[str, tuple[float, HostMetrics]] = {}
+        self._remote_metrics_inflight: set[str] = set()
         self._host_metrics_cache: tuple[float, HostMetrics] | None = None
         self.host_metrics_interval = 5.0
         self._summary_cache: dict[str, tuple[tuple[tuple[str, int, int], ...], RunSummary]] = {}
@@ -307,9 +309,22 @@ class KuraMonitorApp(App[None]):
         cached = self._remote_metrics_cache.get(cache_key)
         if cached and now - cached[0] < self.remote_metrics_interval:
             return cached[1]
-        metrics = _runpod_host_metrics(self.workspace, summary)
-        self._remote_metrics_cache[cache_key] = (now, metrics)
-        return metrics
+        if cache_key not in self._remote_metrics_inflight:
+            self._remote_metrics_inflight.add(cache_key)
+            threading.Thread(
+                target=self._collect_remote_metrics,
+                args=(cache_key, summary),
+                name=f"kura-monitor-metrics-{cache_key}",
+                daemon=True,
+            ).start()
+        return cached[1] if cached else HostMetrics()
+
+    def _collect_remote_metrics(self, cache_key: str, summary: RunSummary) -> None:
+        try:
+            metrics = _runpod_host_metrics(self.workspace, summary)
+            self._remote_metrics_cache[cache_key] = (time.monotonic(), metrics)
+        finally:
+            self._remote_metrics_inflight.discard(cache_key)
 
 
 class PaneTitle(Static):
@@ -759,8 +774,9 @@ class ComputePane(Vertical):
             self._mount_host_metrics()
             return
         info = summary.executor_info
-        pod_status = "● pod up" if info.kind == "remote" and info.pod else ""
-        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, RUN))))
+        pod_status = _remote_execution_phase(summary) if info.kind == "remote" else ""
+        pod_style = DONE if info.pod_stopped or info.downloaded else (STALE if info.remote_state == "completed" else RUN)
+        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, pod_style))))
         if info.kind == "remote":
             table = Table.grid(padding=(0, 3))
             table.add_column(style=FG_MUTED, width=7)
@@ -782,18 +798,20 @@ class ComputePane(Vertical):
                 pod_table.add_row("cost", f"{_money_per_hour(info.pod.cost_per_h)} · {_money(info.pod.cost_used)} used")
                 self.mount(Static(pod_table))
         else:
-            self._mount_host_metrics(fallback_gpu=info.gpu)
+            self._mount_host_metrics(fallback_gpu=info.gpu, summary=summary)
 
     @property
     def app_ref(self) -> KuraMonitorApp:
         return self.app  # type: ignore[return-value]
 
-    def _mount_host_metrics(self, *, fallback_gpu: str | None = None) -> None:
+    def _mount_host_metrics(self, *, fallback_gpu: str | None = None, summary: RunSummary | None = None) -> None:
         metrics = self.app_ref.metrics_for(None)
         table = Table.grid(padding=(0, 2))
         table.add_column(style=FG_MUTED, width=6)
         table.add_column()
         self._add_metrics_rows(table, metrics, fallback_gpu=fallback_gpu, include_gpu_name=True)
+        if summary is not None:
+            table.add_row("uptime", _elapsed(summary))
         self.mount(Static(table))
 
     def _add_metrics_rows(self, table: Table, metrics: HostMetrics, *, fallback_gpu: str | None, include_gpu_name: bool) -> None:
@@ -1135,7 +1153,7 @@ class WatchScreen(Screen[None]):
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
     def refresh_data(self) -> None:
-        summaries = collect_run_summaries(self.app_ref.workspace, loss_tail=10_000, stale_after=self.app_ref.stale_after)
+        summaries = self.app_ref.collect_summaries_cached()
         summary = next((item for item in summaries if item.id == self.run_id), None)
         self.query_one("#status", Static).update(_watch_status_bar(summaries, self.run_id, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
         self.path_targets = _path_targets(summary)
@@ -1742,6 +1760,27 @@ def _executor_label(summary: RunSummary) -> str:
     return "⌂ " + (summary.executor or "local")
 
 
+def _remote_execution_phase(summary: RunSummary) -> str:
+    info = summary.executor_info
+    if info.kind != "remote":
+        return ""
+    if info.pod_stopped:
+        return "● job complete · outputs downloaded · pod stopped" if info.downloaded else "● pod stopped"
+    if info.downloaded:
+        return "● job complete · outputs downloaded · pod still up"
+    if info.remote_state == "completed":
+        return "● job complete · awaiting download and pod stop"
+    if info.recovery_required:
+        return "● recovery required · pod still up"
+    if summary.progress.step and summary.progress.total and summary.progress.step >= summary.progress.total:
+        return "● job finishing · pod up"
+    if (summary.state or "").lower() == "running":
+        return "● training job active via SSH · pod up"
+    if info.pod:
+        return "● pod provisioning · training not started"
+    return "● remote job not launched"
+
+
 def _dataset_summary(datasets: tuple[RunDataset, ...]) -> str:
     if not datasets:
         return "-"
@@ -1811,7 +1850,7 @@ def _steps_seed(summary: RunSummary) -> str:
 
 
 def _backend(summary: RunSummary) -> str:
-    return str(summary.key_config.get("backend") or ("ai-toolkit" if summary.type == "train" else "comfyui"))
+    return str(summary.key_config.get("backend") or ("unknown" if summary.type == "train" else "comfyui"))
 
 
 def _base(summary: RunSummary) -> str:

@@ -13,8 +13,10 @@ import json
 import os
 import secrets
 import shutil
+import struct
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,7 +33,7 @@ class SmokeSpec:
     model_paths: dict[str, str] | None
     model_downloads: dict[str, dict[str, Any]] | None
     extra_override: dict[str, Any]
-    params: dict[str, Any]
+    smoke_values: dict[str, Any]
     expected_script: str
     expected_outputs: int = 1
 
@@ -53,7 +55,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "target_frames": [1],
                         "frame_extraction": "head",
@@ -70,7 +71,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "36"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -100,7 +101,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "target_frames": [1],
                         "frame_extraction": "head",
@@ -116,7 +116,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "51", "--vae_sample_size", "128", "--vae_enable_patch_conv"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -146,7 +146,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "frame_extraction": "full",
                         "max_frames": 37,
@@ -164,7 +163,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "36", "--latent_window_size", "9"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -195,7 +194,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "target_frames": [1],
                         "frame_extraction": "head",
@@ -211,7 +209,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "16"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -248,12 +246,11 @@ SPECS: dict[str, SmokeSpec] = {
             "gradient_checkpointing": True,
             "fp8_base": True,
             "fp8_scaled": True,
-            "fp8_t5": True,
             "text_encoder_batch_size": 1,
             "extra_args": ["--timestep_sampling", "flux_shift", "--weighting_scheme", "none", "--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -286,7 +283,7 @@ SPECS: dict[str, SmokeSpec] = {
             "noise_clip_std": 2.5,
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -318,7 +315,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -350,7 +347,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -378,7 +375,7 @@ SPECS: dict[str, SmokeSpec] = {
             "save_every_n_steps": 1,
             "prune_checkpoints_before_step": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -411,7 +408,7 @@ SPECS: dict[str, SmokeSpec] = {
             "extra_args": ["--blocks_to_swap", "45"],
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -441,7 +438,7 @@ SPECS: dict[str, SmokeSpec] = {
             "fp8_base": True,
             "save_every_n_steps": 1,
         },
-        params={
+        smoke_values={
             "rank": 1,
             "alpha": 1,
             "lr": "1e-6",
@@ -459,7 +456,55 @@ SPECS: dict[str, SmokeSpec] = {
 DEFAULT_MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 
 
+def ensure_base_image_dataset(root: Path) -> None:
+    dataset_root = root / "datasets" / "flux2-klein-tiny"
+    image_dir = dataset_root / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    image_path = image_dir / "00001.png"
+    caption_path = image_dir / "00001.txt"
+    if not image_path.is_file():
+        width = height = 256
+        rows = b"".join(
+            b"\x00" + bytes(channel for x in range(width) for channel in (x % 256, y % 256, 128))
+            for y in range(height)
+        )
+        signature = b"\x89PNG\r\n\x1a\n"
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+
+        image_path.write_bytes(
+            signature
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows))
+            + chunk(b"IEND", b"")
+        )
+    caption_path.write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
+    (dataset_root / "dataset.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "id": "flux2-klein-tiny",
+                "modality": "image",
+                "description": "Generated one-item smoke dataset for adapter verification.",
+                "source": [],
+                "caption": {"strategy": "manual", "version": 1},
+                "stats": {"count": 1},
+                "layout": {"root": "images", "image_dir": "images"},
+                "digest": {"raw": None, "dataset": None},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (dataset_root / "items.jsonl").write_text(
+        json.dumps({"id": "00001", "path": "images/00001.png", "caption": caption_path.read_text(encoding="utf-8").strip(), "role": "target"}) + "\n",
+        encoding="utf-8",
+    )
+
+
 def ensure_generated_dataset(root: Path, dataset_id: str, *, image: str = DEFAULT_MUSUBI_IMAGE) -> None:
+    ensure_base_image_dataset(root)
     if dataset_id == "musubi-video-smoke":
         dataset_root = root / "datasets" / dataset_id
         video_dir = dataset_root / "videos"
@@ -468,8 +513,8 @@ def ensure_generated_dataset(root: Path, dataset_id: str, *, image: str = DEFAUL
         video_dir.mkdir(parents=True, exist_ok=True)
         caption_path.write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
         if not video_path.is_file():
-            image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"
-            if not image.is_file():
+            source_image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"
+            if not source_image.is_file():
                 raise SystemExit("musubi-video-smoke requires datasets/flux2-klein-tiny/images/00001.png")
             generator = r'''
 import cv2
@@ -631,8 +676,20 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         override["model_paths"] = dict(spec.model_paths)
     if spec.model_downloads is not None:
         override["model_downloads"] = {key: dict(value) for key, value in spec.model_downloads.items()}
+    smoke_values = dict(spec.smoke_values)
+    for source, target in (("lr", "learning_rate"), ("rank", "network_dim"), ("alpha", "network_alpha")):
+        if smoke_values.get(source) is not None:
+            override.setdefault(target, smoke_values[source])
+    general = {}
+    if smoke_values.get("resolution") is not None:
+        general["resolution"] = smoke_values["resolution"]
+    if smoke_values.get("batch_size") is not None:
+        general["batch_size"] = smoke_values["batch_size"]
+    if general:
+        dataset_config = override.setdefault("dataset_config", {})
+        dataset_config.setdefault("general", {}).update({key: value for key, value in general.items() if key not in dataset_config.get("general", {})})
     run_yaml = {
-        "schema_version": 1,
+        "schema_version": 2,
         "id": run_id,
         "type": "train",
         "experiment": "musubi-real-smoke",
@@ -640,11 +697,10 @@ def write_run(root: Path, spec: SmokeSpec, *, executor: str, gpu: str, image: st
         "created_by": "agent",
         "parent_run": None,
         "intent": "real one-step Musubi adapter smoke with actual model files",
-        "backend": {"name": "musubi-tuner", "version": None, "adapter_version": 1},
         "model": {"base": spec.model_base, "revision": None},
         "datasets": [{"id": spec.dataset_id, "digest": None, "role": None}],
-        "params": dict(spec.params),
-        "backend_overrides": {"musubi-tuner": override},
+        "recipe": {key: smoke_values[key] for key in ("steps", "seed") if smoke_values.get(key) is not None},
+        "backend": {"name": "musubi-tuner", "version": None, "adapter_version": 1, "config": override},
         "compute": {"executor": executor, "gpu": gpu},
         "safety": {"allow_large_model_downloads": True},
         "sampling": {"prompts": [], "cadence_steps": None},
@@ -666,8 +722,9 @@ def validate_result(root: Path, run_id: str, spec: SmokeSpec) -> dict[str, Any]:
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     stdout_log = run_dir / "logs" / "stdout.log"
     log = stdout_log.read_text(encoding="utf-8", errors="replace") if stdout_log.is_file() else ""
-    command_path = run_dir / "resolved" / "musubi" / "command.json"
-    command_text = command_path.read_text(encoding="utf-8", errors="replace") if command_path.exists() else ""
+    command_path = run_dir / "resolved" / "backend-command.lock.json"
+    command = json.loads(command_path.read_text(encoding="utf-8")) if command_path.is_file() else {}
+    command_text = json.dumps(command, ensure_ascii=False)
     outputs = list((run_dir / "outputs").glob("*.safetensors"))
     outputs.extend((run_dir / "downloads").glob("**/outputs/*.safetensors"))
     checks = {
@@ -677,6 +734,8 @@ def validate_result(root: Path, run_id: str, spec: SmokeSpec) -> dict[str, Any]:
         "script_seen": spec.expected_script in log or spec.expected_script in command_text,
         "loss_seen": "avr_loss=" in log,
         "outputs_seen": len(outputs) >= spec.expected_outputs,
+        "recovery_complete": status.get("host") != "runpod" or status.get("recovery_required") is False,
+        "pod_stopped": status.get("host") != "runpod" or isinstance(status.get("pod_stopped_at"), str),
     }
     return {
         "run_id": run_id,
