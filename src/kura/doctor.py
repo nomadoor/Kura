@@ -458,7 +458,10 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         diagnostics["docker_version_stdout"] = version.stdout.strip()
         diagnostics["docker_version_stderr"] = version.stderr.strip()
         if not checks["daemon_reachable"]:
-            diagnosis = "Docker CLI is available but the daemon is unreachable. If Docker Desktop settings look correct, restart Docker Desktop and this WSL distro; confirm the active Docker context points at the Desktop Linux engine."
+            if _looks_like_process_permission_denial(info.stderr):
+                diagnosis = "This process could not access the Docker daemon because the OS denied permission. The same Kura command may work outside this process's permission context. See docs/external-access.md."
+            else:
+                diagnosis = "Docker CLI is available but the daemon is unreachable. If Docker Desktop settings look correct, restart Docker Desktop and this WSL distro; confirm the active Docker context points at the Desktop Linux engine."
         if checks["daemon_reachable"]:
             root_dir = _docker_run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture=True)
             if root_dir.returncode == 0:
@@ -658,6 +661,8 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         diagnosis = "RunPod has Pods remaining; delete stopped/exited Pods if they should not persist."
     elif checks["network_volumes_empty"] is False:
         diagnosis = "RunPod has Network Volumes remaining; delete volumes that should not persist."
+    elif _looks_like_process_permission_denial(diagnostics.get("pods_error")) or _looks_like_process_permission_denial(diagnostics.get("pod_list_stderr")):
+        diagnosis = "This process could not reach the RunPod API because the OS denied the connection before RunPod responded. The same Kura command may work outside this process's permission context. See docs/external-access.md."
     else:
         diagnosis = "RunPod is not fully ready; inspect checks and diagnostics."
     print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
@@ -795,12 +800,33 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     if checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False:
         diagnosis = "ComfyUI endpoint is reachable."
     elif checks["endpoint_reachable"] and checks["lora_stage_visible"] is False:
-        diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
+        stage_error = diagnostics.get("lora_stage_probe_error")
+        if not checks["stage_dir_writable"] or _looks_like_process_permission_denial(stage_error):
+            diagnosis = "ComfyUI is reachable, but this process could not write to the configured LoRA staging directory. The same Kura command may work outside this process's permission context. See docs/external-access.md."
+        else:
+            diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
     else:
         diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."
     print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
     ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False
     return 0 if ok else 1
+
+
+def _looks_like_process_permission_denial(value: Any) -> bool:
+    """Recognize OS denial wording without guessing which sandbox produced it."""
+
+    if not isinstance(value, str):
+        return False
+    lowered = value.lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "operation not permitted",
+            "permission denied",
+            "read-only file system",
+            "access is denied",
+        )
+    )
 
 
 def cmd_doctor_secrets(_: argparse.Namespace) -> int:

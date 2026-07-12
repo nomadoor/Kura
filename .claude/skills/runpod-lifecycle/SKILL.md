@@ -65,6 +65,11 @@ uv run kura run pull <run-id> --since-step 1000
 uv run kura run stop <run-id>
 ```
 
+If RunPod fails before receiving a request with an OS-level permission error,
+the current agent process may lack network access. Use
+`docs/external-access.md` for the agent-specific setup. Do not classify that as
+a RunPod outage or add a Kura-side network bypass.
+
 ## Test expectations
 
 Run lifecycle tests after changes:

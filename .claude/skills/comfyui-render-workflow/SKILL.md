@@ -48,6 +48,10 @@ Default flow when the user asks to test-generate with a Kura-trained LoRA:
    the configured directory. With user approval, you may inspect their ComfyUI
    files such as `extra_model_paths.yaml` and propose the correct `lora_dir`,
    but do not let runtime code infer or silently retarget it.
+   If the probe instead says this process cannot write the staging directory,
+   treat it as an agent/host permission issue, not a ComfyUI visibility issue.
+   Follow `docs/external-access.md`; do not fall back to asking the user to copy
+   the LoRA manually before explaining how to grant the current agent access.
 6. With `comfyui.lora_dir` set and probe-verified, let `kura render launch` create the temporary
    staged LoRA under `Kura_tmp/`, patch the loader's name field through
    `workflow_patches`, render, and remove the staged file/link afterward.

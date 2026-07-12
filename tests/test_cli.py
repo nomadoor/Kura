@@ -5895,6 +5895,28 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIsNone(payload["checks"]["network_volumes_empty"])
             self.assertIn("network_volumes_error", payload["diagnostics"])
 
+    def test_doctor_runpod_labels_process_permission_denial_without_blame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                completed = subprocess.CompletedProcess([], 0, "ok", "")
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                     patch("kura.doctor.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.doctor.subprocess.run", return_value=completed), \
+                     patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("Operation not permitted")), \
+                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_runpod(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIn("This process could not reach", payload["diagnosis"])
+            self.assertIn("may work outside", payload["diagnosis"])
+            self.assertNotIn("Codex", payload["diagnosis"])
+
     def test_doctor_comfyui_handles_unreachable_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -6133,6 +6155,39 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertFalse(payload["checks"]["endpoint_reachable"])
             self.assertFalse(payload["checks"]["lora_stage_visible"])
             self.assertIn("not ready", payload["diagnosis"])
+            self.assertNotIn("not visible", payload["diagnosis"])
+
+    def test_doctor_comfyui_distinguishes_process_write_denial_from_visibility(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage_dir = root / "models" / "loras" / "Kura_tmp"
+            stage_dir.mkdir(parents=True)
+            (root / "workspace.yaml").write_text(
+                f"comfyui:\n  endpoint: http://127.0.0.1:8190\n  lora_dir: {stage_dir.parent}\n  lora_stage_subdir: Kura_tmp\n",
+                encoding="utf-8",
+            )
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()), \
+                     patch("kura.doctor._probe_comfyui_lora_stage", side_effect=OSError("Read-only file system")), \
+                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=True))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIn("this process could not write", payload["diagnosis"])
             self.assertNotIn("not visible", payload["diagnosis"])
 
     def test_stage_runpod_object_staging_is_disabled(self) -> None:
