@@ -317,6 +317,107 @@ PY
     return [item for item in data if isinstance(item, dict)]
 
 
+def _pull_remote_output_items(
+    run_dir: Path,
+    details: dict[str, Any],
+    *,
+    workspace: str,
+    items: list[dict[str, Any]],
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """Copy stable remote checkpoints without exposing partial local files."""
+
+    if not items:
+        return []
+    config = _workspace_config()
+    min_download_free = _configured_download_min_free_bytes(config)
+    destination = run_dir / "pulled" / "outputs"
+    destination.mkdir(parents=True, exist_ok=True)
+    pulled: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    for item in items:
+        name = item.get("name")
+        size = item.get("size")
+        if isinstance(name, str):
+            local_path = destination / name
+            if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and not force:
+                pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "skipped": True})
+                continue
+        pending.append(item)
+    pending_size = sum(item.get("size") for item in pending if isinstance(item.get("size"), int))
+    if pending:
+        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), pending_size + 5 * 1024**3), context="RunPod output pull")
+    for item in pending:
+        name = item.get("name")
+        remote_path = item.get("path")
+        size = item.get("size")
+        if not isinstance(name, str) or not isinstance(remote_path, str):
+            continue
+        local_path = destination / name
+        partial_path = local_path.with_name(f".{local_path.name}.partial")
+        partial_path.unlink(missing_ok=True)
+        try:
+            result = _run_bounded([
+                "scp",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-P", str(details["port"]),
+                "-i", str(details["key"]),
+                f"root@{details['ip']}:{remote_path}",
+                str(partial_path),
+            ], context="scp output pull")
+            if result.returncode:
+                raise ValueError(f"scp output pull failed with exit code {result.returncode}: {name}")
+            refreshed = _runpod_remote_outputs(details, workspace=workspace, run_id=run_dir.name)
+            after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
+            if not _same_remote_output_version(item, after) or not isinstance(size, int) or partial_path.stat().st_size != size:
+                raise ValueError(f"remote checkpoint changed while it was being copied: {name}; wait for the save to finish and retry")
+            os.replace(partial_path, local_path)
+        finally:
+            partial_path.unlink(missing_ok=True)
+        pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "skipped": False})
+    return pulled
+
+
+def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
+    if not pulled:
+        return
+    status_path = run_dir / "status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    previous = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+    merged = {item.get("name"): item for item in previous if isinstance(item, dict) and isinstance(item.get("name"), str)}
+    for item in pulled:
+        if isinstance(item.get("name"), str):
+            merged[item["name"]] = item
+    status["pulled_outputs"] = list(merged.values())
+    status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
+    status.pop("checkpoint_sync_error", None)
+    atomic_write_json(status_path, _redact_secrets(status))
+    copied = [item for item in pulled if not item.get("skipped")]
+    if copied:
+        append_run_event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(copied), "outputs": copied})
+
+
+def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str) -> bool:
+    """Best-effort checkpoint mirror used by the normal RunPod lifecycle."""
+
+    try:
+        with _run_operation_lock(run_dir, "checkpoint-pull", blocking=False):
+            items = _runpod_remote_outputs(details, workspace=workspace, run_id=run_id)
+            pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=items)
+            _record_pulled_outputs(run_dir, pulled)
+        return True
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+        try:
+            status_path = run_dir / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status["checkpoint_sync_error"] = _safe_error(exc)
+            atomic_write_json(status_path, _redact_secrets(status))
+        except (OSError, json.JSONDecodeError):
+            pass
+        return False
+
+
 def cmd_run_pull(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
@@ -328,52 +429,10 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
         selected = _select_remote_outputs(items, step=args.step, since_step=args.since_step, all_outputs=args.all)
         if not selected:
             raise ValueError("no matching remote .safetensors outputs found")
-        config = _workspace_config()
-        min_download_free = _configured_download_min_free_bytes(config)
-        destination = run_dir / "pulled" / "outputs"
-        destination.mkdir(parents=True, exist_ok=True)
-        selected_size = sum(item.get("size") for item in selected if isinstance(item.get("size"), int))
-        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), selected_size + 5 * 1024**3), context="RunPod output pull")
-        pulled: list[dict[str, Any]] = []
-        for item in selected:
-            name = item.get("name")
-            remote_path = item.get("path")
-            size = item.get("size")
-            if not isinstance(name, str) or not isinstance(remote_path, str):
-                continue
-            local_path = destination / name
-            if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and not args.force:
-                pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "skipped": True})
-                continue
-            partial_path = local_path.with_name(f".{local_path.name}.partial")
-            partial_path.unlink(missing_ok=True)
-            try:
-                result = _run_bounded([
-                    "scp",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
-                    "-P", str(details["port"]),
-                    "-i", str(details["key"]),
-                    f"root@{details['ip']}:{remote_path}",
-                    str(partial_path),
-                ], context="scp output pull")
-                if result.returncode:
-                    return result.returncode
-                refreshed = _runpod_remote_outputs(details, workspace=workspace, run_id=args.run_id)
-                after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
-                if not _same_remote_output_version(item, after) or not isinstance(size, int) or partial_path.stat().st_size != size:
-                    raise ValueError(f"remote checkpoint changed while it was being copied: {name}; wait for the save to finish and retry")
-                os.replace(partial_path, local_path)
-            finally:
-                partial_path.unlink(missing_ok=True)
-            pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "skipped": False})
-        status_path = run_dir / "status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        status["pulled_outputs"] = pulled
-        status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
-        atomic_write_json(status_path, _redact_secrets(status))
-        append_run_event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(pulled), "outputs": pulled})
-        print(json.dumps({"run_id": args.run_id, "destination": str(destination), "pulled": pulled}, ensure_ascii=False, indent=2))
+        with _run_operation_lock(run_dir, "checkpoint-pull"):
+            pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=selected, force=args.force)
+            _record_pulled_outputs(run_dir, pulled)
+        print(json.dumps({"run_id": args.run_id, "destination": str(run_dir / "pulled" / "outputs"), "pulled": pulled}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot pull run outputs: {_safe_error(exc)}", file=sys.stderr)
@@ -981,9 +1040,11 @@ echo $!
             raise subprocess.TimeoutExpired(["runpod-remote-job", run_id], job_timeout_sec)
         if now >= next_sync:
             _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
+            _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
             exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
             if exit_record is not None:
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
+                _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
                 _record_remote_exit_observation(run_dir, exit_record)
                 exit_code = exit_record.get("exit_code")
                 return int(exit_code) if isinstance(exit_code, int) else 1

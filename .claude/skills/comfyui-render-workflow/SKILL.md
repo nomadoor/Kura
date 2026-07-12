@@ -26,11 +26,12 @@ exposing a file to ComfyUI is an execution-time convenience.
 
 Default flow when the user asks to test-generate with a Kura-trained LoRA:
 
-1. For a still-running RunPod training run, pull a completed intermediate
-   checkpoint first with `uv run kura run pull <train-run-id>` (latest) or
-   `--step <step>`. This is a read-only copy and does not stop training. Use the
-   returned `pulled/outputs/...safetensors` path as the render run's
-   `inputs.checkpoint.path`; compile the render run after the pull.
+1. For a still-running RunPod training run, use the completed intermediate
+   checkpoints that normal execution mirrors under `pulled/outputs/`. If an
+   immediate refresh is needed, run `uv run kura run pull <train-run-id>`
+   (latest) or `--step <step>`; this read-only copy does not stop training. Use
+   that checkpoint path as the render run's `inputs.checkpoint.path`, then
+   compile the render run.
 2. Confirm ComfyUI is reachable at the endpoint (default `http://127.0.0.1:8188`).
    If not, ask the user to start it.
 3. Run `uv run kura doctor comfyui --endpoint <url> --probe-stage` when a LoRA

@@ -49,6 +49,13 @@ Compile after editing `run.yaml`, review `run plan`, obtain the single launch
 approval, then use `run execute`. The agent normally performs compile for the
 user; it is listed below as a low-level command for inspection and development.
 
+Local Docker checkpoints appear directly under the run's `outputs/` directory.
+During a normal RunPod execution, Kura also mirrors completed checkpoints into
+`pulled/outputs/` while training continues. This makes already-saved weights
+available for evaluation and preserves the latest successfully mirrored weight
+if training later fails. The pull commands below remain available for an
+explicit immediate refresh or interrupted-controller recovery.
+
 ## Diagnosis and recovery
 
 Use these only when a normal execution was interrupted or needs inspection.
