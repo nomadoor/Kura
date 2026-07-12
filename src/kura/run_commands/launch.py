@@ -218,6 +218,15 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             if not dry_run:
                 _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
             return 1
+    compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
+    compiled_executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    if executor != compiled_executor:
+        print(
+            f"cannot launch run: manifest was compiled for executor.name={compiled_executor}; "
+            f"set executor.name={executor} in run.yaml and recompile before launching with {executor}",
+            file=sys.stderr,
+        )
+        return 1
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         if status.get("state") == "running":

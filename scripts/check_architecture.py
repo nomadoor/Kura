@@ -81,7 +81,9 @@ def main() -> int:
         if removed:
             failures.append(f"{path.relative_to(ROOT)} references removed run key(s): {', '.join(sorted(removed))}")
 
-    for path in sorted(SRC.glob("*.py")):
+    for path in sorted(SRC.rglob("*.py")):
+        if SRC / "backends" in path.parents:
+            continue
         for symbol in semantic_taxonomy_symbols(path):
             failures.append(f"{path.relative_to(ROOT)} defines forbidden core semantic taxonomy symbol: {symbol}")
 

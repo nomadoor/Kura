@@ -4445,6 +4445,36 @@ class DockerLifecycleTests(unittest.TestCase):
             wait.assert_any_call(["docker", "wait", "container-1"], text=True, capture_output=True, check=False)
             reconcile.assert_called_once_with(run_dir)
 
+    def test_training_launch_rejects_executor_different_from_compiled_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "example",
+                        "type": "train",
+                        "compute": {"executor": "docker"},
+                        "backend": {"name": "ai-toolkit", "config": {}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.launch_runpod") as launch, patch(
+                    "sys.stderr", new_callable=__import__("io").StringIO
+                ) as stderr:
+                    self.assertEqual(launch_run("example", executor="runpod", dry_run=True), 1)
+            finally:
+                os.chdir(previous)
+            launch.assert_not_called()
+            self.assertIn("compiled for executor.name=docker", stderr.getvalue())
+            self.assertIn("recompile", stderr.getvalue())
+
     def test_launch_docker_uses_image_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
