@@ -445,6 +445,11 @@ class RunRow(Static):
     def on_click(self) -> None:
         self.post_message(self.Selected(self.summary.id if self.summary else None, self.lane))
 
+    def on_resize(self, _: events.Resize) -> None:
+        """Render with the settled row width instead of waiting for a refresh tick."""
+
+        self.update(self.render_row())
+
 
 class EmptyActiveRow(Static):
     def __init__(self, *, selected: bool = False):
@@ -1042,10 +1047,7 @@ class MonitorScreen(Screen[None]):
 
     def update_view(self) -> None:
         current = self.current_run
-        suffix = None
-        if self.app_ref.hidden_draft_count:
-            suffix = Text(f"{self.app_ref.hidden_draft_count} draft run(s) hidden (--all to show)", style=MUTED)
-        self.query_one("#status", Static).update(_status_bar(self.summaries, workspace=self.app_ref.workspace, width=max(self.size.width, 1), suffix=suffix))
+        self.query_one("#status", Static).update(_status_bar(self.summaries, workspace=self.app_ref.workspace, width=max(self.size.width, 1)))
         datasets = _all_datasets(self.summaries)
         dataset_keys = {_dataset_key(dataset) for dataset in datasets}
         if self.tab == "datasets" and self.selected_dataset_key not in dataset_keys:

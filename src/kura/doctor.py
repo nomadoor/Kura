@@ -801,7 +801,13 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         diagnosis = "ComfyUI endpoint is reachable."
     elif checks["endpoint_reachable"] and checks["lora_stage_visible"] is False:
         stage_error = diagnostics.get("lora_stage_probe_error")
-        if not checks["stage_dir_writable"] or _looks_like_process_permission_denial(stage_error):
+        if not checks["lora_dir_configured"]:
+            diagnosis = "ComfyUI is reachable, but comfyui.lora_dir is not configured."
+        elif not checks["lora_dir_exists"]:
+            diagnosis = "ComfyUI is reachable, but configured comfyui.lora_dir does not exist."
+        elif _looks_like_process_permission_denial(stage_error) or (
+            checks["stage_dir_exists"] and not checks["stage_dir_writable"]
+        ) or diagnostics.get("stage_parent_writable") is False:
             diagnosis = "ComfyUI is reachable, but this process could not write to the configured LoRA staging directory. The same Kura command may work outside this process's permission context. See docs/external-access.md."
         else:
             diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
