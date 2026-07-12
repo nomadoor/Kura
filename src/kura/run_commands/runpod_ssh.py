@@ -37,6 +37,10 @@ from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
 
 
+class _OperationBusy(ValueError):
+    """A normal controller-side scheduling collision."""
+
+
 @contextlib.contextmanager
 def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
     """Serialize controller-side mutations without creating another truth store."""
@@ -49,7 +53,7 @@ def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
         try:
             fcntl.flock(handle.fileno(), operation)
         except BlockingIOError as exc:
-            raise ValueError(f"another {name} operation is already active for run {run_dir.name}") from exc
+            raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
         try:
             yield
         finally:
@@ -287,6 +291,38 @@ def _same_remote_output_version(before: dict[str, Any], after: dict[str, Any] | 
     return all(before.get(key) == after.get(key) for key in ("path", "size", "mtime_ns"))
 
 
+def _validate_safetensors_file(path: Path) -> None:
+    """Reject truncated or structurally invalid safetensors before publication."""
+
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        prefix = handle.read(8)
+        if len(prefix) != 8:
+            raise ValueError(f"checkpoint is not a complete safetensors file: {path.name}")
+        header_size = int.from_bytes(prefix, "little", signed=False)
+        if header_size <= 0 or header_size > size - 8:
+            raise ValueError(f"checkpoint has an invalid safetensors header size: {path.name}")
+        try:
+            header = json.loads(handle.read(header_size))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"checkpoint has an invalid safetensors header: {path.name}") from exc
+    if not isinstance(header, dict):
+        raise ValueError(f"checkpoint has a non-object safetensors header: {path.name}")
+    data_size = size - 8 - header_size
+    tensors = 0
+    for key, value in header.items():
+        if key == "__metadata__":
+            continue
+        if not isinstance(value, dict) or not isinstance(value.get("data_offsets"), list) or len(value["data_offsets"]) != 2:
+            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
+        start, end = value["data_offsets"]
+        if not isinstance(start, int) or not isinstance(end, int) or start < 0 or end < start or end > data_size:
+            raise ValueError(f"checkpoint has tensor data outside the file: {path.name}")
+        tensors += 1
+    if tensors == 0:
+        raise ValueError(f"checkpoint contains no tensors: {path.name}")
+
+
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
@@ -372,6 +408,7 @@ def _pull_remote_output_items(
             after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
             if not _same_remote_output_version(item, after) or not isinstance(size, int) or partial_path.stat().st_size != size:
                 raise ValueError(f"remote checkpoint changed while it was being copied: {name}; wait for the save to finish and retry")
+            _validate_safetensors_file(partial_path)
             os.replace(partial_path, local_path)
         finally:
             partial_path.unlink(missing_ok=True)
@@ -380,10 +417,12 @@ def _pull_remote_output_items(
 
 
 def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
-    if not pulled:
-        return
     status_path = run_dir / "status.json"
     status = json.loads(status_path.read_text(encoding="utf-8"))
+    status.pop("checkpoint_sync_error", None)
+    if not pulled:
+        atomic_write_json(status_path, _redact_secrets(status))
+        return
     previous = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
     merged = {item.get("name"): item for item in previous if isinstance(item, dict) and isinstance(item.get("name"), str)}
     for item in pulled:
@@ -391,7 +430,6 @@ def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
             merged[item["name"]] = item
     status["pulled_outputs"] = list(merged.values())
     status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
-    status.pop("checkpoint_sync_error", None)
     atomic_write_json(status_path, _redact_secrets(status))
     copied = [item for item in pulled if not item.get("skipped")]
     if copied:
@@ -406,6 +444,8 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
             items = _runpod_remote_outputs(details, workspace=workspace, run_id=run_id)
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=items)
             _record_pulled_outputs(run_dir, pulled)
+        return True
+    except _OperationBusy:
         return True
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         try:

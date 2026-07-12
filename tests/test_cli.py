@@ -26,7 +26,7 @@ import yaml
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate_musubi_dataset_layout
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.run_commands.runpod_ssh import _record_pulled_outputs, _same_remote_output_version, _try_sync_runpod_checkpoints
+from kura.run_commands.runpod_ssh import _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
@@ -2904,6 +2904,11 @@ class RunPodLiveSyncTests(unittest.TestCase):
 
 
 class RunPodPullSelectionTests(unittest.TestCase):
+    @staticmethod
+    def _fake_safetensors() -> bytes:
+        header = json.dumps({"weight": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}}, separators=(",", ":")).encode()
+        return len(header).to_bytes(8, "little") + header + b"\x00\x00\x00\x00"
+
     def test_duration_parser_accepts_common_suffixes(self) -> None:
         self.assertEqual(_parse_duration_seconds("30m"), 1800)
         self.assertEqual(_parse_duration_seconds("2h"), 7200)
@@ -2947,6 +2952,91 @@ class RunPodPullSelectionTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "running")
             self.assertIn("network interrupted", status["checkpoint_sync_error"])
+
+    def test_checkpoint_sync_disk_shortage_is_nonfatal_and_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": 10, "mtime_ns": 10}
+            with patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[item]), \
+                 patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes", side_effect=ValueError("insufficient free disk")):
+                synced = _try_sync_runpod_checkpoints(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", run_id="example")
+
+            self.assertFalse(synced)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "running")
+            self.assertIn("insufficient free disk", status["checkpoint_sync_error"])
+
+    def test_empty_successful_sync_clears_previous_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "checkpoint_sync_error": "old"}), encoding="utf-8")
+            _record_pulled_outputs(run_dir, [])
+            self.assertNotIn("checkpoint_sync_error", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
+
+    def test_automatic_sync_skips_busy_manual_pull_without_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            with _run_operation_lock(run_dir, "checkpoint-pull"):
+                self.assertTrue(_try_sync_runpod_checkpoints(run_dir, {}, workspace="/workspace", run_id="example"))
+            self.assertNotIn("checkpoint_sync_error", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
+
+    def test_truncated_safetensors_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "broken.safetensors"
+            path.write_bytes((100).to_bytes(8, "little") + b"{}")
+            with self.assertRaisesRegex(ValueError, "header size"):
+                _validate_safetensors_file(path)
+
+    def test_pull_verifies_then_atomically_publishes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (workspace / "workspace.yaml").write_text("safety: {}\n", encoding="utf-8")
+            payload = self._fake_safetensors()
+            item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": len(payload), "mtime_ns": 10}
+
+            def fake_transfer(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                Path(command[-1]).write_bytes(payload)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer), \
+                 patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(item)]):
+                pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
+
+            published = run_dir / pulled[0]["path"]
+            self.assertEqual(published.read_bytes(), payload)
+            self.assertFalse((published.parent / f".{published.name}.partial").exists())
+
+    def test_changed_remote_file_is_not_published(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            payload = self._fake_safetensors()
+            item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": len(payload), "mtime_ns": 10}
+
+            def fake_transfer(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                Path(command[-1]).write_bytes(payload)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer), \
+                 patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[{**item, "mtime_ns": 11}]):
+                with self.assertRaisesRegex(ValueError, "changed while"):
+                    _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
+
+            destination = run_dir / "pulled" / "outputs"
+            self.assertFalse((destination / item["name"]).exists())
+            self.assertFalse((destination / f".{item['name']}.partial").exists())
 
     def test_pulled_checkpoint_history_accumulates_across_syncs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

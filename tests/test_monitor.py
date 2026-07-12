@@ -442,6 +442,11 @@ class MonitorProjectionTests(unittest.TestCase):
                         "started": "2026-06-22T10:00:00+00:00",
                         "ended": "2026-06-22T10:30:00+00:00",
                         "pod_id": "pod1",
+                        "pulled_outputs": [
+                            {"name": "model-step00000250.safetensors", "step": 250},
+                            {"name": "model-step00000500.safetensors", "step": 500},
+                        ],
+                        "checkpoint_sync_error": "temporary transfer failure",
                         "last_realization": "realizations/launch.json",
                         "last_observation": "realizations/launch.observed-1.json",
                     }
@@ -483,6 +488,8 @@ class MonitorProjectionTests(unittest.TestCase):
             assert summary.executor_info.pod is not None
             self.assertEqual(summary.executor_info.pod.cost_per_h, 0.44)
             self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.22)
+            self.assertEqual(summary.executor_info.mirrored_checkpoint_step, 500)
+            self.assertEqual(summary.executor_info.checkpoint_sync_error, "temporary transfer failure")
 
     def test_collect_run_summaries_estimates_runpod_cost_from_launch_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

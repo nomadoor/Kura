@@ -779,6 +779,10 @@ class ComputePane(Vertical):
             table.add_column(style=FG_MUTED, width=7)
             table.add_column()
             table.add_row("gpu", info.gpu or "-")
+            mirror = f"step {info.mirrored_checkpoint_step}" if info.mirrored_checkpoint_step is not None else "waiting"
+            if info.checkpoint_sync_error:
+                mirror = "sync error · " + _fit_plain(info.checkpoint_sync_error, 34)
+            table.add_row("mirror", Text(mirror, style=FAIL if info.checkpoint_sync_error else DONE if info.mirrored_checkpoint_step is not None else MUTED))
             self._add_metrics_rows(table, self.app_ref.metrics_for(summary), fallback_gpu=None, include_gpu_name=False)
             self.mount(Static(table))
             if info.pod:
