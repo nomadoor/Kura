@@ -798,18 +798,20 @@ class ComputePane(Vertical):
                 pod_table.add_row("cost", f"{_money_per_hour(info.pod.cost_per_h)} · {_money(info.pod.cost_used)} used")
                 self.mount(Static(pod_table))
         else:
-            self._mount_host_metrics(fallback_gpu=info.gpu)
+            self._mount_host_metrics(fallback_gpu=info.gpu, summary=summary)
 
     @property
     def app_ref(self) -> KuraMonitorApp:
         return self.app  # type: ignore[return-value]
 
-    def _mount_host_metrics(self, *, fallback_gpu: str | None = None) -> None:
+    def _mount_host_metrics(self, *, fallback_gpu: str | None = None, summary: RunSummary | None = None) -> None:
         metrics = self.app_ref.metrics_for(None)
         table = Table.grid(padding=(0, 2))
         table.add_column(style=FG_MUTED, width=6)
         table.add_column()
         self._add_metrics_rows(table, metrics, fallback_gpu=fallback_gpu, include_gpu_name=True)
+        if summary is not None:
+            table.add_row("uptime", _elapsed(summary))
         self.mount(Static(table))
 
     def _add_metrics_rows(self, table: Table, metrics: HostMetrics, *, fallback_gpu: str | None, include_gpu_name: bool) -> None:

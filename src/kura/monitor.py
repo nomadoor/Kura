@@ -1003,6 +1003,9 @@ def _format_time_cell(summary: RunSummary) -> str:
             return "-"
         age = _duration(now - base)
         stale = _staleness_label(summary)
+        if summary.started:
+            elapsed = _duration(now - summary.started)
+            return f"{elapsed} elapsed · {age} ago{stale}"
         return f"{age} ago{stale}"
     if summary.started and summary.ended:
         return f"{_duration(summary.ended - summary.started)} / {summary.ended:%m-%d %H:%M}"

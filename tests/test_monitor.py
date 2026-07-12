@@ -8,15 +8,33 @@ import subprocess
 import tempfile
 import unittest
 import yaml
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from rich.console import Console
 
-from kura.monitor import _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
+from kura.monitor import RunSummary, _format_time_cell, _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
 
 
 class MonitorProjectionTests(unittest.TestCase):
+    def test_active_time_shows_total_elapsed_and_update_age(self) -> None:
+        now = datetime.now().astimezone()
+        summary = RunSummary(
+            id="local",
+            experiment=None,
+            type="train",
+            executor="docker",
+            state="running",
+            started=now - timedelta(minutes=10),
+            last_updated=now - timedelta(seconds=5),
+        )
+
+        rendered = _format_time_cell(summary)
+
+        self.assertIn("10m0s elapsed", rendered)
+        self.assertIn("ago", rendered)
+
     def test_legacy_run_is_isolated_as_unreadable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
