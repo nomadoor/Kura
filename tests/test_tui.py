@@ -13,6 +13,9 @@ from kura.tui import HostMetrics, KuraMonitorApp, _aware_datetime, _batch, _open
 
 
 class TuiMetricsTests(unittest.TestCase):
+    def test_click_focus_does_not_recolor_an_entire_pane(self) -> None:
+        self.assertNotIn(".pane:focus", KuraMonitorApp.CSS)
+
     def test_remote_metrics_never_block_screen_switching(self) -> None:
         app = KuraMonitorApp(Path("."))
         summary = RunSummary(

@@ -81,7 +81,7 @@ class KuraMonitorApp(App[None]):
 
     CSS = """
     /* design tokens ---------------------------------------------------------
-       background: level0 app, level1 pane, level2 hover, level3 selected/focus, bar
+       background: level0 app, level1 pane, level2 hover, level3 selected, bar
        spacing: grid gap 1, pane padding 1, section gap 1, row height 1 / padding 0 1
        text: strong/value fg, label fg-muted, secondary muted, link accent, state colors only for state
     ---------------------------------------------------------------------- */
@@ -115,9 +115,6 @@ class KuraMonitorApp(App[None]):
         border: none;
         /* 1 row / 2 cols: aspect-corrected so top and left insets look equal */
         padding: 1 2;
-    }
-    .pane:focus {
-        background: #1d2030;
     }
     #nav {
         height: 1fr;

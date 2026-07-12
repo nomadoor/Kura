@@ -279,6 +279,14 @@ def _select_remote_outputs(items: list[dict[str, Any]], *, step: int | None = No
     return candidates[-1:] if candidates else []
 
 
+def _same_remote_output_version(before: dict[str, Any], after: dict[str, Any] | None) -> bool:
+    """Return true only when a remote file did not change across a transfer."""
+
+    if after is None:
+        return False
+    return all(before.get(key) == after.get(key) for key in ("path", "size", "mtime_ns"))
+
+
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
@@ -293,9 +301,10 @@ directory = {remote_outputs!r}
 items = []
 for path in sorted(glob.glob(os.path.join(directory, "*.safetensors"))):
     name = os.path.basename(path)
+    stat = os.stat(path)
     matches = re.findall(r"(?:step|_)(\\d{{4,}})(?=\\.safetensors$|[-_.])", name)
     step = int(matches[-1]) if matches else None
-    items.append({{"path": path, "name": name, "step": step, "size": os.path.getsize(path)}})
+    items.append({{"path": path, "name": name, "step": step, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
 print(json.dumps(items))
 PY
 """.strip()
@@ -336,17 +345,27 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and not args.force:
                 pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "skipped": True})
                 continue
-            result = _run_bounded([
-                "scp",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-P", str(details["port"]),
-                "-i", str(details["key"]),
-                f"root@{details['ip']}:{remote_path}",
-                str(local_path),
-            ], context="scp output pull")
-            if result.returncode:
-                return result.returncode
+            partial_path = local_path.with_name(f".{local_path.name}.partial")
+            partial_path.unlink(missing_ok=True)
+            try:
+                result = _run_bounded([
+                    "scp",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "UserKnownHostsFile=/dev/null",
+                    "-P", str(details["port"]),
+                    "-i", str(details["key"]),
+                    f"root@{details['ip']}:{remote_path}",
+                    str(partial_path),
+                ], context="scp output pull")
+                if result.returncode:
+                    return result.returncode
+                refreshed = _runpod_remote_outputs(details, workspace=workspace, run_id=args.run_id)
+                after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
+                if not _same_remote_output_version(item, after) or not isinstance(size, int) or partial_path.stat().st_size != size:
+                    raise ValueError(f"remote checkpoint changed while it was being copied: {name}; wait for the save to finish and retry")
+                os.replace(partial_path, local_path)
+            finally:
+                partial_path.unlink(missing_ok=True)
             pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "skipped": False})
         status_path = run_dir / "status.json"
         status = json.loads(status_path.read_text(encoding="utf-8"))

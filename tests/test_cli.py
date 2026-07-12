@@ -26,6 +26,7 @@ import yaml
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate_musubi_dataset_layout
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.run_commands.runpod_ssh import _same_remote_output_version
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
@@ -2926,6 +2927,13 @@ class RunPodPullSelectionTests(unittest.TestCase):
         ]
         selected = _select_remote_outputs(items, since_step=1000)
         self.assertEqual([item["name"] for item in selected], ["model-step00001000.safetensors", "model-step00001500.safetensors"])
+
+    def test_remote_output_version_requires_stable_path_size_and_mtime(self) -> None:
+        before = {"path": "/workspace/model.safetensors", "size": 10, "mtime_ns": 20}
+        self.assertTrue(_same_remote_output_version(before, dict(before)))
+        self.assertFalse(_same_remote_output_version(before, {**before, "size": 11}))
+        self.assertFalse(_same_remote_output_version(before, {**before, "mtime_ns": 21}))
+        self.assertFalse(_same_remote_output_version(before, None))
 
 
 class AiToolkitBackendTests(unittest.TestCase):
