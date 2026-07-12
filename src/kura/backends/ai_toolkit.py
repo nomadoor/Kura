@@ -8,7 +8,8 @@ from typing import Any
 
 from kura.backends.common import _datasets
 from kura.fsio import atomic_write_yaml
-from kura.run_envelope import backend_config, common_recipe
+from kura.run_envelope import backend_config, validated_recipe
+from kura.provenance import artifact_pinning
 
 
 def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, resolution: Any) -> list[dict[str, Any]]:
@@ -16,7 +17,10 @@ def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, r
     for index, dataset in enumerate(datasets):
         dataset_id = dataset.get("id", "")
         folder = override_folder if index == 0 and isinstance(override_folder, str) and override_folder else f"/workspace/datasets/{dataset_id}/images"
-        entries.append({"folder_path": folder, "caption_ext": ".txt", "cache_latents_to_disk": True, "resolution": resolution})
+        entry = {"folder_path": folder, "caption_ext": ".txt", "cache_latents_to_disk": True}
+        if resolution is not None:
+            entry["resolution"] = resolution
+        entries.append(entry)
     return entries
 
 
@@ -24,10 +28,69 @@ def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
     return backend_config(run, "ai-toolkit")
 
 
-def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
+def _nested(mapping: Any, *path: str) -> Any:
+    value = mapping
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
+def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
+    """Project adapter-owned native values for generic display."""
+    native = _ai_toolkit_backend_override(run)
+    config = native.get("config") if isinstance(native.get("config"), dict) else {}
+    datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
+    first_dataset = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
+    return {
+        "architecture": native.get("model_arch") or _nested(config, "model", "arch"),
+        "rank": _nested(config, "network", "linear"),
+        "alpha": _nested(config, "network", "linear_alpha"),
+        "learning_rate": _nested(config, "train", "lr"),
+        "scheduler": _nested(config, "train", "lr_scheduler"),
+        "batch_size": _nested(config, "train", "batch_size"),
+        "gradient_accumulation_steps": _nested(config, "train", "gradient_accumulation_steps"),
+        "resolution": first_dataset.get("resolution") or native.get("resolution"),
+        "optimizer": _nested(config, "train", "optimizer"),
+        "precision": _nested(config, "train", "dtype"),
+        "memory": {
+            "gradient_checkpointing": _nested(config, "train", "gradient_checkpointing"),
+            "low_vram": _nested(config, "model", "low_vram"),
+            "quantize": _nested(config, "model", "quantize"),
+            "quantize_te": _nested(config, "model", "quantize_te"),
+        },
+        "checkpoint": {
+            "save_every_n_steps": _nested(config, "save", "save_every"),
+            "keep_last": _nested(config, "save", "max_step_saves_to_keep"),
+        },
+    }
+
+
+def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, Any] | None = None, *, declared: bool = False) -> list[dict[str, Any]]:
+    del download_estimate, declared
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    base = model.get("base")
+    if not isinstance(base, str) or not base:
+        return []
+    revision = model.get("revision")
+    if base.startswith(("/", "./", "../", "~")):
+        acquisition = "local-path"
+        identity: dict[str, Any] = {"kind": "path", "path": base}
+        expected_format, observable = "backend-native-path", True
+    else:
+        acquisition = "backend"
+        identity = {"kind": "huggingface-repository", "repo_id": base}
+        expected_format, observable = "backend-native-repository", False
+        if isinstance(revision, str) and revision:
+            identity["revision"] = revision
+    return [{"role": "base_model", "acquisition": acquisition, "identity": identity, "runtime_reference": base, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable)}]
+
+
+def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]:
     """Write AI-Toolkit native YAML for configured training runs."""
     override = _ai_toolkit_backend_override(run)
-    recipe = common_recipe(run)
+    recipe = validated_recipe(run, required=override.get("command") is None)
     model = run.get("model", {})
     datasets = _datasets(run)
     native = override.get("config")
@@ -45,7 +108,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
                 "training_folder": f"/workspace/runs/{run['id']}/outputs",
                 "device": "cuda:0",
                 "network": {"type": "lora"},
-                "save": {"dtype": "bf16", "save_every": 1, "max_step_saves_to_keep": 1},
+                "save": {},
                 "datasets": _ai_toolkit_datasets(datasets, override.get("dataset_folder"), None),
                 "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
@@ -62,14 +125,18 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> None:
             else:
                 process[section] = deepcopy(values)
     atomic_write_yaml(destination.with_suffix(".yaml"), config)
+    return command_ai_toolkit(run)
 
 
 def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Return a container-native command spec, without executing it."""
-    common_recipe(run)
-    command = _ai_toolkit_backend_override(run).get("command")
+    override = _ai_toolkit_backend_override(run)
+    command = override.get("command")
+    validated_recipe(run, required=command is None)
     if command is None:
-        return {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}
+        compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+        cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
+        return {"cwd": cwd, "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}
     if not isinstance(command, dict):
         raise ValueError(
             "AI-Toolkit command is not configured. "

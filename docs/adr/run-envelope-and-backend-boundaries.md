@@ -157,6 +157,10 @@ or agent-private state. Tests must prove that workspace files, configured
 secrets, and external provider state are sufficient to compile, execute,
 observe, reconcile, stop, and recover a run.
 
+The compiled `resolved/backend-command.lock.json` is the only training launch
+command. Launch never calls the current adapter to reconstruct argv and never
+changes its cwd. Adapter source identity is frozen alongside that command.
+
 ## Decision 7: preflight remains bounded
 
 Core blocks Kura-owned invariant failures such as malformed files, missing
@@ -205,6 +209,8 @@ strength is explicit, for example:
 
 The record distinguishes not observed from not observable. Kura does not claim
 a content hash for backend-managed multi-file acquisition it did not inspect.
+Adapter source hashes cover only the selected adapter plus its shared backend
+helper and registry, so unrelated backend changes do not invalidate evidence.
 
 ## Decision 9: architecture boundaries are mechanically checked
 
@@ -249,6 +255,13 @@ criterion.
 
 Rejected because startup and acquisition cost can equal the intended run and a
 separate process may duplicate the most expensive work.
+
+### Generic boolean mechanics for unknown native selectors
+
+Rejected. A boolean block for cache mode, dual-DiT, or similar mechanics would
+become a second Musubi constraint language that Kura must synchronize with
+upstream. Known selector translation remains adapter-local. Unknown execution
+paths require an explicit native command or an adapter update.
 
 ## Implemented sequence
 

@@ -13,9 +13,8 @@ def _datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     datasets = run.get("datasets")
     if isinstance(datasets, list):
         return [item for item in datasets if isinstance(item, dict)]
-    dataset = run.get("dataset")
-    if isinstance(dataset, dict):
-        return [dataset]
+    if "dataset" in run:
+        raise ValueError("training run dataset is not supported; use datasets[]")
     return []
 
 

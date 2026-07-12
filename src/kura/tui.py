@@ -1811,7 +1811,7 @@ def _steps_seed(summary: RunSummary) -> str:
 
 
 def _backend(summary: RunSummary) -> str:
-    return str(summary.key_config.get("backend") or ("ai-toolkit" if summary.type == "train" else "comfyui"))
+    return str(summary.key_config.get("backend") or ("unknown" if summary.type == "train" else "comfyui"))
 
 
 def _base(summary: RunSummary) -> str:

@@ -16,7 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from kura import __version__
-from kura.provenance import adapter_source_identity, image_reference_identity
+from kura.provenance import image_reference_identity
 from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, _event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
 
 
@@ -396,7 +396,7 @@ sleep infinity
         failed_request["launch_attempts"] = launch_errors
         realization = {
             "id": realization_id, "executor": "runpod", "state": "launch_failed", "attempted_at": failed_at,
-            "remote_image": image, "image_identity": image_reference_identity(image), "adapter_source": adapter_source_identity(str(spec.get("backend") or "unknown")), "pod": None, "request": failed_request,
+            "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": None, "request": failed_request,
             "container_cwd": spec["cwd"], "backend_command": spec["argv"],
             "logs_path": log_path,
             "workspace_contract": workspace_contract,
@@ -423,7 +423,7 @@ sleep infinity
     realization_path.parent.mkdir(exist_ok=True)
     realization = {
         "id": realization_id, "executor": "runpod", "state": state, "launched_at": _now(),
-        "remote_image": image, "image_identity": image_reference_identity(image), "adapter_source": adapter_source_identity(str(spec.get("backend") or "unknown")), "pod": _runpod_pod_snapshot(pod),
+        "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": _runpod_pod_snapshot(pod),
         "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"],
         "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer_codes,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, "kura_version": __version__,

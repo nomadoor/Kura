@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from kura import __version__
-from kura.provenance import adapter_source_identity, image_reference_identity
+from kura.provenance import image_reference_identity
 from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, _event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
 from kura.paths import workspace_mount_mappings
 
@@ -200,7 +200,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
     realization = {
         "id": realization_id, "executor": "docker", "state": "running", "launched_at": _now(),
         "local_image": image, "image_id": image_id, "dockerfile": dockerfile,
-        "adapter_source": adapter_source_identity(str(spec.get("backend") or "unknown")),
+        **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}),
         "image_identity": image_reference_identity(image, image_id),
         "container": {"id": container_id, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command, "workspace_mount": {"source": str(workspace.resolve()), "target": workspace_target},

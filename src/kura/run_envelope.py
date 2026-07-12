@@ -45,3 +45,18 @@ def common_recipe(run: dict[str, Any]) -> dict[str, Any]:
             )
         return recipe
     return recipe if isinstance(recipe, dict) else {}
+
+
+def validated_recipe(run: dict[str, Any], *, required: bool) -> dict[str, int]:
+    recipe = common_recipe(run)
+    present = {key: value for key, value in recipe.items() if value is not None}
+    if not required:
+        if present:
+            raise ValueError("recipe must be omitted when backend.config.command supplies the complete native execution")
+        return {}
+    steps, seed = recipe.get("steps"), recipe.get("seed")
+    if isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0:
+        raise ValueError("training run recipe.steps must be a positive integer")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("training run recipe.seed must be an integer")
+    return {"steps": steps, "seed": seed}

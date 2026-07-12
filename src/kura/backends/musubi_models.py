@@ -8,6 +8,7 @@ from typing import Any
 
 from kura.container_scripts import script_source
 from kura.backends.common import _musubi_backend_override, _truthy
+from kura.provenance import artifact_pinning
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
     "flux2": (
@@ -240,9 +241,40 @@ def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] 
     return [["python", "-c", code, json.dumps(download_specs, ensure_ascii=False)]], paths
 
 
+def requirements_musubi(run: dict[str, Any], download_estimate: dict[str, Any] | None = None, *, declared: bool = False) -> list[dict[str, Any]]:
+    estimate = download_estimate or {}
+    native = _musubi_backend_override(run)
+    if declared:
+        paths = native.get("model_paths") if isinstance(native.get("model_paths"), dict) else {}
+        existing = {key: value for key, value in paths.items() if isinstance(key, str) and isinstance(value, str)}
+        specs, _ = musubi_model_download_specs(run, existing_paths=existing)
+        estimate = {"items": [{"key": item.get("key"), "repo_id": item.get("repo_id"), "filename": item.get("filename"), "revision": item.get("revision"), "runtime_reference": item.get("link_path"), "size_status": "not-measured", "measurement_scope": "compile", "size_bytes": None, "cached": False} for item in specs]}
+    requirements: list[dict[str, Any]] = []
+    for item in estimate.get("items") if isinstance(estimate.get("items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        identity = {"kind": "huggingface-file", "repo_id": item.get("repo_id"), "filename": item.get("filename")}
+        if item.get("revision"):
+            identity["revision"] = item["revision"]
+        measurement = {"scope": item.get("measurement_scope") or "controller", "status": item.get("size_status") or "unknown", "size_bytes": item.get("size_bytes"), "cached": bool(item.get("cached"))}
+        if item.get("size_detail"):
+            measurement["detail"] = item["size_detail"]
+        requirements.append({"role": item.get("key") or "model", "acquisition": "kura", "identity": identity, "runtime_reference": item.get("runtime_reference"), "expected_format": "backend-role-file", "measurement": measurement, "pinning": artifact_pinning(identity, observable=True)})
+    model_paths = native.get("model_paths")
+    if isinstance(model_paths, dict):
+        for role, path in sorted(model_paths.items()):
+            if isinstance(role, str) and isinstance(path, str) and path:
+                identity = {"kind": "path", "path": path}
+                requirements.append({"role": role, "acquisition": "local-path", "identity": identity, "runtime_reference": path, "expected_format": "backend-role-file", "measurement": {"scope": "compile", "status": "declared"}, "pinning": artifact_pinning(identity, observable=True)})
+    return requirements
+
+
 def _musubi_architecture(run: dict[str, Any]) -> str:
     override = _musubi_backend_override(run)
-    return str(override.get("architecture") or override.get("model_arch") or "flux2").lower().replace("-", "_")
+    value = override.get("architecture") or override.get("model_arch")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Musubi backend.config.architecture is required")
+    return value.lower().replace("-", "_")
 
 
 def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:

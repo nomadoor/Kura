@@ -7,6 +7,7 @@ import io
 import subprocess
 import tempfile
 import unittest
+import yaml
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,31 @@ from kura.monitor import _split_for_monitor, collect_run_summaries, loss_sparkli
 
 
 class MonitorProjectionTests(unittest.TestCase):
+    def test_legacy_run_is_isolated_as_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "runs" / "legacy"
+            current = root / "runs" / "current"
+            legacy.mkdir(parents=True)
+            current.mkdir(parents=True)
+            (legacy / "run.yaml").write_text("id: legacy\ntype: train\nparams: {steps: 1}\n", encoding="utf-8")
+            (current / "run.yaml").write_text("id: current\ntype: train\nrecipe: {steps: 1, seed: 1}\n", encoding="utf-8")
+            summaries = {item.id: item for item in collect_run_summaries(root)}
+        self.assertEqual(summaries["legacy"].state, "unreadable")
+        self.assertNotEqual(summaries["current"].state, "unreadable")
+
+    def test_ai_toolkit_display_projection_is_not_read_as_musubi(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "ai"
+            run_dir.mkdir(parents=True)
+            run = {"id": "ai", "type": "train", "recipe": {"steps": 10, "seed": 1}, "backend": {"name": "ai-toolkit", "config": {"config": {"network": {"linear": 8, "linear_alpha": 4}, "train": {"lr": 0.0001, "batch_size": 2}}}}}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            summary = collect_run_summaries(root)[0]
+        self.assertEqual(summary.key_config["rank"], 8)
+        self.assertEqual(summary.key_config["alpha"], 4)
+        self.assertEqual(summary.key_config["lr"], 0.0001)
+        self.assertEqual(summary.key_config["batch_size"], 2)
     def test_sparkline_tracks_increasing_values(self) -> None:
         line = loss_sparkline([1, 2, 3, 4], width=4)
         self.assertEqual(line, "▁▃▆█")
@@ -48,7 +74,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "type: train",
                         "experiment: exp",
                         "created: '2026-06-21T10:00:00+09:00'",
-                        "dataset: {id: tiny}",
+                        "datasets: [{id: tiny}]",
                         "recipe: {steps: 3}",
                         "backend: {name: musubi-tuner, config: {network_dim: 4, learning_rate: 0.0001}}",
                         "compute: {executor: docker}",

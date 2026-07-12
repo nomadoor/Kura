@@ -20,7 +20,7 @@ Path namespace is defined by the artifact consumer:
 
 | Artifact | Consumer | Persisted form |
 | --- | --- | --- |
-| `resolved/command.json`, dataset TOML, training argv | container | container absolute paths, normally `/workspace/...` |
+| `resolved/backend-command.lock.json`, dataset TOML, training argv | container | container absolute paths, normally `/workspace/...` |
 | `status.json`, model lock files, indexes, workspace symlinks | host CLI / agent / human | workspace-relative paths, or host-resolvable symlinks |
 | realization mounts | host CLI and executor | explicit source/target pairs |
 | RunPod remote facts | host CLI, as remote facts | fields must make the remote namespace explicit |

@@ -17,7 +17,8 @@ from typing import Any, Iterable
 
 import yaml
 
-from kura.run_envelope import backend_config, common_recipe
+from kura.backends import get_backend
+from kura.run_envelope import common_recipe
 
 
 ACTIVE_STATES = {"queued", "staged", "launching", "running"}
@@ -97,7 +98,25 @@ def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: 
 
     workspace = Path(workspace)
     run_ids = _collect_run_ids(workspace)
-    return [_collect_one_run(workspace, workspace / "runs" / run_id, run_id, loss_tail=loss_tail, stale_after=stale_after) for run_id in run_ids]
+    summaries: list[RunSummary] = []
+    for run_id in run_ids:
+        run_dir = workspace / "runs" / run_id
+        try:
+            summaries.append(_collect_one_run(workspace, run_dir, run_id, loss_tail=loss_tail, stale_after=stale_after))
+        except ValueError as exc:
+            summaries.append(
+                RunSummary(
+                    id=run_id,
+                    experiment=None,
+                    type=None,
+                    executor=None,
+                    state="unreadable",
+                    run_dir=run_dir,
+                    last_updated=_latest_mtime(run_dir / "run.yaml", run_dir / "resolved" / "manifest.lock.yaml", run_dir / "status.json"),
+                    activity=str(exc),
+                )
+            )
+    return summaries
 
 
 def loss_sparkline(values: Iterable[float | int], *, width: int = 24) -> str:
@@ -297,7 +316,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         type=run_type,
         executor=executor,
         state=state,
-        key_config=_key_config(run_type, config),
+        key_config=_key_config(run_type, config, run_dir),
         progress=progress,
         losses=losses,
         latest_loss=losses[-1] if losses else None,
@@ -443,7 +462,7 @@ def _latest_observation(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]
     return {}
 
 
-def _key_config(run_type: str | None, config: dict[str, Any]) -> dict[str, Any]:
+def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     if run_type == "render":
         inputs = config.get("inputs", {}) if isinstance(config.get("inputs"), dict) else {}
         checkpoint = inputs.get("checkpoint", {}) if isinstance(inputs.get("checkpoint"), dict) else {}
@@ -453,100 +472,27 @@ def _key_config(run_type: str | None, config: dict[str, Any]) -> dict[str, Any]:
     dataset_ids = [dataset.id for dataset in _datasets(Path("."), config) if dataset.id]
     backend = config.get("backend", {}) if isinstance(config.get("backend"), dict) else {}
     model = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
-    override = _backend_override(config, "musubi-tuner")
-    network_args = _musubi_network_args(override)
-    micro_batch = _micro_batch_size(config)
-    grad_accum = _gradient_accumulation_steps(config)
+    display = _read_mapping(run_dir / "resolved" / "backend-display.lock.json")
+    if not display and backend.get("name"):
+        display = get_backend(backend.get("name")).display(config)
+    micro_batch = _int_or_none(display.get("batch_size"))
+    grad_accum = _int_or_none(display.get("gradient_accumulation_steps"))
     effective_batch = micro_batch * grad_accum if micro_batch is not None and grad_accum is not None else None
     return {
         "backend": backend.get("name"),
         "base": model.get("base"),
-        "rank": override.get("network_dim") or _nested_config(override, "config", "network", "linear"),
-        "alpha": override.get("network_alpha") or _nested_config(override, "config", "network", "linear_alpha"),
-        "conv_rank": network_args.get("conv_dim"),
-        "conv_alpha": network_args.get("conv_alpha"),
-        "lr": override.get("learning_rate") or _nested_config(override, "config", "train", "lr"),
-        "scheduler": _nested_config(override, "config", "train", "lr_scheduler"),
+        "rank": display.get("rank"),
+        "alpha": display.get("alpha"),
+        "lr": display.get("learning_rate"),
+        "scheduler": display.get("scheduler"),
         "steps": recipe.get("steps"),
         "batch_size": micro_batch,
         "gradient_accumulation_steps": grad_accum,
         "effective_batch_size": effective_batch,
-        "save_precision": override.get("save_precision", "bf16") if backend.get("name") == "musubi-tuner" else None,
+        "precision": display.get("precision"),
         "seed": recipe.get("seed"),
         "dataset": "+".join(dataset_ids) if dataset_ids else None,
     }
-
-
-def _musubi_network_args(override: dict[str, Any]) -> dict[str, str]:
-    extra_args = override.get("extra_args")
-    if not isinstance(extra_args, list):
-        return {}
-    values: dict[str, str] = {}
-    for index, arg in enumerate(extra_args):
-        if arg != "--network_args":
-            continue
-        for raw in extra_args[index + 1:]:
-            if not isinstance(raw, str) or raw.startswith("--"):
-                break
-            for part in raw.split():
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    values[key] = value
-    return values
-
-
-def _nested_config(config: dict[str, Any], *path: str) -> Any:
-    value: Any = config
-    for key in path:
-        if not isinstance(value, dict):
-            return None
-        value = value.get(key)
-    return value
-
-
-def _micro_batch_size(config: dict[str, Any]) -> int | None:
-    override = _backend_override(config, "musubi-tuner")
-    dataset_config = override.get("dataset_config")
-    if isinstance(dataset_config, dict):
-        general = dataset_config.get("general")
-        if isinstance(general, dict):
-            value = _int_or_none(general.get("batch_size"))
-            if value is not None:
-                return value
-        datasets = dataset_config.get("datasets")
-        if isinstance(datasets, list):
-            for item in datasets:
-                if not isinstance(item, dict):
-                    continue
-                value = _int_or_none(item.get("batch_size"))
-                if value is not None:
-                    return value
-    return _int_or_none(_nested_config(override, "config", "train", "batch_size"))
-
-
-def _gradient_accumulation_steps(config: dict[str, Any]) -> int | None:
-    override = _backend_override(config, "musubi-tuner")
-    for key in ("gradient_accumulation_steps", "gradient_accumulation"):
-        value = _int_or_none(override.get(key))
-        if value is not None:
-            return value
-    extra_args = override.get("extra_args")
-    if isinstance(extra_args, list):
-        for index, arg in enumerate(extra_args):
-            if not isinstance(arg, str):
-                continue
-            if arg == "--gradient_accumulation_steps" and index + 1 < len(extra_args):
-                return _int_or_none(extra_args[index + 1])
-            if arg.startswith("--gradient_accumulation_steps="):
-                return _int_or_none(arg.split("=", 1)[1])
-    backend = config.get("backend", {}) if isinstance(config.get("backend"), dict) else {}
-    if backend.get("name") == "musubi-tuner":
-        return 1
-    return _int_or_none((config.get("train") if isinstance(config.get("train"), dict) else {}).get("gradient_accumulation_steps")) or 1
-
-
-def _backend_override(config: dict[str, Any], name: str) -> dict[str, Any]:
-    return backend_config(config, name)
 
 
 def _progress(status: dict[str, Any], config: dict[str, Any], *, stdout_progress: RunProgress | None = None) -> RunProgress:
@@ -741,7 +687,7 @@ def _activity_from_stdout_line(line: str) -> str | None:
 def _download_keys_from_command(run_dir: Path | None) -> list[str]:
     if run_dir is None:
         return []
-    command = _read_mapping(run_dir / "resolved" / "musubi" / "command.json")
+    command = _read_mapping(run_dir / "resolved" / "backend-command.lock.json")
     argv = command.get("argv") if isinstance(command.get("argv"), list) else []
     for part in argv:
         if not isinstance(part, str) or '"link_path"' not in part or '"repo_id"' not in part:
@@ -864,8 +810,9 @@ def _datasets(workspace: Path, config: dict[str, Any]) -> list[RunDataset]:
     if isinstance(items, list):
         raw_items = items
     else:
-        single = config.get("dataset")
-        raw_items = [single] if isinstance(single, dict) else []
+        if "dataset" in config:
+            raise ValueError("training run dataset is not supported; use datasets[]")
+        raw_items = []
     datasets: list[RunDataset] = []
     for item in raw_items:
         if not isinstance(item, dict):

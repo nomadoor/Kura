@@ -17,8 +17,7 @@ from typing import Any
 
 import yaml
 
-from kura.backends import musubi_model_download_specs
-from kura.backends.musubi_datasets import validate_musubi_dataset_layout
+from kura.backends import get_backend
 from kura.executors import stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -128,46 +127,10 @@ def _local_gpu_payload() -> dict[str, Any]:
     return {"name": "unknown", "vram_total_mb": "unknown"}
 
 
-def _important_backend_config(run: dict[str, Any]) -> dict[str, Any]:
+def _adapter_display(run: dict[str, Any]) -> dict[str, Any]:
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
-    if not isinstance(backend_name, str):
-        return {}
-    native_config = backend_config(run, backend_name)
-
-    important: dict[str, Any] = {}
-    direct_keys = (
-        "fp8_base",
-        "fp8_scaled",
-        "gradient_checkpointing",
-        "low_vram",
-        "quantize",
-        "quantize_te",
-        "blocks_to_swap",
-        "extra_args",
-        "save_every_n_steps",
-        "save_precision",
-        "prune_checkpoints_before_step",
-        "learning_rate",
-        "network_dim",
-        "network_alpha",
-        "dataset_config",
-    )
-    for key in direct_keys:
-        if key in native_config:
-            important[key] = native_config[key]
-
-    nested_keys = {
-        "config.train.gradient_checkpointing": ("config", "train", "gradient_checkpointing"),
-        "config.model.low_vram": ("config", "model", "low_vram"),
-        "config.model.quantize": ("config", "model", "quantize"),
-        "config.model.quantize_te": ("config", "model", "quantize_te"),
-    }
-    for label, path in nested_keys.items():
-        value = _nested_get(native_config, path)
-        if value is not None:
-            important[label] = value
-    return important
+    return get_backend(backend_name).display(run)
 
 
 def _runpod_requested_gpus(compute: dict[str, Any], config: dict[str, Any]) -> Any:
@@ -181,69 +144,32 @@ def _runpod_requested_gpus(compute: dict[str, Any], config: dict[str, Any]) -> A
     return configured if isinstance(configured, list) else NOT_SET
 
 
-def _model_artifact_filenames(run: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
+def _model_artifact_filenames(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
-    for item in download_estimate.get("items") if isinstance(download_estimate.get("items"), list) else []:
-        if not isinstance(item, dict):
+    for item in requirements:
+        identity = item.get("identity") if isinstance(item.get("identity"), dict) else {}
+        reference = item.get("runtime_reference")
+        filename = identity.get("filename") or (Path(reference).name if isinstance(reference, str) else None)
+        if not filename:
             continue
         artifacts.append(
             {
-                "role": _plan_value(item.get("key")),
-                "filename": _plan_value(item.get("filename")),
-                "source": _plan_value(item.get("repo_id")),
+                "role": _plan_value(item.get("role")),
+                "filename": _plan_value(filename),
+                "source": _plan_value(identity.get("repo_id") or identity.get("path")),
             }
         )
-    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    backend_name = backend.get("name")
-    backend_override = backend_config(run, backend_name) if isinstance(backend_name, str) else {}
-    paths = backend_override.get("model_paths") if isinstance(backend_override, dict) else None
-    if isinstance(paths, dict):
-        for role, value in sorted(paths.items()):
-            if isinstance(role, str) and isinstance(value, str) and value:
-                artifacts.append({"role": role, "filename": Path(value).name or value, "source": "model_paths"})
     return artifacts
 
 
-def _resource_architecture(backend_name: Any, backend_override: dict[str, Any]) -> Any:
-    if not isinstance(backend_override, dict):
-        return NOT_SET
-    value = backend_override.get("architecture") or backend_override.get("model_arch")
-    if value:
-        return value
-    if backend_name == "musubi-tuner":
-        return "flux2"
-    return NOT_SET
-
-
-def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
+def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], download_estimate: dict[str, Any], *, adapter_display: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    backend_override = backend_config(run, backend_name) if isinstance(backend_name, str) else {}
-    extra_args = backend_override.get("extra_args") if isinstance(backend_override, dict) else None
+    display = adapter_display if isinstance(adapter_display, dict) else _adapter_display(run)
     executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
-    common_flags = {
-        "batch_size": _plan_value(_nested_get(backend_override, ("dataset_config", "general", "batch_size")) or _nested_get(backend_override, ("config", "train", "batch_size"))),
-        "gradient_accumulation": _plan_value(backend_override.get("gradient_accumulation_steps") or _nested_get(backend_override, ("config", "train", "gradient_accumulation_steps"))),
-        "resolution": _plan_value(_nested_get(backend_override, ("dataset_config", "general", "resolution")) or _nested_get(backend_override, ("config", "datasets", "resolution"))),
-        "rank": _plan_value(backend_override.get("network_dim") or _nested_get(backend_override, ("config", "network", "linear"))),
-        "optimizer": _plan_value(backend_override.get("optimizer_type") or _nested_get(backend_override, ("config", "train", "optimizer"))),
-    }
-    ai_toolkit_flags = {
-        "gradient_checkpointing": _plan_value(_nested_get(backend_override, ("config", "train", "gradient_checkpointing"))),
-        "quantize": _plan_value(_nested_get(backend_override, ("config", "model", "quantize"))),
-        "quantize_te": _plan_value(_nested_get(backend_override, ("config", "model", "quantize_te"))),
-        "low_vram": _plan_value(_nested_get(backend_override, ("config", "model", "low_vram"))),
-    }
-    musubi_flags = {
-        "fp8_base": _plan_value(backend_override.get("fp8_base") if isinstance(backend_override, dict) else None),
-        "fp8_scaled": _plan_value(backend_override.get("fp8_scaled") if isinstance(backend_override, dict) else None),
-        "fp8_t5": _plan_value(backend_override.get("fp8_t5") if isinstance(backend_override, dict) else None),
-        "fp8_llm": _plan_value(backend_override.get("fp8_llm") if isinstance(backend_override, dict) else None),
-        "fp8_vl": _plan_value(backend_override.get("fp8_vl") if isinstance(backend_override, dict) else None),
-        "blocks_to_swap": _plan_value(backend_override.get("blocks_to_swap")) if isinstance(backend_override, dict) and backend_override.get("blocks_to_swap") is not None else _extra_args_value(extra_args, "--blocks_to_swap"),
-    }
+    requirements = model_requirements(run, download_estimate)
     return {
         "hardware": {"local_gpu": _local_gpu_payload()},
         "executor": {
@@ -252,16 +178,14 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
         },
         "model": {
             "backend": _plan_value(backend_name),
-            "architecture": _resource_architecture(backend_name, backend_override),
+            "architecture": _plan_value(display.get("architecture")),
             "base": _plan_value(model.get("base")),
-            "artifacts": _model_artifact_filenames(run, download_estimate),
-            "requirements": model_requirements(run, download_estimate),
+            "artifacts": _model_artifact_filenames(requirements),
+            "requirements": requirements,
         },
-        "memory_flags": {
-            "common": common_flags,
-            "ai_toolkit": ai_toolkit_flags,
-            "musubi": musubi_flags,
-        },
+        "training": {key: _plan_value(value) for key, value in display.items() if key not in {"checkpoint", "memory"}},
+        "memory": display.get("memory") or {},
+        "checkpoint": display.get("checkpoint") or {},
     }
 
 
@@ -277,38 +201,10 @@ def _as_positive_int(value: Any) -> int | None:
     return number if number > 0 else None
 
 
-def _extra_args_has_keep_last_policy(extra_args: Any) -> bool:
-    if not isinstance(extra_args, list):
-        return False
-    keep_last_flags = {
-        "--save_last_n_steps",
-        "--save_last_n_epochs",
-        "--save_last_n_steps_state",
-        "--save_last_n_epochs_state",
-    }
-    index = 0
-    while index < len(extra_args):
-        item = extra_args[index]
-        if not isinstance(item, str):
-            index += 1
-            continue
-        flag, sep, inline_value = item.partition("=")
-        if flag not in keep_last_flags:
-            index += 1
-            continue
-        if sep:
-            if _as_positive_int(inline_value):
-                return True
-        elif index + 1 < len(extra_args) and _as_positive_int(extra_args[index + 1]):
-            return True
-        index += 1
-    return False
-
-
 def _checkpoint_retention_policy_present(important_config: dict[str, Any]) -> bool:
     return bool(
-        _as_positive_int(important_config.get("prune_checkpoints_before_step"))
-        or _extra_args_has_keep_last_policy(important_config.get("extra_args"))
+        _as_positive_int(important_config.get("prune_before_step"))
+        or important_config.get("keep_last")
     )
 
 
@@ -338,7 +234,7 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is True:
         return
-    important = _important_backend_config(run)
+    important = (_adapter_display(run).get("checkpoint") or {})
     run_recipe = common_recipe(run)
     steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
@@ -459,24 +355,30 @@ def _host_cache_target(path: Path, *, workspace: Path | None = None) -> Path:
     return path
 
 
-def _estimate_musubi_download_bytes(run: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
+def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
-    if backend_name != "musubi-tuner":
+    if backend_name is None:
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
+    adapter = get_backend(backend_name)
+    if adapter.download_specs is None:
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
     try:
-        override = backend_config(run, "musubi-tuner")
+        override = backend_config(run, backend_name)
     except ValueError:
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid backend model download spec"], "probe_failures": []}
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    if not model.get("base") and not override.get("model_downloads") and not override.get("model_paths"):
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
     existing_paths = {}
     if isinstance(override, dict):
         paths = override.get("model_paths")
         if isinstance(paths, dict):
             existing_paths = {key: value for key, value in paths.items() if isinstance(key, str) and isinstance(value, str)}
     try:
-        specs, _ = musubi_model_download_specs(run, existing_paths=existing_paths)
+        specs, _ = adapter.download_specs(run, existing_paths=existing_paths)
     except ValueError:
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid musubi model download spec"], "probe_failures": []}
+        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid backend model download spec"], "probe_failures": []}
     download_total = 0
     size_total = 0
     cached_total = 0
@@ -641,7 +543,7 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
         _checkpoint_safety_preflight(run)
     except ValueError as exc:
         return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
-    important = _important_backend_config(run)
+    important = (_adapter_display(run).get("checkpoint") or {})
     run_recipe = common_recipe(run)
     steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
@@ -653,10 +555,11 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> list[dict[str, Any]]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    if backend.get("name") != "musubi-tuner":
+    adapter = get_backend(backend.get("name"))
+    if adapter.validate_dataset is None:
         return []
     try:
-        validate_musubi_dataset_layout(run, workspace)
+        adapter.validate_dataset(run, workspace)
     except ValueError as exc:
         return [_preflight_record("dataset-images", "error", str(exc), "run.yaml")]
     return [_preflight_record("dataset-images", "info", "Musubi dataset image directories resolved", "run.yaml")]
@@ -708,12 +611,12 @@ def collect_run_preflight(
     workspace_config = config if isinstance(config, dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
-    estimate = download_estimate or _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)))
+    estimate = download_estimate or _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)))
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
-    important = _important_backend_config(run)
+    important = (_adapter_display(run).get("checkpoint") or {})
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
     if resolved_executor == "runpod":
@@ -739,7 +642,7 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is not True:
         return {"bytes": 0, "count": 0}
-    important = _important_backend_config(run)
+    important = (_adapter_display(run).get("checkpoint") or {})
     run_recipe = common_recipe(run)
     steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important.get("save_every_n_steps"))
@@ -792,7 +695,7 @@ def _local_launch_disk_preflight(
             paths[f"mount:{mount.get('target', mount['source'])}"] = source
     hf_cache_path = _hf_cache_path(workspace, mounts)
     paths.setdefault("hf_cache", hf_cache_path)
-    download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"))
+    download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"))
     if enforce_model_download_safety:
         _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
@@ -942,9 +845,11 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     if sampling.get("cadence_steps") is not None:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
-    important_config = _important_backend_config(run)
-    download_estimate = _estimate_musubi_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
-    resources = _resources_payload(run, _workspace_config(), download_estimate)
+    native_config = backend_config(run, backend.get("name")) if isinstance(backend.get("name"), str) else {}
+    download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
+    display_path = run_dir / "resolved" / "backend-display.lock.json"
+    frozen_display = _load_yaml(display_path) if display_path.is_file() else None
+    resources = _resources_payload(run, _workspace_config(), download_estimate, adapter_display=frozen_display)
     preflight = collect_run_preflight(run, workspace, config=_workspace_config(), download_estimate=download_estimate)
     return {
         "id": run_id,
@@ -955,7 +860,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resolved_manifest": _workspace_display_path(manifest) if manifest.is_file() else None,
         "backend": {
             "name": backend.get("name") if isinstance(backend, dict) else None,
-            "config": important_config,
+            "config": native_config,
         },
         "model": {
             "base": model.get("base") if isinstance(model, dict) else None,
@@ -1130,10 +1035,9 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 filename = item.get("filename") or NOT_SET
                 source = item.get("source") or NOT_SET
                 lines.append(f"      - {_format_plan_value(role)}: {_format_plan_value(filename)} ({_format_plan_value(source)})")
-        memory_flags = resources.get("memory_flags") if isinstance(resources.get("memory_flags"), dict) else {}
-        for section in ("common", "ai_toolkit", "musubi"):
-            values = memory_flags.get(section)
-            if isinstance(values, dict):
+        for section in ("training", "memory", "checkpoint"):
+            values = resources.get(section)
+            if isinstance(values, dict) and values:
                 lines.append(f"  {section}")
                 _append_mapping(lines, values, indent=4)
 

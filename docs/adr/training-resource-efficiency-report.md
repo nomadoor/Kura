@@ -127,7 +127,7 @@ run intent justify the trade-off."
 
 ### Run plan visibility
 
-`src/kura/run_commands/plan.py` already has `_estimate_musubi_download_bytes()`
+`src/kura/run_commands/plan.py` already has `_estimate_backend_download_bytes()`
 and local Docker launch preflight accounts for estimated Hugging Face writes.
 But `kura run plan` does not include or render that estimate.
 

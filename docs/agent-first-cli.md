@@ -40,6 +40,10 @@ uv run kura run watch <run-id>
 Manual authoring is supported, but it is not the primary UX. The important
 guarantee is that the files an agent produces are complete, readable CLI input.
 
+For training, `resolved/backend-command.lock.json` is the command that executes.
+Kura does not regenerate it from newer adapter code at launch. A run missing
+that lock must be recompiled as a new run.
+
 New training runs use `backend.name` plus opaque `backend.config`. Only
 optimizer-step count and seed currently have proven common recipe semantics:
 
@@ -84,6 +88,8 @@ intent and prior observations provide the migration context.
   not valid execution input.
 - `resolved/` is immutable after compile.
 - Runtime attempts and external identities are append-only realization facts.
+- Backend display and model-requirement projections are adapter-owned and
+  frozen under `resolved/`; monitor and plan do not reinterpret native keys.
 - Secrets come only from `.env.local` or environment variables and are never
   frozen into run artifacts.
 - Model and image provenance records the strongest identity actually observed;

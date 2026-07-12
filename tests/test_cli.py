@@ -31,7 +31,7 @@ from kura.executors.common import _safe_env
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_musubi_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
@@ -1064,13 +1064,13 @@ class TuiPathDisplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "example"
-            (run_dir / "resolved" / "musubi").mkdir(parents=True)
+            (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "logs").mkdir()
             (root / "index.jsonl").write_text(json.dumps({"id": "example"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: example\ntype: train\n", encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: example\ntype: train\nrecipe: {steps: 1}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
-            (run_dir / "resolved" / "musubi" / "command.json").write_text(
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(
                 json.dumps(
                     {
                         "argv": [
@@ -1394,7 +1394,7 @@ class RunPlanTests(unittest.TestCase):
         resources = payload["resources"]
         self.assertEqual(resources["hardware"]["local_gpu"]["name"], "unknown")
         self.assertEqual(resources["model"]["architecture"], "flux_kontext")
-        self.assertEqual(resources["memory_flags"]["common"]["batch_size"], "(not set)")
+        self.assertEqual(resources["training"]["batch_size"], "(not set)")
         artifact_filenames = {item["filename"] for item in resources["model"]["artifacts"]}
         self.assertEqual(artifact_filenames, {"dit.safetensors", "vae.safetensors"})
         requirements = resources["model"]["requirements"]
@@ -1540,7 +1540,7 @@ class RunPlanTests(unittest.TestCase):
             _configured_gib(False, default=50)
 
     def test_musubi_download_estimate_handles_malformed_overrides(self) -> None:
-        payload = _estimate_musubi_download_bytes(
+        payload = _estimate_backend_download_bytes(
             {
                 "type": "train",
                 "backend": {"name": "musubi-tuner"},
@@ -1548,7 +1548,7 @@ class RunPlanTests(unittest.TestCase):
             }
         )
         self.assertEqual(payload["bytes"], 0)
-        self.assertIn("invalid musubi model download spec", payload["unknown"])
+        self.assertIn("invalid backend model download spec", payload["unknown"])
 
     def test_runpod_plan_counts_remote_downloads_even_when_local_cache_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2982,9 +2982,8 @@ class MusubiBackendTests(unittest.TestCase):
     def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
-            compile_musubi_tuner(self._run(), destination)
+            command = compile_musubi_tuner(self._run(), destination)
             dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
-            command = json.loads((destination / "command.json").read_text(encoding="utf-8"))
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         self.assertIn("image_directory = \"/workspace/datasets/tiny/images\"", dataset_toml)
         self.assertIn("cache_directory = \"/workspace/runs/musubi-example/cache/musubi/tiny\"", dataset_toml)
@@ -3016,6 +3015,18 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["backend"]["config"]["max_train_steps"] = 2
         with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_requires_architecture(self) -> None:
+        run = self._run()
+        run["backend"]["config"].pop("architecture")
+        with self.assertRaisesRegex(ValueError, "architecture is required"):
+            command_musubi_tuner(run)
+
+    def test_command_musubi_requires_seed(self) -> None:
+        run = self._run()
+        run["recipe"]["seed"] = None
+        with self.assertRaisesRegex(ValueError, "recipe.seed must be an integer"):
             command_musubi_tuner(run)
 
     def test_command_musubi_rejects_recipe_duplicates_in_extra_args(self) -> None:
@@ -3123,6 +3134,7 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_rejects_secret_explicit_env(self) -> None:
         run = self._run()
+        run["recipe"] = {}
         run["backend"]["config"]["command"] = {"cwd": "/opt/musubi-tuner", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "secret"}}
 
         with self.assertRaisesRegex(ValueError, "env must not contain secrets"):
@@ -3456,9 +3468,9 @@ class MusubiBackendTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
-            compile_musubi_tuner(run, destination)
+            command = compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
-            script = json.loads((destination / "command.json").read_text(encoding="utf-8"))["argv"][2]
+            script = command["argv"][2]
 
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
         self.assertEqual(expected["vae"], "flux2_ae_or_vae")
@@ -4110,7 +4122,7 @@ class DockerLifecycleTests(unittest.TestCase):
             "kura.run_commands.plan._hf_file_size_probe",
             return_value={"status": "not_found", "size_bytes": None, "detail": "HTTP 404"},
         ):
-            estimate = _estimate_musubi_download_bytes(run)
+            estimate = _estimate_backend_download_bytes(run)
 
         self.assertEqual(estimate["unknown"], [])
         self.assertEqual(estimate["probe_failures"][0]["status"], "not_found")
@@ -4413,6 +4425,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
                 encoding="utf-8",
@@ -4450,6 +4463,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump({"docker": {"min_free_gb": 10, "images": {"ai-toolkit": {"local": "configured-local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
                 encoding="utf-8",
@@ -4482,6 +4496,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump({"docker": {"workspace_target": "/ws", "images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
                 encoding="utf-8",
@@ -5034,6 +5049,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (root / "runs" / "example" / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/app/ai-toolkit", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
                     {

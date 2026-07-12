@@ -7,10 +7,29 @@ from pathlib import Path
 from typing import Any
 
 
+def artifact_pinning(identity: dict[str, Any], *, observable: bool) -> dict[str, Any]:
+    if isinstance(identity.get("sha256"), str):
+        return {"strength": "content-hash", "observation": "observed"}
+    revision = identity.get("revision")
+    if isinstance(revision, str) and len(revision) >= 40 and all(char in "0123456789abcdefABCDEF" for char in revision):
+        return {"strength": "immutable-revision", "observation": "observed"}
+    if revision:
+        return {"strength": "mutable-reference", "observation": "observed", "detail": "revision is not proven immutable"}
+    if identity.get("kind") == "path":
+        return {"strength": "external-unobserved", "observation": "not-observed" if observable else "not-observable", "detail": "Kura did not hash the external model path during compile"}
+    return {"strength": "mutable-reference", "observation": "not-observed" if observable else "not-observable", "detail": "no immutable revision or content hash was observed"}
+
+
 def adapter_source_identity(backend_name: str) -> dict[str, str]:
     root = Path(__file__).resolve().parent / "backends"
+    if backend_name == "ai-toolkit":
+        paths = [root / "common.py", root / "ai_toolkit.py", root / "registry.py"]
+    elif backend_name == "musubi-tuner":
+        paths = [root / "common.py", root / "registry.py", *sorted(root.glob("musubi_*.py"))]
+    else:
+        raise ValueError(f"unsupported backend for source identity: {backend_name}")
     hasher = hashlib.sha256()
-    for path in sorted(root.glob("*.py")):
+    for path in paths:
         hasher.update(path.name.encode("utf-8") + b"\0")
         hasher.update(path.read_bytes() + b"\0")
     return {"kind": "source-tree-sha256", "value": hasher.hexdigest(), "backend": backend_name}

@@ -33,6 +33,24 @@ def exact_string_constants(path: Path) -> set[str]:
     return {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
 
 
+def semantic_taxonomy_symbols(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    failures: list[str] = []
+    semantic = ("task", "architecture", "model_family")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and any(token in node.name.lower() for token in semantic):
+            if any((isinstance(base, ast.Name) and base.id.endswith("Enum")) or (isinstance(base, ast.Attribute) and base.attr.endswith("Enum")) for base in node.bases):
+                failures.append(node.name)
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and any(token in target.id.lower() for token in semantic):
+                    value = node.value
+                    if isinstance(value, (ast.Set, ast.List, ast.Tuple)) and len(value.elts) >= 2:
+                        failures.append(target.id)
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     for path in sorted(PURE_OBSERVATION_MODULES):
@@ -62,6 +80,10 @@ def main() -> int:
         removed = REMOVED_RUN_KEYS & exact_string_constants(path)
         if removed:
             failures.append(f"{path.relative_to(ROOT)} references removed run key(s): {', '.join(sorted(removed))}")
+
+    for path in sorted(SRC.glob("*.py")):
+        for symbol in semantic_taxonomy_symbols(path):
+            failures.append(f"{path.relative_to(ROOT)} defines forbidden core semantic taxonomy symbol: {symbol}")
 
     selector = "kura.backends.musubi_native_selectors"
     for path in sorted(SRC.rglob("*.py")):
