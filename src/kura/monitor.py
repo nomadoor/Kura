@@ -65,6 +65,11 @@ class ExecutorInfo:
     provider: str | None = None
     gpu: str | None = None
     pod: PodInfo | None = None
+    job_state: str | None = None
+    remote_state: str | None = None
+    downloaded: bool = False
+    recovery_required: bool = False
+    pod_stopped: bool = False
 
 
 @dataclass(frozen=True)
@@ -801,7 +806,17 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     cost_stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
     cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, status.get("state"))
     pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost_used) if pod_id or pod_state else None
-    return ExecutorInfo(kind=kind, provider=provider, gpu=gpu, pod=pod)
+    return ExecutorInfo(
+        kind=kind,
+        provider=provider,
+        gpu=gpu,
+        pod=pod,
+        job_state=_string(status.get("state")),
+        remote_state=_string(status.get("remote_state")),
+        downloaded=bool(status.get("downloaded_run")),
+        recovery_required=bool(status.get("recovery_required")),
+        pod_stopped=bool(status.get("pod_stopped_at")),
+    )
 
 
 def _datasets(workspace: Path, config: dict[str, Any]) -> list[RunDataset]:

@@ -40,7 +40,7 @@ def _compile_musubi(run: dict[str, Any], resolved: Path, workspace: Path | None,
 
 
 BACKENDS: dict[str, BackendAdapter] = {
-    "ai-toolkit": BackendAdapter("ai-toolkit", "ai-toolkit", _compile_ai, command_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, runpod_template_compatible=True, default_ports=("8675/http", "22/tcp")),
+    "ai-toolkit": BackendAdapter("ai-toolkit", "ai-toolkit", _compile_ai, command_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, default_ports=("8675/http", "22/tcp")),
     "musubi-tuner": BackendAdapter("musubi-tuner", "musubi-tuner", _compile_musubi, command_musubi_tuner, display_musubi_tuner, requirements_musubi, musubi_model_download_specs, validate_musubi_dataset_layout),
 }
 

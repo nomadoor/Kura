@@ -3,15 +3,61 @@
 from __future__ import annotations
 
 import unittest
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from kura.monitor import RunSummary
-from kura.tui import _aware_datetime, _batch, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _resolve_run_selection, _runpod_pod_url
+from kura.monitor import ExecutorInfo, PodInfo, RunSummary
+from kura.tui import HostMetrics, KuraMonitorApp, _aware_datetime, _batch, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
+    def test_remote_metrics_never_block_screen_switching(self) -> None:
+        app = KuraMonitorApp(Path("."))
+        summary = RunSummary(
+            id="remote",
+            experiment=None,
+            type="train",
+            executor="runpod",
+            state="running",
+            executor_info=ExecutorInfo(kind="remote", provider="runpod", pod=PodInfo(id="pod-1")),
+        )
+
+        def slow_metrics(*_: object) -> HostMetrics:
+            time.sleep(0.2)
+            return HostMetrics(gpu_name="NVIDIA A40")
+
+        with patch("kura.tui._runpod_host_metrics", side_effect=slow_metrics):
+            started = time.monotonic()
+            initial = app.metrics_for(summary)
+            elapsed = time.monotonic() - started
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline and app.metrics_for(summary).gpu_name is None:
+                time.sleep(0.01)
+            loaded = app.metrics_for(summary)
+
+        self.assertLess(elapsed, 0.05)
+        self.assertIsNone(initial.gpu_name)
+        self.assertEqual(loaded.gpu_name, "NVIDIA A40")
+
+    def test_remote_phase_distinguishes_job_from_pod_state(self) -> None:
+        summary = RunSummary(
+            id="remote",
+            experiment=None,
+            type="train",
+            executor="runpod",
+            state="running",
+            executor_info=ExecutorInfo(
+                kind="remote",
+                provider="runpod",
+                pod=PodInfo(id="pod-1", state="RUNNING"),
+                remote_state="completed",
+                recovery_required=True,
+            ),
+        )
+        self.assertEqual(_remote_execution_phase(summary), "● job complete · awaiting download and pod stop")
+
     def test_parse_nvidia_smi_csv(self) -> None:
         metrics = _parse_nvidia_smi_csv("NVIDIA A40, 91, 43000, 46068, 70, 220.5, 300.0\n")
 

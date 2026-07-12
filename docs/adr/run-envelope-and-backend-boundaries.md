@@ -160,6 +160,9 @@ observe, reconcile, stop, and recover a run.
 The compiled `resolved/backend-command.lock.json` is the only training launch
 command. Launch never calls the current adapter to reconstruct argv and never
 changes its cwd. Adapter source identity is frozen alongside that command.
+Standard training launch also selects the configured runtime image directly.
+RunPod templates are not used by backend launch paths because a template owns
+its own image and would create a second, potentially mutable runtime identity.
 
 ## Decision 7: preflight remains bounded
 

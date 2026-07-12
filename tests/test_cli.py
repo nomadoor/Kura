@@ -24,6 +24,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
+from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
@@ -2956,6 +2957,28 @@ class AiToolkitBackendTests(unittest.TestCase):
 
 
 class MusubiBackendTests(unittest.TestCase):
+    def test_explicit_image_directory_does_not_require_default_images_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "datasets" / "paired" / "pose" / "target"
+            target.mkdir(parents=True)
+            (target / "0001.png").write_bytes(b"png")
+            run = {
+                "id": "paired-layout",
+                "datasets": [{"id": "paired"}],
+                "backend": {
+                    "name": "musubi-tuner",
+                    "config": {
+                        "dataset_config": {
+                            "datasets": [
+                                {"image_directory": "/workspace/datasets/paired/pose/target"}
+                            ]
+                        }
+                    },
+                },
+            }
+            validate_musubi_dataset_layout(run, root)
+
     def _run(self) -> dict[str, object]:
         return {
             "id": "musubi-example",
@@ -5083,7 +5106,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
                     {
-                        "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "cloud_type": "COMMUNITY"},
+                        "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "cloud_type": "COMMUNITY", "template_id": "mutable-template"},
                         "docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}},
                     }
                 ),
@@ -5098,6 +5121,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_ids"], ["NVIDIA A40"])
             self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_priority"], "custom")
+            self.assertNotIn("template_id", launch.call_args.kwargs["config"])
+            self.assertEqual(launch.call_args.kwargs["config"]["ports"], ["8675/http", "22/tcp"])
 
     def test_launch_runpod_rejects_unsupported_udp_ports(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

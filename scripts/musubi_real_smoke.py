@@ -13,8 +13,10 @@ import json
 import os
 import secrets
 import shutil
+import struct
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -459,7 +461,55 @@ SPECS: dict[str, SmokeSpec] = {
 DEFAULT_MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 
 
+def ensure_base_image_dataset(root: Path) -> None:
+    dataset_root = root / "datasets" / "flux2-klein-tiny"
+    image_dir = dataset_root / "images"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    image_path = image_dir / "00001.png"
+    caption_path = image_dir / "00001.txt"
+    if not image_path.is_file():
+        width = height = 256
+        rows = b"".join(
+            b"\x00" + bytes(channel for x in range(width) for channel in (x % 256, y % 256, 128))
+            for y in range(height)
+        )
+        signature = b"\x89PNG\r\n\x1a\n"
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+
+        image_path.write_bytes(
+            signature
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows))
+            + chunk(b"IEND", b"")
+        )
+    caption_path.write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
+    (dataset_root / "dataset.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "id": "flux2-klein-tiny",
+                "modality": "image",
+                "description": "Generated one-item smoke dataset for adapter verification.",
+                "source": [],
+                "caption": {"strategy": "manual", "version": 1},
+                "stats": {"count": 1},
+                "layout": {"root": "images", "image_dir": "images"},
+                "digest": {"raw": None, "dataset": None},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (dataset_root / "items.jsonl").write_text(
+        json.dumps({"id": "00001", "path": "images/00001.png", "caption": caption_path.read_text(encoding="utf-8").strip(), "role": "target"}) + "\n",
+        encoding="utf-8",
+    )
+
+
 def ensure_generated_dataset(root: Path, dataset_id: str, *, image: str = DEFAULT_MUSUBI_IMAGE) -> None:
+    ensure_base_image_dataset(root)
     if dataset_id == "musubi-video-smoke":
         dataset_root = root / "datasets" / dataset_id
         video_dir = dataset_root / "videos"
@@ -468,8 +518,8 @@ def ensure_generated_dataset(root: Path, dataset_id: str, *, image: str = DEFAUL
         video_dir.mkdir(parents=True, exist_ok=True)
         caption_path.write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
         if not video_path.is_file():
-            image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"
-            if not image.is_file():
+            source_image = root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png"
+            if not source_image.is_file():
                 raise SystemExit("musubi-video-smoke requires datasets/flux2-klein-tiny/images/00001.png")
             generator = r'''
 import cv2
@@ -677,8 +727,9 @@ def validate_result(root: Path, run_id: str, spec: SmokeSpec) -> dict[str, Any]:
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     stdout_log = run_dir / "logs" / "stdout.log"
     log = stdout_log.read_text(encoding="utf-8", errors="replace") if stdout_log.is_file() else ""
-    command_path = run_dir / "resolved" / "musubi" / "command.json"
-    command_text = command_path.read_text(encoding="utf-8", errors="replace") if command_path.exists() else ""
+    command_path = run_dir / "resolved" / "backend-command.lock.json"
+    command = json.loads(command_path.read_text(encoding="utf-8")) if command_path.is_file() else {}
+    command_text = json.dumps(command, ensure_ascii=False)
     outputs = list((run_dir / "outputs").glob("*.safetensors"))
     outputs.extend((run_dir / "downloads").glob("**/outputs/*.safetensors"))
     checks = {

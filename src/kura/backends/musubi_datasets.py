@@ -69,7 +69,7 @@ def _musubi_dataset_items(
             "cache_directory": f"/workspace/runs/{run['id']}/cache/musubi/{dataset_id}",
             "num_repeats": dataset.get("num_repeats") or dataset.get("repeats") or 1,
         }
-        if not uses_jsonl:
+        if not uses_jsonl and "image_directory" not in override_item:
             item["image_directory"] = _default_image_directory(destination, dataset_id, workspace=workspace, strict=strict)
         if "paired_jsonl" in override_item:
             paired = override_item.pop("paired_jsonl")
