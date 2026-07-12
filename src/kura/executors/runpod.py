@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 
 from kura import __version__
 from kura.provenance import image_reference_identity
-from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, _event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
 
 
 def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None) -> Any:
@@ -233,7 +233,7 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     status = _load_status(run_dir)
     status["last_stage"] = str(stage_path.relative_to(run_dir))
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_staged", **record})
+    append_run_event(run_dir, {"event": "run_staged", **record})
     return record
 
 
@@ -410,7 +410,7 @@ sleep infinity
         status.pop("pod_id", None)
         status.pop("last_observation", None)
         _write_status(run_dir, status)
-        _event(run_dir / "logs" / "events.jsonl", {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
+        append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
         raise ValueError("RunPod launch failed for all configured cloud types: " + realization["error"])
     safe_used_request = dict(used_request)
     safe_used_request["env"] = _safe_env(runtime_env)
@@ -433,7 +433,7 @@ sleep infinity
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
     status.pop("last_observation", None)
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_started", "timestamp": _now(), "executor": "runpod", "realization_id": realization_id, "pod_id": pod_id})
+    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "realization_id": realization_id, "pod_id": pod_id})
     return realization_id
 
 
@@ -535,7 +535,7 @@ sleep infinity
         status.pop("pod_id", None)
         status.pop("last_observation", None)
         _write_status(run_dir, status)
-        _event(run_dir / "logs" / "events.jsonl", {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
+        append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
         raise ValueError("RunPod session launch failed for all configured cloud types: " + realization["error"])
     pod_id = pod.get("id")
     if not isinstance(pod_id, str) or not pod_id:
@@ -552,7 +552,7 @@ sleep infinity
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
     status.pop("last_observation", None)
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_started", "timestamp": _now(), "executor": "runpod", "purpose": purpose, "realization_id": realization_id, "pod_id": pod_id})
+    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "purpose": purpose, "realization_id": realization_id, "pod_id": pod_id})
     return realization_id
 
 
@@ -576,7 +576,7 @@ def reconcile_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     status.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observation["observed_at"], "last_observation": str(observation_path.relative_to(run_dir))})
     _materialize_stdout_progress(run_dir, status, state=state)
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_reconciled", **observation})
+    append_run_event(run_dir, {"event": "run_reconciled", **observation})
     return status
 
 
@@ -601,5 +601,5 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         status.update({"state": "interrupted", "exit_code": None, "ended": ended_at})
     status["pod_stopped_at"] = ended_at
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_terminated", "timestamp": ended_at, "executor": "runpod", "pod_id": pod_id})
+    append_run_event(run_dir, {"event": "run_terminated", "timestamp": ended_at, "executor": "runpod", "pod_id": pod_id})
     return status

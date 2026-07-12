@@ -24,7 +24,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.backends.musubi_datasets import validate_musubi_dataset_layout
+from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate_musubi_dataset_layout
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, stage_runpod, stop_runpod
@@ -2860,6 +2860,30 @@ class RunPodLiveSyncTests(unittest.TestCase):
             self.assertTrue(status["recovery_required"])
             observation = run_dir / status["last_remote_exit_observation"]
             self.assertEqual(json.loads(observation.read_text(encoding="utf-8"))["event"], "remote_exit_observed")
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[-1]["event"], "remote_exit_observed")
+
+    def test_remote_exit_observation_survives_convenience_log_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs" / "events.jsonl").mkdir(parents=True)
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+
+            stderr = io.StringIO()
+            with patch("sys.stderr", stderr):
+                _record_remote_exit_observation(
+                    run_dir,
+                    {"event": "remote_exit", "exit_code": 0, "timestamp": "2026-01-01T00:00:00+00:00"},
+                )
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["remote_state"], "completed")
+            self.assertTrue(status["recovery_required"])
+            self.assertIn("could not append convenience event log", stderr.getvalue())
 
     def test_runpod_image_preflight_warns_for_mutable_latest(self) -> None:
         records = _runpod_image_preflight_report(
@@ -2957,6 +2981,48 @@ class AiToolkitBackendTests(unittest.TestCase):
 
 
 class MusubiBackendTests(unittest.TestCase):
+    def test_video_directory_is_a_native_source_without_image_sentinel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            videos = root / "datasets" / "video" / "videos"
+            videos.mkdir(parents=True)
+            (videos / "0001.mp4").write_bytes(b"video")
+            destination = root / "runs" / "video-run" / "resolved" / "musubi" / "dataset.toml"
+            run = {
+                "id": "video-run",
+                "datasets": [{"id": "video"}],
+                "backend": {"name": "musubi-tuner", "config": {"dataset_config": {"datasets": [
+                    {"video_directory": "/workspace/datasets/video/videos"}
+                ]}}},
+            }
+
+            _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
+
+            rendered = destination.read_text(encoding="utf-8")
+            self.assertIn('video_directory = "/workspace/datasets/video/videos"', rendered)
+            self.assertNotIn("image_directory", rendered)
+
+    def test_video_jsonl_is_a_native_source_without_default_images(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "datasets" / "video" / "videos.jsonl"
+            source.parent.mkdir(parents=True)
+            source.write_text('{}\n', encoding="utf-8")
+            destination = root / "runs" / "video-run" / "resolved" / "musubi" / "dataset.toml"
+            run = {
+                "id": "video-run",
+                "datasets": [{"id": "video"}],
+                "backend": {"name": "musubi-tuner", "config": {"dataset_config": {"datasets": [
+                    {"video_jsonl_file": "/workspace/datasets/video/videos.jsonl"}
+                ]}}},
+            }
+
+            _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
+
+            rendered = destination.read_text(encoding="utf-8")
+            self.assertIn('video_jsonl_file = "/workspace/datasets/video/videos.jsonl"', rendered)
+            self.assertNotIn("image_directory", rendered)
+
     def test_explicit_image_directory_does_not_require_default_images_layout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3733,7 +3799,7 @@ class MusubiBackendTests(unittest.TestCase):
         command = command_musubi_tuner(run)
         script = command["argv"][2]
         self.assertIn("hf_hub_download", script)
-        self.assertIn("HF_HUB_DISABLE_XET", script)
+        self.assertNotIn("HF_HUB_DISABLE_XET", script)
         self.assertIn('cache_dir = os.environ.get("HF_HUB_CACHE")', script)
         self.assertIn("HF_HUB_CACHE is required before downloading models", script)
         self.assertNotIn('or "/root/.cache/huggingface"', script)
@@ -3741,8 +3807,8 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertNotIn("/workspace/cache/hf-models/musubi", script)
         self.assertIn("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", script)
         self.assertIn("repo_cache_dirs(cache_dir, item)", script)
-        self.assertNotIn("remove_incomplete_files(cache_dir)", script)
-        self.assertIn("removed {removed} incomplete", script)
+        self.assertNotIn("remove_incomplete_files", script)
+        self.assertIn("preserving resumable state and retrying", script)
         self.assertLess(script.index("musubi dataset ok"), script.index("hf_hub_download"))
         self.assertIn("def stable_link_target", script)
         self.assertIn("require_cache_mappable(cache_dir, link_path)", script)

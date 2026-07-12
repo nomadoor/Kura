@@ -194,7 +194,7 @@ capability registry. Each record identifies:
 - backend and adapter source identity
 - backend image digest or immutable upstream identity
 - opaque native path or selector exercised
-- evidence kind: parser, compile, or real optimizer step
+- evidence kind: parser, compile, real runtime attempt, or real optimizer step
 - outcome and timestamp
 - evidence artifact or log reference when retained
 
@@ -212,8 +212,10 @@ strength is explicit, for example:
 
 The record distinguishes not observed from not observable. Kura does not claim
 a content hash for backend-managed multi-file acquisition it did not inspect.
-Adapter source hashes cover only the selected adapter plus its shared backend
-helper and registry, so unrelated backend changes do not invalidate evidence.
+Adapter source hashes cover only the selected adapter, its shared backend
+helper and registry, and runtime helper source embedded in that adapter's
+frozen command. Unrelated backend changes do not invalidate evidence, while a
+download/assert/validation helper change correctly invalidates Musubi evidence.
 
 ## Decision 9: architecture boundaries are mechanically checked
 

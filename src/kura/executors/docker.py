@@ -13,7 +13,7 @@ from typing import Any
 
 from kura import __version__
 from kura.provenance import image_reference_identity
-from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, _event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
 from kura.paths import workspace_mount_mappings
 
 
@@ -215,7 +215,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
     status.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": platform.node(), "last_realization": str(realization_path.relative_to(run_dir)), "container_id": container_id, "container_name": name})
     status.pop("last_observation", None)
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id})
+    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id})
     return command, realization_id
 
 
@@ -258,7 +258,7 @@ def reconcile_docker(run_dir: Path) -> dict[str, Any]:
     status.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observed_at, "last_observation": str(observation_path.relative_to(run_dir))})
     _materialize_stdout_progress(run_dir, status, state=state)
     _write_status(run_dir, status)
-    _event(run_dir / "logs" / "events.jsonl", {"event": "run_reconciled", **observation})
+    append_run_event(run_dir, {"event": "run_reconciled", **observation})
     return status
 
 

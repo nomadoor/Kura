@@ -20,6 +20,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 class MusubiRealSmokeHarnessTests(unittest.TestCase):
+    def test_flux_kontext_smoke_avoids_broken_upstream_fp8_t5_path(self) -> None:
+        self.assertNotIn("fp8_t5", MODULE.SPECS["flux_kontext"].extra_override)
+
     def test_dataset_generation_starts_from_an_empty_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -61,6 +64,35 @@ class MusubiRealSmokeHarnessTests(unittest.TestCase):
 
         self.assertTrue(report["checks"]["script_seen"])
         self.assertTrue(report["ok"])
+
+    def test_runpod_result_requires_recovery_and_pod_stop(self) -> None:
+        spec = MODULE.SPECS["wan"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "smoke"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "outputs").mkdir()
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "runpod", "recovery_required": False}),
+                encoding="utf-8",
+            )
+            (run_dir / "logs" / "stdout.log").write_text("avr_loss=0.1\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(
+                json.dumps({"backend": "musubi-tuner", "cwd": "/opt/musubi-tuner", "argv": ["python", spec.expected_script], "env": {}}),
+                encoding="utf-8",
+            )
+            for index in range(spec.expected_outputs):
+                (run_dir / "outputs" / f"result-{index}.safetensors").write_bytes(b"result")
+
+            report = MODULE.validate_result(root, "smoke", spec)
+            self.assertFalse(report["checks"]["pod_stopped"])
+            self.assertFalse(report["ok"])
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            status["pod_stopped_at"] = "2026-01-01T00:00:00+00:00"
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            self.assertTrue(MODULE.validate_result(root, "smoke", spec)["ok"])
 
 
 if __name__ == "__main__":

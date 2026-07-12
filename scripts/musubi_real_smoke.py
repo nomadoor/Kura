@@ -55,7 +55,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "target_frames": [1],
                         "frame_extraction": "head",
@@ -102,7 +101,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "target_frames": [1],
                         "frame_extraction": "head",
@@ -148,7 +146,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "frame_extraction": "full",
                         "max_frames": 37,
@@ -197,7 +194,6 @@ SPECS: dict[str, SmokeSpec] = {
                 "general": {"resolution": [256, 256], "batch_size": 1},
                 "datasets": [
                     {
-                        "image_directory": None,
                         "video_directory": "/workspace/datasets/musubi-video-smoke/videos",
                         "target_frames": [1],
                         "frame_extraction": "head",
@@ -250,7 +246,6 @@ SPECS: dict[str, SmokeSpec] = {
             "gradient_checkpointing": True,
             "fp8_base": True,
             "fp8_scaled": True,
-            "fp8_t5": True,
             "text_encoder_batch_size": 1,
             "extra_args": ["--timestep_sampling", "flux_shift", "--weighting_scheme", "none", "--blocks_to_swap", "24"],
             "save_every_n_steps": 1,
@@ -739,6 +734,8 @@ def validate_result(root: Path, run_id: str, spec: SmokeSpec) -> dict[str, Any]:
         "script_seen": spec.expected_script in log or spec.expected_script in command_text,
         "loss_seen": "avr_loss=" in log,
         "outputs_seen": len(outputs) >= spec.expected_outputs,
+        "recovery_complete": status.get("host") != "runpod" or status.get("recovery_required") is False,
+        "pod_stopped": status.get("host") != "runpod" or isinstance(status.get("pod_stopped_at"), str),
     }
     return {
         "run_id": run_id,

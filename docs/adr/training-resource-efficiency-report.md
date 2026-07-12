@@ -266,6 +266,28 @@ The user should still be able to override every important trade-off. But when
 the user has not asked for a special configuration, Kura should choose a
 reasonable efficient profile from the environment and show what it chose.
 
+## Hugging Face transfer decision (2026-07-12)
+
+Kura-managed Musubi downloads use the transfer implementation provided by the
+pinned container image. Kura does not force `HF_HUB_DISABLE_XET=1`; operators
+may still set that standard Hugging Face escape hatch when a particular
+environment needs it. Independent model parts are fetched concurrently with an
+internal maximum of four workers. This is an implementation safety bound, not
+a user-facing training or quality parameter. Download activity is observed at
+the shared Hugging Face cache level because Xet chunk state is shared; Kura does
+not claim per-file progress from that shared observation.
+
+Retries preserve Hugging Face resumable state. One worker must never delete a
+sibling worker's incomplete file. Both local Docker and RunPod require
+`HF_HUB_CACHE` to equal `HF_HOME/hub`, keeping Xet state, disk preflight, and
+the persistent workspace cache in the same namespace.
+
+An empty-cache Ideogram 4 acceptance run improved from 31m25s to 7m04s from
+container start through one optimizer step (4.44x). This is one end-to-end
+observation of Xet enablement and model-part concurrency together. It is not a
+download-only benchmark and does not isolate either change's individual
+contribution.
+
 ## Immediate next implementation candidates
 
 1. Add model download estimates to `kura run plan`.

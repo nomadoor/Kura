@@ -27,7 +27,7 @@ from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _event, _run_datasets, _safe_error, _workspace_display_path
+from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
 from kura.run_envelope import backend_config, common_recipe
 
 

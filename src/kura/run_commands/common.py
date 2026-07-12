@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kura.executors import _redact_secret_text
+from kura.executors.common import append_run_event, _redact_secret_text
 from kura.backends import get_backend
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -64,10 +64,3 @@ def _workspace_display_path(path: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return str(path)
-
-
-def _event(run_dir: Path, payload: dict[str, Any]) -> None:
-    path = run_dir / "logs" / "events.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")

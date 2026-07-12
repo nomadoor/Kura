@@ -112,7 +112,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
                 )
 
     def test_container_env_inventory_is_derived_from_sources(self) -> None:
-        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
+        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HOME", "HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
         self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HUB_CACHE", "KURA_WORKSPACE"})
 
     def test_local_docker_env_satisfies_container_script_contract(self) -> None:

@@ -12,7 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 PATH = ROOT / "docs" / "backend-smoke-evidence.yaml"
 IDENTITY_KEYS = {"kind", "value"}
-EVIDENCE_KINDS = {"parser", "compile", "real-optimizer-step"}
+EVIDENCE_KINDS = {"parser", "compile", "real-runtime", "real-optimizer-step"}
 
 
 def main() -> int:

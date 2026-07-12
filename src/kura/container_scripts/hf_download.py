@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 
 def env_int(name, default):
@@ -20,14 +21,13 @@ ATTEMPTS = env_int("KURA_HF_DOWNLOAD_ATTEMPTS", 4)
 POLL_SEC = env_int("KURA_HF_DOWNLOAD_POLL_SEC", 15)
 NO_PROGRESS_SEC = env_int("KURA_HF_DOWNLOAD_NO_PROGRESS_SEC", 180)
 DOWNLOAD_RESERVE_BYTES = 1024**3
+MAX_PARALLEL_DOWNLOADS = 4
 
 
 CHILD = r"""
 import json
 import os
 import sys
-
-os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 from huggingface_hub import hf_hub_download
 
@@ -77,24 +77,6 @@ def repo_cache_dirs(cache_dir, item):
         os.path.join(cache_dir, repo_dir),
         os.path.join(cache_dir, ".locks", repo_dir),
     ]
-
-
-def remove_incomplete_files(directories):
-    removed = 0
-    for directory in directories:
-        if not os.path.isdir(directory):
-            continue
-        for root, _, files in os.walk(directory):
-            for name in files:
-                if ".incomplete" not in name:
-                    continue
-                path = os.path.join(root, name)
-                try:
-                    os.remove(path)
-                except OSError:
-                    continue
-                removed += 1
-    return removed
 
 
 def stable_link_target(path, link_path):
@@ -164,11 +146,16 @@ def metadata_failure_kind(exc):
 
 def preflight_downloads(items):
     cache_dir = os.environ.get("HF_HUB_CACHE")
+    hf_home = os.environ.get("HF_HOME")
     if not cache_dir:
         raise SystemExit("[kura] HF_HUB_CACHE is required before downloading models")
+    if not hf_home:
+        raise SystemExit("[kura] HF_HOME is required before downloading models")
+    expected_cache_dir = os.path.join(hf_home, "hub")
+    if os.path.abspath(cache_dir) != os.path.abspath(expected_cache_dir):
+        raise SystemExit(f"[kura] HF_HUB_CACHE must equal HF_HOME/hub: {cache_dir} != {expected_cache_dir}")
     os.makedirs(cache_dir, exist_ok=True)
 
-    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     from huggingface_hub import get_hf_file_metadata, hf_hub_url, try_to_load_from_cache
 
     required_bytes = 0
@@ -230,10 +217,12 @@ def run_one(item):
     os.makedirs(cache_dir, exist_ok=True)
     label = f"{item['key']}:{item['filename']}"
     progress_dirs = repo_cache_dirs(cache_dir, item)
+    activity_dirs = [*progress_dirs, os.path.join(os.environ["HF_HOME"], "xet")]
     baseline_total = sum(tree_snapshot(directory)[0] for directory in progress_dirs)
     baseline_count = sum(tree_snapshot(directory)[2] for directory in progress_dirs)
-    last_total = baseline_total
-    last_mtime = max((tree_snapshot(directory)[1] for directory in progress_dirs), default=0.0)
+    activity_snapshots = [tree_snapshot(directory) for directory in activity_dirs]
+    last_activity_total = sum(snapshot[0] for snapshot in activity_snapshots)
+    last_activity_mtime = max((snapshot[1] for snapshot in activity_snapshots), default=0.0)
     expected_size = item.get("_size_bytes")
     for attempt in range(1, ATTEMPTS + 1):
         print(f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}", flush=True)
@@ -243,27 +232,30 @@ def run_one(item):
             time.sleep(POLL_SEC)
             snapshots = [tree_snapshot(directory) for directory in progress_dirs]
             total = sum(snapshot[0] for snapshot in snapshots)
-            newest = max((snapshot[1] for snapshot in snapshots), default=0.0)
             count = sum(snapshot[2] for snapshot in snapshots)
             downloaded = progress_bytes(total, baseline_total, expected_size)
             created_files = max(0, count - baseline_count)
-            if total != last_total or newest != last_mtime:
-                last_total, last_mtime = total, newest
+            activity_snapshots = [tree_snapshot(directory) for directory in activity_dirs]
+            activity_total = sum(snapshot[0] for snapshot in activity_snapshots)
+            activity_mtime = max((snapshot[1] for snapshot in activity_snapshots), default=0.0)
+            if activity_total != last_activity_total or activity_mtime != last_activity_mtime:
+                last_activity_total, last_activity_mtime = activity_total, activity_mtime
                 last_progress = time.monotonic()
-                print(f"[kura] hf download progress {label} files={created_files} bytes={downloaded}", flush=True)
+                print(
+                    f"[kura] hf download shared activity {label} repo_files_delta={created_files} "
+                    f"repo_bytes_delta={downloaded} expected_size_bytes={expected_size}",
+                    flush=True,
+                )
                 continue
             idle = int(time.monotonic() - last_progress)
-            print(f"[kura] hf download idle {label} idle={idle}s bytes={downloaded}", flush=True)
+            print(f"[kura] hf download shared idle {label} idle={idle}s expected_size_bytes={expected_size}", flush=True)
             if idle >= NO_PROGRESS_SEC:
                 process.kill()
                 process.wait(timeout=30)
-                removed = remove_incomplete_files(repo_cache_dirs(cache_dir, item))
-                print(f"[kura] hf download stalled {label}; removed {removed} incomplete file(s); retrying", flush=True)
-                snapshots = [tree_snapshot(directory) for directory in progress_dirs]
-                last_total = sum(snapshot[0] for snapshot in snapshots)
-                last_mtime = max((snapshot[1] for snapshot in snapshots), default=0.0)
-                baseline_total = last_total
-                baseline_count = sum(snapshot[2] for snapshot in snapshots)
+                print(f"[kura] hf download stalled {label}; preserving resumable state and retrying", flush=True)
+                activity_snapshots = [tree_snapshot(directory) for directory in activity_dirs]
+                last_activity_total = sum(snapshot[0] for snapshot in activity_snapshots)
+                last_activity_mtime = max((snapshot[1] for snapshot in activity_snapshots), default=0.0)
                 break
         output = ""
         if process.stdout is not None:
@@ -292,8 +284,14 @@ def run_one(item):
 def main():
     items = json.loads(sys.argv[1])
     preflight_downloads(items)
-    for item in items:
-        run_one(item)
+    if not items:
+        return
+    workers = min(len(items), MAX_PARALLEL_DOWNLOADS)
+    print(f"[kura] hf download parallel files={len(items)} workers={workers}", flush=True)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(run_one, item) for item in items]
+        for future in futures:
+            future.result()
 
 
 if __name__ == "__main__":

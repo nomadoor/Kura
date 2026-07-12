@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -38,10 +39,18 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
-def _event(path: Path, event: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
+def append_run_event(run_dir: Path, event: dict[str, Any], *, best_effort: bool = False) -> bool:
+    path = run_dir / "logs" / "events.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
+    except OSError as exc:
+        if not best_effort:
+            raise
+        print(f"warning: could not append convenience event log for run {run_dir.name}: {_redact_secret_text(str(exc))}", file=sys.stderr)
+        return False
+    return True
 
 
 def _is_secret(name: str) -> bool:

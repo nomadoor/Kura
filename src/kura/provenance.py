@@ -22,15 +22,26 @@ def artifact_pinning(identity: dict[str, Any], *, observable: bool) -> dict[str,
 
 def adapter_source_identity(backend_name: str) -> dict[str, str]:
     root = Path(__file__).resolve().parent / "backends"
+    container_root = Path(__file__).resolve().parent / "container_scripts"
     if backend_name == "ai-toolkit":
         paths = [root / "common.py", root / "ai_toolkit.py", root / "registry.py"]
     elif backend_name == "musubi-tuner":
-        paths = [root / "common.py", root / "registry.py", *sorted(root.glob("musubi_*.py"))]
+        paths = [
+            root / "common.py",
+            root / "registry.py",
+            *sorted(root.glob("musubi_*.py")),
+            *(container_root / name for name in (
+                "hf_download.py",
+                "musubi_dataset_assert.py",
+                "prune_checkpoints.py",
+                "safetensors_validator.py",
+            )),
+        ]
     else:
         raise ValueError(f"unsupported backend for source identity: {backend_name}")
     hasher = hashlib.sha256()
     for path in paths:
-        hasher.update(path.name.encode("utf-8") + b"\0")
+        hasher.update(path.relative_to(Path(__file__).resolve().parent).as_posix().encode("utf-8") + b"\0")
         hasher.update(path.read_bytes() + b"\0")
     return {"kind": "source-tree-sha256", "value": hasher.hexdigest(), "backend": backend_name}
 
