@@ -20,6 +20,7 @@ from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import Screen
@@ -119,9 +120,9 @@ class KuraMonitorApp(App[None]):
     #nav {
         height: 1fr;
         layout: grid;
-        grid-size: 1 3;
-        grid-rows: 1 1 1fr;
-        grid-gutter: $gap-y 0;
+        grid-size: 1 6;
+        grid-rows: 1 auto 2 1 1fr 2;
+        grid-gutter: 0;
     }
     #detail {
         height: 1fr;
@@ -163,50 +164,79 @@ class KuraMonitorApp(App[None]):
         scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 1;
     }
-    #nav-body {
-        height: 1fr;
-        layout: vertical;
-    }
-    #nav-body.datasets-mode {
-        layout: vertical;
+    #runs-back {
+        display: none;
     }
     #nav-active {
         height: auto;
-        margin-bottom: 1;
+        margin-bottom: 0;
         overflow-y: auto;
     }
     #nav-history {
         height: 1fr;
         overflow-y: auto;
     }
-    #nav-body.datasets-mode #nav-active {
+    #nav.datasets-mode #nav-active {
         height: 1fr;
         margin-bottom: 0;
     }
-    #nav-body.datasets-mode #nav-history {
+    #nav.datasets-mode {
+        grid-size: 1 3;
+        grid-rows: 1 1fr 2;
+    }
+    #nav.datasets-mode #history-title,
+    #nav.datasets-mode #history-filter,
+    #nav.datasets-mode #nav-history,
+    #nav.datasets-mode #datasets-link {
         display: none;
     }
-    .tabs {
-        height: 1;
+    #nav.datasets-mode #runs-back {
+        display: block;
     }
     PaneTitle, SectionLabel {
         height: 1;
         color: #8089b3;
     }
-    TabButton {
+    #history-filter {
         height: 1;
-        width: auto;
-        min-width: 8;
-        padding: 0 1;
+    }
+    #history-title {
+        height: 2;
+        padding-top: 1;
+    }
+    SegmentButton {
+        height: 1;
+        width: 1fr;
+        content-align: center middle;
         color: #8089b3;
+        background: transparent;
     }
-    TabButton:hover {
-        background: #222637;
+    SegmentButton:hover {
+        color: #c5cdf0;
     }
-    TabButton.selected {
-        background: #7aa2f7;
-        color: #10131f;
+    SegmentButton.selected {
+        color: #7aa2f7;
+        background: transparent;
         text-style: bold;
+    }
+    ModeLink {
+        height: 2;
+        padding-top: 1;
+        color: #8089b3;
+        background: transparent;
+    }
+    ModeLink:hover {
+        color: #7aa2f7;
+    }
+    #datasets-link {
+        content-align: right middle;
+    }
+    #runs-back {
+        content-align: right middle;
+    }
+    #detail, #loss, #datasets, #compute, #watch-main {
+        scrollbar-size-vertical: 1;
+        scrollbar-size-horizontal: 1;
     }
     RunRow, EmptyActiveRow, DatasetRow, PathRow, UrlRow {
         height: 1;
@@ -329,24 +359,38 @@ class PaneTitle(Static):
 
 
 class SectionLabel(Static):
-    def __init__(self, label: str):
-        super().__init__(label.upper())
+    def __init__(self, label: str, *, id: str | None = None):
+        super().__init__(label.upper(), id=id)
 
 
-class TabButton(Static):
+class SegmentButton(Static):
     class Selected(Message):
-        def __init__(self, tab: str) -> None:
+        def __init__(self, value: str) -> None:
             super().__init__()
-            self.tab = tab
+            self.value = value
 
-    def __init__(self, label: str, tab: str, *, selected: bool = False, id: str | None = None):
+    def __init__(self, label: str, value: str, *, selected: bool = False, id: str | None = None):
         super().__init__(label, id=id)
-        self.tab = tab
+        self.value = value
         if selected:
             self.add_class("selected")
 
     def on_click(self) -> None:
-        self.post_message(self.Selected(self.tab))
+        self.post_message(self.Selected(self.value))
+
+
+class ModeLink(Static):
+    class Selected(Message):
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    def __init__(self, label: str, value: str, *, id: str | None = None):
+        super().__init__(label, id=id)
+        self.value = value
+
+    def on_click(self) -> None:
+        self.post_message(self.Selected(self.value))
 
 
 class RunRow(Static):
@@ -368,14 +412,18 @@ class RunRow(Static):
             return Text("  none", style=MUTED)
         summary = self.summary
         dot = _state_dot(summary)
-        loc = "☁" if summary.executor_info.kind == "remote" else "⌂"
-        loc_style = DONE if summary.executor_info.kind == "remote" else MUTED
+        is_render = summary.type == "render"
+        badge = "R" if is_render else "T"
+        badge_style = "bold #bb9af7" if is_render else "bold #7aa2f7"
+        location = "POD" if summary.executor_info.kind == "remote" else "LOC"
+        location_style = DONE if summary.executor_info.kind == "remote" else MUTED
         try:
             width = max(int(self.size.width or 0), 0)
         except RuntimeError:
             width = 0
         middle_width = 5 if (summary.state or "").lower() in ACTIVE_STATES and (width == 0 or width >= 18) else 0
-        name_width = max((width - middle_width - 5) if width else 13, 6)
+        location_width = len(location) + 1 if self.lane == "active" else 0
+        name_width = max((width - middle_width - 6 - location_width) if width else (12 - location_width), 6)
         name = _fit_plain(_short_run_label(summary), name_width).ljust(name_width)
         activity_percent = _activity_percent(summary.activity)
         if middle_width == 0:
@@ -387,8 +435,12 @@ class RunRow(Static):
         else:
             middle = (" " * middle_width, FG_MUTED)
         if middle is None:
-            return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), (dot, _state_style(summary)))
-        return Text.assemble((loc, loc_style), (" "), (name, FG), (" "), middle, (" "), (dot, _state_style(summary)))
+            if self.lane == "active":
+                return Text.assemble((badge, badge_style), (" "), (name, FG), (" "), (location, location_style), (" "), (dot, _state_style(summary)))
+            return Text.assemble((badge, badge_style), (" "), (name, FG), (" "), (dot, _state_style(summary)))
+        if self.lane == "active":
+            return Text.assemble((badge, badge_style), (" "), (name, FG), (" "), middle, (" "), (location, location_style), (" "), (dot, _state_style(summary)))
+        return Text.assemble((badge, badge_style), (" "), (name, FG), (" "), middle, (" "), (dot, _state_style(summary)))
 
     def on_click(self) -> None:
         self.post_message(self.Selected(self.summary.id if self.summary else None, self.lane))
@@ -497,13 +549,16 @@ class MetricGrid(Static):
 
 class NavigatorPane(Grid):
     def compose(self) -> ComposeResult:
-        yield PaneTitle("NAVIGATOR")
-        with Horizontal(classes="tabs"):
-            yield TabButton("Runs", "runs", selected=True, id="tab-runs")
-            yield TabButton("Datasets", "datasets", id="tab-datasets")
-        with Vertical(id="nav-body"):
-            yield VerticalScroll(id="nav-active")
-            yield VerticalScroll(id="nav-history")
+        yield SectionLabel("ACTIVE", id="nav-section-title")
+        yield VerticalScroll(id="nav-active")
+        yield SectionLabel("HISTORY", id="history-title")
+        with Horizontal(id="history-filter"):
+            yield SegmentButton("ALL", "all", selected=True, id="filter-all")
+            yield SegmentButton("TRAIN", "train", id="filter-train")
+            yield SegmentButton("RENDER", "render", id="filter-render")
+        yield VerticalScroll(id="nav-history")
+        yield ModeLink("Browse datasets →", "datasets", id="datasets-link")
+        yield ModeLink("← Back to runs", "runs", id="runs-back")
 
     def update_state(
         self,
@@ -511,18 +566,19 @@ class NavigatorPane(Grid):
         active_tab: str,
         active: list[RunSummary],
         history: list[RunSummary],
+        history_filter: str,
         datasets: list[RunDataset],
         selected_run_id: str | None,
         selected_dataset_key: tuple[str | None, str | None, str | None, str] | None,
     ) -> None:
-        self.query_one("#tab-runs", TabButton).set_class(active_tab == "runs", "selected")
-        self.query_one("#tab-datasets", TabButton).set_class(active_tab == "datasets", "selected")
         active_container = self.query_one("#nav-active", VerticalScroll)
         history_container = self.query_one("#nav-history", VerticalScroll)
-        nav_body = self.query_one("#nav-body", Vertical)
-        nav_body.set_class(active_tab == "datasets", "datasets-mode")
+        self.set_class(active_tab == "datasets", "datasets-mode")
+        self.query_one("#nav-section-title", SectionLabel).update("DATASETS" if active_tab == "datasets" else "ACTIVE")
+        for value in ("all", "train", "render"):
+            self.query_one(f"#filter-{value}", SegmentButton).set_class(history_filter == value, "selected")
         if active_tab == "datasets":
-            _sync_dataset_section(active_container, "datasets", datasets, action="select", selected_dataset_key=selected_dataset_key)
+            _sync_dataset_section(active_container, datasets, action="select", selected_dataset_key=selected_dataset_key)
             _sync_static_section(history_container, "")
             return
         _sync_run_section(active_container, "active", active, selected_run_id, show_none=True)
@@ -534,14 +590,10 @@ def _sync_run_section(container: VerticalScroll, label: str, summaries: list[Run
     if getattr(container, "_kura_signature", None) != signature:
         container.remove_children()
         if summaries:
-            container.mount(SectionLabel(label))
             for summary in summaries:
                 container.mount(RunRow(summary, lane=label, selected=summary.id == selected_run_id))
         elif show_none:
-            container.mount(SectionLabel(label))
             container.mount(EmptyActiveRow(selected=selected_run_id is None))
-        else:
-            container.mount(SectionLabel(label))
         setattr(container, "_kura_signature", signature)
         return
 
@@ -561,7 +613,6 @@ def _sync_run_section(container: VerticalScroll, label: str, summaries: list[Run
 
 def _sync_dataset_section(
     container: VerticalScroll,
-    label: str,
     datasets: list[RunDataset],
     *,
     action: str,
@@ -573,7 +624,6 @@ def _sync_dataset_section(
             row.set_class(_dataset_key(row.dataset) == selected_dataset_key, "selected")
         return
     container.remove_children()
-    container.mount(SectionLabel(label))
     if not datasets:
         container.mount(Static(Text("  no datasets", style=MUTED)))
     for dataset in datasets:
@@ -773,7 +823,7 @@ class ComputePane(Vertical):
         info = summary.executor_info
         pod_status = _remote_execution_phase(summary) if info.kind == "remote" else ""
         pod_style = DONE if info.pod_stopped or info.downloaded else (STALE if info.remote_state == "completed" else RUN)
-        self.mount(Static(Text.assemble(("☁ " if info.kind == "remote" else "⌂ ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, pod_style))))
+        self.mount(Static(Text.assemble((("POD" if info.kind == "remote" else "LOC") + "  ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, pod_style))))
         if info.kind == "remote":
             table = Table.grid(padding=(0, 3))
             table.add_column(style=FG_MUTED, width=7)
@@ -901,8 +951,8 @@ class MonitorScreen(Screen[None]):
     """Three-column monitor board."""
 
     BINDINGS = [
-        ("up", "cursor_up", "select up"),
-        ("down", "cursor_down", "select down"),
+        Binding("up", "cursor_up", "select up", priority=True),
+        Binding("down", "cursor_down", "select down", priority=True),
         ("enter", "watch", "watch"),
         ("w", "watch", "watch"),
         ("a", "toggle_all", "all"),
@@ -921,6 +971,7 @@ class MonitorScreen(Screen[None]):
         self._run_selection_initialized = False
         self.selected_dataset_key: tuple[str | None, str | None, str | None, str] | None = None
         self.tab = "runs"
+        self.history_filter = "all"
         self.path_targets: list[PathTarget] = []
         self.path_index = 0
 
@@ -955,7 +1006,7 @@ class MonitorScreen(Screen[None]):
         active_ids = {item.id for item in self.active_runs}
         history = [item for item in self.summaries if item.id not in active_ids]
         history.sort(key=lambda item: _aware_datetime(item.last_updated or item.finished or item.created) or AWARE_MIN, reverse=True)
-        return history[: max(self.app_ref.limit, 0)]
+        return _filter_run_history(history, self.history_filter)[: max(self.app_ref.limit, 0)]
 
     @property
     def ordered_runs(self) -> list[RunSummary]:
@@ -1003,6 +1054,7 @@ class MonitorScreen(Screen[None]):
             active_tab=self.tab,
             active=self.active_runs,
             history=self.history_runs,
+            history_filter=self.history_filter,
             datasets=datasets,
             selected_run_id=self.selected_run_id,
             selected_dataset_key=self.selected_dataset_key,
@@ -1023,14 +1075,22 @@ class MonitorScreen(Screen[None]):
             self.query_one(ComputePane).update_summary(current)
         self.query_one("#keybar", Static).update(_keybar(self.path_targets, self.path_index))
 
-    def on_tab_button_selected(self, message: TabButton.Selected) -> None:
-        self.tab = message.tab
+    def on_mode_link_selected(self, message: ModeLink.Selected) -> None:
+        self.tab = message.value
         self.path_index = 0
         self.update_view()
 
     def on_run_row_selected(self, message: RunRow.Selected) -> None:
         self.selected_run_id = message.run_id
         self.selected_run_lane = message.lane
+        self.path_index = 0
+        self.update_view()
+
+    def on_segment_button_selected(self, message: SegmentButton.Selected) -> None:
+        self.history_filter = message.value
+        if self.selected_run_lane == "history" and self.selected_run_id not in {item.id for item in self.history_runs}:
+            self.selected_run_id = self.history_runs[0].id if self.history_runs else (self.active_runs[0].id if self.active_runs else None)
+            self.selected_run_lane = "history" if self.history_runs else "active"
         self.path_index = 0
         self.update_view()
 
@@ -1249,6 +1309,14 @@ def _resolve_run_selection(previous: str | None, lane: str, active: list[RunSumm
     if previous is not None and previous not in all_ids:
         return None, "active"
     return previous, lane
+
+
+def _filter_run_history(history: list[RunSummary], value: str) -> list[RunSummary]:
+    if value == "train":
+        return [item for item in history if item.type != "render"]
+    if value == "render":
+        return [item for item in history if item.type == "render"]
+    return history
 
 
 def _base_path_targets(summary: RunSummary) -> list[PathTarget]:
@@ -1757,8 +1825,8 @@ def _seconds_per_iter(summary: RunSummary) -> str:
 def _executor_label(summary: RunSummary) -> str:
     info = summary.executor_info
     if info.kind == "remote":
-        return "☁ " + " · ".join(part for part in (info.provider, info.gpu) if part)
-    return "⌂ " + (summary.executor or "local")
+        return "POD · " + " · ".join(part for part in (info.provider, info.gpu) if part)
+    return "LOC · " + (summary.executor or "local")
 
 
 def _remote_execution_phase(summary: RunSummary) -> str:

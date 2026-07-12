@@ -9,10 +9,30 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kura.monitor import ExecutorInfo, PodInfo, RunSummary
-from kura.tui import HostMetrics, KuraMonitorApp, _aware_datetime, _batch, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _runpod_pod_url
+from kura.tui import HostMetrics, KuraMonitorApp, RunRow, _aware_datetime, _batch, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
+    def test_history_filter_separates_training_and_render_runs(self) -> None:
+        train = RunSummary(id="train", experiment=None, type="train", executor="docker", state="completed")
+        render = RunSummary(id="render", experiment=None, type="render", executor="local", state="completed")
+        history = [render, train]
+        self.assertEqual([item.id for item in _filter_run_history(history, "all")], ["render", "train"])
+        self.assertEqual([item.id for item in _filter_run_history(history, "train")], ["train"])
+        self.assertEqual([item.id for item in _filter_run_history(history, "render")], ["render"])
+
+    def test_run_row_uses_type_and_environment_emoji(self) -> None:
+        train = RunRow(RunSummary(id="train", experiment=None, type="train", executor="docker", state="completed"), lane="history")
+        render = RunRow(RunSummary(id="render", experiment=None, type="render", executor="local", state="completed"), lane="history")
+        self.assertTrue(train.render_row().plain.startswith("T "))
+        self.assertTrue(render.render_row().plain.startswith("R "))
+        self.assertNotIn("⌂", train.render_row().plain)
+        self.assertNotIn("LOC", train.render_row().plain)
+        local_active = RunRow(RunSummary(id="local", experiment=None, type="train", executor="docker", state="running"), lane="active")
+        self.assertIn("LOC", local_active.render_row().plain)
+        remote = RunRow(RunSummary(id="remote", experiment=None, type="train", executor="runpod", state="running", executor_info=ExecutorInfo(kind="remote")), lane="active")
+        self.assertIn("POD", remote.render_row().plain)
+
     def test_click_focus_does_not_recolor_an_entire_pane(self) -> None:
         self.assertNotIn(".pane:focus", KuraMonitorApp.CSS)
 
