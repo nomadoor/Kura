@@ -552,6 +552,31 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.checkpoint_expected, 4)
             self.assertEqual(summary.outputs_path, run_dir / "outputs")
 
+    def test_collect_run_summaries_counts_checkpoints_in_legacy_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            downloaded_outputs = run_dir / "downloads" / "train" / "outputs"
+            (run_dir / "resolved").mkdir(parents=True)
+            downloaded_outputs.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "completed", "downloaded_run": "downloads/train"}),
+                encoding="utf-8",
+            )
+            (run_dir / "resolved" / "backend-display.lock.json").write_text(
+                json.dumps({"checkpoint": {"save_every_n_steps": 250}}),
+                encoding="utf-8",
+            )
+            for step in (250, 500, 750):
+                (downloaded_outputs / f"train-step{step:08d}.safetensors").touch()
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.outputs_path, downloaded_outputs)
+            self.assertEqual(summary.checkpoint_count, 3)
+            self.assertEqual(summary.checkpoint_expected, 4)
+
     def test_collect_run_summaries_estimates_runpod_cost_from_launch_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

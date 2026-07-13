@@ -149,10 +149,13 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_name(f".{target.name}.partial-{secrets.token_hex(4)}")
                 try:
-                    os.link(source, temporary)
-                except OSError:
-                    shutil.copy2(source, temporary)
-                os.replace(temporary, target)
+                    try:
+                        os.link(source, temporary)
+                    except OSError:
+                        shutil.copy2(source, temporary)
+                    os.replace(temporary, target)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 outputs.append(str((primary / relative).relative_to(run_dir)))
             return outputs
 

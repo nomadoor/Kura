@@ -5924,6 +5924,32 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["outputs"], ["outputs/artifact.safetensors"])
             self.assertEqual(status["downloaded_run"], "downloads/example")
 
+    def test_run_download_cleans_partial_output_when_publication_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            output_dir = run_dir / "downloads" / "example" / "outputs"
+            realization_dir = run_dir / "downloads" / "example" / "realizations"
+            output_dir.mkdir(parents=True)
+            realization_dir.mkdir(parents=True)
+            (output_dir / "artifact.safetensors").write_text("artifact", encoding="utf-8")
+            (realization_dir / "remote-exit-20260101.json").write_text(
+                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.os.replace", side_effect=OSError("publication failed")):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertEqual(list((run_dir / "outputs").glob(".artifact.safetensors.partial-*")), [])
+
     def test_run_download_rejects_fresh_archive_without_remote_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

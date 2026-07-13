@@ -317,6 +317,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         *sorted((run_dir / "realizations").glob("*.json")),
     )
     ended = _parse_datetime(_first_present(status.get("ended"), observed.get("ended"), realization.get("ended"), realization.get("timestamp")))
+    outputs_path = _outputs_path(run_dir, status)
     return RunSummary(
         id=_string(config.get("id") or run.get("id")) or fallback_id,
         experiment=_string(config.get("experiment") or run.get("experiment")),
@@ -335,8 +336,8 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         finished=ended,
         exit_code=_int_or_none(_first_present(status.get("exit_code"), observed.get("exit_code"), realization.get("exit_code"))),
         run_dir=run_dir,
-        outputs_path=_outputs_path(run_dir, status),
-        checkpoint_count=_checkpoint_count(run_dir),
+        outputs_path=outputs_path,
+        checkpoint_count=_checkpoint_count(outputs_path),
         checkpoint_expected=_checkpoint_expected(config, run_dir),
         datasets=tuple(_datasets(workspace, config or run)),
         executor_info=_executor_info(executor, config, status, realization, run_dir),
@@ -611,6 +612,19 @@ def _read_activity_from_stdout_candidates(paths: Iterable[Path], *, run_dir: Pat
     return None
 
 
+def _hf_download_base_and_bytes(kind: str, raw_label: str, rest: str) -> tuple[str, int | None]:
+    label = _download_label(raw_label)
+    bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
+    if kind == "start":
+        attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
+        return f"downloading {label}" + (f" · attempt {attempt}" if attempt else ""), bytes_value
+    if kind in {"progress", "shared activity"}:
+        return f"downloading {label}", bytes_value
+    idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
+    base = f"download idle {idle}s · {label}" if idle is not None else f"download idle · {label}"
+    return base, bytes_value
+
+
 def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = None) -> str | None:
     try:
         text = _read_text_tail(path, max_bytes=64 * 1024)
@@ -633,16 +647,7 @@ def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = 
             key = _download_key(download.group("label"))
             kind = download.group("kind").lower()
             rest = download.group("rest")
-            bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
-            label = _download_label(download.group("label"))
-            if kind == "start":
-                attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
-                base = f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
-            elif kind in {"progress", "shared activity"}:
-                base = f"downloading {label}"
-            else:
-                idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
-                base = f"download idle {idle}s · {label}" if idle is not None else f"download idle · {label}"
+            base, bytes_value = _hf_download_base_and_bytes(kind, download.group("label"), rest)
             latest_download_activity = _download_activity(base, key, completed_downloads, download_keys, bytes_value=bytes_value)
             continue
         stalled = HF_DOWNLOAD_STALLED_RE.search(line)
@@ -676,17 +681,10 @@ def _activity_from_stdout_line(line: str) -> str | None:
     match = HF_DOWNLOAD_RE.search(line)
     if match:
         kind = match.group("kind").lower()
-        label = _download_label(match.group("label"))
         rest = match.group("rest")
-        bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
-        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None else ""
-        if kind == "start":
-            attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
-            return f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
-        if kind in {"progress", "shared activity"}:
-            return f"downloading {label}{suffix}"
-        idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
-        return f"download idle {idle}s · {label}{suffix}" if idle is not None else f"download idle · {label}{suffix}"
+        base, bytes_value = _hf_download_base_and_bytes(kind, match.group("label"), rest)
+        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None and kind != "start" else ""
+        return f"{base}{suffix}"
     downloaded = KURA_DOWNLOADED_RE.search(line)
     if downloaded:
         return f"downloaded {downloaded.group('key')}"
@@ -882,8 +880,7 @@ def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
     return primary
 
 
-def _checkpoint_count(run_dir: Path) -> int:
-    outputs = run_dir / "outputs"
+def _checkpoint_count(outputs: Path) -> int:
     if not outputs.is_dir():
         return 0
     return sum(1 for path in outputs.glob("*.safetensors") if _checkpoint_step_from_name(path.name) is not None)
