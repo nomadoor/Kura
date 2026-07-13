@@ -51,6 +51,7 @@ _RECENT_DATASET_FILES_CACHE: dict[tuple[str, int], tuple[float, list[str]]] = {}
 class PathTarget:
     label: str
     path: Path
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -494,11 +495,12 @@ class PathRow(Static):
             self.target = target
             self.action = action
 
-    def __init__(self, label: str, *, path: Path, display: str | None = None, selected: bool = False):
+    def __init__(self, label: str, *, path: Path, display: str | None = None, selected: bool = False, enabled: bool = True):
         self.label = label
         self.path = path
         self.path_display = display
-        self.target = PathTarget(label, path)
+        self.enabled = enabled
+        self.target = PathTarget(label, path, enabled)
         super().__init__("")
         if selected:
             self.add_class("selected")
@@ -512,9 +514,11 @@ class PathRow(Static):
         display = self.path_display
         if display is None or len(display) > max_len:
             display = _compact_path(self.path, max_len=max_len)
-        return Text.assemble((label, FG_MUTED), ("  "), (display, f"underline {ACCENT}"))
+        return Text.assemble((label, FG_MUTED), ("  "), (display, f"underline {ACCENT}" if self.enabled else MUTED))
 
     def on_click(self, event: events.Click) -> None:
+        if not self.enabled:
+            return
         self.post_message(self.Activated(self.target, "copy" if event.button == 3 else "open"))
 
 
@@ -571,6 +575,7 @@ class NavigatorPane(Grid):
         active_tab: str,
         active: list[RunSummary],
         history: list[RunSummary],
+        history_pool: list[RunSummary],
         history_filter: str,
         datasets: list[RunDataset],
         selected_run_id: str | None,
@@ -587,21 +592,37 @@ class NavigatorPane(Grid):
             _sync_static_section(history_container, "")
             return
         _sync_run_section(active_container, "active", active, selected_run_id, show_none=True)
-        _sync_run_section(history_container, "history", history, selected_run_id, show_none=False)
+        _sync_run_section(
+            history_container,
+            "history",
+            history,
+            selected_run_id,
+            show_none=False,
+            retained=history_pool,
+        )
 
 
-def _sync_run_section(container: VerticalScroll, label: str, summaries: list[RunSummary], selected_run_id: str | None, *, show_none: bool) -> None:
-    signature = tuple(summary.id for summary in summaries) or (("__none__",) if show_none else ())
+def _sync_run_section(
+    container: VerticalScroll,
+    label: str,
+    summaries: list[RunSummary],
+    selected_run_id: str | None,
+    *,
+    show_none: bool,
+    retained: list[RunSummary] | None = None,
+) -> None:
+    mounted_summaries = retained if retained is not None else summaries
+    signature = tuple(summary.id for summary in mounted_summaries) or (("__none__",) if show_none else ())
     if getattr(container, "_kura_signature", None) != signature:
         container.remove_children()
-        if summaries:
-            for summary in summaries:
-                container.mount(RunRow(summary, lane=label, selected=summary.id == selected_run_id))
+        if mounted_summaries:
+            container.mount(*(RunRow(summary, lane=label, selected=summary.id == selected_run_id) for summary in mounted_summaries))
         elif show_none:
             container.mount(EmptyActiveRow(selected=selected_run_id is None))
         setattr(container, "_kura_signature", signature)
-        return
 
+    visible_ids = {summary.id for summary in summaries}
+    summaries_by_id = {summary.id: summary for summary in mounted_summaries}
     for row in container.query(EmptyActiveRow):
         row.set_class(selected_run_id is None, "selected")
     for row in container.query(RunRow):
@@ -609,9 +630,12 @@ def _sync_run_section(container: VerticalScroll, label: str, summaries: list[Run
             row.set_class(selected_run_id is None, "selected")
             row.update(row.render_row())
             continue
-        summary = next((item for item in summaries if item.id == row.summary.id), row.summary)
+        summary = summaries_by_id.get(row.summary.id, row.summary)
         row.summary = summary
         row.lane = label
+        row.display = summary.id in visible_ids
+        if not row.display:
+            continue
         row.update(row.render_row())
         row.set_class(summary.id == selected_run_id, "selected")
 
@@ -684,7 +708,7 @@ class DetailPane(VerticalScroll):
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("files"))
         for target in _base_path_targets(summary):
-            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=52), selected=selected_target == target))
+            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=52), selected=selected_target == target, enabled=target.enabled))
         self.mount(Static(Text("paths are links · o open · y copy", style=MUTED)))
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("events"))
@@ -834,10 +858,10 @@ class ComputePane(Vertical):
             table.add_column(style=FG_MUTED, width=7)
             table.add_column()
             table.add_row("gpu", info.gpu or "-")
-            mirror = f"step {info.mirrored_checkpoint_step}" if info.mirrored_checkpoint_step is not None else "waiting"
+            mirror = _checkpoint_count_text(summary)
             if info.checkpoint_sync_error:
                 mirror = "sync error · " + _fit_plain(info.checkpoint_sync_error, 34)
-            table.add_row("mirror", Text(mirror, style=FAIL if info.checkpoint_sync_error else DONE if info.mirrored_checkpoint_step is not None else MUTED))
+            table.add_row("weights", Text(mirror, style=FAIL if info.checkpoint_sync_error else DONE if summary.checkpoint_count else MUTED))
             self._add_metrics_rows(table, self.app_ref.metrics_for(summary), fallback_gpu=None, include_gpu_name=False)
             self.mount(Static(table))
             if info.pod:
@@ -855,6 +879,7 @@ class ComputePane(Vertical):
                 self.mount(Static(pod_table))
         else:
             self._mount_host_metrics(fallback_gpu=info.gpu, summary=summary)
+            self.mount(Static(Text.assemble(("weights ", FG_MUTED), (_checkpoint_count_text(summary), DONE if summary.checkpoint_count else MUTED))))
 
     @property
     def app_ref(self) -> KuraMonitorApp:
@@ -928,14 +953,16 @@ class WatchPane(VerticalScroll):
         right.add_column(style=FG_MUTED)
         right.add_column()
         right.add_row("created", _fmt_dt(summary.created))
+        right.add_row("started", _fmt_dt(summary.started))
         right.add_row("finished", _fmt_dt(summary.finished))
+        right.add_row("weights", _checkpoint_count_text(summary))
         right.add_row("outputs", str(summary.outputs_path or "-"))
         overview.add_row(left, right)
         self.mount(Static(overview))
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("files"))
         for target in _path_targets(summary):
-            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=72), selected=selected_target == target))
+            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=72), selected=selected_target == target, enabled=target.enabled))
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("config"))
         self.mount(Static(_config_table(summary)))
@@ -997,6 +1024,13 @@ class MonitorScreen(Screen[None]):
             yield Static(id="keybar")
 
     def on_mount(self) -> None:
+        self.query_one("#status", Static).update(Text("Kura monitor · loading runs…", style=FG_MUTED))
+        self.query_one(DetailPane).mount(PaneTitle("RUN"), Static(Text("loading…", style=MUTED)))
+        self.call_after_refresh(self._start_refresh_loop)
+
+    def _start_refresh_loop(self) -> None:
+        if not self.is_mounted:
+            return
         self.refresh_data()
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
@@ -1008,10 +1042,18 @@ class MonitorScreen(Screen[None]):
 
     @property
     def history_runs(self) -> list[RunSummary]:
+        return _filter_run_history(self.history_pool, self.history_filter)[: max(self.app_ref.limit, 0)]
+
+    @property
+    def history_pool(self) -> list[RunSummary]:
         active_ids = {item.id for item in self.active_runs}
         history = [item for item in self.summaries if item.id not in active_ids]
         history.sort(key=lambda item: _aware_datetime(item.last_updated or item.finished or item.created) or AWARE_MIN, reverse=True)
-        return _filter_run_history(history, self.history_filter)[: max(self.app_ref.limit, 0)]
+        return history
+
+    @property
+    def retained_history(self) -> list[RunSummary]:
+        return _retained_run_history(self.history_pool, limit=max(self.app_ref.limit, 0))
 
     @property
     def ordered_runs(self) -> list[RunSummary]:
@@ -1056,6 +1098,7 @@ class MonitorScreen(Screen[None]):
             active_tab=self.tab,
             active=self.active_runs,
             history=self.history_runs,
+            history_pool=self.retained_history,
             history_filter=self.history_filter,
             datasets=datasets,
             selected_run_id=self.selected_run_id,
@@ -1111,6 +1154,8 @@ class MonitorScreen(Screen[None]):
         self._activate_path(message.target.path, message.action)
 
     def _activate_path(self, path: Path, action: str) -> None:
+        if not path.exists() or (path.is_dir() and not any(path.iterdir())):
+            return
         if action == "copy":
             _copy_text(str(path), self)
             self.notify(f"copied {path.name}")
@@ -1212,6 +1257,13 @@ class WatchScreen(Screen[None]):
             yield Static(id="keybar")
 
     def on_mount(self) -> None:
+        self.query_one("#status", Static).update(Text(f"Kura watch · {self.run_id} · loading…", style=FG_MUTED))
+        self.query_one(WatchPane).mount(PaneTitle("RUN"), Static(Text("loading…", style=MUTED)))
+        self.call_after_refresh(self._start_refresh_loop)
+
+    def _start_refresh_loop(self) -> None:
+        if not self.is_mounted:
+            return
         self.refresh_data()
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
@@ -1321,13 +1373,31 @@ def _filter_run_history(history: list[RunSummary], value: str) -> list[RunSummar
     return history
 
 
+def _retained_run_history(history: list[RunSummary], *, limit: int) -> list[RunSummary]:
+    """Keep only rows that can appear in one of the history filter views."""
+
+    if limit <= 0:
+        return []
+    retained_ids: set[str] = set()
+    for value in ("all", "train", "render"):
+        retained_ids.update(item.id for item in _filter_run_history(history, value)[:limit])
+    return [item for item in history if item.id in retained_ids]
+
+
 def _base_path_targets(summary: RunSummary) -> list[PathTarget]:
     targets: list[PathTarget] = []
     if summary.run_dir:
         targets.append(PathTarget("dir", summary.run_dir))
     if summary.outputs_path:
-        targets.append(PathTarget("out", summary.outputs_path))
+        enabled = summary.outputs_path.is_dir() and any(summary.outputs_path.iterdir())
+        targets.append(PathTarget("out", summary.outputs_path, enabled))
     return targets
+
+
+def _checkpoint_count_text(summary: RunSummary) -> str:
+    if summary.checkpoint_expected is not None:
+        return f"{summary.checkpoint_count} / {summary.checkpoint_expected} saved"
+    return f"{summary.checkpoint_count} saved"
 
 
 def _path_targets(summary: RunSummary | None) -> list[PathTarget]:
@@ -1637,15 +1707,33 @@ def _events_table(summary: RunSummary, *, lines: int) -> Table | Text:
     table.add_column()
     import json
 
+    parsed: list[tuple[dict[str, Any] | None, str]] = []
     for line in raw:
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
+            parsed.append((None, line))
+        else:
+            parsed.append((item, line))
+    dates = {
+        str(item.get("timestamp") or item.get("observed_at"))[:10]
+        for item, _ in parsed
+        if item and len(str(item.get("timestamp") or item.get("observed_at") or "")) >= 10
+    }
+    show_date_boundaries = len(dates) > 1
+    previous_date: str | None = None
+    for item, line in parsed:
+        if item is None:
             table.add_row("", "event", line)
             continue
         ts = str(item.get("timestamp") or item.get("observed_at") or "")
+        date = ts[:10] if len(ts) >= 10 else ""
+        if show_date_boundaries and date and date != previous_date:
+            table.add_row("", Text(f"── {date[5:]} ──", style=MUTED), "")
+        if date:
+            previous_date = date
         event = str(item.get("event") or "event")
-        table.add_row(ts.replace("T", " ")[11:16] or "--:--", Text(event, style=RUN if event == "run_started" else ACCENT), _event_detail(item))
+        table.add_row(ts.replace("T", " ")[11:16] or "--:--", Text(_event_label(event), style=RUN if event == "run_started" else ACCENT), _event_detail(item))
     return table
 
 
@@ -1961,6 +2049,16 @@ def _fit_plain(value: str, width: int) -> str:
 
 def _event_detail(item: dict[str, Any]) -> str:
     details: list[str] = []
+    event = item.get("event")
+    if event == "run_outputs_pulled":
+        outputs = item.get("outputs") if isinstance(item.get("outputs"), list) else []
+        steps = [output.get("step") for output in outputs if isinstance(output, dict) and output.get("step") is not None]
+        if steps:
+            details.append("step " + ", ".join(str(step) for step in steps))
+        elif item.get("count") is not None:
+            details.append(f"{item['count']} output(s)")
+    if item.get("remote_state"):
+        details.append(f"remote {item['remote_state']}")
     if item.get("state"):
         details.append(f"state {item['state']}")
     if item.get("exit_code") is not None:
@@ -1972,6 +2070,19 @@ def _event_detail(item: dict[str, Any]) -> str:
     if not details and item.get("executor"):
         details.append(str(item["executor"]))
     return " · ".join(details) or "-"
+
+
+def _event_label(event: str) -> str:
+    return {
+        "run_staged": "staged",
+        "run_started": "started",
+        "run_outputs_pulled": "weight pulled",
+        "remote_exit_observed": "job exited",
+        "runpod_pod_stopped": "pod stopped",
+        "run_terminated": "pod stopped",
+        "run_launch_failed": "launch failed",
+        "run_reconciled": "reconciled",
+    }.get(event, event)
 
 
 def _age(value: datetime | None) -> str:

@@ -601,5 +601,5 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         status.update({"state": "interrupted", "exit_code": None, "ended": ended_at})
     status["pod_stopped_at"] = ended_at
     _write_status(run_dir, status)
-    append_run_event(run_dir, {"event": "run_terminated", "timestamp": ended_at, "executor": "runpod", "pod_id": pod_id})
+    append_run_event(run_dir, {"event": "runpod_pod_stopped", "timestamp": ended_at, "executor": "runpod", "pod_id": pod_id})
     return status

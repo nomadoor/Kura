@@ -25,11 +25,9 @@ ACTIVE_STATES = {"queued", "staged", "launching", "running"}
 DRAFT_STATE = "draft"
 AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
-TRAIN_STDOUT_PROGRESS_RE = re.compile(
-    r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)",
-    re.IGNORECASE,
-)
-HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
+TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
+TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
+HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle|shared activity|shared idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
 HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
 KURA_STEP_RE = re.compile(r"\[kura\]\s+musubi step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
 KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+downloaded\s+(?P<key>\S+)\s+->", re.IGNORECASE)
@@ -94,6 +92,8 @@ class RunSummary:
     exit_code: int | None = None
     run_dir: Path | None = None
     outputs_path: Path | None = None
+    checkpoint_count: int = 0
+    checkpoint_expected: int | None = None
     datasets: tuple[RunDataset, ...] = ()
     executor_info: ExecutorInfo = field(default_factory=ExecutorInfo)
     is_stale: bool = False
@@ -317,6 +317,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         *sorted((run_dir / "realizations").glob("*.json")),
     )
     ended = _parse_datetime(_first_present(status.get("ended"), observed.get("ended"), realization.get("ended"), realization.get("timestamp")))
+    outputs_path = _outputs_path(run_dir, status)
     return RunSummary(
         id=_string(config.get("id") or run.get("id")) or fallback_id,
         experiment=_string(config.get("experiment") or run.get("experiment")),
@@ -335,7 +336,9 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         finished=ended,
         exit_code=_int_or_none(_first_present(status.get("exit_code"), observed.get("exit_code"), realization.get("exit_code"))),
         run_dir=run_dir,
-        outputs_path=_outputs_path(run_dir, status),
+        outputs_path=outputs_path,
+        checkpoint_count=_checkpoint_count(outputs_path),
+        checkpoint_expected=_checkpoint_expected(config, run_dir),
         datasets=tuple(_datasets(workspace, config or run)),
         executor_info=_executor_info(executor, config, status, realization, run_dir),
         is_stale=bool(state == "running" and last_updated and (datetime.now().astimezone() - last_updated).total_seconds() > stale_after),
@@ -535,20 +538,34 @@ def _read_training_stdout(path: Path, *, loss_tail: int) -> tuple[RunProgress | 
     seconds_per_iter: float | None = None
     losses: list[float] = []
     seen: set[tuple[int, int, float]] = set()
-    for match in TRAIN_STDOUT_PROGRESS_RE.finditer(text):
-        loss = float(match.group("loss"))
-        current = int(match.group("step"))
-        current_total = int(match.group("total"))
-        current_seconds = _parse_seconds_per_iter(match.group(0))
-        key = (current, current_total, loss)
-        if key in seen:
+    for record in re.split(r"[\r\n]+", text):
+        if not record:
             continue
-        seen.add(key)
-        step = current
-        total = current_total
-        if current_seconds is not None:
-            seconds_per_iter = current_seconds
-        losses.append(loss)
+        for loss_match in TRAIN_STDOUT_LOSS_RE.finditer(record):
+            # tqdm rewrites progress with carriage returns. Search only the
+            # bounded prefix of this display record instead of allowing a
+            # cross-record ``.*?`` scan, which becomes quadratic on logs with
+            # many progress-looking fragments but no following loss token.
+            prefix = record[max(0, loss_match.start() - 512):loss_match.start()]
+            progress_matches = list(TRAIN_STDOUT_PROGRESS_RE.finditer(prefix))
+            if not progress_matches:
+                continue
+            progress_match = progress_matches[-1]
+            loss = float(loss_match.group("loss"))
+            current = int(progress_match.group("step"))
+            current_total = int(progress_match.group("total"))
+            if current > current_total:
+                continue
+            current_seconds = _parse_seconds_per_iter(record)
+            key = (current, current_total, loss)
+            if key in seen:
+                continue
+            seen.add(key)
+            step = current
+            total = current_total
+            if current_seconds is not None:
+                seconds_per_iter = current_seconds
+            losses.append(loss)
     if loss_tail > 0:
         losses = losses[-loss_tail:]
     progress = RunProgress(step=step, total=total, seconds_per_iter=seconds_per_iter) if step is not None or total is not None or seconds_per_iter is not None else None
@@ -595,6 +612,19 @@ def _read_activity_from_stdout_candidates(paths: Iterable[Path], *, run_dir: Pat
     return None
 
 
+def _hf_download_base_and_bytes(kind: str, raw_label: str, rest: str) -> tuple[str, int | None]:
+    label = _download_label(raw_label)
+    bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
+    if kind == "start":
+        attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
+        return f"downloading {label}" + (f" · attempt {attempt}" if attempt else ""), bytes_value
+    if kind in {"progress", "shared activity"}:
+        return f"downloading {label}", bytes_value
+    idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
+    base = f"download idle {idle}s · {label}" if idle is not None else f"download idle · {label}"
+    return base, bytes_value
+
+
 def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = None) -> str | None:
     try:
         text = _read_text_tail(path, max_bytes=64 * 1024)
@@ -617,16 +647,7 @@ def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = 
             key = _download_key(download.group("label"))
             kind = download.group("kind").lower()
             rest = download.group("rest")
-            bytes_value = _int_from_pattern(rest, r"\bbytes=(\d+)")
-            label = _download_label(download.group("label"))
-            if kind == "start":
-                attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
-                base = f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
-            elif kind == "progress":
-                base = f"downloading {label}"
-            else:
-                idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
-                base = f"download idle {idle}s · {label}" if idle is not None else f"download idle · {label}"
+            base, bytes_value = _hf_download_base_and_bytes(kind, download.group("label"), rest)
             latest_download_activity = _download_activity(base, key, completed_downloads, download_keys, bytes_value=bytes_value)
             continue
         stalled = HF_DOWNLOAD_STALLED_RE.search(line)
@@ -660,17 +681,10 @@ def _activity_from_stdout_line(line: str) -> str | None:
     match = HF_DOWNLOAD_RE.search(line)
     if match:
         kind = match.group("kind").lower()
-        label = _download_label(match.group("label"))
         rest = match.group("rest")
-        bytes_value = _int_from_pattern(rest, r"\bbytes=(\d+)")
-        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None else ""
-        if kind == "start":
-            attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
-            return f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
-        if kind == "progress":
-            return f"downloading {label}{suffix}"
-        idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
-        return f"download idle {idle}s · {label}{suffix}" if idle is not None else f"download idle · {label}{suffix}"
+        base, bytes_value = _hf_download_base_and_bytes(kind, match.group("label"), rest)
+        suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None and kind != "start" else ""
+        return f"{base}{suffix}"
     downloaded = KURA_DOWNLOADED_RE.search(line)
     if downloaded:
         return f"downloaded {downloaded.group('key')}"
@@ -808,7 +822,7 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     cost_stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
     cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, status.get("state"))
     pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost_used) if pod_id or pod_state else None
-    pulled = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+    pulled = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
     mirrored_steps = [_int_or_none(item.get("step")) for item in pulled if isinstance(item, dict)]
     mirrored_step = max((step for step in mirrored_steps if step is not None), default=None)
     return ExecutorInfo(
@@ -864,6 +878,28 @@ def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
         if candidate.exists():
             return candidate
     return primary
+
+
+def _checkpoint_count(outputs: Path) -> int:
+    if not outputs.is_dir():
+        return 0
+    return sum(1 for path in outputs.glob("*.safetensors") if _checkpoint_step_from_name(path.name) is not None)
+
+
+def _checkpoint_step_from_name(name: str) -> int | None:
+    matches = re.findall(r"(?:step|_)(\d{4,})(?=\.safetensors$|[-_.])", name)
+    return int(matches[-1]) if matches else None
+
+
+def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:
+    recipe = common_recipe(config)
+    steps = _int_or_none(recipe.get("steps"))
+    display = _read_mapping(run_dir / "resolved" / "backend-display.lock.json")
+    checkpoint = display.get("checkpoint") if isinstance(display.get("checkpoint"), dict) else {}
+    every = _int_or_none(checkpoint.get("save_every_n_steps"))
+    if not steps or not every or checkpoint.get("prune_before_step") is not None or checkpoint.get("keep_last") is not None:
+        return None
+    return max(steps // every, 1)
 
 
 def _downloaded_run_dir(run_dir: Path, status: dict[str, Any]) -> Path | None:

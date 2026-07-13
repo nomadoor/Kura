@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import io
+import inspect
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from unittest.mock import patch
 from rich.console import Console
 
 from kura.monitor import RunSummary, _format_time_cell, _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
+from kura.container_scripts import hf_download
 
 
 class MonitorProjectionTests(unittest.TestCase):
@@ -313,6 +315,24 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.latest_loss, 0.321)
             self.assertEqual(summary.best_loss, 0.316)
 
+    def test_training_stdout_ignores_date_like_progress_before_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 100}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "steps: 10/100 [00:10<01:30, 1.0s/it, avr_loss=0.5]\n"
+                "2026/07/13 12:00:00 INFO epoch loss: 0.999\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual((summary.progress.step, summary.progress.total), (10, 100))
+            self.assertEqual(summary.losses, (0.5,))
+
     def test_collect_run_summaries_reads_model_download_activity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -333,13 +353,35 @@ class MonitorProjectionTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
             (run_dir / "logs" / "stdout.log").write_text(
                 "[kura] musubi step 1/6: hf_hub_download\n"
-                "[kura] hf download progress dit:raw.safetensors files=40 bytes=2147483648\n",
+                "[kura] hf download shared activity dit:raw.safetensors repo_files_delta=40 repo_bytes_delta=2147483648 expected_size_bytes=4294967296\n",
                 encoding="utf-8",
             )
 
             summary = collect_run_summaries(root)[0]
 
             self.assertEqual(summary.activity, "downloading dit raw.safetensors · 2.0GB")
+
+    def test_hf_download_activity_contract_matches_container_producer(self) -> None:
+        source = inspect.getsource(hf_download)
+        self.assertIn("hf download shared activity", source)
+        self.assertIn("repo_bytes_delta=", source)
+        self.assertIn("hf download shared idle", source)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "downloading"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: downloading\ntype: train\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "[kura] hf download shared activity dit:model.safetensors repo_files_delta=2 repo_bytes_delta=1048576 expected_size_bytes=2097152\n"
+                "[kura] hf download shared idle dit:model.safetensors idle=15s expected_size_bytes=2097152\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.activity, "download idle 15s · dit model.safetensors")
 
     def test_collect_run_summaries_reads_downloaded_stdout_for_remote_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -442,7 +484,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "started": "2026-06-22T10:00:00+00:00",
                         "ended": "2026-06-22T10:30:00+00:00",
                         "pod_id": "pod1",
-                        "pulled_outputs": [
+                        "mirrored_outputs": [
                             {"name": "model-step00000250.safetensors", "step": 250},
                             {"name": "model-step00000500.safetensors", "step": 500},
                         ],
@@ -490,6 +532,50 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.22)
             self.assertEqual(summary.executor_info.mirrored_checkpoint_step, 500)
             self.assertEqual(summary.executor_info.checkpoint_sync_error, "temporary transfer failure")
+
+    def test_collect_run_summaries_counts_scheduled_checkpoints_in_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "outputs").mkdir()
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "resolved" / "backend-display.lock.json").write_text(json.dumps({"checkpoint": {"save_every_n_steps": 250}}), encoding="utf-8")
+            for step in (250, 500, 750):
+                (run_dir / "outputs" / f"train-step{step:08d}.safetensors").touch()
+            (run_dir / "outputs" / "train.safetensors").touch()
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.checkpoint_count, 3)
+            self.assertEqual(summary.checkpoint_expected, 4)
+            self.assertEqual(summary.outputs_path, run_dir / "outputs")
+
+    def test_collect_run_summaries_counts_checkpoints_in_legacy_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            downloaded_outputs = run_dir / "downloads" / "train" / "outputs"
+            (run_dir / "resolved").mkdir(parents=True)
+            downloaded_outputs.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "completed", "downloaded_run": "downloads/train"}),
+                encoding="utf-8",
+            )
+            (run_dir / "resolved" / "backend-display.lock.json").write_text(
+                json.dumps({"checkpoint": {"save_every_n_steps": 250}}),
+                encoding="utf-8",
+            )
+            for step in (250, 500, 750):
+                (downloaded_outputs / f"train-step{step:08d}.safetensors").touch()
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.outputs_path, downloaded_outputs)
+            self.assertEqual(summary.checkpoint_count, 3)
+            self.assertEqual(summary.checkpoint_expected, 4)
 
     def test_collect_run_summaries_estimates_runpod_cost_from_launch_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

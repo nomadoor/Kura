@@ -142,22 +142,21 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             outputs: list[str] = []
             if not output_dir.exists():
                 return outputs
-            temporary = run_dir / f".outputs.tmp-{secrets.token_hex(4)}"
-            if temporary.exists():
-                shutil.rmtree(temporary)
-            temporary.mkdir(parents=True, exist_ok=True)
+            primary.mkdir(parents=True, exist_ok=True)
             for source in sorted(path for path in output_dir.rglob("*") if path.is_file()):
                 relative = source.relative_to(output_dir)
-                target = temporary / relative
+                target = primary / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_name(f".{target.name}.partial-{secrets.token_hex(4)}")
                 try:
-                    os.link(source, target)
-                except OSError:
-                    shutil.copy2(source, target)
+                    try:
+                        os.link(source, temporary)
+                    except OSError:
+                        shutil.copy2(source, temporary)
+                    os.replace(temporary, target)
+                finally:
+                    temporary.unlink(missing_ok=True)
                 outputs.append(str((primary / relative).relative_to(run_dir)))
-            if primary.exists():
-                shutil.rmtree(primary)
-            temporary.rename(primary)
             return outputs
 
         def materialize_downloaded_status() -> bool:
@@ -406,13 +405,13 @@ def _pull_remote_output_items(
         return []
     config = _workspace_config()
     min_download_free = _configured_download_min_free_bytes(config)
-    destination = run_dir / "pulled" / "outputs"
+    destination = run_dir / "outputs"
     destination.mkdir(parents=True, exist_ok=True)
     try:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         status = {}
-    previous_outputs = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+    previous_outputs = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
     previous_by_name = {item.get("name"): item for item in previous_outputs if isinstance(item, dict) and isinstance(item.get("name"), str)}
     pulled: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
@@ -473,22 +472,22 @@ def _pull_remote_output_items(
     return pulled
 
 
-def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
+def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]], *, emit_event: bool = True) -> None:
     def mutate(status: dict[str, Any]) -> None:
         status.pop("checkpoint_sync_error", None)
         if not pulled:
             return
-        previous = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+        previous = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
         merged = {item.get("name"): item for item in previous if isinstance(item, dict) and isinstance(item.get("name"), str)}
         for item in pulled:
             if isinstance(item.get("name"), str):
                 merged[item["name"]] = item
-        status["pulled_outputs"] = list(merged.values())
-        status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
+        status["mirrored_outputs"] = list(merged.values())
+        status["mirrored_outputs_synced_at"] = datetime.now().astimezone().isoformat()
 
     _mutate_run_status(run_dir, mutate)
     copied = [item for item in pulled if not item.get("skipped")]
-    if copied:
+    if copied and emit_event:
         append_run_event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(copied), "outputs": copied})
 
 
@@ -499,7 +498,10 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
         with _run_operation_lock(run_dir, "checkpoint-pull", blocking=False):
             items = _runpod_remote_outputs(details, workspace=workspace, run_id=run_id)
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=items)
-            _record_pulled_outputs(run_dir, pulled)
+            # Newly published files were recorded immediately so partial
+            # success survives a later transfer failure. Merge skipped items
+            # and clear stale errors without emitting the same event twice.
+            _record_pulled_outputs(run_dir, pulled, emit_event=False)
         return True
     except _OperationBusy:
         return True
@@ -525,8 +527,8 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             raise ValueError("no matching remote .safetensors outputs found")
         with _run_operation_lock(run_dir, "checkpoint-pull"):
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=selected, force=args.force)
-            _record_pulled_outputs(run_dir, pulled)
-        print(json.dumps({"run_id": args.run_id, "destination": str(run_dir / "pulled" / "outputs"), "pulled": pulled}, ensure_ascii=False, indent=2))
+            _record_pulled_outputs(run_dir, pulled, emit_event=False)
+        print(json.dumps({"run_id": args.run_id, "destination": str(run_dir / "outputs"), "pulled": pulled}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot pull run outputs: {_safe_error(exc)}", file=sys.stderr)
