@@ -14,7 +14,6 @@ FORBIDDEN_PARTS = {
     "__pycache__",
     "runs",
     "datasets",
-    "experiments",
     "workflows",
     "promptsets",
     "outputs",

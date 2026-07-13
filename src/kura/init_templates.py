@@ -299,7 +299,7 @@ if __name__ == "__main__":
 
 def cmd_init(_: argparse.Namespace) -> int:
     root = Path.cwd()
-    for relative in ("datasets", "experiments", "runs", "workflows", "promptsets", "backends", "executors", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner", "docker/comfyui"):
+    for relative in ("datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner", "docker/comfyui"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
