@@ -51,6 +51,7 @@ _RECENT_DATASET_FILES_CACHE: dict[tuple[str, int], tuple[float, list[str]]] = {}
 class PathTarget:
     label: str
     path: Path
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -494,11 +495,12 @@ class PathRow(Static):
             self.target = target
             self.action = action
 
-    def __init__(self, label: str, *, path: Path, display: str | None = None, selected: bool = False):
+    def __init__(self, label: str, *, path: Path, display: str | None = None, selected: bool = False, enabled: bool = True):
         self.label = label
         self.path = path
         self.path_display = display
-        self.target = PathTarget(label, path)
+        self.enabled = enabled
+        self.target = PathTarget(label, path, enabled)
         super().__init__("")
         if selected:
             self.add_class("selected")
@@ -512,9 +514,11 @@ class PathRow(Static):
         display = self.path_display
         if display is None or len(display) > max_len:
             display = _compact_path(self.path, max_len=max_len)
-        return Text.assemble((label, FG_MUTED), ("  "), (display, f"underline {ACCENT}"))
+        return Text.assemble((label, FG_MUTED), ("  "), (display, f"underline {ACCENT}" if self.enabled else MUTED))
 
     def on_click(self, event: events.Click) -> None:
+        if not self.enabled:
+            return
         self.post_message(self.Activated(self.target, "copy" if event.button == 3 else "open"))
 
 
@@ -684,7 +688,7 @@ class DetailPane(VerticalScroll):
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("files"))
         for target in _base_path_targets(summary):
-            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=52), selected=selected_target == target))
+            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=52), selected=selected_target == target, enabled=target.enabled))
         self.mount(Static(Text("paths are links · o open · y copy", style=MUTED)))
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("events"))
@@ -834,10 +838,10 @@ class ComputePane(Vertical):
             table.add_column(style=FG_MUTED, width=7)
             table.add_column()
             table.add_row("gpu", info.gpu or "-")
-            mirror = f"step {info.mirrored_checkpoint_step}" if info.mirrored_checkpoint_step is not None else "waiting"
+            mirror = _checkpoint_count_text(summary)
             if info.checkpoint_sync_error:
                 mirror = "sync error · " + _fit_plain(info.checkpoint_sync_error, 34)
-            table.add_row("mirror", Text(mirror, style=FAIL if info.checkpoint_sync_error else DONE if info.mirrored_checkpoint_step is not None else MUTED))
+            table.add_row("weights", Text(mirror, style=FAIL if info.checkpoint_sync_error else DONE if summary.checkpoint_count else MUTED))
             self._add_metrics_rows(table, self.app_ref.metrics_for(summary), fallback_gpu=None, include_gpu_name=False)
             self.mount(Static(table))
             if info.pod:
@@ -855,6 +859,7 @@ class ComputePane(Vertical):
                 self.mount(Static(pod_table))
         else:
             self._mount_host_metrics(fallback_gpu=info.gpu, summary=summary)
+            self.mount(Static(Text.assemble(("weights ", FG_MUTED), (_checkpoint_count_text(summary), DONE if summary.checkpoint_count else MUTED))))
 
     @property
     def app_ref(self) -> KuraMonitorApp:
@@ -929,13 +934,14 @@ class WatchPane(VerticalScroll):
         right.add_column()
         right.add_row("created", _fmt_dt(summary.created))
         right.add_row("finished", _fmt_dt(summary.finished))
+        right.add_row("weights", _checkpoint_count_text(summary))
         right.add_row("outputs", str(summary.outputs_path or "-"))
         overview.add_row(left, right)
         self.mount(Static(overview))
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("files"))
         for target in _path_targets(summary):
-            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=72), selected=selected_target == target))
+            self.mount(PathRow(target.label, path=target.path, display=_compact_path(target.path, max_len=72), selected=selected_target == target, enabled=target.enabled))
         self.mount(Static("", classes="section-gap"))
         self.mount(SectionLabel("config"))
         self.mount(Static(_config_table(summary)))
@@ -1111,6 +1117,8 @@ class MonitorScreen(Screen[None]):
         self._activate_path(message.target.path, message.action)
 
     def _activate_path(self, path: Path, action: str) -> None:
+        if not path.exists() or (path.is_dir() and not any(path.iterdir())):
+            return
         if action == "copy":
             _copy_text(str(path), self)
             self.notify(f"copied {path.name}")
@@ -1326,8 +1334,15 @@ def _base_path_targets(summary: RunSummary) -> list[PathTarget]:
     if summary.run_dir:
         targets.append(PathTarget("dir", summary.run_dir))
     if summary.outputs_path:
-        targets.append(PathTarget("out", summary.outputs_path))
+        enabled = summary.outputs_path.is_dir() and any(summary.outputs_path.iterdir())
+        targets.append(PathTarget("out", summary.outputs_path, enabled))
     return targets
+
+
+def _checkpoint_count_text(summary: RunSummary) -> str:
+    if summary.checkpoint_expected is not None:
+        return f"{summary.checkpoint_count} / {summary.checkpoint_expected} saved"
+    return f"{summary.checkpoint_count} saved"
 
 
 def _path_targets(summary: RunSummary | None) -> list[PathTarget]:

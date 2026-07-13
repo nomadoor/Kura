@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kura.monitor import ExecutorInfo, PodInfo, RunSummary
-from kura.tui import HostMetrics, KuraMonitorApp, RunRow, _aware_datetime, _batch, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _runpod_pod_url
+from kura.tui import HostMetrics, KuraMonitorApp, PathRow, RunRow, _aware_datetime, _batch, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
@@ -35,6 +35,13 @@ class TuiMetricsTests(unittest.TestCase):
 
     def test_click_focus_does_not_recolor_an_entire_pane(self) -> None:
         self.assertNotIn(".pane:focus", KuraMonitorApp.CSS)
+
+    def test_empty_output_path_is_rendered_as_disabled(self) -> None:
+        row = PathRow("out", path=Path("/tmp/missing"), enabled=False)
+        with patch.object(row, "post_message") as post:
+            row.on_click(None)  # type: ignore[arg-type]
+        post.assert_not_called()
+        self.assertTrue(all("underline" not in str(span.style) for span in row.render().spans))
 
     def test_remote_metrics_never_block_screen_switching(self) -> None:
         app = KuraMonitorApp(Path("."))

@@ -442,7 +442,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "started": "2026-06-22T10:00:00+00:00",
                         "ended": "2026-06-22T10:30:00+00:00",
                         "pod_id": "pod1",
-                        "pulled_outputs": [
+                        "mirrored_outputs": [
                             {"name": "model-step00000250.safetensors", "step": 250},
                             {"name": "model-step00000500.safetensors", "step": 500},
                         ],
@@ -490,6 +490,25 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertAlmostEqual(summary.executor_info.pod.cost_used or 0.0, 0.22)
             self.assertEqual(summary.executor_info.mirrored_checkpoint_step, 500)
             self.assertEqual(summary.executor_info.checkpoint_sync_error, "temporary transfer failure")
+
+    def test_collect_run_summaries_counts_scheduled_checkpoints_in_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "outputs").mkdir()
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "resolved" / "backend-display.lock.json").write_text(json.dumps({"checkpoint": {"save_every_n_steps": 250}}), encoding="utf-8")
+            for step in (250, 500, 750):
+                (run_dir / "outputs" / f"train-step{step:08d}.safetensors").touch()
+            (run_dir / "outputs" / "train.safetensors").touch()
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.checkpoint_count, 3)
+            self.assertEqual(summary.checkpoint_expected, 4)
+            self.assertEqual(summary.outputs_path, run_dir / "outputs")
 
     def test_collect_run_summaries_estimates_runpod_cost_from_launch_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

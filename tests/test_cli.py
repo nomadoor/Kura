@@ -3052,7 +3052,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
             threads = [
                 threading.Thread(target=_mutate_run_status, args=(run_dir, lambda status: status.__setitem__("remote_log_bytes", 10))),
-                threading.Thread(target=_mutate_run_status, args=(run_dir, lambda status: status.__setitem__("pulled_outputs", [{"name": "step.safetensors"}]))),
+                threading.Thread(target=_mutate_run_status, args=(run_dir, lambda status: status.__setitem__("mirrored_outputs", [{"name": "step.safetensors"}]))),
             ]
             for thread in threads:
                 thread.start()
@@ -3060,7 +3060,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 thread.join()
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["remote_log_bytes"], 10)
-            self.assertEqual(status["pulled_outputs"], [{"name": "step.safetensors"}])
+            self.assertEqual(status["mirrored_outputs"], [{"name": "step.safetensors"}])
 
     def test_pull_verifies_then_atomically_publishes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3089,12 +3089,12 @@ class RunPodPullSelectionTests(unittest.TestCase):
     def test_pull_skips_only_valid_local_copy_with_matching_remote_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
-            destination = run_dir / "pulled" / "outputs"
+            destination = run_dir / "outputs"
             destination.mkdir(parents=True)
             payload = self._fake_safetensors()
             item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": len(payload), "mtime_ns": 10}
             (destination / item["name"]).write_bytes(payload)
-            (run_dir / "status.json").write_text(json.dumps({"pulled_outputs": [{"name": item["name"], "remote_path": item["path"], "remote_mtime_ns": item["mtime_ns"]}]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"mirrored_outputs": [{"name": item["name"], "remote_path": item["path"], "remote_mtime_ns": item["mtime_ns"]}]}), encoding="utf-8")
             with patch("kura.run_commands.runpod_ssh._run_bounded") as transfer:
                 pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
             transfer.assert_not_called()
@@ -3103,12 +3103,12 @@ class RunPodPullSelectionTests(unittest.TestCase):
     def test_pull_replaces_same_size_copy_when_remote_mtime_changed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
-            destination = run_dir / "pulled" / "outputs"
+            destination = run_dir / "outputs"
             destination.mkdir(parents=True)
             payload = self._fake_safetensors()
             item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": len(payload), "mtime_ns": 11}
             (destination / item["name"]).write_bytes(payload)
-            (run_dir / "status.json").write_text(json.dumps({"pulled_outputs": [{"name": item["name"], "remote_path": item["path"], "remote_mtime_ns": 10}]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"mirrored_outputs": [{"name": item["name"], "remote_path": item["path"], "remote_mtime_ns": 10}]}), encoding="utf-8")
 
             def fake_transfer(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
                 Path(command[-1]).write_bytes(payload)
@@ -3145,8 +3145,8 @@ class RunPodPullSelectionTests(unittest.TestCase):
                     _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[first, second])
 
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual([item["name"] for item in status["pulled_outputs"]], [first["name"]])
-            self.assertTrue((run_dir / "pulled" / "outputs" / first["name"]).is_file())
+            self.assertEqual([item["name"] for item in status["mirrored_outputs"]], [first["name"]])
+            self.assertTrue((run_dir / "outputs" / first["name"]).is_file())
 
     def test_changed_remote_file_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3166,7 +3166,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "changed while"):
                     _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
 
-            destination = run_dir / "pulled" / "outputs"
+            destination = run_dir / "outputs"
             self.assertFalse((destination / item["name"]).exists())
             self.assertFalse((destination / f".{item['name']}.partial").exists())
 
@@ -3175,11 +3175,11 @@ class RunPodPullSelectionTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
             (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
-            _record_pulled_outputs(run_dir, [{"name": "model-step00000250.safetensors", "path": "pulled/outputs/model-step00000250.safetensors", "step": 250, "size": 10, "skipped": False}])
-            _record_pulled_outputs(run_dir, [{"name": "model-step00000500.safetensors", "path": "pulled/outputs/model-step00000500.safetensors", "step": 500, "size": 10, "skipped": False}])
+            _record_pulled_outputs(run_dir, [{"name": "model-step00000250.safetensors", "path": "outputs/model-step00000250.safetensors", "step": 250, "size": 10, "skipped": False}])
+            _record_pulled_outputs(run_dir, [{"name": "model-step00000500.safetensors", "path": "outputs/model-step00000500.safetensors", "step": 500, "size": 10, "skipped": False}])
 
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual([item["step"] for item in status["pulled_outputs"]], [250, 500])
+            self.assertEqual([item["step"] for item in status["mirrored_outputs"]], [250, 500])
 
 
 class AiToolkitBackendTests(unittest.TestCase):
@@ -5900,6 +5900,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             realization_dir = run_dir / "downloads" / "example" / "realizations"
             output_dir.mkdir(parents=True)
             realization_dir.mkdir(parents=True)
+            (run_dir / "outputs").mkdir()
+            (run_dir / "outputs" / "intermediate-step00000250.safetensors").write_text("intermediate", encoding="utf-8")
             (output_dir / "artifact.safetensors").write_text("artifact", encoding="utf-8")
             (realization_dir / "remote-exit-20260101.json").write_text(json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
@@ -5911,6 +5913,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 0)
             self.assertEqual((run_dir / "outputs" / "artifact.safetensors").read_text(encoding="utf-8"), "artifact")
+            self.assertEqual((run_dir / "outputs" / "intermediate-step00000250.safetensors").read_text(encoding="utf-8"), "intermediate")
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["outputs"], ["outputs/artifact.safetensors"])
             self.assertEqual(status["downloaded_run"], "downloads/example")

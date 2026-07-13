@@ -51,7 +51,7 @@ user; it is listed below as a low-level command for inspection and development.
 
 Local Docker checkpoints appear directly under the run's `outputs/` directory.
 During a normal RunPod execution, Kura also mirrors completed checkpoints into
-`pulled/outputs/` while training continues. This makes already-saved weights
+the run's `outputs/` while training continues. This makes already-saved weights
 available for evaluation and preserves the latest successfully mirrored weight
 if training later fails. The pull commands below remain available for an
 explicit immediate refresh or interrupted-controller recovery.
