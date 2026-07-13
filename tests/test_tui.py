@@ -14,7 +14,7 @@ from unittest.mock import patch
 from rich.console import Console
 
 from kura.monitor import ExecutorInfo, PodInfo, RunSummary
-from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, _aware_datetime, _batch, _events_table, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _runpod_pod_url
+from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, WatchScreen, _aware_datetime, _batch, _events_table, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _retained_run_history, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
@@ -25,6 +25,15 @@ class TuiMetricsTests(unittest.TestCase):
         self.assertEqual([item.id for item in _filter_run_history(history, "all")], ["render", "train"])
         self.assertEqual([item.id for item in _filter_run_history(history, "train")], ["train"])
         self.assertEqual([item.id for item in _filter_run_history(history, "render")], ["render"])
+
+    def test_retained_history_is_bounded_but_covers_each_filter(self) -> None:
+        history = [RunSummary(id=f"train-{index}", experiment=None, type="train", executor="docker", state="completed") for index in range(200)]
+        history += [RunSummary(id=f"render-{index}", experiment=None, type="render", executor="local", state="completed") for index in range(200)]
+
+        retained = _retained_run_history(history, limit=30)
+
+        self.assertLessEqual(len(retained), 90)
+        self.assertEqual(len([item for item in retained if item.type == "render"]), 30)
 
     def test_run_row_uses_type_and_environment_emoji(self) -> None:
         train = RunRow(RunSummary(id="train", experiment=None, type="train", executor="docker", state="completed"), lane="history")
@@ -186,6 +195,7 @@ class TuiMetricsTests(unittest.TestCase):
                 {"event": "run_started", "timestamp": "2026-07-13T09:00:00+09:00", "executor": "runpod"},
                 {"event": "run_outputs_pulled", "timestamp": "2026-07-13T09:01:00+09:00", "count": 1, "outputs": [{"step": 20}]},
                 {"event": "remote_exit_observed", "observed_at": "2026-07-13T09:02:00+09:00", "remote_state": "completed", "exit_code": 0},
+                {"event": "run_terminated", "timestamp": "2026-07-13T09:02:30+09:00", "pod_id": "legacy-pod"},
                 {"event": "runpod_pod_stopped", "timestamp": "2026-07-13T09:03:00+09:00", "pod_id": "pod-1"},
             ]
             (run_dir / "logs" / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
@@ -198,6 +208,13 @@ class TuiMetricsTests(unittest.TestCase):
 
             positions = [rendered.index(label) for label in ("started", "weight pulled", "job exited", "pod stopped")]
             self.assertEqual(positions, sorted(positions))
+            self.assertEqual(rendered.count("pod stopped"), 2)
+
+    def test_deferred_refresh_ignores_unmounted_screens(self) -> None:
+        for screen in (MonitorScreen(), WatchScreen("run")):
+            with patch.object(screen, "refresh_data") as refresh:
+                screen._start_refresh_loop()
+            refresh.assert_not_called()
 
 
 class TuiHistoryFilterTests(unittest.IsolatedAsyncioTestCase):
@@ -213,8 +230,10 @@ class TuiHistoryFilterTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(screen, MonitorScreen)
                 rows_before = {row.summary.id: row for row in screen.query("#nav-history RunRow") if row.summary}
 
-                screen.on_segment_button_selected(SegmentButton.Selected("train"))
-                await pilot.pause()
+                with patch.object(rows_before["render"], "render_row", wraps=rows_before["render"].render_row) as hidden_render:
+                    screen.on_segment_button_selected(SegmentButton.Selected("train"))
+                    await pilot.pause()
+                    hidden_render.assert_not_called()
                 rows_after = {row.summary.id: row for row in screen.query("#nav-history RunRow") if row.summary}
 
                 self.assertEqual(set(rows_after), {"train", "render"})

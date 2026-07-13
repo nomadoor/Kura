@@ -633,9 +633,11 @@ def _sync_run_section(
         summary = summaries_by_id.get(row.summary.id, row.summary)
         row.summary = summary
         row.lane = label
+        row.display = summary.id in visible_ids
+        if not row.display:
+            continue
         row.update(row.render_row())
         row.set_class(summary.id == selected_run_id, "selected")
-        row.display = summary.id in visible_ids
 
 
 def _sync_dataset_section(
@@ -1027,6 +1029,8 @@ class MonitorScreen(Screen[None]):
         self.call_after_refresh(self._start_refresh_loop)
 
     def _start_refresh_loop(self) -> None:
+        if not self.is_mounted:
+            return
         self.refresh_data()
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
@@ -1046,6 +1050,10 @@ class MonitorScreen(Screen[None]):
         history = [item for item in self.summaries if item.id not in active_ids]
         history.sort(key=lambda item: _aware_datetime(item.last_updated or item.finished or item.created) or AWARE_MIN, reverse=True)
         return history
+
+    @property
+    def retained_history(self) -> list[RunSummary]:
+        return _retained_run_history(self.history_pool, limit=max(self.app_ref.limit, 0))
 
     @property
     def ordered_runs(self) -> list[RunSummary]:
@@ -1090,7 +1098,7 @@ class MonitorScreen(Screen[None]):
             active_tab=self.tab,
             active=self.active_runs,
             history=self.history_runs,
-            history_pool=self.history_pool,
+            history_pool=self.retained_history,
             history_filter=self.history_filter,
             datasets=datasets,
             selected_run_id=self.selected_run_id,
@@ -1254,6 +1262,8 @@ class WatchScreen(Screen[None]):
         self.call_after_refresh(self._start_refresh_loop)
 
     def _start_refresh_loop(self) -> None:
+        if not self.is_mounted:
+            return
         self.refresh_data()
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
@@ -1361,6 +1371,17 @@ def _filter_run_history(history: list[RunSummary], value: str) -> list[RunSummar
     if value == "render":
         return [item for item in history if item.type == "render"]
     return history
+
+
+def _retained_run_history(history: list[RunSummary], *, limit: int) -> list[RunSummary]:
+    """Keep only rows that can appear in one of the history filter views."""
+
+    if limit <= 0:
+        return []
+    retained_ids: set[str] = set()
+    for value in ("all", "train", "render"):
+        retained_ids.update(item.id for item in _filter_run_history(history, value)[:limit])
+    return [item for item in history if item.id in retained_ids]
 
 
 def _base_path_targets(summary: RunSummary) -> list[PathTarget]:

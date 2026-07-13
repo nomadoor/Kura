@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import io
+import inspect
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from unittest.mock import patch
 from rich.console import Console
 
 from kura.monitor import RunSummary, _format_time_cell, _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
+from kura.container_scripts import hf_download
 
 
 class MonitorProjectionTests(unittest.TestCase):
@@ -313,6 +315,24 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.latest_loss, 0.321)
             self.assertEqual(summary.best_loss, 0.316)
 
+    def test_training_stdout_ignores_date_like_progress_before_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 100}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "steps: 10/100 [00:10<01:30, 1.0s/it, avr_loss=0.5]\n"
+                "2026/07/13 12:00:00 INFO epoch loss: 0.999\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual((summary.progress.step, summary.progress.total), (10, 100))
+            self.assertEqual(summary.losses, (0.5,))
+
     def test_collect_run_summaries_reads_model_download_activity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -333,13 +353,35 @@ class MonitorProjectionTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 0}), encoding="utf-8")
             (run_dir / "logs" / "stdout.log").write_text(
                 "[kura] musubi step 1/6: hf_hub_download\n"
-                "[kura] hf download progress dit:raw.safetensors files=40 bytes=2147483648\n",
+                "[kura] hf download shared activity dit:raw.safetensors repo_files_delta=40 repo_bytes_delta=2147483648 expected_size_bytes=4294967296\n",
                 encoding="utf-8",
             )
 
             summary = collect_run_summaries(root)[0]
 
             self.assertEqual(summary.activity, "downloading dit raw.safetensors · 2.0GB")
+
+    def test_hf_download_activity_contract_matches_container_producer(self) -> None:
+        source = inspect.getsource(hf_download)
+        self.assertIn("hf download shared activity", source)
+        self.assertIn("repo_bytes_delta=", source)
+        self.assertIn("hf download shared idle", source)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "downloading"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: downloading\ntype: train\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text(
+                "[kura] hf download shared activity dit:model.safetensors repo_files_delta=2 repo_bytes_delta=1048576 expected_size_bytes=2097152\n"
+                "[kura] hf download shared idle dit:model.safetensors idle=15s expected_size_bytes=2097152\n",
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.activity, "download idle 15s · dit model.safetensors")
 
     def test_collect_run_summaries_reads_downloaded_stdout_for_remote_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

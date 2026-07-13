@@ -27,7 +27,7 @@ AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
 TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
-HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
+HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle|shared activity|shared idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
 HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
 KURA_STEP_RE = re.compile(r"\[kura\]\s+musubi step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
 KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+downloaded\s+(?P<key>\S+)\s+->", re.IGNORECASE)
@@ -553,6 +553,8 @@ def _read_training_stdout(path: Path, *, loss_tail: int) -> tuple[RunProgress | 
             loss = float(loss_match.group("loss"))
             current = int(progress_match.group("step"))
             current_total = int(progress_match.group("total"))
+            if current > current_total:
+                continue
             current_seconds = _parse_seconds_per_iter(record)
             key = (current, current_total, loss)
             if key in seen:
@@ -631,12 +633,12 @@ def _read_activity_from_stdout(path: Path, *, download_keys: list[str] | None = 
             key = _download_key(download.group("label"))
             kind = download.group("kind").lower()
             rest = download.group("rest")
-            bytes_value = _int_from_pattern(rest, r"\bbytes=(\d+)")
+            bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
             label = _download_label(download.group("label"))
             if kind == "start":
                 attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
                 base = f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
-            elif kind == "progress":
+            elif kind in {"progress", "shared activity"}:
                 base = f"downloading {label}"
             else:
                 idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
@@ -676,12 +678,12 @@ def _activity_from_stdout_line(line: str) -> str | None:
         kind = match.group("kind").lower()
         label = _download_label(match.group("label"))
         rest = match.group("rest")
-        bytes_value = _int_from_pattern(rest, r"\bbytes=(\d+)")
+        bytes_value = _int_from_pattern(rest, r"\b(?:repo_bytes_delta|bytes)=(\d+)")
         suffix = f" · {_format_bytes(bytes_value)}" if bytes_value is not None else ""
         if kind == "start":
             attempt = _match_text(rest, r"\battempt\s+(\d+\s*/\s*\d+)")
             return f"downloading {label}" + (f" · attempt {attempt}" if attempt else "")
-        if kind == "progress":
+        if kind in {"progress", "shared activity"}:
             return f"downloading {label}{suffix}"
         idle = _int_from_pattern(rest, r"\bidle=(\d+)s")
         return f"download idle {idle}s · {label}{suffix}" if idle is not None else f"download idle · {label}{suffix}"
