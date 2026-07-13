@@ -72,6 +72,8 @@ class InitCommandTests(unittest.TestCase):
                 root = Path(directory)
                 for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "docker/ai-toolkit/Dockerfile"):
                     self.assertTrue((root / relative).exists(), relative)
+                for relative in ("experiments", "backends", "executors"):
+                    self.assertFalse((root / relative).exists(), relative)
                 self.assertTrue((root / "docker/musubi-tuner/Dockerfile").exists())
                 self.assertTrue((root / "docker/ai-toolkit/kura_runpod_object_job.py").exists())
                 for dockerfile in (root / "docker/ai-toolkit/Dockerfile", root / "docker/musubi-tuner/Dockerfile"):

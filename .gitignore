@@ -17,13 +17,10 @@ AGENT_STATE.md
 workspace.yaml
 index.jsonl
 datasets/
-experiments/
 runs/
 workflows/*
 !workflows/samples/
 promptsets/
-/backends/
-/executors/
 
 # Defense in depth: generated artifacts should live under ignored workspace
 # directories, but keep accidental root-level drops out of git too.
