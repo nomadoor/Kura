@@ -575,6 +575,7 @@ class NavigatorPane(Grid):
         active_tab: str,
         active: list[RunSummary],
         history: list[RunSummary],
+        history_pool: list[RunSummary],
         history_filter: str,
         datasets: list[RunDataset],
         selected_run_id: str | None,
@@ -591,21 +592,37 @@ class NavigatorPane(Grid):
             _sync_static_section(history_container, "")
             return
         _sync_run_section(active_container, "active", active, selected_run_id, show_none=True)
-        _sync_run_section(history_container, "history", history, selected_run_id, show_none=False)
+        _sync_run_section(
+            history_container,
+            "history",
+            history,
+            selected_run_id,
+            show_none=False,
+            retained=history_pool,
+        )
 
 
-def _sync_run_section(container: VerticalScroll, label: str, summaries: list[RunSummary], selected_run_id: str | None, *, show_none: bool) -> None:
-    signature = tuple(summary.id for summary in summaries) or (("__none__",) if show_none else ())
+def _sync_run_section(
+    container: VerticalScroll,
+    label: str,
+    summaries: list[RunSummary],
+    selected_run_id: str | None,
+    *,
+    show_none: bool,
+    retained: list[RunSummary] | None = None,
+) -> None:
+    mounted_summaries = retained if retained is not None else summaries
+    signature = tuple(summary.id for summary in mounted_summaries) or (("__none__",) if show_none else ())
     if getattr(container, "_kura_signature", None) != signature:
         container.remove_children()
-        if summaries:
-            for summary in summaries:
-                container.mount(RunRow(summary, lane=label, selected=summary.id == selected_run_id))
+        if mounted_summaries:
+            container.mount(*(RunRow(summary, lane=label, selected=summary.id == selected_run_id) for summary in mounted_summaries))
         elif show_none:
             container.mount(EmptyActiveRow(selected=selected_run_id is None))
         setattr(container, "_kura_signature", signature)
-        return
 
+    visible_ids = {summary.id for summary in summaries}
+    summaries_by_id = {summary.id: summary for summary in mounted_summaries}
     for row in container.query(EmptyActiveRow):
         row.set_class(selected_run_id is None, "selected")
     for row in container.query(RunRow):
@@ -613,11 +630,12 @@ def _sync_run_section(container: VerticalScroll, label: str, summaries: list[Run
             row.set_class(selected_run_id is None, "selected")
             row.update(row.render_row())
             continue
-        summary = next((item for item in summaries if item.id == row.summary.id), row.summary)
+        summary = summaries_by_id.get(row.summary.id, row.summary)
         row.summary = summary
         row.lane = label
         row.update(row.render_row())
         row.set_class(summary.id == selected_run_id, "selected")
+        row.display = summary.id in visible_ids
 
 
 def _sync_dataset_section(
@@ -933,6 +951,7 @@ class WatchPane(VerticalScroll):
         right.add_column(style=FG_MUTED)
         right.add_column()
         right.add_row("created", _fmt_dt(summary.created))
+        right.add_row("started", _fmt_dt(summary.started))
         right.add_row("finished", _fmt_dt(summary.finished))
         right.add_row("weights", _checkpoint_count_text(summary))
         right.add_row("outputs", str(summary.outputs_path or "-"))
@@ -1003,6 +1022,11 @@ class MonitorScreen(Screen[None]):
             yield Static(id="keybar")
 
     def on_mount(self) -> None:
+        self.query_one("#status", Static).update(Text("Kura monitor · loading runs…", style=FG_MUTED))
+        self.query_one(DetailPane).mount(PaneTitle("RUN"), Static(Text("loading…", style=MUTED)))
+        self.call_after_refresh(self._start_refresh_loop)
+
+    def _start_refresh_loop(self) -> None:
         self.refresh_data()
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
@@ -1014,10 +1038,14 @@ class MonitorScreen(Screen[None]):
 
     @property
     def history_runs(self) -> list[RunSummary]:
+        return _filter_run_history(self.history_pool, self.history_filter)[: max(self.app_ref.limit, 0)]
+
+    @property
+    def history_pool(self) -> list[RunSummary]:
         active_ids = {item.id for item in self.active_runs}
         history = [item for item in self.summaries if item.id not in active_ids]
         history.sort(key=lambda item: _aware_datetime(item.last_updated or item.finished or item.created) or AWARE_MIN, reverse=True)
-        return _filter_run_history(history, self.history_filter)[: max(self.app_ref.limit, 0)]
+        return history
 
     @property
     def ordered_runs(self) -> list[RunSummary]:
@@ -1062,6 +1090,7 @@ class MonitorScreen(Screen[None]):
             active_tab=self.tab,
             active=self.active_runs,
             history=self.history_runs,
+            history_pool=self.history_pool,
             history_filter=self.history_filter,
             datasets=datasets,
             selected_run_id=self.selected_run_id,
@@ -1220,6 +1249,11 @@ class WatchScreen(Screen[None]):
             yield Static(id="keybar")
 
     def on_mount(self) -> None:
+        self.query_one("#status", Static).update(Text(f"Kura watch · {self.run_id} · loading…", style=FG_MUTED))
+        self.query_one(WatchPane).mount(PaneTitle("RUN"), Static(Text("loading…", style=MUTED)))
+        self.call_after_refresh(self._start_refresh_loop)
+
+    def _start_refresh_loop(self) -> None:
         self.refresh_data()
         self.set_interval(max(self.app_ref.interval, 0.2), self.refresh_data)
 
@@ -1660,7 +1694,7 @@ def _events_table(summary: RunSummary, *, lines: int) -> Table | Text:
             continue
         ts = str(item.get("timestamp") or item.get("observed_at") or "")
         event = str(item.get("event") or "event")
-        table.add_row(ts.replace("T", " ")[11:16] or "--:--", Text(event, style=RUN if event == "run_started" else ACCENT), _event_detail(item))
+        table.add_row(ts.replace("T", " ")[11:16] or "--:--", Text(_event_label(event), style=RUN if event == "run_started" else ACCENT), _event_detail(item))
     return table
 
 
@@ -1976,6 +2010,16 @@ def _fit_plain(value: str, width: int) -> str:
 
 def _event_detail(item: dict[str, Any]) -> str:
     details: list[str] = []
+    event = item.get("event")
+    if event == "run_outputs_pulled":
+        outputs = item.get("outputs") if isinstance(item.get("outputs"), list) else []
+        steps = [output.get("step") for output in outputs if isinstance(output, dict) and output.get("step") is not None]
+        if steps:
+            details.append("step " + ", ".join(str(step) for step in steps))
+        elif item.get("count") is not None:
+            details.append(f"{item['count']} output(s)")
+    if item.get("remote_state"):
+        details.append(f"remote {item['remote_state']}")
     if item.get("state"):
         details.append(f"state {item['state']}")
     if item.get("exit_code") is not None:
@@ -1987,6 +2031,19 @@ def _event_detail(item: dict[str, Any]) -> str:
     if not details and item.get("executor"):
         details.append(str(item["executor"]))
     return " · ".join(details) or "-"
+
+
+def _event_label(event: str) -> str:
+    return {
+        "run_staged": "staged",
+        "run_started": "started",
+        "run_outputs_pulled": "weight pulled",
+        "remote_exit_observed": "job exited",
+        "runpod_pod_stopped": "pod stopped",
+        "run_terminated": "pod stopped",
+        "run_launch_failed": "launch failed",
+        "run_reconciled": "reconciled",
+    }.get(event, event)
 
 
 def _age(value: datetime | None) -> str:

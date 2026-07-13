@@ -469,7 +469,7 @@ def _pull_remote_output_items(
     return pulled
 
 
-def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
+def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]], *, emit_event: bool = True) -> None:
     def mutate(status: dict[str, Any]) -> None:
         status.pop("checkpoint_sync_error", None)
         if not pulled:
@@ -484,7 +484,7 @@ def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
 
     _mutate_run_status(run_dir, mutate)
     copied = [item for item in pulled if not item.get("skipped")]
-    if copied:
+    if copied and emit_event:
         append_run_event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(copied), "outputs": copied})
 
 
@@ -495,7 +495,10 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
         with _run_operation_lock(run_dir, "checkpoint-pull", blocking=False):
             items = _runpod_remote_outputs(details, workspace=workspace, run_id=run_id)
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=items)
-            _record_pulled_outputs(run_dir, pulled)
+            # Newly published files were recorded immediately so partial
+            # success survives a later transfer failure. Merge skipped items
+            # and clear stale errors without emitting the same event twice.
+            _record_pulled_outputs(run_dir, pulled, emit_event=False)
         return True
     except _OperationBusy:
         return True
@@ -521,7 +524,7 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             raise ValueError("no matching remote .safetensors outputs found")
         with _run_operation_lock(run_dir, "checkpoint-pull"):
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=selected, force=args.force)
-            _record_pulled_outputs(run_dir, pulled)
+            _record_pulled_outputs(run_dir, pulled, emit_event=False)
         print(json.dumps({"run_id": args.run_id, "destination": str(run_dir / "outputs"), "pulled": pulled}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:

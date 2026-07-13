@@ -237,6 +237,11 @@ immediate trainer check unless failure would be expensive-late or cryptic.
   identity, actual image identity when obtainable, runtime measurements,
   resolved model observations, exits, and recovery facts.
 - `status.json` is only the latest materialized state.
+- `logs/events.jsonl` is an append-only, human-readable activity feed for the
+  monitor. It is not a complete event-sourced lifecycle record and must not
+  become a second source of truth beside `realizations/`. Event names describe
+  their actual scope: for example, `remote_exit_observed` is a remote job exit
+  observation, while `runpod_pod_stopped` is disposal of its compute Pod.
 - `samples/images.jsonl` records generated-image facts.
 - `notes.md` records human evaluation and reflection. It is not the primary
   store for runtime measurements or machine events.

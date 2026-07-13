@@ -25,10 +25,8 @@ ACTIVE_STATES = {"queued", "staged", "launching", "running"}
 DRAFT_STATE = "draft"
 AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
-TRAIN_STDOUT_PROGRESS_RE = re.compile(
-    r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)",
-    re.IGNORECASE,
-)
+TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
+TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
 HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
 HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
 KURA_STEP_RE = re.compile(r"\[kura\]\s+musubi step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
@@ -539,20 +537,32 @@ def _read_training_stdout(path: Path, *, loss_tail: int) -> tuple[RunProgress | 
     seconds_per_iter: float | None = None
     losses: list[float] = []
     seen: set[tuple[int, int, float]] = set()
-    for match in TRAIN_STDOUT_PROGRESS_RE.finditer(text):
-        loss = float(match.group("loss"))
-        current = int(match.group("step"))
-        current_total = int(match.group("total"))
-        current_seconds = _parse_seconds_per_iter(match.group(0))
-        key = (current, current_total, loss)
-        if key in seen:
+    for record in re.split(r"[\r\n]+", text):
+        if not record:
             continue
-        seen.add(key)
-        step = current
-        total = current_total
-        if current_seconds is not None:
-            seconds_per_iter = current_seconds
-        losses.append(loss)
+        for loss_match in TRAIN_STDOUT_LOSS_RE.finditer(record):
+            # tqdm rewrites progress with carriage returns. Search only the
+            # bounded prefix of this display record instead of allowing a
+            # cross-record ``.*?`` scan, which becomes quadratic on logs with
+            # many progress-looking fragments but no following loss token.
+            prefix = record[max(0, loss_match.start() - 512):loss_match.start()]
+            progress_matches = list(TRAIN_STDOUT_PROGRESS_RE.finditer(prefix))
+            if not progress_matches:
+                continue
+            progress_match = progress_matches[-1]
+            loss = float(loss_match.group("loss"))
+            current = int(progress_match.group("step"))
+            current_total = int(progress_match.group("total"))
+            current_seconds = _parse_seconds_per_iter(record)
+            key = (current, current_total, loss)
+            if key in seen:
+                continue
+            seen.add(key)
+            step = current
+            total = current_total
+            if current_seconds is not None:
+                seconds_per_iter = current_seconds
+            losses.append(loss)
     if loss_tail > 0:
         losses = losses[-loss_tail:]
     progress = RunProgress(step=step, total=total, seconds_per_iter=seconds_per_iter) if step is not None or total is not None or seconds_per_iter is not None else None

@@ -3086,6 +3086,12 @@ class RunPodPullSelectionTests(unittest.TestCase):
             self.assertEqual(published.read_bytes(), payload)
             self.assertFalse((published.parent / f".{published.name}.partial").exists())
 
+            # The caller performs a final status merge after the per-file
+            # publication. That merge must not duplicate the activity event.
+            _record_pulled_outputs(run_dir, pulled, emit_event=False)
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([event["event"] for event in events], ["run_outputs_pulled"])
+
     def test_pull_skips_only_valid_local_copy_with_matching_remote_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
@@ -6385,6 +6391,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                     status = stop_runpod(run_dir, self._config())
             self.assertEqual(status["state"], "interrupted")
             self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(events[-1]["event"], "runpod_pod_stopped")
 
     def test_stop_runpod_preserves_completed_status_after_download(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
