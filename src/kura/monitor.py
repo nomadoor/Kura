@@ -70,6 +70,8 @@ class ExecutorInfo:
     downloaded: bool = False
     recovery_required: bool = False
     pod_stopped: bool = False
+    mirrored_checkpoint_step: int | None = None
+    checkpoint_sync_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -806,6 +808,9 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     cost_stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
     cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, status.get("state"))
     pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost_used) if pod_id or pod_state else None
+    pulled = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+    mirrored_steps = [_int_or_none(item.get("step")) for item in pulled if isinstance(item, dict)]
+    mirrored_step = max((step for step in mirrored_steps if step is not None), default=None)
     return ExecutorInfo(
         kind=kind,
         provider=provider,
@@ -816,6 +821,8 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
         downloaded=bool(status.get("downloaded_run")),
         recovery_required=bool(status.get("recovery_required")),
         pod_stopped=bool(status.get("pod_stopped_at")),
+        mirrored_checkpoint_step=mirrored_step,
+        checkpoint_sync_error=_string(status.get("checkpoint_sync_error")),
     )
 
 

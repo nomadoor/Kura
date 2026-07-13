@@ -26,28 +26,38 @@ exposing a file to ComfyUI is an execution-time convenience.
 
 Default flow when the user asks to test-generate with a Kura-trained LoRA:
 
-1. Confirm ComfyUI is reachable at the endpoint (default `http://127.0.0.1:8188`).
+1. For a still-running RunPod training run, use the completed intermediate
+   checkpoints that normal execution mirrors under `pulled/outputs/`. If an
+   immediate refresh is needed, run `uv run kura run pull <train-run-id>`
+   (latest) or `--step <step>`; this read-only copy does not stop training. Use
+   that checkpoint path as the render run's `inputs.checkpoint.path`, then
+   compile the render run.
+2. Confirm ComfyUI is reachable at the endpoint (default `http://127.0.0.1:8188`).
    If not, ask the user to start it.
-2. Run `uv run kura doctor comfyui --endpoint <url> --probe-stage` when a LoRA
+3. Run `uv run kura doctor comfyui --endpoint <url> --probe-stage` when a LoRA
    render will stage a local Kura output. This verifies the configured
    `comfyui.lora_dir` is visible to that exact endpoint.
-3. If `lora_dir_configured` is false, ask the user once for ComfyUI's
+4. If `lora_dir_configured` is false, ask the user once for ComfyUI's
    `models/loras` directory and record it in local `workspace.yaml`.
    Ask plainly: "Where is your ComfyUI `models/loras` directory?" Do not guess
    or edit ComfyUI's own config.
    After changing `comfyui.lora_dir`, run `kura render compile <run-id>` again
    before launch; render compile freezes the ComfyUI staging settings into
    `resolved/manifest.lock.yaml`.
-4. If `lora_stage_visible` is false, explain that this endpoint is not seeing
+5. If `lora_stage_visible` is false, explain that this endpoint is not seeing
    the configured directory. With user approval, you may inspect their ComfyUI
    files such as `extra_model_paths.yaml` and propose the correct `lora_dir`,
    but do not let runtime code infer or silently retarget it.
-5. With `comfyui.lora_dir` set and probe-verified, let `kura render launch` create the temporary
+   If the probe instead says this process cannot write the staging directory,
+   treat it as an agent/host permission issue, not a ComfyUI visibility issue.
+   Follow `docs/external-access.md`; do not fall back to asking the user to copy
+   the LoRA manually before explaining how to grant the current agent access.
+6. With `comfyui.lora_dir` set and probe-verified, let `kura render launch` create the temporary
    staged LoRA under `Kura_tmp/`, patch the loader's name field through
    `workflow_patches`, render, and remove the staged file/link afterward.
-6. If ComfyUI cached the old list, a refresh/restart may be needed before the new
+7. If ComfyUI cached the old list, a refresh/restart may be needed before the new
    file appears.
-7. To keep a LoRA permanently available, tell the user to place it in `models/loras`
+8. To keep a LoRA permanently available, tell the user to place it in `models/loras`
    themselves — that is a human decision, not a Kura mutation.
 
 Runtime Kura code must not inspect `/proc`, infer the ComfyUI cwd, parse a live

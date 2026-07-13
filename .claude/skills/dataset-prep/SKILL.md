@@ -28,6 +28,21 @@ uv run kura dataset validate datasets/<id>
 uv run kura run compile <run-id>
 ```
 
+## Visual review
+
+- Choose the amount of visual review from the dataset's size, content, and the
+  decision being made. Kura's measured facts and structural validation should
+  guide that choice; visual inspection is an agent aid, not a prerequisite for
+  using the CLI.
+- For a large routine dataset, prefer a useful sample selected from measured
+  outliers (resolution, aspect ratio, missing or unusual captions, duplicate
+  candidates) plus ordinary examples. Review more when the task genuinely
+  benefits from it, and state whether the review was sampled or exhaustive.
+- If images are sensitive, unsuitable for visual processing, or unavailable to
+  the agent, continue with file, dimension, caption, and manifest facts. Explain
+  the resulting limit; do not make visual inspection a hidden gate.
+- Never copy dataset pixels into repo documentation, run metadata, or fixtures.
+
 Minimal `items.jsonl` rows need `id` and `path`; include `caption` and `hash`
 when available:
 

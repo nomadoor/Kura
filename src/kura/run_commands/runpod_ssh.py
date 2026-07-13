@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -37,6 +37,10 @@ from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
 
 
+class _OperationBusy(ValueError):
+    """A normal controller-side scheduling collision."""
+
+
 @contextlib.contextmanager
 def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
     """Serialize controller-side mutations without creating another truth store."""
@@ -49,11 +53,23 @@ def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
         try:
             fcntl.flock(handle.fileno(), operation)
         except BlockingIOError as exc:
-            raise ValueError(f"another {name} operation is already active for run {run_dir.name}") from exc
+            raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
         try:
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Serialize status read-modify-write cycles across controller operations."""
+
+    with _run_operation_lock(run_dir, "status"):
+        status_path = run_dir / "status.json"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        mutate(status)
+        redacted = _redact_secrets(status)
+        atomic_write_json(status_path, redacted)
+        return redacted
 
 
 def _run_bounded(command: list[str], *, context: str, timeout: int = RUNPOD_TRANSFER_TIMEOUT_SEC, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
@@ -152,20 +168,25 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             exit_code = remote_exit.get("exit_code")
             if not isinstance(exit_code, int):
                 return False
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             output_dir = downloaded_run / "outputs"
             outputs = materialize_primary_outputs(output_dir)
-            status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
+            steps: int | None = None
             if exit_code == 0:
                 try:
                     manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-                    steps = common_recipe(manifest).get("steps")
-                    if isinstance(steps, int) and steps > 0:
-                        status["last_step"] = steps
-                        status["total_steps"] = steps
+                    configured_steps = common_recipe(manifest).get("steps")
+                    if isinstance(configured_steps, int) and configured_steps > 0:
+                        steps = configured_steps
                 except (OSError, ValueError, yaml.YAMLError):
                     pass
-            atomic_write_json(run_dir / "status.json", status)
+
+            def mutate(status: dict[str, Any]) -> None:
+                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
+                if steps is not None:
+                    status["last_step"] = steps
+                    status["total_steps"] = steps
+
+            _mutate_run_status(run_dir, mutate)
             return True
 
         if downloaded_run.exists() and not force:
@@ -279,6 +300,68 @@ def _select_remote_outputs(items: list[dict[str, Any]], *, step: int | None = No
     return candidates[-1:] if candidates else []
 
 
+def _same_remote_output_version(before: dict[str, Any], after: dict[str, Any] | None) -> bool:
+    """Return true only when a remote file did not change across a transfer."""
+
+    if after is None:
+        return False
+    return all(before.get(key) == after.get(key) for key in ("path", "size", "mtime_ns"))
+
+
+def _validate_safetensors_file(path: Path) -> None:
+    """Reject truncated or structurally invalid safetensors before publication."""
+
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        prefix = handle.read(8)
+        if len(prefix) != 8:
+            raise ValueError(f"checkpoint is not a complete safetensors file: {path.name}")
+        header_size = int.from_bytes(prefix, "little", signed=False)
+        if header_size <= 0 or header_size > size - 8:
+            raise ValueError(f"checkpoint has an invalid safetensors header size: {path.name}")
+        try:
+            def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+                result: dict[str, Any] = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError(f"checkpoint has duplicate safetensors header keys: {path.name}")
+                    result[key] = value
+                return result
+
+            header = json.loads(handle.read(header_size), object_pairs_hook=reject_duplicate_keys)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"checkpoint has an invalid safetensors header: {path.name}") from exc
+    if not isinstance(header, dict):
+        raise ValueError(f"checkpoint has a non-object safetensors header: {path.name}")
+    data_size = size - 8 - header_size
+    intervals: list[tuple[int, int]] = []
+    for key, value in header.items():
+        if key == "__metadata__":
+            if not isinstance(value, dict) or not all(isinstance(name, str) and isinstance(item, str) for name, item in value.items()):
+                raise ValueError(f"checkpoint has invalid safetensors metadata: {path.name}")
+            continue
+        if not isinstance(value, dict) or not isinstance(value.get("dtype"), str) or not value["dtype"]:
+            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
+        shape = value.get("shape")
+        if not isinstance(shape, list) or not all(isinstance(dimension, int) and not isinstance(dimension, bool) and dimension >= 0 for dimension in shape):
+            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
+        if not isinstance(value.get("data_offsets"), list) or len(value["data_offsets"]) != 2:
+            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
+        start, end = value["data_offsets"]
+        if not isinstance(start, int) or isinstance(start, bool) or not isinstance(end, int) or isinstance(end, bool) or start < 0 or end < start or end > data_size:
+            raise ValueError(f"checkpoint has tensor data outside the file: {path.name}")
+        intervals.append((start, end))
+    if not intervals:
+        raise ValueError(f"checkpoint contains no tensors: {path.name}")
+    cursor = 0
+    for start, end in sorted(intervals):
+        if start != cursor:
+            raise ValueError(f"checkpoint tensor data is not contiguous: {path.name}")
+        cursor = end
+    if cursor != data_size:
+        raise ValueError(f"checkpoint tensor data is not contiguous: {path.name}")
+
+
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
@@ -293,9 +376,10 @@ directory = {remote_outputs!r}
 items = []
 for path in sorted(glob.glob(os.path.join(directory, "*.safetensors"))):
     name = os.path.basename(path)
+    stat = os.stat(path)
     matches = re.findall(r"(?:step|_)(\\d{{4,}})(?=\\.safetensors$|[-_.])", name)
     step = int(matches[-1]) if matches else None
-    items.append({{"path": path, "name": name, "step": step, "size": os.path.getsize(path)}})
+    items.append({{"path": path, "name": name, "step": step, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
 print(json.dumps(items))
 PY
 """.strip()
@@ -306,6 +390,126 @@ PY
     if not isinstance(data, list):
         raise ValueError("remote output listing did not return a list")
     return [item for item in data if isinstance(item, dict)]
+
+
+def _pull_remote_output_items(
+    run_dir: Path,
+    details: dict[str, Any],
+    *,
+    workspace: str,
+    items: list[dict[str, Any]],
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """Copy stable remote checkpoints without exposing partial local files."""
+
+    if not items:
+        return []
+    config = _workspace_config()
+    min_download_free = _configured_download_min_free_bytes(config)
+    destination = run_dir / "pulled" / "outputs"
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        status = {}
+    previous_outputs = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+    previous_by_name = {item.get("name"): item for item in previous_outputs if isinstance(item, dict) and isinstance(item.get("name"), str)}
+    pulled: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    for item in items:
+        name = item.get("name")
+        size = item.get("size")
+        if isinstance(name, str):
+            local_path = destination / name
+            previous = previous_by_name.get(name)
+            metadata_matches = isinstance(previous, dict) and previous.get("remote_path") == item.get("path") and previous.get("remote_mtime_ns") == item.get("mtime_ns")
+            if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and metadata_matches and not force:
+                try:
+                    _validate_safetensors_file(local_path)
+                except (OSError, ValueError):
+                    pass
+                else:
+                    pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "remote_path": item.get("path"), "remote_mtime_ns": item.get("mtime_ns"), "skipped": True})
+                    continue
+        pending.append(item)
+    pending_size = sum(item.get("size") for item in pending if isinstance(item.get("size"), int))
+    if pending:
+        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), pending_size + 5 * 1024**3), context="RunPod output pull")
+    for item in pending:
+        name = item.get("name")
+        remote_path = item.get("path")
+        size = item.get("size")
+        if not isinstance(name, str) or not isinstance(remote_path, str):
+            continue
+        local_path = destination / name
+        partial_path = local_path.with_name(f".{local_path.name}.partial")
+        partial_path.unlink(missing_ok=True)
+        try:
+            result = _run_bounded([
+                "scp",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-P", str(details["port"]),
+                "-i", str(details["key"]),
+                f"root@{details['ip']}:{remote_path}",
+                str(partial_path),
+            ], context="scp output pull")
+            if result.returncode:
+                raise ValueError(f"scp output pull failed with exit code {result.returncode}: {name}")
+            refreshed = _runpod_remote_outputs(details, workspace=workspace, run_id=run_dir.name)
+            after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
+            if not _same_remote_output_version(item, after) or not isinstance(size, int) or partial_path.stat().st_size != size:
+                raise ValueError(f"remote checkpoint changed while it was being copied: {name}; wait for the save to finish and retry")
+            _validate_safetensors_file(partial_path)
+            os.replace(partial_path, local_path)
+        finally:
+            partial_path.unlink(missing_ok=True)
+        published = {"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "remote_path": remote_path, "remote_mtime_ns": item.get("mtime_ns"), "skipped": False}
+        pulled.append(published)
+        # Persist each verified publication immediately. A later item in the
+        # same batch may fail, but that must not orphan an already-local file
+        # from status.json and force a multi-GB transfer again next cycle.
+        _record_pulled_outputs(run_dir, [published])
+    return pulled
+
+
+def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]]) -> None:
+    def mutate(status: dict[str, Any]) -> None:
+        status.pop("checkpoint_sync_error", None)
+        if not pulled:
+            return
+        previous = status.get("pulled_outputs") if isinstance(status.get("pulled_outputs"), list) else []
+        merged = {item.get("name"): item for item in previous if isinstance(item, dict) and isinstance(item.get("name"), str)}
+        for item in pulled:
+            if isinstance(item.get("name"), str):
+                merged[item["name"]] = item
+        status["pulled_outputs"] = list(merged.values())
+        status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
+
+    _mutate_run_status(run_dir, mutate)
+    copied = [item for item in pulled if not item.get("skipped")]
+    if copied:
+        append_run_event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(copied), "outputs": copied})
+
+
+def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str) -> bool:
+    """Best-effort checkpoint mirror used by the normal RunPod lifecycle."""
+
+    try:
+        with _run_operation_lock(run_dir, "checkpoint-pull", blocking=False):
+            items = _runpod_remote_outputs(details, workspace=workspace, run_id=run_id)
+            pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=items)
+            _record_pulled_outputs(run_dir, pulled)
+        return True
+    except _OperationBusy:
+        return True
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+        error_message = _safe_error(exc)
+        try:
+            _mutate_run_status(run_dir, lambda status: status.__setitem__("checkpoint_sync_error", error_message))
+        except (OSError, json.JSONDecodeError):
+            pass
+        return False
 
 
 def cmd_run_pull(args: argparse.Namespace) -> int:
@@ -319,42 +523,10 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
         selected = _select_remote_outputs(items, step=args.step, since_step=args.since_step, all_outputs=args.all)
         if not selected:
             raise ValueError("no matching remote .safetensors outputs found")
-        config = _workspace_config()
-        min_download_free = _configured_download_min_free_bytes(config)
-        destination = run_dir / "pulled" / "outputs"
-        destination.mkdir(parents=True, exist_ok=True)
-        selected_size = sum(item.get("size") for item in selected if isinstance(item.get("size"), int))
-        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), selected_size + 5 * 1024**3), context="RunPod output pull")
-        pulled: list[dict[str, Any]] = []
-        for item in selected:
-            name = item.get("name")
-            remote_path = item.get("path")
-            size = item.get("size")
-            if not isinstance(name, str) or not isinstance(remote_path, str):
-                continue
-            local_path = destination / name
-            if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and not args.force:
-                pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": size, "skipped": True})
-                continue
-            result = _run_bounded([
-                "scp",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-P", str(details["port"]),
-                "-i", str(details["key"]),
-                f"root@{details['ip']}:{remote_path}",
-                str(local_path),
-            ], context="scp output pull")
-            if result.returncode:
-                return result.returncode
-            pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "skipped": False})
-        status_path = run_dir / "status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        status["pulled_outputs"] = pulled
-        status["pulled_outputs_synced_at"] = datetime.now().astimezone().isoformat()
-        atomic_write_json(status_path, _redact_secrets(status))
-        append_run_event(run_dir, {"event": "run_outputs_pulled", "timestamp": datetime.now().astimezone().isoformat(), "count": len(pulled), "outputs": pulled})
-        print(json.dumps({"run_id": args.run_id, "destination": str(destination), "pulled": pulled}, ensure_ascii=False, indent=2))
+        with _run_operation_lock(run_dir, "checkpoint-pull"):
+            pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=selected, force=args.force)
+            _record_pulled_outputs(run_dir, pulled)
+        print(json.dumps({"run_id": args.run_id, "destination": str(run_dir / "pulled" / "outputs"), "pulled": pulled}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot pull run outputs: {_safe_error(exc)}", file=sys.stderr)
@@ -569,10 +741,15 @@ fi
         log_path.parent.mkdir(exist_ok=True)
         with log_path.open("ab") as handle:
             handle.write(payload)
-    status["remote_log_bytes"] = remote_size
-    status["remote_log_synced_at"] = datetime.now().astimezone().isoformat()
-    _materialize_stdout_progress(run_dir, status, state=str(status.get("state") or "running"))
-    atomic_write_json(status_path, _redact_secrets(status))
+    def mutate(current: dict[str, Any]) -> None:
+        current["remote_log_bytes"] = remote_size
+        current["remote_log_synced_at"] = datetime.now().astimezone().isoformat()
+        _materialize_stdout_progress(run_dir, current, state=str(current.get("state") or "running"))
+
+    try:
+        _mutate_run_status(run_dir, mutate)
+    except (OSError, json.JSONDecodeError):
+        return False
     return True
 
 
@@ -640,14 +817,16 @@ def _record_remote_exit_observation(run_dir: Path, exit_record: dict[str, Any]) 
         "recovery_required": True,
     }
     atomic_write_json(observation_path, _redact_secrets(observation))
-    status.update({
-        "remote_state": observation["remote_state"],
-        "remote_exit_code": exit_code,
-        "remote_ended": exit_record.get("timestamp"),
-        "recovery_required": True,
-        "last_remote_exit_observation": str(observation_path.relative_to(run_dir)),
-    })
-    atomic_write_json(status_path, _redact_secrets(status))
+    def mutate(current: dict[str, Any]) -> None:
+        current.update({
+            "remote_state": observation["remote_state"],
+            "remote_exit_code": exit_code,
+            "remote_ended": exit_record.get("timestamp"),
+            "recovery_required": True,
+            "last_remote_exit_observation": str(observation_path.relative_to(run_dir)),
+        })
+
+    _mutate_run_status(run_dir, mutate)
     append_run_event(run_dir, observation, best_effort=True)
 
 
@@ -945,12 +1124,12 @@ echo $!
         detail = _redact_secret_text(started.stderr.strip() or started.stdout.strip() or "remote job start failed")
         raise ValueError(f"remote job start failed with exit code {started.returncode}: {detail}")
     remote_pid = started.stdout.strip().splitlines()[-1] if started.stdout.strip() else None
-    status_path = run_dir / "status.json"
     try:
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        status["remote_pid"] = remote_pid
-        status["remote_job_started_at"] = datetime.now().astimezone().isoformat()
-        atomic_write_json(status_path, _redact_secrets(status))
+        def mutate(status: dict[str, Any]) -> None:
+            status["remote_pid"] = remote_pid
+            status["remote_job_started_at"] = datetime.now().astimezone().isoformat()
+
+        _mutate_run_status(run_dir, mutate)
     except (OSError, json.JSONDecodeError):
         pass
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None
@@ -962,9 +1141,11 @@ echo $!
             raise subprocess.TimeoutExpired(["runpod-remote-job", run_id], job_timeout_sec)
         if now >= next_sync:
             _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
+            _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
             exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
             if exit_record is not None:
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
+                _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
                 _record_remote_exit_observation(run_dir, exit_record)
                 exit_code = exit_record.get("exit_code")
                 return int(exit_code) if isinstance(exit_code, int) else 1

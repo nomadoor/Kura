@@ -49,6 +49,13 @@ Compile after editing `run.yaml`, review `run plan`, obtain the single launch
 approval, then use `run execute`. The agent normally performs compile for the
 user; it is listed below as a low-level command for inspection and development.
 
+Local Docker checkpoints appear directly under the run's `outputs/` directory.
+During a normal RunPod execution, Kura also mirrors completed checkpoints into
+`pulled/outputs/` while training continues. This makes already-saved weights
+available for evaluation and preserves the latest successfully mirrored weight
+if training later fails. The pull commands below remain available for an
+explicit immediate refresh or interrupted-controller recovery.
+
 ## Diagnosis and recovery
 
 Use these only when a normal execution was interrupted or needs inspection.
@@ -60,7 +67,8 @@ situation-dependent decision, not a safe universal `recover` action.
 | `uv run kura doctor docker` | Diagnose the local Docker/GPU execution environment |
 | `uv run kura doctor runpod` | Diagnose RunPod API access and remaining resources |
 | `uv run kura run reconcile <run-id>` | Refresh observed Pod/container state without changing it |
-| `uv run kura run pull <run-id> --step <step>` | Recover an intermediate checkpoint from a running RunPod run |
+| `uv run kura run pull <run-id>` | Copy the latest completed intermediate checkpoint from a running RunPod run without stopping training |
+| `uv run kura run pull <run-id> --step <step>` | Copy one completed intermediate checkpoint for evaluation, such as a local ComfyUI render |
 | `uv run kura run download <run-id> --force` | Retry downloading a RunPod snapshot after inspecting remote state |
 | `uv run kura run stop <run-id>` | Explicitly stop the associated Pod/container |
 
