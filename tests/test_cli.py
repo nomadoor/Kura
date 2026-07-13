@@ -3067,6 +3067,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
             workspace = Path(directory)
             run_dir = workspace / "runs" / "example"
             run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
             (workspace / "workspace.yaml").write_text("safety: {}\n", encoding="utf-8")
             payload = self._fake_safetensors()
             item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": len(payload), "mtime_ns": 10}
@@ -3120,6 +3121,32 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
             transfer.assert_called_once()
             self.assertFalse(pulled[0]["skipped"])
+
+    def test_pull_records_published_item_before_later_batch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            payload = self._fake_safetensors()
+            first = {"name": "model-step00000250.safetensors", "path": "/workspace/first.safetensors", "step": 250, "size": len(payload), "mtime_ns": 10}
+            second = {"name": "model-step00000500.safetensors", "path": "/workspace/second.safetensors", "step": 500, "size": len(payload), "mtime_ns": 20}
+
+            def transfer(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                if "first.safetensors" in command[-2]:
+                    Path(command[-1]).write_bytes(payload)
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 1, "", "failed")
+
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=transfer), \
+                 patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(first), dict(second)]):
+                with self.assertRaisesRegex(ValueError, "00000500"):
+                    _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[first, second])
+
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["name"] for item in status["pulled_outputs"]], [first["name"]])
+            self.assertTrue((run_dir / "pulled" / "outputs" / first["name"]).is_file())
 
     def test_changed_remote_file_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

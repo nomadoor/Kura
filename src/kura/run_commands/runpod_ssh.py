@@ -464,7 +464,12 @@ def _pull_remote_output_items(
             os.replace(partial_path, local_path)
         finally:
             partial_path.unlink(missing_ok=True)
-        pulled.append({"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "remote_path": remote_path, "remote_mtime_ns": item.get("mtime_ns"), "skipped": False})
+        published = {"name": name, "path": str(local_path.relative_to(run_dir)), "step": item.get("step"), "size": local_path.stat().st_size, "remote_path": remote_path, "remote_mtime_ns": item.get("mtime_ns"), "skipped": False}
+        pulled.append(published)
+        # Persist each verified publication immediately. A later item in the
+        # same batch may fail, but that must not orphan an already-local file
+        # from status.json and force a multi-GB transfer again next cycle.
+        _record_pulled_outputs(run_dir, [published])
     return pulled
 
 
@@ -499,8 +504,9 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
     except _OperationBusy:
         return True
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+        error_message = _safe_error(exc)
         try:
-            _mutate_run_status(run_dir, lambda status: status.__setitem__("checkpoint_sync_error", _safe_error(exc)))
+            _mutate_run_status(run_dir, lambda status: status.__setitem__("checkpoint_sync_error", error_message))
         except (OSError, json.JSONDecodeError):
             pass
         return False
