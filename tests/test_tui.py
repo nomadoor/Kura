@@ -196,7 +196,7 @@ class TuiMetricsTests(unittest.TestCase):
                 {"event": "run_outputs_pulled", "timestamp": "2026-07-13T09:01:00+09:00", "count": 1, "outputs": [{"step": 20}]},
                 {"event": "remote_exit_observed", "observed_at": "2026-07-13T09:02:00+09:00", "remote_state": "completed", "exit_code": 0},
                 {"event": "run_terminated", "timestamp": "2026-07-13T09:02:30+09:00", "pod_id": "legacy-pod"},
-                {"event": "runpod_pod_stopped", "timestamp": "2026-07-13T09:03:00+09:00", "pod_id": "pod-1"},
+                {"event": "runpod_pod_stopped", "timestamp": "2026-07-14T00:03:00+09:00", "pod_id": "pod-1"},
             ]
             (run_dir / "logs" / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
             summary = RunSummary(id="run", experiment=None, type="train", executor="runpod", state="completed", run_dir=run_dir)
@@ -209,6 +209,8 @@ class TuiMetricsTests(unittest.TestCase):
             positions = [rendered.index(label) for label in ("started", "weight pulled", "job exited", "pod stopped")]
             self.assertEqual(positions, sorted(positions))
             self.assertEqual(rendered.count("pod stopped"), 2)
+            self.assertLess(rendered.index("── 07-13 ──"), rendered.index("started"))
+            self.assertLess(rendered.index("── 07-14 ──"), rendered.rindex("pod stopped"))
 
     def test_deferred_refresh_ignores_unmounted_screens(self) -> None:
         for screen in (MonitorScreen(), WatchScreen("run")):

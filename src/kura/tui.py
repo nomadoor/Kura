@@ -1707,13 +1707,31 @@ def _events_table(summary: RunSummary, *, lines: int) -> Table | Text:
     table.add_column()
     import json
 
+    parsed: list[tuple[dict[str, Any] | None, str]] = []
     for line in raw:
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
+            parsed.append((None, line))
+        else:
+            parsed.append((item, line))
+    dates = {
+        str(item.get("timestamp") or item.get("observed_at"))[:10]
+        for item, _ in parsed
+        if item and len(str(item.get("timestamp") or item.get("observed_at") or "")) >= 10
+    }
+    show_date_boundaries = len(dates) > 1
+    previous_date: str | None = None
+    for item, line in parsed:
+        if item is None:
             table.add_row("", "event", line)
             continue
         ts = str(item.get("timestamp") or item.get("observed_at") or "")
+        date = ts[:10] if len(ts) >= 10 else ""
+        if show_date_boundaries and date and date != previous_date:
+            table.add_row("", Text(f"── {date[5:]} ──", style=MUTED), "")
+        if date:
+            previous_date = date
         event = str(item.get("event") or "event")
         table.add_row(ts.replace("T", " ")[11:16] or "--:--", Text(_event_label(event), style=RUN if event == "run_started" else ACCENT), _event_detail(item))
     return table
