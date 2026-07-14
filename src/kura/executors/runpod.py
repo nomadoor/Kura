@@ -831,7 +831,9 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(
             "run is waiting for RunPod capacity and no Pod exists to stop; "
-            "interrupt the active launch controller with Ctrl+C"
+            "interrupt the active launch controller with Ctrl+C; if no controller remains, "
+            f"run `uv run kura doctor runpod`, then `uv run kura run launch {run_dir.name}` "
+            "to recover the stale wait"
         )
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:

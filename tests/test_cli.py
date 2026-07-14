@@ -36,7 +36,7 @@ from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_image_preflight_report
+from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _runpod_image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
@@ -1434,6 +1434,22 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("COMMUNITY: None · unavailable", output)
             self.assertIn("launch now: NVIDIA A40 / COMMUNITY", output)
             self.assertIn("set compute.capacity.mode=wait before compile", output)
+
+    def test_runpod_capacity_plan_survives_invalid_runpod_settings(self) -> None:
+        run = {
+            "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]},
+        }
+        with patch(
+            "kura.run_commands.plan.runpod_gpu_availability",
+            side_effect=ValueError("runpod.cloud_types must contain COMMUNITY or SECURE"),
+        ):
+            payload = _runpod_capacity_payload(run, {"runpod": {}})
+
+        assert payload is not None
+        self.assertEqual(payload["measurement"]["status"], "unavailable")
+        self.assertEqual(payload["measurement"]["candidates"], [])
+        self.assertIn("runpod.cloud_types", payload["measurement"]["reason"])
+        self.assertEqual(payload["immediate_candidates"], [])
 
     def test_run_plan_prints_musubi_download_estimates_and_cache_hits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6994,7 +7010,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch("kura.executors.runpod._runpod_request") as request:
-                with self.assertRaisesRegex(ValueError, "no Pod exists.*Ctrl\\+C"):
+                with self.assertRaisesRegex(ValueError, "no Pod exists.*Ctrl\\+C.*doctor runpod.*run launch example"):
                     stop_runpod(run_dir, self._config())
             request.assert_not_called()
 

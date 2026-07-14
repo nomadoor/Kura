@@ -168,11 +168,17 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any]) -> dic
     }
     runpod_config = dict(config.get("runpod", {})) if isinstance(config.get("runpod"), dict) else {}
     runpod_config.setdefault("gpu_type_ids", gpu_type_ids)
-    measurement = runpod_gpu_availability(runpod_config, gpu_type_ids) if gpu_type_ids else {
-        "status": "unavailable",
-        "reason": "no RunPod GPU candidates are configured",
-        "candidates": [],
-    }
+    if gpu_type_ids:
+        try:
+            measurement = runpod_gpu_availability(runpod_config, gpu_type_ids)
+        except ValueError as exc:
+            measurement = {"status": "unavailable", "reason": _safe_error(exc), "candidates": []}
+    else:
+        measurement = {
+            "status": "unavailable",
+            "reason": "no RunPod GPU candidates are configured",
+            "candidates": [],
+        }
     immediate = []
     for candidate in measurement.get("candidates", []):
         if not isinstance(candidate, dict):
