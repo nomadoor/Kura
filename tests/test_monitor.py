@@ -79,6 +79,65 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summaries[0].id, "missing-pieces")
             self.assertIsNone(summaries[0].state)
 
+    def test_queued_capacity_wait_becomes_stale_after_missed_polls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "queued-run"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: queued-run\ntype: train\ncompute: {executor: runpod}\n", encoding="utf-8")
+            old = (datetime.now().astimezone() - timedelta(minutes=5)).isoformat()
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "queued", "capacity_wait": {"last_attempt_at": old, "poll_interval_sec": 30}}),
+                encoding="utf-8",
+            )
+
+            summary = collect_run_summaries(root, stale_after=90)[0]
+
+            self.assertTrue(summary.is_stale)
+            self.assertIsNotNone(summary.capacity_wait)
+            self.assertIn("GPU wait stopped", summary.activity or "")
+
+    def test_active_capacity_wait_is_rendered_as_waiting_with_probe_details(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "waiting-run"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: waiting-run\ntype: train\ncompute: {executor: runpod, gpu: NVIDIA A40}\n", encoding="utf-8")
+            now = datetime.now().astimezone().isoformat()
+            (run_dir / "status.json").write_text(
+                json.dumps(
+                    {
+                        "state": "queued",
+                        "capacity_wait": {
+                            "started_at": now,
+                            "last_attempt_at": now,
+                            "attempts": 3,
+                            "remaining_sec": 21_540,
+                            "poll_interval_sec": 30,
+                            "gpu_type_ids": ["NVIDIA A40"],
+                            "cloud_types": ["SECURE"],
+                            "last_result": "capacity",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"timestamp": now, "state": "staged"}), encoding="utf-8")
+
+            summary = collect_run_summaries(root)[0]
+            console = Console(file=io.StringIO(), record=True, width=180, color_system=None)
+            console.print(render_monitor(root))
+            rendered = console.export_text()
+
+            self.assertFalse(summary.is_stale)
+            self.assertIsNone(summary.ended)
+            self.assertEqual(summary.capacity_wait.attempts if summary.capacity_wait else None, 3)
+            self.assertEqual(summary.executor_info.gpu, "NVIDIA A40")
+            self.assertEqual(summary.activity, "waiting for GPU · NVIDIA A40 · probe 3 · 5h59m left")
+            self.assertIn("waiting 1", rendered)
+            self.assertIn("waiting-run", rendered)
+            self.assertIn("probe 3", rendered)
+
     def test_collect_run_summaries_reads_config_status_and_loss(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -551,6 +610,49 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.checkpoint_count, 3)
             self.assertEqual(summary.checkpoint_expected, 4)
             self.assertEqual(summary.outputs_path, run_dir / "outputs")
+
+    def test_collect_run_summaries_counts_final_weight_without_scheduled_checkpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "outputs").mkdir()
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+            (run_dir / "resolved" / "backend-display.lock.json").write_text(
+                json.dumps({"checkpoint": {"save_every_n_steps": 1}}),
+                encoding="utf-8",
+            )
+            (run_dir / "outputs" / "train.safetensors").touch()
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.checkpoint_count, 1)
+            self.assertEqual(summary.checkpoint_expected, 1)
+
+    def test_collect_run_summaries_ignores_retained_ai_toolkit_legacy_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "train"
+            legacy_dir = run_dir / "outputs" / "train"
+            (run_dir / "resolved").mkdir(parents=True)
+            legacy_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
+            (run_dir / "resolved" / "backend-display.lock.json").write_text(
+                json.dumps({"checkpoint": {"save_every_n_steps": 500}}),
+                encoding="utf-8",
+            )
+            for step in (500, 1000):
+                name = f"train-step{step:08d}.safetensors"
+                (run_dir / "outputs" / name).touch()
+                (legacy_dir / name).touch()
+            (legacy_dir / "keep.txt").touch()
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.checkpoint_count, 2)
+            self.assertEqual(summary.checkpoint_expected, 2)
 
     def test_collect_run_summaries_counts_checkpoints_in_legacy_download(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

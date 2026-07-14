@@ -70,7 +70,7 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 
 1. 🧑 Put your dataset under `datasets/`.
 2. 🧑 Tell the agent the goal — e.g. `Train a Krea 2 character LoRA with this dataset.` (You can also spell out exact parameters like `rank 16, lr 5e-5, ...` if you want.)
-3. 🤖 Inspect the dataset, write `run.yaml`, compile it, and show `kura run plan` with assumptions, resource facts, and trade-offs.
+3. 🤖 Inspect the dataset and write `run.yaml`. For RunPod, use a draft `kura run plan` to check GPU stock and record the immediate/wait choice; then compile and show the final plan with assumptions, resource facts, and trade-offs.
 4. 🧑 Approve that plan once, or tell the agent what to change.
 5. 🤖 Run `kura run execute <run-id>` using the local Docker or RunPod executor frozen in the plan. Infrastructure smoke checks are used when the backend or environment needs them; they are not a second user workflow.
    For RunPod, `execute` stops the Pod immediately after outputs are downloaded. Use `kura run remote <run-id> --hold-for 30m` instead when you need a review window before shutdown.
@@ -103,6 +103,7 @@ RunPod runs use **disposable Pods**. Kura uploads only the inputs it needs, trai
 
 - By default it does not use Network Volumes (no persistent storage left behind, flexible GPU placement).
 - Normal `kura run execute` stops the Pod immediately after confirmed output recovery.
+- A draft `kura run plan` checks current stock for the ordered RunPod GPU candidates. If the selected GPU is unavailable, choose an available alternative or record `compute.capacity: {mode: wait, timeout: 6h}` before compile; the final plan approves that choice once. Closing the terminal ends a foreground wait.
 - Use the low-level `kura run remote <run-id> --hold-for 30m` only when you intentionally need a review window.
 - A Pod-side `--max-lease 12h` guard is a last billing fuse if the local controller dies.
 

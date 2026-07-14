@@ -10,7 +10,10 @@ Use this skill for any RunPod remote execution or cleanup change.
 ## Standard remote flow
 
 ```text
+draft run plan: measure GPU stock/price
+record the selected GPU and immediate/wait capacity policy
 compile
+final run plan and one approval
 stage upload bundle
 launch disposable Pod
 upload over SSH
@@ -34,6 +37,14 @@ stop Pod
 - GPU candidates default to `NVIDIA RTX A5000` then `NVIDIA A40` with custom priority.
 - If a run explicitly sets `compute.gpu`, treat it as part of the user's run
   intent and use it before workspace-level candidates.
+- Run `kura run plan` once while the RunPod run is still a draft so current
+  stock and alternatives can inform `compute.gpu` and `compute.capacity`.
+  Compile only after that choice, then show the final compiled plan for the
+  single launch approval.
+- `compute.capacity.mode=wait` is a bounded foreground policy. The default
+  upload path cannot safely use RunPod's provider-side Deploy When Available
+  subscription because the controller must still upload inputs, start training,
+  and install the max-lease guard after Pod creation.
 
 ## Non-negotiables
 
@@ -64,6 +75,9 @@ uv run kura run download <run-id> --force
 uv run kura run pull <run-id> --since-step 1000
 uv run kura run stop <run-id>
 ```
+
+After a long unattended capacity wait, run `uv run kura doctor runpod` to
+confirm that no unrecorded Pod remains before retrying or leaving RunPod.
 
 If RunPod fails before receiving a request with an OS-level permission error,
 the current agent process may lack network access. Use

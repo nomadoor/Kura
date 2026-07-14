@@ -127,6 +127,21 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 If a run needs a specific GPU, set `compute.gpu` in that run. Kura will use that
 GPU before the workspace-level candidates.
 
+RunPod capacity behavior belongs to the run intent, not `workspace.yaml`:
+
+```yaml
+compute:
+  executor: runpod
+  gpu: NVIDIA RTX A5000
+  capacity:
+    mode: immediate  # or wait
+    timeout: 6h      # required only for wait; defaults to 24h
+    poll_interval: 30s
+```
+
+`kura run plan` measures live stock and price before approval. `run execute`
+uses the compiled capacity policy without asking again.
+
 Training RunPod Pods are disposable. In `upload` mode, local model caches are
 not uploaded with the run bundle, so `kura run plan` reports model downloads as
 remote writes for RunPod even when the same files are cached locally. Before

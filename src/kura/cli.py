@@ -120,6 +120,21 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     adapter = get_backend(backend_name)
     if adapter.validate_dataset is not None:
         adapter.validate_dataset(run, _workspace())
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    capacity = compute.get("capacity")
+    if capacity is not None:
+        if compute.get("executor") != "runpod":
+            raise ValueError("compute.capacity is only valid for RunPod runs")
+        if not isinstance(capacity, dict):
+            raise ValueError("compute.capacity must be a mapping")
+        mode = capacity.get("mode", "immediate")
+        if mode not in {"immediate", "wait"}:
+            raise ValueError("compute.capacity.mode must be immediate or wait")
+        if mode == "wait":
+            if _parse_duration_seconds(capacity.get("timeout", "24h")) <= 0:
+                raise ValueError("compute.capacity.timeout must be greater than zero when mode=wait")
+            if _parse_duration_seconds(capacity.get("poll_interval", "30s")) <= 0:
+                raise ValueError("compute.capacity.poll_interval must be greater than zero when mode=wait")
 
 
 def _now() -> datetime:
@@ -218,7 +233,11 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         "model": {"base": "", "revision": None},
         "datasets": [{"id": "", "digest": None, "role": None}],
         "recipe": {"steps": None, "seed": None},
-        "compute": {"executor": args.executor, "gpu": args.gpu},
+        "compute": {
+            "executor": args.executor,
+            "gpu": args.gpu,
+            **({"capacity": {"mode": "immediate"}} if args.executor == "runpod" else {}),
+        },
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
@@ -1102,6 +1121,8 @@ def main() -> None:
     remote.add_argument("--download-attempts", type=int, default=60)
     remote.add_argument("--download-interval", type=int, default=20)
     remote.add_argument("--image", help="Override the RunPod image for this run only")
+    remote.add_argument("--wait-for-capacity", default="0", help="Retry capacity-only launch failures for this long, e.g. 6h. Defaults to 0 (do not wait).")
+    remote.add_argument("--capacity-poll-interval", default="30s", help="How often to retry RunPod capacity while waiting, e.g. 30s")
     remote.add_argument("--hold-for", default="30m", help="Keep the Pod running for review after confirmed download, e.g. 30m. Defaults to 30m; use 0 to stop immediately.")
     remote.add_argument("--max-lease", default="12h", help="Best-effort Pod-side billing safety lease, e.g. 12h. Use 0 to disable.")
     remote.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
@@ -1127,6 +1148,8 @@ def main() -> None:
     launch.add_argument("--dry-run", action="store_true")
     launch.add_argument("--image", help="Override the runtime image for this run only")
     launch.add_argument("--wait", action="store_true", help="For local Docker runs, wait for the container to exit and reconcile status")
+    launch.add_argument("--wait-for-capacity", default="0", help="For RunPod, retry capacity-only launch failures for this long, e.g. 6h. Defaults to 0 (do not wait).")
+    launch.add_argument("--capacity-poll-interval", default="30s", help="How often to retry RunPod capacity while waiting, e.g. 30s")
     launch.set_defaults(func=cmd_run_launch)
 
     render = sub.add_parser("render", help="Create and launch ComfyUI render runs")

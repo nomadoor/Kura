@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -9,6 +10,48 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+class FileLockBusy(ValueError):
+    """A controller-side operation already owns an advisory file lock."""
+
+
+@contextlib.contextmanager
+def file_lock(path: Path, *, blocking: bool = True):
+    """Hold an advisory lock; Windows blocking locks may time out after about 10s."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            if handle.seek(0, os.SEEK_END) == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+            try:
+                msvcrt.locking(handle.fileno(), mode, 1)
+            except OSError as exc:
+                raise FileLockBusy(f"another operation already owns {path.name}") from exc
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+
+        import fcntl
+
+        operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle.fileno(), operation)
+        except BlockingIOError as exc:
+            raise FileLockBusy(f"another operation already owns {path.name}") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _fsync_directory(path: Path) -> None:

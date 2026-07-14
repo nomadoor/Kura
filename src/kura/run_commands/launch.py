@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, reconcile_docker
+from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.notifications import sleep_with_completion_reminders as _sleep_with_completion_reminders
@@ -40,6 +41,8 @@ def run_remote(
     notify_repeat_interval: Any = "10m",
     notify_channels: Any = None,
     image: str | None = None,
+    wait_for_capacity: Any = "0",
+    capacity_poll_interval: Any = "30s",
 ) -> int:
     run_dir = _run_path(run_id)
     launched = False
@@ -52,10 +55,19 @@ def run_remote(
         hold_for_sec = _parse_duration_seconds(hold_for)
         max_lease_sec = _parse_duration_seconds(max_lease)
         repeat_interval = _parse_duration_seconds(notify_repeat_interval)
+        wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
+        capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval)
         stage_code = stage_run(run_id, executor="runpod")
         if stage_code:
             return stage_code
-        launch_code = launch_run(run_id, executor="runpod", dry_run=False, image=image)
+        launch_code = launch_run(
+            run_id,
+            executor="runpod",
+            dry_run=False,
+            image=image,
+            wait_for_capacity=wait_for_capacity_sec,
+            capacity_poll_interval=capacity_poll_interval_sec,
+        )
         if launch_code:
             return launch_code
         launched = True
@@ -120,6 +132,8 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
         notify_repeat_interval=getattr(args, "notify_repeat_interval", "10m"),
         notify_channels=getattr(args, "notify", None),
         image=getattr(args, "image", None),
+        wait_for_capacity=getattr(args, "wait_for_capacity", "0"),
+        capacity_poll_interval=getattr(args, "capacity_poll_interval", "30s"),
     )
 
 
@@ -135,6 +149,8 @@ def execute_run(
     notify_repeat_interval: Any = "10m",
     notify_channels: Any = None,
     image: str | None = None,
+    wait_for_capacity: Any = None,
+    capacity_poll_interval: Any = None,
 ) -> int:
     """Execute using the executor frozen in the compiled manifest."""
 
@@ -146,6 +162,9 @@ def execute_run(
     compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
     executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
     if executor == "runpod":
+        capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
+        frozen_wait = capacity.get("timeout", "24h") if capacity.get("mode", "immediate") == "wait" else "0"
+        frozen_poll = capacity.get("poll_interval", "30s")
         return run_remote(
             run_id,
             upload_timeout=upload_timeout,
@@ -157,6 +176,8 @@ def execute_run(
             notify_repeat_interval=notify_repeat_interval,
             notify_channels=notify_channels,
             image=image,
+            wait_for_capacity=frozen_wait if wait_for_capacity is None else wait_for_capacity,
+            capacity_poll_interval=frozen_poll if capacity_poll_interval is None else capacity_poll_interval,
         )
     if executor == "docker":
         return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
@@ -176,6 +197,8 @@ def cmd_run_execute(args: argparse.Namespace) -> int:
         notify_repeat_interval=getattr(args, "notify_repeat_interval", "10m"),
         notify_channels=getattr(args, "notify", None),
         image=getattr(args, "image", None),
+        wait_for_capacity=getattr(args, "wait_for_capacity", None),
+        capacity_poll_interval=getattr(args, "capacity_poll_interval", None),
     )
 
 
@@ -195,7 +218,17 @@ def _wait_for_docker_run(run_dir: Path) -> int:
     return 0 if final.get("state") == "completed" else 1
 
 
-def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None = None, notify_channels: Any = None, wait: bool = False) -> int:
+def launch_run(
+    run_id: str,
+    *,
+    executor: str,
+    dry_run: bool,
+    image: str | None = None,
+    notify_channels: Any = None,
+    wait: bool = False,
+    wait_for_capacity: Any = "0",
+    capacity_poll_interval: Any = "30s",
+) -> int:
     run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
@@ -231,7 +264,9 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         if status.get("state") == "running":
             raise ValueError("run already has a running realization; reconcile or stop it first")
-        if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):
+        allowed_states = ("compiled", "failed", "interrupted", "unknown", "launch_failed")
+        stale_capacity_wait = status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict)
+        if status.get("state") not in allowed_states and not stale_capacity_wait:
             raise ValueError("run must be compiled before launch")
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
@@ -295,7 +330,16 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
             elif isinstance(gpu_override, list) and all(isinstance(item, str) and item for item in gpu_override):
                 runpod_config["gpu_type_ids"] = list(gpu_override)
                 runpod_config["gpu_type_priority"] = "custom"
-            launch_runpod(run_dir=run_dir, spec=spec, image=remote_image, config=runpod_config, dry_run=dry_run)
+            with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
+                launch_runpod(
+                    run_dir=run_dir,
+                    spec=spec,
+                    image=remote_image,
+                    config=runpod_config,
+                    dry_run=dry_run,
+                    wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity),
+                    capacity_poll_interval_sec=_parse_duration_seconds(capacity_poll_interval),
+                )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -305,4 +349,13 @@ def launch_run(run_id: str, *, executor: str, dry_run: bool, image: str | None =
 
 
 def cmd_run_launch(args: argparse.Namespace) -> int:
-    return launch_run(args.run_id, executor=args.executor, dry_run=args.dry_run, image=getattr(args, "image", None), notify_channels=getattr(args, "notify", None), wait=bool(getattr(args, "wait", False)))
+    return launch_run(
+        args.run_id,
+        executor=args.executor,
+        dry_run=args.dry_run,
+        image=getattr(args, "image", None),
+        notify_channels=getattr(args, "notify", None),
+        wait=bool(getattr(args, "wait", False)),
+        wait_for_capacity=getattr(args, "wait_for_capacity", "0"),
+        capacity_poll_interval=getattr(args, "capacity_poll_interval", "30s"),
+    )

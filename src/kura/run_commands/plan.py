@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from kura.backends import get_backend
-from kura.executors import stage_runpod, stop_docker, stop_runpod
+from kura.executors import runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
@@ -142,6 +142,54 @@ def _runpod_requested_gpus(compute: dict[str, Any], config: dict[str, Any]) -> A
     runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
     configured = runpod.get("gpu_type_ids") if isinstance(runpod, dict) else None
     return configured if isinstance(configured, list) else NOT_SET
+
+
+def _runpod_planning_gpus(compute: dict[str, Any], config: dict[str, Any]) -> tuple[list[str], list[str]]:
+    selected = _runpod_requested_gpus(compute, config)
+    selected_ids = selected if isinstance(selected, list) else []
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    configured = runpod.get("gpu_type_ids") if isinstance(runpod.get("gpu_type_ids"), list) else []
+    candidates = list(dict.fromkeys([*selected_ids, *(item for item in configured if isinstance(item, str) and item)]))
+    return selected_ids, candidates
+
+
+def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any] | None:
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    if executor != "runpod":
+        return None
+    selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
+    capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
+    mode = capacity.get("mode", "immediate")
+    policy = {
+        "mode": mode,
+        "timeout": capacity.get("timeout", "24h") if mode == "wait" else None,
+        "poll_interval": capacity.get("poll_interval", "30s") if mode == "wait" else None,
+    }
+    runpod_config = dict(config.get("runpod", {})) if isinstance(config.get("runpod"), dict) else {}
+    runpod_config.setdefault("gpu_type_ids", gpu_type_ids)
+    measurement = runpod_gpu_availability(runpod_config, gpu_type_ids) if gpu_type_ids else {
+        "status": "unavailable",
+        "reason": "no RunPod GPU candidates are configured",
+        "candidates": [],
+    }
+    immediate = []
+    for candidate in measurement.get("candidates", []):
+        if not isinstance(candidate, dict):
+            continue
+        for cloud in candidate.get("clouds", []):
+            if isinstance(cloud, dict) and cloud.get("available"):
+                immediate.append({"gpu_type_id": candidate.get("gpu_type_id"), "cloud_type": cloud.get("cloud_type"), "price_per_hour": cloud.get("price_per_hour")})
+    return {
+        "policy": policy,
+        "selected_gpu_type_ids": selected_gpu_type_ids,
+        "measurement": measurement,
+        "immediate_candidates": immediate,
+        "provider_reservation": {
+            "available": False,
+            "reason": "Kura upload staging still needs the local controller after Pod creation; native Deploy When Available is not yet safe for autonomous training",
+        },
+    }
 
 
 def _model_artifact_filenames(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -849,8 +897,9 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
     display_path = run_dir / "resolved" / "backend-display.lock.json"
     frozen_display = _load_yaml(display_path) if display_path.is_file() else None
-    resources = _resources_payload(run, _workspace_config(), download_estimate, adapter_display=frozen_display)
-    preflight = collect_run_preflight(run, workspace, config=_workspace_config(), download_estimate=download_estimate)
+    workspace_config = _workspace_config()
+    resources = _resources_payload(run, workspace_config, download_estimate, adapter_display=frozen_display)
+    preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -869,11 +918,13 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "compute": {
             "executor": compute.get("executor") if isinstance(compute, dict) else None,
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
+            "capacity": compute.get("capacity") if isinstance(compute.get("capacity"), dict) else None,
         },
         "datasets": datasets,
         "recipe": {key: value for key, value in plan_recipe.items() if value is not None},
         "sampling": sampling_payload,
         "resources": resources,
+        "runpod_capacity": _runpod_capacity_payload(run, workspace_config),
         "model_downloads": download_estimate,
         "preflight": preflight,
     }
@@ -947,6 +998,54 @@ def format_run_plan(payload: dict[str, Any]) -> str:
     for key, value in payload.get("compute", {}).items():
         if value is not None:
             _append_kv(lines, key, value)
+
+    runpod_capacity = payload.get("runpod_capacity") if isinstance(payload.get("runpod_capacity"), dict) else None
+    if runpod_capacity is not None:
+        lines.append("")
+        lines.append("RunPod capacity")
+        policy = runpod_capacity.get("policy") if isinstance(runpod_capacity.get("policy"), dict) else {}
+        _append_kv(lines, "policy", policy.get("mode", "immediate"))
+        if policy.get("timeout"):
+            _append_kv(lines, "timeout", policy.get("timeout"))
+        if policy.get("poll_interval"):
+            _append_kv(lines, "poll", policy.get("poll_interval"))
+        measurement = runpod_capacity.get("measurement") if isinstance(runpod_capacity.get("measurement"), dict) else {}
+        _append_kv(lines, "probe", measurement.get("status", "unavailable"))
+        if measurement.get("checked_at"):
+            _append_kv(lines, "checked", measurement.get("checked_at"))
+        if measurement.get("reason"):
+            _append_kv(lines, "reason", measurement.get("reason"))
+        selected_gpu_type_ids = runpod_capacity.get("selected_gpu_type_ids") if isinstance(runpod_capacity.get("selected_gpu_type_ids"), list) else []
+        for candidate in measurement.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            label = candidate.get("display_name") or candidate.get("gpu_type_id") or "GPU"
+            memory = f" · {candidate.get('memory_gb')} GB" if candidate.get("memory_gb") is not None else ""
+            selected = " · selected" if candidate.get("gpu_type_id") in selected_gpu_type_ids else " · alternative"
+            lines.append(f"  - {_format_plan_value(label)}{memory}{selected}")
+            for cloud in candidate.get("clouds", []):
+                if not isinstance(cloud, dict):
+                    continue
+                availability = "available now (stock snapshot)" if cloud.get("available") else "unavailable (stock snapshot)"
+                price = cloud.get("price_per_hour")
+                price_text = f" · ${price}/h" if price is not None else ""
+                lines.append(
+                    f"    - {_format_plan_value(cloud.get('cloud_type'))}: "
+                    f"{_format_plan_value(cloud.get('stock_status'))} · {availability}{price_text}"
+                )
+        immediate = runpod_capacity.get("immediate_candidates") if isinstance(runpod_capacity.get("immediate_candidates"), list) else []
+        if immediate:
+            lines.append("  choices")
+            for item in immediate:
+                if isinstance(item, dict):
+                    lines.append(f"    - launch now: {item.get('gpu_type_id')} / {item.get('cloud_type')}")
+            lines.append("    - wait for the selected GPU: set compute.capacity.mode=wait before compile")
+        else:
+            lines.append("  choices")
+            lines.append("    - choose another GPU, or set compute.capacity.mode=wait before compile")
+        reservation = runpod_capacity.get("provider_reservation") if isinstance(runpod_capacity.get("provider_reservation"), dict) else {}
+        if not reservation.get("available"):
+            _append_kv(lines, "native_queue", reservation.get("reason"), indent=4)
 
     lines.append("")
     lines.append("Datasets")

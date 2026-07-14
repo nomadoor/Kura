@@ -8,7 +8,9 @@ import platform
 import secrets
 import shutil
 import subprocess
+import sys
 import tarfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,14 @@ from kura.provenance import image_reference_identity
 from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
 
 
+class RunPodAPIError(ValueError):
+    """A RunPod HTTP error with its status preserved for retry policy."""
+
+    def __init__(self, message: str, *, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None) -> Any:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = Request(f"{RUNPOD_API_ROOT}{path}", data=body, method=method, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
@@ -28,7 +38,7 @@ def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         detail = _redact_secret_text(exc.read().decode("utf-8", errors="replace"))
-        raise ValueError(f"RunPod API {method} {path} failed ({exc.code}): {detail}") from exc
+        raise RunPodAPIError(f"RunPod API {method} {path} failed ({exc.code}): {detail}", status_code=exc.code) from exc
     except URLError as exc:
         raise ValueError(f"RunPod API is unreachable: {exc.reason}") from exc
     if not raw:
@@ -44,6 +54,82 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
     if not isinstance(value, dict):
         raise ValueError("RunPod API returned an unexpected response")
     return value
+
+
+def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> dict[str, Any]:
+    """Measure current RunPod stock and price for an ordered GPU candidate list."""
+
+    settings = _runpod_settings(config)
+    api_key = os.environ.get(settings["api_key_env"])
+    if not api_key:
+        return {"status": "unavailable", "reason": f"{settings['api_key_env']} is not exported", "candidates": []}
+    aliases: list[str] = []
+    for index, gpu_type_id in enumerate(gpu_type_ids):
+        cloud_fields = []
+        for cloud_type in settings["cloud_types"]:
+            secure = "true" if cloud_type == "SECURE" else "false"
+            cloud_fields.append(
+                f'{cloud_type.lower()}: lowestPrice(input: {{gpuCount: {settings["gpu_count"]}, secureCloud: {secure}}}) '
+                "{ stockStatus uninterruptablePrice availableGpuCounts }"
+            )
+        aliases.append(
+            f'g{index}: gpuTypes(input: {{id: {json.dumps(gpu_type_id)}}}) '
+            "{ id displayName memoryInGb " + " ".join(cloud_fields) + " }"
+        )
+    query = "query KuraGpuAvailability { " + " ".join(aliases) + " }"
+    body = json.dumps({"query": query}).encode("utf-8")
+    request = Request(
+        "https://api.runpod.io/graphql",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": f"Kura/{__version__}",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = _redact_secret_text(exc.read().decode("utf-8", errors="replace"))
+        kind = "auth" if exc.code in {401, 403} else "rate_limit" if exc.code == 429 else "transient" if exc.code >= 500 else "request"
+        return {"status": "unavailable", "error_kind": kind, "reason": f"RunPod GraphQL failed ({exc.code}): {detail}", "candidates": []}
+    except (URLError, OSError, json.JSONDecodeError) as exc:
+        return {"status": "unavailable", "error_kind": "transient", "reason": _redact_secret_text(str(exc)), "candidates": []}
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if errors or not isinstance(data, dict):
+        return {"status": "unavailable", "error_kind": "request", "reason": _redact_secret_text(str(errors or "unexpected RunPod response")), "candidates": []}
+    candidates: list[dict[str, Any]] = []
+    for index, requested_id in enumerate(gpu_type_ids):
+        matches = data.get(f"g{index}")
+        item = matches[0] if isinstance(matches, list) and matches and isinstance(matches[0], dict) else {}
+        clouds = []
+        for cloud_type in settings["cloud_types"]:
+            price = item.get(cloud_type.lower()) if isinstance(item.get(cloud_type.lower()), dict) else {}
+            stock = price.get("stockStatus")
+            counts_raw = price.get("availableGpuCounts")
+            counts = counts_raw if isinstance(counts_raw, list) else []
+            requested_count_available = settings["gpu_count"] in counts if isinstance(counts_raw, list) else True
+            clouds.append(
+                {
+                    "cloud_type": cloud_type,
+                    "stock_status": stock or "None",
+                    "available": str(stock).lower() in {"high", "medium", "low"} and requested_count_available,
+                    "price_per_hour": price.get("uninterruptablePrice"),
+                    "available_gpu_counts": counts,
+                }
+            )
+        candidates.append(
+            {
+                "gpu_type_id": item.get("id") or requested_id,
+                "display_name": item.get("displayName") or requested_id,
+                "memory_gb": item.get("memoryInGb"),
+                "clouds": clouds,
+            }
+        )
+    return {"status": "ok", "checked_at": _now(), "gpu_count": settings["gpu_count"], "candidates": candidates}
 
 
 def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
@@ -122,6 +208,35 @@ def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
     """Return ordered GPU attempts for deterministic fallback."""
 
     return [[gpu_type_id] for gpu_type_id in gpu_type_ids]
+
+
+def _is_runpod_capacity_error(exc: ValueError) -> bool:
+    """Return whether a Pod-create failure says the requested GPU is unavailable."""
+
+    text = str(exc).lower()
+    markers = (
+        "out of capacity",
+        "gpu capacity",
+        "compute capacity",
+        "out of stock",
+        "no gpu",
+        "no available",
+        "none available",
+        "no longer any instances",
+        "gpu unavailable",
+        "gpu is unavailable",
+    )
+    if any(marker in text for marker in markers):
+        return True
+    requested_compute = "requested" in text and ("gpu" in text or "instance" in text)
+    return requested_compute and ("not available" in text or "unavailable" in text)
+
+
+def _is_runpod_transient_error(exc: ValueError) -> bool:
+    if isinstance(exc, RunPodAPIError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    text = str(exc).lower()
+    return "runpod api is unreachable" in text or any(f"({code})" in text for code in (429, 500, 502, 503, 504))
 
 
 def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_id: str) -> dict[str, str]:
@@ -269,7 +384,16 @@ def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def launch_runpod(*, run_dir: Path, spec: dict[str, Any], image: str, config: dict[str, Any], dry_run: bool = False) -> str | None:
+def launch_runpod(
+    *,
+    run_dir: Path,
+    spec: dict[str, Any],
+    image: str,
+    config: dict[str, Any],
+    dry_run: bool = False,
+    wait_for_capacity_sec: int = 0,
+    capacity_poll_interval_sec: int = 30,
+) -> str | None:
     """Create a RunPod Pod using a pre-staged workspace."""
     settings = _runpod_settings(config)
     realization_id = _realization_id()
@@ -372,22 +496,137 @@ sleep infinity
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
         raise ValueError(f"{settings['api_key_env']} must be exported to launch a RunPod run")
+    if wait_for_capacity_sec < 0:
+        raise ValueError("wait_for_capacity_sec must be zero or greater")
+    if wait_for_capacity_sec and capacity_poll_interval_sec <= 0:
+        raise ValueError("capacity_poll_interval_sec must be greater than zero while waiting for capacity")
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
-    for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]):
-        for cloud_type in settings["cloud_types"]:
-            attempt_request = dict(request_body)
-            attempt_request["gpuTypeIds"] = gpu_type_ids
-            attempt_request["cloudType"] = cloud_type
-            try:
-                pod = _runpod_request("POST", "/pods", api_key, attempt_request)
-                used_request = attempt_request
+    capacity_wait_started_at: str | None = None
+    capacity_wait_started_monotonic = time.monotonic()
+    capacity_rounds = 0
+    transient_rounds = 0
+    controller_phase = "probe"
+    try:
+        while pod is None:
+            if wait_for_capacity_sec and capacity_rounds and time.monotonic() - capacity_wait_started_monotonic >= wait_for_capacity_sec:
                 break
-            except ValueError as exc:
-                launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
-        if pod is not None:
-            break
+            launch_errors = []
+            round_exceptions: list[ValueError] = []
+            attempts: list[tuple[list[str], str]] = []
+            transient_probe = False
+            if wait_for_capacity_sec:
+                controller_phase = "probe"
+                measurement = runpod_gpu_availability(config, settings["gpu_type_ids"])
+                if measurement.get("status") == "ok":
+                    for candidate in measurement.get("candidates", []):
+                        if not isinstance(candidate, dict) or not isinstance(candidate.get("gpu_type_id"), str):
+                            continue
+                        for cloud in candidate.get("clouds", []):
+                            if isinstance(cloud, dict) and cloud.get("available") and cloud.get("cloud_type") in settings["cloud_types"]:
+                                attempts.append(([candidate["gpu_type_id"]], cloud["cloud_type"]))
+                    if not attempts:
+                        transient_rounds = 0
+                        launch_errors.append({"gpu_type_ids": ", ".join(settings["gpu_type_ids"]), "cloud_type": ", ".join(settings["cloud_types"]), "error": "RunPod stock snapshot reports no matching GPU capacity", "classification": "capacity"})
+                else:
+                    kind = str(measurement.get("error_kind") or "request")
+                    launch_errors.append({"gpu_type_ids": ", ".join(settings["gpu_type_ids"]), "cloud_type": "availability-probe", "error": _redact_secret_text(str(measurement.get("reason") or "RunPod availability probe failed")), "classification": kind})
+                    transient_probe = kind in {"rate_limit", "transient"}
+                    if not transient_probe:
+                        break
+                    transient_rounds += 1
+            else:
+                attempts = [(gpu_type_ids, cloud_type) for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]) for cloud_type in settings["cloud_types"]]
+
+            for gpu_type_ids, cloud_type in attempts:
+                attempt_request = dict(request_body)
+                attempt_request["gpuTypeIds"] = gpu_type_ids
+                attempt_request["cloudType"] = cloud_type
+                controller_phase = "create"
+                try:
+                    pod = _runpod_request("POST", "/pods", api_key, attempt_request)
+                    used_request = attempt_request
+                    controller_phase = "probe"
+                    break
+                except ValueError as exc:
+                    round_exceptions.append(exc)
+                    classification = "capacity" if _is_runpod_capacity_error(exc) else "transient" if _is_runpod_transient_error(exc) else "fatal"
+                    launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc)), "classification": classification})
+                    controller_phase = "probe"
+            if pod is not None:
+                break
+            retryable_create = bool(round_exceptions) and all(_is_runpod_capacity_error(exc) or _is_runpod_transient_error(exc) for exc in round_exceptions)
+            if not wait_for_capacity_sec or (attempts and not retryable_create):
+                break
+            if any(_is_runpod_transient_error(exc) for exc in round_exceptions):
+                transient_rounds += 1
+            elif round_exceptions:
+                transient_rounds = 0
+            elapsed = time.monotonic() - capacity_wait_started_monotonic
+            if elapsed >= wait_for_capacity_sec:
+                break
+            capacity_rounds += 1
+            now = _now()
+            if capacity_wait_started_at is None:
+                capacity_wait_started_at = now
+                append_run_event(
+                    run_dir,
+                    {
+                        "event": "runpod_capacity_wait_started",
+                        "timestamp": now,
+                        "executor": "runpod",
+                        "timeout_sec": wait_for_capacity_sec,
+                        "poll_interval_sec": capacity_poll_interval_sec,
+                        "attempts": capacity_rounds,
+                        "gpu_type_ids": settings["gpu_type_ids"],
+                        "cloud_types": settings["cloud_types"],
+                    },
+                )
+            remaining = max(wait_for_capacity_sec - elapsed, 0)
+            status = _load_status(run_dir)
+            status.update(
+                {
+                    "state": "queued",
+                    "started": None,
+                    "ended": None,
+                    "exit_code": None,
+                    "host": "runpod",
+                    "capacity_wait": {
+                        "started_at": capacity_wait_started_at,
+                        "attempts": capacity_rounds,
+                        "last_attempt_at": now,
+                        "remaining_sec": round(remaining),
+                        "poll_interval_sec": capacity_poll_interval_sec,
+                        "gpu_type_ids": settings["gpu_type_ids"],
+                        "cloud_types": settings["cloud_types"],
+                        "last_result": launch_errors[-1].get("classification") if launch_errors else "capacity",
+                    },
+                }
+            )
+            status.pop("pod_id", None)
+            status.pop("last_observation", None)
+            _write_status(run_dir, status)
+            backoff = min(2 ** min(transient_rounds, 4), 10) if transient_probe or transient_rounds else 1
+            sleep_for = min(capacity_poll_interval_sec * backoff, 300, remaining)
+            print(
+                f"RunPod capacity unavailable; waiting {sleep_for:.0f}s "
+                f"before probe {capacity_rounds + 1} (up to {remaining:.0f}s remaining).",
+                file=sys.stderr,
+            )
+            controller_phase = "sleep"
+            time.sleep(sleep_for)
+            controller_phase = "probe"
+    except KeyboardInterrupt as exc:
+        cancelled_at = _now()
+        status = _load_status(run_dir)
+        status.update({"state": "interrupted", "ended": cancelled_at, "exit_code": None, "host": "runpod"})
+        status.pop("capacity_wait", None)
+        _write_status(run_dir, status)
+        append_run_event(run_dir, {"event": "runpod_capacity_wait_cancelled", "timestamp": cancelled_at, "executor": "runpod", "attempts": capacity_rounds, "phase": controller_phase})
+        if controller_phase == "create":
+            raise ValueError("RunPod capacity wait was interrupted during Pod creation; creation is unconfirmed, so inspect RunPod before retrying") from exc
+        raise ValueError("RunPod capacity wait cancelled; no Pod was created") from exc
     if pod is None or used_request is None:
         failed_at = _now()
         realization_path = run_dir / "realizations" / f"{realization_id}.json"
@@ -409,12 +648,15 @@ sleep infinity
         status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir))})
         status.pop("pod_id", None)
         status.pop("last_observation", None)
+        status.pop("capacity_wait", None)
         _write_status(run_dir, status)
         append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "runpod", "realization_id": realization_id, "error": realization["error"]})
         raise ValueError("RunPod launch failed for all configured cloud types: " + realization["error"])
     safe_used_request = dict(used_request)
     safe_used_request["env"] = _safe_env(runtime_env)
     safe_used_request["cloudTypeCandidates"] = settings["cloud_types"]
+    if capacity_wait_started_at is not None:
+        safe_used_request["capacityWait"] = {"startedAt": capacity_wait_started_at, "failedRounds": capacity_rounds}
     pod_id = pod.get("id")
     if not isinstance(pod_id, str) or not pod_id:
         raise ValueError("RunPod create response did not include a pod ID")
@@ -432,7 +674,10 @@ sleep infinity
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
     status.pop("last_observation", None)
+    status.pop("capacity_wait", None)
     _write_status(run_dir, status)
+    if capacity_wait_started_at is not None:
+        append_run_event(run_dir, {"event": "runpod_capacity_acquired", "timestamp": _now(), "executor": "runpod", "attempts": capacity_rounds + 1, "pod_id": pod_id})
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "runpod", "realization_id": realization_id, "pod_id": pod_id})
     return realization_id
 
@@ -582,10 +827,15 @@ def reconcile_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
 
 def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     settings = _runpod_settings(config)
+    status = _load_status(run_dir)
+    if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
+        raise ValueError(
+            "run is waiting for RunPod capacity and no Pod exists to stop; "
+            "interrupt the active launch controller with Ctrl+C"
+        )
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
         raise ValueError(f"{settings['api_key_env']} must be exported to stop a RunPod run")
-    status = _load_status(run_dir)
     pod_id = status.get("pod_id")
     if not isinstance(pod_id, str):
         raise ValueError("run has no RunPod pod ID")
