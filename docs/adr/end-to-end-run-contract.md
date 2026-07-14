@@ -227,6 +227,26 @@ These are not independent approval gates:
 The same fact should have one owner. Code should not duplicate a clear,
 immediate trainer check unless failure would be expensive-late or cryptic.
 
+RunPod capacity is measured during planning, before launch approval. The plan
+shows current stock and price for each ordered GPU/cloud candidate. The user may
+select an available alternative or record a bounded wait policy under
+`compute.capacity` before compile; `run execute` follows the frozen choice.
+Foreground waiting is not a Kura-owned queue or daemon. It retries only provider
+stock probes until capacity is reported, then uses Pod creation as the
+authoritative check. A create race returns to the read-only probe instead of
+using repeated create requests as a polling mechanism. It keeps the latest wait
+state in `status.json` and records wait boundaries in the activity feed.
+Authentication, balance, and invalid-request failures fail immediately. Rate
+limits, transient network failures, and provider 5xx errors use bounded backoff
+within the already-approved wait window.
+
+RunPod also offers a provider-side Deploy When Available subscription. Kura
+does not submit one while its default remote path depends on controller-side
+upload and SSH startup: RunPod could otherwise create a billing Pod after the
+controller exits without delivering the dataset, starting training, or
+installing Kura's lease guard. Native subscription support requires autonomous,
+durable staging and recovery first.
+
 ## Decision 7: file roles remain distinct
 
 - `run.yaml` records human and agent intent, including the approved recipe and

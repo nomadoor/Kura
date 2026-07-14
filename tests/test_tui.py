@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 from rich.console import Console
 
-from kura.monitor import ExecutorInfo, PodInfo, RunSummary
-from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, WatchScreen, _aware_datetime, _batch, _events_table, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _retained_run_history, _runpod_pod_url
+from kura.monitor import CapacityWaitInfo, ExecutorInfo, PodInfo, RunSummary
+from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, WatchScreen, _aware_datetime, _batch, _compute_location, _events_table, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _retained_run_history, _runpod_pod_url
 
 
 class TuiMetricsTests(unittest.TestCase):
@@ -46,6 +46,26 @@ class TuiMetricsTests(unittest.TestCase):
         self.assertIn("LOC", local_active.render_row().plain)
         remote = RunRow(RunSummary(id="remote", experiment=None, type="train", executor="runpod", state="running", executor_info=ExecutorInfo(kind="remote")), lane="active")
         self.assertIn("POD", remote.render_row().plain)
+
+    def test_capacity_wait_row_and_phase_do_not_claim_a_pod_exists(self) -> None:
+        summary = RunSummary(
+            id="waiting",
+            experiment=None,
+            type="train",
+            executor="runpod",
+            state="queued",
+            executor_info=ExecutorInfo(kind="remote", provider="runpod", gpu="NVIDIA A40"),
+            capacity_wait=CapacityWaitInfo(attempts=3, remaining_sec=21_540, gpu_type_ids=("NVIDIA A40",)),
+            activity="waiting for GPU · NVIDIA A40 · probe 3 · 5h59m left",
+        )
+
+        rendered = RunRow(summary, lane="active").render_row().plain
+
+        self.assertIn("WAIT", rendered)
+        self.assertIn("5h59m", rendered)
+        self.assertNotIn("POD", rendered)
+        self.assertEqual(_compute_location(summary), "WAIT")
+        self.assertEqual(_remote_execution_phase(summary), "● waiting for RunPod GPU capacity · no Pod created")
 
     def test_click_focus_does_not_recolor_an_entire_pane(self) -> None:
         self.assertNotIn(".pane:focus", KuraMonitorApp.CSS)

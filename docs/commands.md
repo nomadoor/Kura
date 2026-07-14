@@ -49,6 +49,31 @@ Compile after editing `run.yaml`, review `run plan`, obtain the single launch
 approval, then use `run execute`. The agent normally performs compile for the
 user; it is listed below as a low-level command for inspection and development.
 
+For RunPod runs, `run plan` measures current stock and hourly price for every
+ordered GPU/cloud candidate before approval. Choose an available alternative or
+record a bounded foreground wait in `run.yaml` before compiling:
+
+```yaml
+compute:
+  executor: runpod
+  gpu: NVIDIA RTX A5000
+  capacity:
+    mode: wait
+    timeout: 6h
+    poll_interval: 30s
+```
+
+`run execute` follows this frozen policy. Capacity waiting polls RunPod's
+read-only stock query and attempts Pod creation only when matching stock is
+reported. Authentication, balance, and invalid configuration errors fail
+immediately; rate limits, transient network failures, and provider 5xx errors
+use bounded backoff while the approved wait window remains. Closing the terminal
+or pressing Ctrl+C ends the wait. `run stop` cannot cancel this state because no
+Pod exists yet; it reports where the foreground controller must be interrupted.
+RunPod's provider-side Deploy When Available queue is not used yet: Kura's
+default upload staging still needs the local controller to deliver the dataset
+and start training after a Pod is created.
+
 Local Docker checkpoints appear directly under the run's `outputs/` directory.
 During a normal RunPod execution, Kura also mirrors completed checkpoints into
 the run's `outputs/` while training continues. This makes already-saved weights

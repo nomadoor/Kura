@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
+import filecmp
 import json
 import os
 import re
@@ -24,7 +24,7 @@ from typing import Any, Callable
 import yaml
 
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
-from kura.fsio import atomic_write_json
+from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
@@ -37,7 +37,7 @@ from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
 
 
-class _OperationBusy(ValueError):
+class _OperationBusy(FileLockBusy):
     """A normal controller-side scheduling collision."""
 
 
@@ -47,17 +47,11 @@ def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
 
     lock_dir = run_dir / ".locks"
     lock_dir.mkdir(exist_ok=True)
-    lock_path = lock_dir / f"{name}.lock"
-    with lock_path.open("a+b") as handle:
-        operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
-        try:
-            fcntl.flock(handle.fileno(), operation)
-        except BlockingIOError as exc:
-            raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
-        try:
+    try:
+        with file_lock(lock_dir / f"{name}.lock", blocking=blocking):
             yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except FileLockBusy as exc:
+        raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
 
 
 def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
@@ -136,6 +130,14 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
         downloaded_run = destination / run_id
+        try:
+            manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        except (OSError, ValueError, yaml.YAMLError):
+            manifest = {}
+        if not isinstance(manifest, dict):
+            manifest = {}
+        backend = manifest.get("backend") if isinstance(manifest.get("backend"), dict) else {}
+        backend_name = backend.get("name") if isinstance(backend.get("name"), str) else None
 
         def materialize_primary_outputs(output_dir: Path) -> list[str]:
             primary = run_dir / "outputs"
@@ -143,8 +145,17 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             if not output_dir.exists():
                 return outputs
             primary.mkdir(parents=True, exist_ok=True)
+            publications: dict[Path, Path] = {}
+            legacy_publications: dict[Path, Path] = {}
             for source in sorted(path for path in output_dir.rglob("*") if path.is_file()):
                 relative = source.relative_to(output_dir)
+                if backend_name == "ai-toolkit" and len(relative.parts) > 1 and relative.parts[0] == run_id:
+                    relative = Path(*relative.parts[1:])
+                    legacy_publications[relative] = source
+                if relative in publications:
+                    raise ValueError(f"download outputs collide at canonical path {relative}")
+                publications[relative] = source
+            for relative, source in publications.items():
                 target = primary / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_name(f".{target.name}.partial-{secrets.token_hex(4)}")
@@ -157,6 +168,18 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 finally:
                     temporary.unlink(missing_ok=True)
                 outputs.append(str((primary / relative).relative_to(run_dir)))
+            legacy_root = primary / run_id
+            if legacy_publications and legacy_root.is_dir():
+                legacy_files = {
+                    path.relative_to(legacy_root): path
+                    for path in legacy_root.rglob("*")
+                    if path.is_file()
+                }
+                if legacy_files.keys() == legacy_publications.keys() and all(
+                    filecmp.cmp(legacy_files[relative], source, shallow=False)
+                    for relative, source in legacy_publications.items()
+                ):
+                    shutil.rmtree(legacy_root)
             return outputs
 
         def materialize_downloaded_status() -> bool:
@@ -172,11 +195,10 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             steps: int | None = None
             if exit_code == 0:
                 try:
-                    manifest = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
                     configured_steps = common_recipe(manifest).get("steps")
                     if isinstance(configured_steps, int) and configured_steps > 0:
                         steps = configured_steps
-                except (OSError, ValueError, yaml.YAMLError):
+                except ValueError:
                     pass
 
             def mutate(status: dict[str, Any]) -> None:

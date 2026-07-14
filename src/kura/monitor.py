@@ -11,7 +11,7 @@ import shlex
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -73,6 +73,18 @@ class ExecutorInfo:
 
 
 @dataclass(frozen=True)
+class CapacityWaitInfo:
+    started_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    attempts: int = 0
+    remaining_sec: int | None = None
+    poll_interval_sec: float | None = None
+    gpu_type_ids: tuple[str, ...] = ()
+    cloud_types: tuple[str, ...] = ()
+    last_result: str | None = None
+
+
+@dataclass(frozen=True)
 class RunSummary:
     id: str
     experiment: str | None
@@ -96,6 +108,7 @@ class RunSummary:
     checkpoint_expected: int | None = None
     datasets: tuple[RunDataset, ...] = ()
     executor_info: ExecutorInfo = field(default_factory=ExecutorInfo)
+    capacity_wait: CapacityWaitInfo | None = None
     is_stale: bool = False
     activity: str | None = None
 
@@ -180,7 +193,7 @@ def _monitor_table(summaries: list[RunSummary], *, terminal_width: int, active: 
     for summary in summaries:
         stale_style = _staleness_style(summary)
         table.add_row(
-            _state_text(summary.state),
+            _state_text(summary),
             _id_text(summary),
             summary.type or "-",
             summary.executor or "-",
@@ -222,7 +235,7 @@ def render_watch(workspace: Path, run_id: str, *, events_tail: int = 8, full_con
     header.add_column(ratio=1)
     header.add_column(ratio=1)
     header.add_row(
-        Text.assemble(("run ", "dim"), (summary.id, "bold cyan"), ("  "), _state_text(summary.state)),
+        Text.assemble(("run ", "dim"), (summary.id, "bold cyan"), ("  "), _state_text(summary)),
         Text(datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"), style="dim"),
     )
 
@@ -317,7 +330,17 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         *sorted((run_dir / "realizations").glob("*.json")),
     )
     ended = _parse_datetime(_first_present(status.get("ended"), observed.get("ended"), realization.get("ended"), realization.get("timestamp")))
+    if state in ACTIVE_STATES:
+        ended = None
     outputs_path = _outputs_path(run_dir, status)
+    is_stale = bool(state == "running" and last_updated and (datetime.now().astimezone() - last_updated).total_seconds() > stale_after)
+    capacity_wait_raw = status.get("capacity_wait") if isinstance(status.get("capacity_wait"), dict) else {}
+    capacity_wait = _capacity_wait_info(capacity_wait_raw) if state == "queued" and capacity_wait_raw else None
+    if capacity_wait:
+        last_attempt = capacity_wait.last_attempt_at
+        poll_interval = capacity_wait.poll_interval_sec or 30.0
+        threshold = max(stale_after, poll_interval * 3)
+        is_stale = bool(last_attempt and (datetime.now().astimezone() - last_attempt).total_seconds() > threshold)
     return RunSummary(
         id=_string(config.get("id") or run.get("id")) or fallback_id,
         experiment=_string(config.get("experiment") or run.get("experiment")),
@@ -341,8 +364,9 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         checkpoint_expected=_checkpoint_expected(config, run_dir),
         datasets=tuple(_datasets(workspace, config or run)),
         executor_info=_executor_info(executor, config, status, realization, run_dir),
-        is_stale=bool(state == "running" and last_updated and (datetime.now().astimezone() - last_updated).total_seconds() > stale_after),
-        activity=stdout_activity,
+        capacity_wait=capacity_wait,
+        is_stale=is_stale,
+        activity=_capacity_wait_activity(capacity_wait, stale=is_stale) if capacity_wait else stdout_activity,
     )
 
 
@@ -814,7 +838,13 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     elif isinstance(gpu_ids, list) and gpu_ids:
         gpu = str(gpu_ids[0])
     elif isinstance(config.get("compute"), dict) and config["compute"].get("gpu") is not None:
-        gpu = "gpu" if config["compute"].get("gpu") else "cpu"
+        configured_gpu = config["compute"].get("gpu")
+        if isinstance(configured_gpu, str):
+            gpu = configured_gpu
+        elif isinstance(configured_gpu, list) and configured_gpu:
+            gpu = str(configured_gpu[0])
+        else:
+            gpu = "gpu" if configured_gpu else "cpu"
     pod_id = _string(status.get("pod_id") or pod_raw.get("id"))
     pod_state = _string(observation.get("desired_status") or observation.get("state") or pod_raw.get("desired_status") or pod_raw.get("state") or request.get("desiredStatus"))
     started = _parse_datetime(_first_present(observation.get("last_started_at"), pod_raw.get("last_started_at"), realization.get("launched_at")))
@@ -883,7 +913,12 @@ def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
 def _checkpoint_count(outputs: Path) -> int:
     if not outputs.is_dir():
         return 0
-    return sum(1 for path in outputs.glob("*.safetensors") if _checkpoint_step_from_name(path.name) is not None)
+    weights = list(outputs.rglob("*.safetensors"))
+    if any(path.parent == outputs for path in weights):
+        legacy_root = outputs / outputs.parent.name
+        weights = [path for path in weights if not path.is_relative_to(legacy_root)]
+    scheduled = [path for path in weights if _checkpoint_step_from_name(path.name) is not None]
+    return len(scheduled) if scheduled else len(weights)
 
 
 def _checkpoint_step_from_name(name: str) -> int | None:
@@ -926,6 +961,38 @@ def _split_for_monitor(summaries: list[RunSummary], *, limit: int) -> tuple[list
     return active, history[: max(limit, 0)]
 
 
+def _capacity_wait_info(value: dict[str, Any]) -> CapacityWaitInfo:
+    return CapacityWaitInfo(
+        started_at=_parse_datetime(value.get("started_at")),
+        last_attempt_at=_parse_datetime(value.get("last_attempt_at")),
+        attempts=_int_or_none(value.get("attempts")) or 0,
+        remaining_sec=_int_or_none(value.get("remaining_sec")),
+        poll_interval_sec=_float_or_none(value.get("poll_interval_sec")),
+        gpu_type_ids=tuple(item for item in value.get("gpu_type_ids", []) if isinstance(item, str)) if isinstance(value.get("gpu_type_ids"), list) else (),
+        cloud_types=tuple(item for item in value.get("cloud_types", []) if isinstance(item, str)) if isinstance(value.get("cloud_types"), list) else (),
+        last_result=_string(value.get("last_result")),
+    )
+
+
+def _capacity_wait_activity(wait: CapacityWaitInfo, *, stale: bool) -> str:
+    if stale:
+        return f"GPU wait stopped · last probe {_duration(datetime.now().astimezone() - wait.last_attempt_at)} ago" if wait.last_attempt_at else "GPU wait stopped"
+    parts = ["waiting for GPU"]
+    if wait.gpu_type_ids:
+        parts.append(" / ".join(wait.gpu_type_ids))
+    if wait.attempts:
+        parts.append(f"probe {wait.attempts}")
+    if wait.remaining_sec is not None:
+        parts.append(f"{_duration(timedelta(seconds=wait.remaining_sec))} left")
+    return " · ".join(parts)
+
+
+def _display_state(summary: RunSummary) -> str:
+    if summary.capacity_wait:
+        return "wait stale" if summary.is_stale else "waiting"
+    return summary.state or "unknown"
+
+
 def _partition_drafts(summaries: list[RunSummary], *, include_drafts: bool) -> tuple[list[RunSummary], int]:
     if include_drafts:
         return summaries, 0
@@ -943,12 +1010,14 @@ def _recency_key(summary: RunSummary) -> datetime:
     return summary.last_updated or summary.ended or summary.started or summary.created or AWARE_MIN
 
 
-def _state_text(state: str | None) -> Any:
+def _state_text(summary: RunSummary) -> Any:
     from rich.text import Text
 
-    state = state or "unknown"
+    state = _display_state(summary)
     style = {
         "running": "green",
+        "waiting": "yellow",
+        "wait stale": "red",
         "queued": "yellow",
         "staged": "yellow",
         "launching": "yellow",
@@ -1012,6 +1081,8 @@ def _format_seconds_per_iter(progress: RunProgress) -> str:
 def _format_progress_cell(summary: RunSummary, *, active: bool) -> Any:
     from rich.text import Text
 
+    if active and summary.capacity_wait and summary.activity:
+        return Text(summary.activity, style="dim")
     text = _format_progress(summary.progress)
     if text == "-" and active and summary.activity:
         return Text(summary.activity, style="dim")
@@ -1155,7 +1226,8 @@ def _summary_bar(summaries: list[RunSummary]) -> Any:
 
     counts = {
         "running": sum(1 for item in summaries if item.state == "running"),
-        "queued": sum(1 for item in summaries if item.state in {"queued", "staged", "launching"}),
+        "waiting": sum(1 for item in summaries if item.capacity_wait),
+        "queued": sum(1 for item in summaries if item.state in {"queued", "staged", "launching"} and not item.capacity_wait),
         "completed": sum(1 for item in summaries if item.state == "completed"),
         "failed": sum(1 for item in summaries if item.state in {"failed", "launch_failed", "interrupted"}),
     }
@@ -1163,6 +1235,8 @@ def _summary_bar(summaries: list[RunSummary]) -> Any:
         ("kura monitor", "bold"),
         ("   "),
         (f"running {counts['running']}", "green"),
+        ("   "),
+        (f"waiting {counts['waiting']}", "yellow"),
         ("   "),
         (f"queued {counts['queued']}", "yellow"),
         ("   "),
@@ -1178,8 +1252,10 @@ def _watch_left(summary: RunSummary) -> Any:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="dim", no_wrap=True)
     table.add_column()
-    table.add_row("state", _state_text(summary.state))
+    table.add_row("state", _state_text(summary))
     table.add_row("progress", _format_progress_cell(summary, active=(summary.state or "").lower() in ACTIVE_STATES))
+    if summary.capacity_wait:
+        table.add_row("phase", "RunPod capacity wait · no Pod created")
     table.add_row("executor", summary.executor or "-")
     table.add_row("type", summary.type or "-")
     return table

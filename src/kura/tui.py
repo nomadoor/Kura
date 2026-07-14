@@ -416,8 +416,8 @@ class RunRow(Static):
         is_render = summary.type == "render"
         badge = "R" if is_render else "T"
         badge_style = "bold #bb9af7" if is_render else "bold #7aa2f7"
-        location = "POD" if summary.executor_info.kind == "remote" else "LOC"
-        location_style = DONE if summary.executor_info.kind == "remote" else MUTED
+        location = _compute_location(summary)
+        location_style = STALE if summary.capacity_wait and summary.is_stale else QUEUE if summary.capacity_wait else DONE if summary.executor_info.kind == "remote" else MUTED
         try:
             width = max(int(self.size.width or 0), 0)
         except RuntimeError:
@@ -426,7 +426,7 @@ class RunRow(Static):
         location_width = len(location) + 1 if self.lane == "active" else 0
         name_width = max((width - middle_width - 6 - location_width) if width else (12 - location_width), 6)
         name = _fit_plain(_short_run_label(summary), name_width).ljust(name_width)
-        activity_percent = _activity_percent(summary.activity)
+        activity_percent = _short_duration(summary.capacity_wait.remaining_sec) if summary.capacity_wait and summary.capacity_wait.remaining_sec is not None else _activity_percent(summary.activity)
         if middle_width == 0:
             middle = None
         elif activity_percent and (summary.state or "").lower() in ACTIVE_STATES:
@@ -699,7 +699,8 @@ class DetailPane(VerticalScroll):
             return
         self.mount(Static(_run_headline(summary)))
         if summary.is_stale:
-            self.mount(Static(Text(f"STALE · last local update {_age(summary.last_updated)}", style=f"bold {STALE}")))
+            stale_text = f"WAIT STALE · last capacity probe {_age(summary.capacity_wait.last_attempt_at)}" if summary.capacity_wait else f"STALE · last local update {_age(summary.last_updated)}"
+            self.mount(Static(Text(stale_text, style=f"bold {STALE}")))
         self.mount(Static("", classes="section-gap"))
         self.mount(Static(_progress_text(summary)))
         self.mount(Static("", classes="section-gap"))
@@ -782,7 +783,8 @@ class LossPane(Vertical):
         self.query_one(PaneTitle).update("LOSS")
         chart = self.query_one("#loss-chart", Static)
         if summary and not summary.losses and summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
-            chart.update(Text.assemble(("MODEL DOWNLOAD / STARTUP\n", FG_MUTED), (_fit_plain(summary.activity, 28), f"bold {ACCENT}")))
+            phase_title = "GPU CAPACITY WAIT\n" if summary.capacity_wait else "MODEL DOWNLOAD / STARTUP\n"
+            chart.update(Text.assemble((phase_title, FG_MUTED), (_fit_plain(summary.activity, 28), f"bold {ACCENT}")))
         else:
             chart.update(Text(_mini_loss_chart(summary.losses, width=26, height=3) if summary else "no active run", style=LOSS if summary else MUTED))
         self.metrics.update_summary(summary)
@@ -851,8 +853,12 @@ class ComputePane(Vertical):
             return
         info = summary.executor_info
         pod_status = _remote_execution_phase(summary) if info.kind == "remote" else ""
-        pod_style = DONE if info.pod_stopped or info.downloaded else (STALE if info.remote_state == "completed" else RUN)
-        self.mount(Static(Text.assemble((("POD" if info.kind == "remote" else "LOC") + "  ", DONE if info.kind == "remote" else MUTED), (info.provider or "local", f"bold {DONE}" if info.kind == "remote" else FG), ("   "), (pod_status, pod_style))))
+        waiting = summary.capacity_wait is not None
+        pod_style = STALE if waiting and summary.is_stale else QUEUE if waiting else DONE if info.pod_stopped or info.downloaded else (STALE if info.remote_state == "completed" else RUN)
+        location = _compute_location(summary)
+        location_style = STALE if waiting and summary.is_stale else QUEUE if waiting else DONE if info.kind == "remote" else MUTED
+        provider_style = f"bold {location_style}" if info.kind == "remote" else FG
+        self.mount(Static(Text.assemble((location + "  ", location_style), (info.provider or "local", provider_style), ("   "), (pod_status, pod_style))))
         if info.kind == "remote":
             table = Table.grid(padding=(0, 3))
             table.add_column(style=FG_MUTED, width=7)
@@ -949,6 +955,11 @@ class WatchPane(VerticalScroll):
         left.add_row("state", _badge(summary))
         left.add_row("progress", f"{summary.progress.step or 0}/{summary.progress.total or '-'}")
         left.add_row("executor", _executor_label(summary))
+        if summary.capacity_wait and summary.activity:
+            left.add_row("wait", summary.activity)
+        phase = _remote_execution_phase(summary)
+        if phase:
+            left.add_row("phase", phase.removeprefix("● "))
         right = Table.grid(padding=(0, 2))
         right.add_column(style=FG_MUTED)
         right.add_column()
@@ -1319,11 +1330,12 @@ def run_textual_monitor(workspace: Path, *, interval: float = 2.0, stale_after: 
 def _status_bar(summaries: list[RunSummary], *, workspace: Path | None = None, width: int | None = None, suffix: Text | None = None) -> Text:
     counts = {
         "running": sum(item.state == "running" for item in summaries),
-        "queued": sum(item.state in {"queued", "staged", "launching"} for item in summaries),
+        "waiting": sum(item.capacity_wait is not None for item in summaries),
+        "queued": sum(item.state in {"queued", "staged", "launching"} and item.capacity_wait is None for item in summaries),
         "done": sum(item.state == "completed" for item in summaries),
         "failed": sum(item.state in {"failed", "launch_failed", "interrupted"} for item in summaries),
     }
-    left = Text.assemble(("▸ kura", f"bold {ACCENT}"), ("   "), (str(counts["running"]), f"bold {RUN}"), (" running   ", RUN), (str(counts["queued"]), f"bold {QUEUE}"), (" queued   ", QUEUE), (str(counts["done"]), f"bold {DONE}"), (" done   ", DONE), (str(counts["failed"]), f"bold {FAIL}"), (" failed", FAIL))
+    left = Text.assemble(("▸ kura", f"bold {ACCENT}"), ("   "), (str(counts["running"]), f"bold {RUN}"), (" running   ", RUN), (str(counts["waiting"]), f"bold {QUEUE}"), (" waiting   ", QUEUE), (str(counts["queued"]), f"bold {QUEUE}"), (" queued   ", QUEUE), (str(counts["done"]), f"bold {DONE}"), (" done   ", DONE), (str(counts["failed"]), f"bold {FAIL}"), (" failed", FAIL))
     if workspace is not None:
         left.append("   ")
         left.append("ws ", style=FG_MUTED)
@@ -1870,6 +1882,8 @@ def _state_style(summary: RunSummary) -> str:
 
 
 def _badge(summary: RunSummary) -> str:
+    if summary.capacity_wait:
+        return "WAIT STALE" if summary.is_stale else "WAITING"
     state = summary.state or "unknown"
     return state.upper()
 
@@ -1914,15 +1928,25 @@ def _seconds_per_iter(summary: RunSummary) -> str:
 
 def _executor_label(summary: RunSummary) -> str:
     info = summary.executor_info
+    if summary.capacity_wait:
+        return "WAIT · " + " · ".join(part for part in (info.provider or "runpod", info.gpu) if part)
     if info.kind == "remote":
         return "POD · " + " · ".join(part for part in (info.provider, info.gpu) if part)
     return "LOC · " + (summary.executor or "local")
+
+
+def _compute_location(summary: RunSummary) -> str:
+    if summary.capacity_wait:
+        return "WAIT"
+    return "POD" if summary.executor_info.kind == "remote" else "LOC"
 
 
 def _remote_execution_phase(summary: RunSummary) -> str:
     info = summary.executor_info
     if info.kind != "remote":
         return ""
+    if summary.capacity_wait:
+        return "● GPU wait controller stale · no Pod created" if summary.is_stale else "● waiting for RunPod GPU capacity · no Pod created"
     if info.pod_stopped:
         return "● job complete · outputs downloaded · pod stopped" if info.downloaded else "● pod stopped"
     if info.downloaded:
@@ -2065,6 +2089,8 @@ def _event_detail(item: dict[str, Any]) -> str:
         details.append(f"exit {item['exit_code']}")
     if item.get("container_id"):
         details.append("container " + str(item["container_id"])[:8])
+    if event in {"runpod_capacity_wait_started", "runpod_capacity_acquired", "runpod_capacity_wait_cancelled"} and item.get("attempts") is not None:
+        details.append(f"attempt {item['attempts']}")
     if item.get("detail"):
         details.append(str(item["detail"]))
     if not details and item.get("executor"):
@@ -2076,6 +2102,9 @@ def _event_label(event: str) -> str:
     return {
         "run_staged": "staged",
         "run_started": "started",
+        "runpod_capacity_wait_started": "waiting for GPU",
+        "runpod_capacity_acquired": "GPU acquired",
+        "runpod_capacity_wait_cancelled": "GPU wait cancelled",
         "run_outputs_pulled": "weight pulled",
         "remote_exit_observed": "job exited",
         "runpod_pod_stopped": "pod stopped",

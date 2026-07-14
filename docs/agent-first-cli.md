@@ -37,6 +37,11 @@ uv run kura run execute <run-id>
 uv run kura run watch <run-id>
 ```
 
+For a RunPod draft, run `kura run plan` before compile as a live capacity check.
+Choose the selected GPU or a bounded `compute.capacity.mode=wait` policy from
+the reported stock and price, then compile and show the final plan for the one
+launch approval.
+
 Manual authoring is supported, but it is not the primary UX. The important
 guarantee is that the files an agent produces are complete, readable CLI input.
 

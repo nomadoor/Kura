@@ -120,14 +120,15 @@ error-prone in exactly the way quality gates fail.
 | 2 | `dataset inspect` (+ `validate` if needed) | code: facts |
 | 3 | Parameter proposal (skill + cards + inspect facts) | agent: judgment |
 | 4 | Draft `run.yaml` | free; not a gate |
-| 5 | `compile` — fail-fast checks, path resolution, backend contract | code: guard |
-| 6 | `kura run plan` — resources, DL estimate, disk, warnings | code: facts |
-| 7 | Last look — regret reminder note | agent: judgment |
-| 8 | User approval | **the only gate** |
-| 9 | `launch` — DL gate, disk recheck, Pod disk, overwrite guard | code: guard |
-| 10 | In-container assertions before downloads/heavy work | code: guard |
-| 11 | Run; OOM → adjust within the recorded envelope or return to plan | agent + user |
-| 12 | User evaluation → `notes.md` → cards (successes) / regrets | knowledge loop |
+| 5 | RunPod only: draft `kura run plan` — live GPU stock/price, select immediate/wait intent | code facts + agent/user choice; not a gate |
+| 6 | `compile` — fail-fast checks, path resolution, backend contract | code: guard |
+| 7 | Final `kura run plan` — resources, DL estimate, disk, warnings, frozen capacity policy | code: facts |
+| 8 | Last look — regret reminder note | agent: judgment |
+| 9 | User approval | **the only gate** |
+| 10 | `launch` — DL gate, disk recheck, Pod disk, overwrite guard | code: guard |
+| 11 | In-container assertions before downloads/heavy work | code: guard |
+| 12 | Run; OOM → adjust within the recorded envelope or return to plan | agent + user |
+| 13 | User evaluation → `notes.md` → cards (successes) / regrets | knowledge loop |
 
 ## Relationship to prior ADRs
 
