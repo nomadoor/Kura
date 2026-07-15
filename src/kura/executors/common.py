@@ -42,11 +42,12 @@ def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
 
     lock_dir = run_dir / ".locks"
     lock_dir.mkdir(exist_ok=True)
-    try:
-        with file_lock(lock_dir / f"{name}.lock", blocking=blocking):
-            yield
-    except FileLockBusy as exc:
-        raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(file_lock(lock_dir / f"{name}.lock", blocking=blocking))
+        except FileLockBusy as exc:
+            raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
+        yield
 
 
 def _now() -> str:

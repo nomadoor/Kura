@@ -30,7 +30,7 @@ def _support_evidence_claims(text: str) -> list[tuple[int, str, str, list[str]]]
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if len(cells) != 5 or cells[0] in ("Backend", "---"):
             continue
-        backend, model_family, _adapter, status, notes = cells
+        backend, _model_family, _adapter, status, notes = cells
         marker = "Evidence:"
         references = EVIDENCE_REFERENCE_RE.findall(notes.split(marker, 1)[1]) if marker in notes else []
         if status == "✅" or references:

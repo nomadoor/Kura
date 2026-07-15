@@ -31,7 +31,7 @@ from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
 from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error
-from kura.fsio import file_lock
+from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -3091,6 +3091,17 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 self.assertTrue(_try_sync_runpod_checkpoints(run_dir, {}, workspace="/workspace", run_id="example"))
             self.assertNotIn("checkpoint_sync_error", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
 
+    def test_operation_lock_does_not_relabel_protected_operation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            with self.assertRaises(FileLockBusy) as raised:
+                with _run_operation_lock(run_dir, "checkpoint-pull"):
+                    raise FileLockBusy("inner operation lock failure")
+
+            self.assertIs(type(raised.exception), FileLockBusy)
+            self.assertEqual(str(raised.exception), "inner operation lock failure")
+
     def test_truncated_safetensors_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "broken.safetensors"
@@ -4789,19 +4800,20 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertTrue(list((run_dir / "realizations").glob("r1.observed-*.json")))
 
     def test_reconcile_docker_preserves_confirmed_terminal_outcome(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = self._run_dir(Path(directory))
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "completed", "exit_code": 0, "ended": "confirmed-end", "last_realization": "realizations/r1.json", "container_id": "container-1"}),
-                encoding="utf-8",
-            )
-            result = subprocess.CompletedProcess([], 0, '{"Running": true, "ExitCode": 0}')
-            with patch("kura.executors.docker.subprocess.run", return_value=result):
-                status = reconcile_docker(run_dir)
+        for terminal_state, exit_code in (("completed", 0), ("failed", 7)):
+            with self.subTest(state=terminal_state), tempfile.TemporaryDirectory() as directory:
+                run_dir = self._run_dir(Path(directory))
+                (run_dir / "status.json").write_text(
+                    json.dumps({"state": terminal_state, "exit_code": exit_code, "ended": "confirmed-end", "last_realization": "realizations/r1.json", "container_id": "container-1"}),
+                    encoding="utf-8",
+                )
+                result = subprocess.CompletedProcess([], 0, '{"Running": true, "ExitCode": 0}')
+                with patch("kura.executors.docker.subprocess.run", return_value=result):
+                    status = reconcile_docker(run_dir)
 
-            self.assertEqual(status["state"], "completed")
-            self.assertEqual(status["exit_code"], 0)
-            self.assertEqual(status["ended"], "confirmed-end")
+                self.assertEqual(status["state"], terminal_state)
+                self.assertEqual(status["exit_code"], exit_code)
+                self.assertEqual(status["ended"], "confirmed-end")
 
     def test_reconcile_docker_merges_observation_into_latest_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
