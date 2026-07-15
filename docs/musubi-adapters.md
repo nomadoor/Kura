@@ -40,7 +40,7 @@ generator for it.
 | Architecture | Kura built-in adapter | Image smoke | Real smoke | Notes |
 | --- | --- | --- | --- | --- |
 | FLUX.2 / FLUX.2 klein | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | verified in prior local/RunPod runs | `architecture: flux2` or `flux_2` |
-| Wan | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py wan --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: wan` |
+| Wan | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker and RunPod 1-step paths; identity-bound records: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12` | `architecture: wan` |
 | Krea 2 | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py krea2`) | `architecture: krea2` or `krea_2` |
 | Qwen-Image | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed RunPod A40 1-step on 2026-06-30 (`scripts/musubi_real_smoke.py qwen_image --executor runpod --gpu "NVIDIA A40"`); A5000 reached training start but was SIGKILLed, likely OOM for that 256px/fp8/block-swap recipe | `architecture: qwen_image` |
 | Z-Image | yes | passed `kura doctor musubi` on `nomadoor/kura-musubi-tuner:dev` | passed local Docker 1-step on 2026-07-01 (`scripts/musubi_real_smoke.py zimage --executor docker --image nomadoor/kura-musubi-tuner:dev`) | `architecture: zimage` or `z_image`; use upstream `qwen_3_4b.safetensors` text encoder |

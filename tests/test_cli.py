@@ -31,7 +31,7 @@ from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
 from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error
-from kura.fsio import file_lock
+from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
@@ -3091,6 +3091,17 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 self.assertTrue(_try_sync_runpod_checkpoints(run_dir, {}, workspace="/workspace", run_id="example"))
             self.assertNotIn("checkpoint_sync_error", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
 
+    def test_operation_lock_does_not_relabel_protected_operation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            with self.assertRaises(FileLockBusy) as raised:
+                with _run_operation_lock(run_dir, "checkpoint-pull"):
+                    raise FileLockBusy("inner operation lock failure")
+
+            self.assertIs(type(raised.exception), FileLockBusy)
+            self.assertEqual(str(raised.exception), "inner operation lock failure")
+
     def test_truncated_safetensors_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "broken.safetensors"
@@ -4788,6 +4799,45 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertEqual(status["exit_code"], 0)
             self.assertTrue(list((run_dir / "realizations").glob("r1.observed-*.json")))
 
+    def test_reconcile_docker_preserves_confirmed_terminal_outcome(self) -> None:
+        for terminal_state, exit_code in (("completed", 0), ("failed", 7)):
+            with self.subTest(state=terminal_state), tempfile.TemporaryDirectory() as directory:
+                run_dir = self._run_dir(Path(directory))
+                (run_dir / "status.json").write_text(
+                    json.dumps({"state": terminal_state, "exit_code": exit_code, "ended": "confirmed-end", "last_realization": "realizations/r1.json", "container_id": "container-1"}),
+                    encoding="utf-8",
+                )
+                result = subprocess.CompletedProcess([], 0, '{"Running": true, "ExitCode": 0}')
+                with patch("kura.executors.docker.subprocess.run", return_value=result):
+                    status = reconcile_docker(run_dir)
+
+                self.assertEqual(status["state"], terminal_state)
+                self.assertEqual(status["exit_code"], exit_code)
+                self.assertEqual(status["ended"], "confirmed-end")
+
+    def test_reconcile_docker_merges_observation_into_latest_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            inspect_started = threading.Event()
+            release_inspect = threading.Event()
+            reconciled: list[dict[str, Any]] = []
+
+            def inspect(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                inspect_started.set()
+                self.assertTrue(release_inspect.wait(2))
+                return subprocess.CompletedProcess([], 0, '{"Running": true, "ExitCode": 0}')
+
+            with patch("kura.executors.docker.subprocess.run", side_effect=inspect):
+                thread = threading.Thread(target=lambda: reconciled.append(reconcile_docker(run_dir)))
+                thread.start()
+                self.assertTrue(inspect_started.wait(2))
+                _mutate_run_status(run_dir, lambda status: status.update({"sampling_progress": 3}))
+                release_inspect.set()
+                thread.join(2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(reconciled[0]["sampling_progress"], 3)
+
     def test_reconcile_materializes_ai_toolkit_stdout_progress(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
@@ -6150,6 +6200,96 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["state"], "unknown")
             self.assertIsNone(status["exit_code"])
 
+    def test_reconcile_runpod_preserves_confirmed_terminal_outcome(self) -> None:
+        for terminal_state, exit_code in (("completed", 0), ("failed", 7)):
+            with self.subTest(state=terminal_state), tempfile.TemporaryDirectory() as directory:
+                run_dir = self._run_dir(Path(directory))
+                realization_ref = "realizations/r1.json"
+                (run_dir / realization_ref).write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+                (run_dir / "status.json").write_text(
+                    json.dumps({"state": terminal_state, "exit_code": exit_code, "ended": "confirmed-end", "last_realization": realization_ref, "pod_id": "pod-1"}),
+                    encoding="utf-8",
+                )
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                    with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
+                        status = reconcile_runpod(run_dir, self._config())
+
+                self.assertEqual(status["state"], terminal_state)
+                self.assertEqual(status["exit_code"], exit_code)
+                self.assertEqual(status["ended"], "confirmed-end")
+                observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
+                self.assertEqual(observation["state"], "running")
+                events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+                self.assertEqual(events[-1]["event"], "run_reconciled")
+                self.assertEqual(events[-1]["state"], "running")
+
+    def test_reconcile_runpod_merges_observation_into_latest_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            realization_ref = "realizations/r1.json"
+            (run_dir / realization_ref).write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": realization_ref, "pod_id": "pod-1"}), encoding="utf-8")
+            request_started = threading.Event()
+            release_request = threading.Event()
+            result: list[dict[str, Any]] = []
+
+            def observe(*_args: object) -> dict[str, object]:
+                request_started.set()
+                self.assertTrue(release_request.wait(2))
+                return {"id": "pod-1", "desiredStatus": "RUNNING"}
+
+            def reconcile() -> None:
+                result.append(reconcile_runpod(run_dir, self._config()))
+
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=observe):
+                    thread = threading.Thread(target=reconcile)
+                    thread.start()
+                    self.assertTrue(request_started.wait(2))
+                    _mutate_run_status(
+                        run_dir,
+                        lambda status: status.update({"remote_log_bytes": 77, "mirrored_outputs": [{"name": "step.safetensors"}]}),
+                    )
+                    release_request.set()
+                    thread.join(2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(result[0]["remote_log_bytes"], 77)
+            self.assertEqual(result[0]["mirrored_outputs"], [{"name": "step.safetensors"}])
+
+    def test_reconcile_runpod_does_not_attach_stale_realization_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            realization_ref = "realizations/r1.json"
+            (run_dir / realization_ref).write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": realization_ref, "pod_id": "pod-1"}), encoding="utf-8")
+            request_started = threading.Event()
+            release_request = threading.Event()
+            result: list[dict[str, Any]] = []
+
+            def observe(*_args: object) -> dict[str, object]:
+                request_started.set()
+                self.assertTrue(release_request.wait(2))
+                return {"id": "pod-1", "desiredStatus": "TERMINATED"}
+
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=observe):
+                    thread = threading.Thread(target=lambda: result.append(reconcile_runpod(run_dir, self._config())))
+                    thread.start()
+                    self.assertTrue(request_started.wait(2))
+                    _mutate_run_status(
+                        run_dir,
+                        lambda status: status.update({"state": "running", "last_realization": "realizations/r2.json", "pod_id": "pod-2"}),
+                    )
+                    release_request.set()
+                    thread.join(2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(result[0]["last_realization"], "realizations/r2.json")
+            self.assertEqual(result[0]["pod_id"], "pod-2")
+            self.assertNotIn("last_observation", result[0])
+            self.assertTrue(list((run_dir / "realizations").glob("r1.observed-*.json")))
+
     def test_cli_reconcile_runpod_syncs_remote_log_without_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -7024,3 +7164,83 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["exit_code"], 0)
             self.assertIn("pod_stopped_at", status)
+
+    def test_hold_reconcile_then_stop_preserves_completed_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            realization_ref = "realizations/r1.json"
+            (run_dir / realization_ref).write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "completed", "exit_code": 0, "ended": "confirmed-end", "last_realization": realization_ref, "pod_id": "pod-1"}),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=[{"id": "pod-1", "desiredStatus": "RUNNING"}, {}]):
+                    reconciled = reconcile_runpod(run_dir, self._config())
+                    stopped = stop_runpod(run_dir, self._config())
+
+            self.assertEqual(reconciled["state"], "completed")
+            self.assertEqual(stopped["state"], "completed")
+            self.assertEqual(stopped["exit_code"], 0)
+            self.assertEqual(stopped["ended"], "confirmed-end")
+
+    def test_stop_runpod_merges_stop_into_latest_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            request_started = threading.Event()
+            release_request = threading.Event()
+            result: list[dict[str, Any]] = []
+
+            def delete(*_args: object) -> dict[str, object]:
+                request_started.set()
+                self.assertTrue(release_request.wait(2))
+                return {}
+
+            def stop() -> None:
+                result.append(stop_runpod(run_dir, self._config()))
+
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=delete):
+                    thread = threading.Thread(target=stop)
+                    thread.start()
+                    self.assertTrue(request_started.wait(2))
+                    _mutate_run_status(
+                        run_dir,
+                        lambda status: status.update({"remote_log_bytes": 77, "mirrored_outputs": [{"name": "step.safetensors"}]}),
+                    )
+                    release_request.set()
+                    thread.join(2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(result[0]["state"], "interrupted")
+            self.assertEqual(result[0]["remote_log_bytes"], 77)
+            self.assertEqual(result[0]["mirrored_outputs"], [{"name": "step.safetensors"}])
+            self.assertIn("pod_stopped_at", result[0])
+
+    def test_stop_runpod_does_not_mutate_replacement_pod_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            request_started = threading.Event()
+            release_request = threading.Event()
+            result: list[dict[str, Any]] = []
+
+            def delete(*_args: object) -> dict[str, object]:
+                request_started.set()
+                self.assertTrue(release_request.wait(2))
+                return {}
+
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=delete):
+                    thread = threading.Thread(target=lambda: result.append(stop_runpod(run_dir, self._config())))
+                    thread.start()
+                    self.assertTrue(request_started.wait(2))
+                    _mutate_run_status(run_dir, lambda status: status.update({"state": "running", "pod_id": "pod-2"}))
+                    release_request.set()
+                    thread.join(2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(result[0]["state"], "running")
+            self.assertEqual(result[0]["pod_id"], "pod-2")
+            self.assertNotIn("pod_stopped_at", result[0])

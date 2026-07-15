@@ -13,7 +13,7 @@ from typing import Any
 
 from kura import __version__
 from kura.provenance import image_reference_identity
-from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
 from kura.paths import workspace_mount_mappings
 
 
@@ -255,9 +255,17 @@ def reconcile_docker(run_dir: Path) -> dict[str, Any]:
         detail = _redact_secret_text(str(docker_state.get("Error"))) if docker_state.get("Error") else None
     observation = {"realization_id": realization["id"], "observed_at": observed_at, "state": state, "exit_code": exit_code, "container_id": identity, "detail": detail}
     observation_path = _write_observation(run_dir, realization["id"], observation)
-    status.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observed_at, "last_observation": str(observation_path.relative_to(run_dir))})
-    _materialize_stdout_progress(run_dir, status, state=state)
-    _write_status(run_dir, status)
+
+    def mutate(latest: dict[str, Any]) -> None:
+        if latest.get("last_realization") != realization_ref:
+            return
+        latest["last_observation"] = str(observation_path.relative_to(run_dir))
+        if latest.get("state") not in ("completed", "failed"):
+            latest.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observed_at})
+        effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
+        _materialize_stdout_progress(run_dir, latest, state=effective_state)
+
+    status = _mutate_run_status(run_dir, mutate)
     append_run_event(run_dir, {"event": "run_reconciled", **observation})
     return status
 

@@ -22,7 +22,7 @@ that disposable Pods usually pay to redownload model files.
 | Architecture | Real smoke result | Capacity note |
 | --- | --- | --- |
 | FLUX.2 / FLUX.2 klein | Verified in prior local/RunPod runs | depends strongly on 4B vs 9B and fp8/block swap settings |
-| Wan | Passed local Docker 1-step on 2026-06-30 | used Wan 2.1 T2V 1.3B, 256px, batch 1, bf16/fp8 base, gradient checkpointing; model files were stored once in HF cache and exposed through Kura's Musubi symlink tree |
+| Wan | Passed local Docker and RunPod 1-step paths | used Wan 2.1 T2V 1.3B, 256px, batch 1, bf16/fp8 base, gradient checkpointing; identity-bound records: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12` |
 | Krea 2 | Passed local Docker 1-step on 2026-06-30 | used tiny 256px image smoke with fp8 and block swap |
 | Qwen-Image | Passed RunPod A40 1-step on 2026-06-30 | 256px, batch 1, fp8, `blocks_to_swap 45`; A5000 reached training start but was SIGKILLed, likely OOM. Treat A5000 as too small for this recipe, not as a general adapter failure |
 | Z-Image | Passed local Docker 1-step on 2026-07-01 | used `Comfy-Org/z_image`, 256px, batch 1, fp8 base/scaled/LLM, `blocks_to_swap 24`; use `qwen_3_4b.safetensors`, not the Comfy fp8-mixed text encoder |
