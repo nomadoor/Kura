@@ -1,6 +1,6 @@
 # Backend support
 
-Snapshot: 2026-07-11.
+Snapshot: 2026-07-12.
 
 This page answers three questions: which upstream version Kura uses, whether
 Kura has an adapter, and how far that path has been tested. It intentionally
@@ -36,7 +36,7 @@ Mutable `latest` is not a supported default.
 
 | Backend | Model family | Adapter | Status | Notes |
 | --- | --- | --- | --- | --- |
-| AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified |
+| AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |
 | AI-Toolkit | SD 1.5 | Generic native-config projection | 🧪 | Local one-step path verified |
 | AI-Toolkit | FLUX.1 / Kontext / Flex / Chroma | Generic native-config projection | 🧩 | Model-specific defaults not verified |
 | AI-Toolkit | Qwen Image | Generic native-config projection | ⚠️ | T2I expressible; edit/control needs explicit dataset config |
@@ -48,7 +48,7 @@ Mutable `latest` is not a supported default.
 | AI-Toolkit | ACE-Step | — | ❌ | Audio is outside the current training contract |
 | AI-Toolkit | Other image families | Native override only | ⚠️ | Model-specific review required |
 | Musubi Tuner | FLUX.2 | Built-in | 🧪 | dev; Klein/base 4B and 9B; reference-image path compiles |
-| Musubi Tuner | Wan 2.1 / 2.2 | Built-in | ✅ | T2V/I2V, Fun Control, dual-DiT, and Single Frame covered |
+| Musubi Tuner | Wan 2.1 / 2.2 | Built-in | ✅ | T2V/I2V, Fun Control, dual-DiT, and Single Frame covered. Evidence: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12` |
 | Musubi Tuner | Krea 2 | Built-in | 🧪 | Broader Krea validation remains separate |
 | Musubi Tuner | Qwen-Image | Built-in | 🧪 | Original, Edit, 2509, 2511, and Layered compile paths covered |
 | Musubi Tuner | Z-Image | Built-in | 🧪 | — |
@@ -57,7 +57,7 @@ Mutable `latest` is not a supported default.
 | Musubi Tuner | HiDream-O1-Image | Built-in | 🧪 | T2I and I2I compile paths covered |
 | Musubi Tuner | HunyuanVideo | Built-in | 🧪 | — |
 | Musubi Tuner | HunyuanVideo 1.5 | Built-in | 🧪 | T2V and I2V compile paths covered |
-| Musubi Tuner | FramePack | Built-in | 🧪 | Normal, F1, and Single Frame compile paths covered |
+| Musubi Tuner | FramePack | Built-in | 🧪 | Normal, F1, and Single Frame compile paths covered. Evidence: `musubi-framepack-video-docker-2026-07-12` |
 | Musubi Tuner | Kandinsky 5 | Built-in | ⚠️ | Lite real-smoked; Pro remains capacity-dependent |
 
 Musubi `v0.3.4` has no missing top-level Kura adapter. All 36 expected cache

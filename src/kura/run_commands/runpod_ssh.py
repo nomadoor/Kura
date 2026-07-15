@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import filecmp
 import json
 import os
@@ -19,51 +18,22 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
-from kura.fsio import FileLockBusy, atomic_write_json, file_lock
+from kura.fsio import atomic_write_json
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe
-from kura.executors.common import append_run_event
+from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 
 
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
-
-
-class _OperationBusy(FileLockBusy):
-    """A normal controller-side scheduling collision."""
-
-
-@contextlib.contextmanager
-def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
-    """Serialize controller-side mutations without creating another truth store."""
-
-    lock_dir = run_dir / ".locks"
-    lock_dir.mkdir(exist_ok=True)
-    try:
-        with file_lock(lock_dir / f"{name}.lock", blocking=blocking):
-            yield
-    except FileLockBusy as exc:
-        raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
-
-
-def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
-    """Serialize status read-modify-write cycles across controller operations."""
-
-    with _run_operation_lock(run_dir, "status"):
-        status_path = run_dir / "status.json"
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-        mutate(status)
-        redacted = _redact_secrets(status)
-        atomic_write_json(status_path, redacted)
-        return redacted
 
 
 def _run_bounded(command: list[str], *, context: str, timeout: int = RUNPOD_TRANSFER_TIMEOUT_SEC, **kwargs: Any) -> subprocess.CompletedProcess[Any]:

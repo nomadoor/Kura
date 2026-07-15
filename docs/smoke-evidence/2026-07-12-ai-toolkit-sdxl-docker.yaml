@@ -1,0 +1,12 @@
+schema_version: 1
+run_id: 20260712-0959_ai-toolkit-sdxl-local_e3e7
+executor: docker
+observed:
+  optimizer_steps: 1
+  output_safetensors: 1
+  exit_code: 0
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  outputs_seen: true

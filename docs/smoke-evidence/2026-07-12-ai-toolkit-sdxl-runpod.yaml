@@ -1,0 +1,16 @@
+schema_version: 1
+run_id: 20260712-1131_ai-toolkit-sdxl-runpod-a40-pinned_148f
+executor: runpod
+observed:
+  optimizer_steps: 1
+  output_safetensors: 1
+  remote_exit_code: 0
+  recovery_required: false
+  pod_stopped_at: 2026-07-12T11:46:31.338646+09:00
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  outputs_seen: true
+  recovery_complete: true
+  pod_stopped: true

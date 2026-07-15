@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 from kura import __version__
 from kura.provenance import image_reference_identity
-from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
 
 
 class RunPodAPIError(ValueError):
@@ -818,9 +818,17 @@ def reconcile_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     state, exit_code = _runpod_state(pod)
     observation = {"realization_id": realization["id"], "observed_at": _now(), "state": state, "exit_code": exit_code, "pod_id": pod_id, **_runpod_pod_snapshot(pod)}
     observation_path = _write_observation(run_dir, realization["id"], observation)
-    status.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observation["observed_at"], "last_observation": str(observation_path.relative_to(run_dir))})
-    _materialize_stdout_progress(run_dir, status, state=state)
-    _write_status(run_dir, status)
+
+    def mutate(latest: dict[str, Any]) -> None:
+        if latest.get("last_realization") != realization_ref:
+            return
+        latest["last_observation"] = str(observation_path.relative_to(run_dir))
+        if latest.get("state") not in ("completed", "failed"):
+            latest.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observation["observed_at"]})
+        effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
+        _materialize_stdout_progress(run_dir, latest, state=effective_state)
+
+    status = _mutate_run_status(run_dir, mutate)
     append_run_event(run_dir, {"event": "run_reconciled", **observation})
     return status
 
@@ -849,9 +857,14 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         if "404" not in message and "pod not found" not in message:
             raise
     ended_at = _now()
-    if status.get("state") not in ("completed", "failed"):
-        status.update({"state": "interrupted", "exit_code": None, "ended": ended_at})
-    status["pod_stopped_at"] = ended_at
-    _write_status(run_dir, status)
+
+    def mutate(latest: dict[str, Any]) -> None:
+        if latest.get("pod_id") != pod_id:
+            return
+        if latest.get("state") not in ("completed", "failed"):
+            latest.update({"state": "interrupted", "exit_code": None, "ended": ended_at})
+        latest["pod_stopped_at"] = ended_at
+
+    status = _mutate_run_status(run_dir, mutate)
     append_run_event(run_dir, {"event": "runpod_pod_stopped", "timestamp": ended_at, "executor": "runpod", "pod_id": pod_id})
     return status

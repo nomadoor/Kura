@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from kura.fsio import atomic_write_json
+from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 
 
 CONTAINER_WORKSPACE = "/workspace"
@@ -29,6 +30,23 @@ AI_TOOLKIT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?loss:
 
 
 MUSUBI_PROGRESS_RE = re.compile(r"steps:\s+\d+%\|.*?\|\s*(?P<step>\d+)\s*/\s*(?P<total>\d+).*?avr_loss=", re.IGNORECASE)
+
+
+class _OperationBusy(FileLockBusy):
+    """A normal controller-side scheduling collision."""
+
+
+@contextlib.contextmanager
+def _run_operation_lock(run_dir: Path, name: str, *, blocking: bool = True):
+    """Serialize controller-side mutations without creating another truth store."""
+
+    lock_dir = run_dir / ".locks"
+    lock_dir.mkdir(exist_ok=True)
+    try:
+        with file_lock(lock_dir / f"{name}.lock", blocking=blocking):
+            yield
+    except FileLockBusy as exc:
+        raise _OperationBusy(f"another {name} operation is already active for run {run_dir.name}") from exc
 
 
 def _now() -> str:
@@ -112,6 +130,17 @@ def _load_status(run_dir: Path) -> dict[str, Any]:
 
 def _write_status(run_dir: Path, status: dict[str, Any]) -> None:
     _write_json(_status_path(run_dir), status)
+
+
+def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Apply a status change to the latest snapshot under an advisory lock."""
+
+    with _run_operation_lock(run_dir, "status"):
+        status = _load_status(run_dir)
+        mutate(status)
+        redacted = _redact_secrets(status)
+        atomic_write_json(_status_path(run_dir), redacted)
+        return redacted
 
 
 def _write_observation(run_dir: Path, realization_id: str, observation: dict[str, Any]) -> Path:

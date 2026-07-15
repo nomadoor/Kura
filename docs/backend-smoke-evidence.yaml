@@ -3,6 +3,52 @@ description: >-
   Historical execution observations. Records are evidence for the stated
   identity tuple, not declarations of backend capability.
 records:
+  - id: ai-toolkit-sdxl-docker-2026-07-12
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 9381fd7c841549d289a42ba42e64d074aa87879fd3a15c479d09ed887af070af
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:beae7631fb490711c7ff8ffa8795e6bc6f00cf89b255b0b03b029748b1f68cd7
+    native_path:
+      architecture: sdxl
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-07-12
+    artifact: smoke-evidence/2026-07-12-ai-toolkit-sdxl-docker.yaml
+  - id: ai-toolkit-sdxl-runpod-2026-07-12
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5925b9dfea6ed382641424756270039448b0235d2e77e4f59b32079e07f350b
+    runtime_image:
+      kind: mutable-image-reference
+      value: ostris/aitoolkit:0.10.22
+    native_path:
+      architecture: sdxl
+      executor: runpod
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-07-12
+    artifact: smoke-evidence/2026-07-12-ai-toolkit-sdxl-runpod.yaml
+  - id: musubi-wan-t2v-1.3b-docker-2026-07-12
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: f305aefd55ac8fdfb2d08e050ceee7720ad3a339fb604fb75703fd5bf763c866
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:e3c4814c1320267f1157cacc74e90fb69a6b30ad32f46a019b241fb64a861e1c
+    native_path:
+      architecture: wan
+      task: t2v-1.3B
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-07-12
+    artifact: smoke-evidence/2026-07-12-wan-docker.yaml
   - id: musubi-framepack-video-docker-2026-07-12
     backend: musubi-tuner
     adapter_source:
