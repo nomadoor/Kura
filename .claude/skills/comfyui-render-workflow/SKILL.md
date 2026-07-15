@@ -15,6 +15,12 @@ Use this skill for render runs and workflow JSON changes.
 - Default endpoint should remain `http://127.0.0.1:8188` unless the run explicitly says otherwise.
 - Freeze workflow and promptset at compile time under `resolved/`.
 - Record generated images in `samples/images.jsonl`.
+- Never add `--yes` to a RunPod render launch without the user's explicit
+  instruction to perform that billed launch.
+- If local ComfyUI is unavailable or a local render fails, do not rewrite
+  `run.yaml` from the local executor to `runpod`. A local-to-RunPod switch is a
+  cost-bearing plan change: show the GPU, hourly price, and maximum lease, get
+  user approval, then record the approved executor and recompile.
 
 ## Making the LoRA/model visible to ComfyUI
 

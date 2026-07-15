@@ -118,7 +118,15 @@ nohup python main.py --listen 127.0.0.1 --port 8188 >> "$KURA_LOG_PATH" 2>&1 &
         raise ValueError(f"remote ComfyUI start failed with exit code {result.returncode}: {detail}")
 
 
-def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None, notify_channels: Any = None) -> int:
+def launch_render_runpod(
+    run_id: str,
+    *,
+    dry_run: bool,
+    image: str | None = None,
+    notify_channels: Any = None,
+    yes: bool = False,
+    max_lease_sec: int = 12 * 3600,
+) -> int:
     workspace = _workspace()
     run_dir = _run_path(run_id)
     launched = False
@@ -156,13 +164,21 @@ def launch_render_runpod(run_id: str, *, dry_run: bool, image: str | None = None
         if dry_run:
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
-        launch_runpod_session(run_dir=run_dir, image=remote_image, config=runpod_config, purpose="comfyui-render", dry_run=False)
+        launch_runpod_session(
+            run_dir=run_dir,
+            image=remote_image,
+            config=runpod_config,
+            purpose="comfyui-render",
+            dry_run=False,
+            yes=yes,
+            max_lease_sec=max_lease_sec,
+        )
         launched = True
         details = _runpod_ssh_details(run_dir, timeout_sec=300, interval_sec=5)
         ssh_details = details
         remote_workspace = str(runpod_config.get("workspace_path") or "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
-        _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name)
+        _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name, max_lease_sec=max_lease_sec)
         prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp"], check=False, timeout=600)
         if prepared.returncode:
             raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")

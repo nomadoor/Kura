@@ -4,6 +4,8 @@ Status: accepted owner decision.
 
 Date: 2026-07-03
 
+Updated: 2026-07-15 — RunPod Pod-creation confirmation behavior.
+
 ## Mission (owner statement)
 
 > Every user — light or expert — should spend their time on datasets and
@@ -54,6 +56,16 @@ After approval, nothing may change silently. A relaunch adjustment (e.g.
 plan review **only if** that contingency was explicitly recorded in
 `run.yaml` and shown in the approved plan. Anything outside the recorded
 envelope returns to plan approval.
+
+RunPod Pod creation also has one mechanical confirmation of that approval;
+it is not a second plan review or a persisted approval system. At an
+interactive terminal, Kura shows the GPU candidates, current hourly prices,
+and effective maximum lease, then accepts only `y`. In a non-interactive
+session, creation requires `--yes`, which an agent may use only after explicit
+user instruction. A bounded capacity wait is confirmed once before its wait
+loop so unattended acquisition remains possible; the confirmation warns that
+the displayed price may change while waiting and covers the configured
+creation-attempt sequence.
 
 ### Pre-empt criterion (when Kura may duplicate a trainer check)
 

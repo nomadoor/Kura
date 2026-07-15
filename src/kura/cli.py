@@ -1127,6 +1127,7 @@ def main() -> None:
     remote.add_argument("--max-lease", default="12h", help="Best-effort Pod-side billing safety lease, e.g. 12h. Use 0 to disable.")
     remote.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
     remote.add_argument("--notify-repeat-interval", default="10m", help="Repeat completion notifications while the Pod is held for review; use 0 to disable")
+    remote.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
     remote.set_defaults(func=cmd_run_remote)
     stop = run_sub.add_parser("stop", help="Stop the associated Pod or container")
     stop.add_argument("run_id")
@@ -1150,6 +1151,7 @@ def main() -> None:
     launch.add_argument("--wait", action="store_true", help="For local Docker runs, wait for the container to exit and reconcile status")
     launch.add_argument("--wait-for-capacity", default="0", help="For RunPod, retry capacity-only launch failures for this long, e.g. 6h. Defaults to 0 (do not wait).")
     launch.add_argument("--capacity-poll-interval", default="30s", help="How often to retry RunPod capacity while waiting, e.g. 30s")
+    launch.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
     launch.set_defaults(func=cmd_run_launch)
 
     render = sub.add_parser("render", help="Create and launch ComfyUI render runs")
@@ -1166,6 +1168,7 @@ def main() -> None:
     render_launch.add_argument("--dry-run", action="store_true")
     render_launch.add_argument("--image", help="Override the runtime image for this render only")
     render_launch.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
+    render_launch.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
     render_launch.set_defaults(func=cmd_run_launch)
     render_status = render_sub.add_parser("status", help="Print the latest render status")
     render_status.add_argument("run_id")

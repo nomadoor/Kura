@@ -45,9 +45,24 @@ stop Pod
   upload path cannot safely use RunPod's provider-side Deploy When Available
   subscription because the controller must still upload inputs, start training,
   and install the max-lease guard after Pod creation.
+- Confirm a bounded capacity wait once before entering its wait loop so it can
+  acquire unattended. The confirmation covers the configured creation-attempt
+  sequence and must warn that the displayed hourly price may change while
+  waiting; do not move the prompt to the eventual capacity-acquisition moment.
 
 ## Non-negotiables
 
+- Never add `--yes` to a RunPod launch unless the user explicitly instructed
+  that billed launch. In a non-interactive agent or script session, `--yes`
+  records that explicit instruction; it is not a convenience flag for bypassing
+  the launch gate. It skips only the question; Kura still prints the GPU, price,
+  and maximum-lease summary.
+- A local execution failure is not permission to switch providers. In
+  particular, do not rewrite `run.yaml` from a local executor to `runpod`
+  because Docker, ComfyUI, or another local service is unavailable. Switching
+  local to RunPod creates a new cost decision: show the GPU, hourly price, and
+  maximum lease, obtain user approval, then record and compile the approved
+  executor change.
 - Do not stop a disposable Pod until remote exit and local download are confirmed.
 - If download/completion is uncertain, leave the Pod running and print/notify recovery steps.
 - Do not add unbounded keep-alive flags. Use bounded leases only.

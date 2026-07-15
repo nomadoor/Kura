@@ -132,6 +132,78 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> 
     return {"status": "ok", "checked_at": _now(), "gpu_count": settings["gpu_count"], "candidates": candidates}
 
 
+def _format_lease_limit(max_lease_sec: int | None) -> str:
+    if max_lease_sec is None:
+        return "none (this command does not install an automatic stop limit)"
+    if max_lease_sec <= 0:
+        return "disabled"
+    if max_lease_sec % 3600 == 0:
+        return f"{max_lease_sec // 3600}h"
+    if max_lease_sec % 60 == 0:
+        return f"{max_lease_sec // 60}m"
+    return f"{max_lease_sec}s"
+
+
+def _confirm_runpod_launch(
+    config: dict[str, Any],
+    settings: dict[str, Any],
+    *,
+    yes: bool,
+    max_lease_sec: int | None,
+    wait_for_capacity_sec: int = 0,
+) -> dict[str, Any]:
+    """Require one authorization before a billable Pod-creation attempt sequence."""
+
+    interactive = sys.stdin.isatty()
+    if not interactive and not yes:
+        raise ValueError(
+            "RunPod Pod creation requires confirmation in non-interactive mode; "
+            "use --yes only when the user has explicitly instructed this billed launch"
+        )
+
+    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"])
+    candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
+    measured_by_id = {
+        candidate.get("gpu_type_id"): candidate
+        for candidate in candidates or []
+        if isinstance(candidate, dict) and isinstance(candidate.get("gpu_type_id"), str)
+    }
+    print("RunPod Pod creation will start billing:", file=sys.stderr)
+    for gpu_type_id in settings["gpu_type_ids"]:
+        candidate = measured_by_id.get(gpu_type_id, {})
+        display_name = candidate.get("display_name") if isinstance(candidate.get("display_name"), str) else gpu_type_id
+        print(f"  GPU: {display_name} x{settings['gpu_count']}", file=sys.stderr)
+        prices: list[str] = []
+        for cloud in candidate.get("clouds", []) if isinstance(candidate, dict) else []:
+            if not isinstance(cloud, dict) or cloud.get("cloud_type") not in settings["cloud_types"]:
+                continue
+            price = cloud.get("price_per_hour")
+            if isinstance(price, (int, float)) and not isinstance(price, bool):
+                prices.append(f"{cloud['cloud_type']} ${price:.3f}/hr")
+        print(f"  Hourly price: {'; '.join(prices) if prices else 'unavailable'}", file=sys.stderr)
+    if measurement.get("status") != "ok":
+        reason = measurement.get("reason")
+        if isinstance(reason, str) and reason:
+            print(f"  Price lookup: {_redact_secret_text(reason)}", file=sys.stderr)
+    print(f"  Maximum lease: {_format_lease_limit(max_lease_sec)}", file=sys.stderr)
+    if wait_for_capacity_sec > 0:
+        print(
+            f"  Capacity wait: up to {_format_lease_limit(wait_for_capacity_sec)}; "
+            "hourly prices may change while waiting",
+            file=sys.stderr,
+        )
+    if yes:
+        return measurement
+    print("Create the RunPod Pod? [y/N] ", end="", file=sys.stderr, flush=True)
+    try:
+        response = sys.stdin.readline()
+    except KeyboardInterrupt as exc:
+        raise ValueError("RunPod launch cancelled; no Pod was created") from exc
+    if response.strip().lower() != "y":
+        raise ValueError("RunPod launch cancelled; no Pod was created")
+    return measurement
+
+
 def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     storage_mode = config.get("storage_mode", "upload")
     if storage_mode not in ("upload", "container_disk", "object_staging"):
@@ -393,6 +465,8 @@ def launch_runpod(
     dry_run: bool = False,
     wait_for_capacity_sec: int = 0,
     capacity_poll_interval_sec: int = 30,
+    yes: bool = False,
+    max_lease_sec: int | None = None,
 ) -> str | None:
     """Create a RunPod Pod using a pre-staged workspace."""
     settings = _runpod_settings(config)
@@ -500,6 +574,13 @@ sleep infinity
         raise ValueError("wait_for_capacity_sec must be zero or greater")
     if wait_for_capacity_sec and capacity_poll_interval_sec <= 0:
         raise ValueError("capacity_poll_interval_sec must be greater than zero while waiting for capacity")
+    confirmation_measurement: dict[str, Any] | None = _confirm_runpod_launch(
+        config,
+        settings,
+        yes=yes,
+        max_lease_sec=max_lease_sec,
+        wait_for_capacity_sec=wait_for_capacity_sec,
+    )
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
@@ -518,7 +599,10 @@ sleep infinity
             transient_probe = False
             if wait_for_capacity_sec:
                 controller_phase = "probe"
-                measurement = runpod_gpu_availability(config, settings["gpu_type_ids"])
+                measurement = confirmation_measurement
+                confirmation_measurement = None
+                if measurement is None:
+                    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"])
                 if measurement.get("status") == "ok":
                     for candidate in measurement.get("candidates", []):
                         if not isinstance(candidate, dict) or not isinstance(candidate.get("gpu_type_id"), str):
@@ -682,13 +766,22 @@ sleep infinity
     return realization_id
 
 
-def launch_runpod_session(*, run_dir: Path, image: str, config: dict[str, Any], purpose: str, dry_run: bool = False) -> str | None:
+def launch_runpod_session(
+    *,
+    run_dir: Path,
+    image: str,
+    config: dict[str, Any],
+    purpose: str,
+    dry_run: bool = False,
+    yes: bool = False,
+    max_lease_sec: int = 12 * 3600,
+) -> str | None:
     """Create a thin disposable RunPod session without Kura training staging."""
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
-    runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name)
+    runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name, max_lease_sec=max_lease_sec)
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
@@ -751,6 +844,7 @@ sleep infinity
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
         raise ValueError(f"{settings['api_key_env']} must be exported to launch a RunPod session")
+    _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec)
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []

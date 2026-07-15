@@ -117,6 +117,12 @@ Useful low-level `run remote` flags:
   can inspect results. Use `--hold-for 0` to stop immediately.
 - `--max-lease 12h` is a best-effort Pod-side billing fuse if the local
   controller dies.
+- `--yes` confirms Pod creation in a non-interactive session. Use it only after
+  the user explicitly approves the billed RunPod launch. Interactive terminals
+  show GPU, current hourly price, and maximum lease and ask once before creation.
+  `--yes` skips only the question; the cost summary is still printed. A bounded
+  capacity wait is approved once before waiting, and its displayed price may
+  change before capacity becomes available.
 
 ## Monitoring
 
@@ -134,6 +140,10 @@ Useful low-level `run remote` flags:
 | `uv run kura render compile <run-id>` | Freeze workflow and promptset inputs |
 | `uv run kura render launch <run-id>` | Generate images through ComfyUI |
 | `uv run kura render launch <run-id> --executor runpod` | Generate images through a disposable RunPod ComfyUI Pod |
+
+RunPod render launches use the same interactive confirmation. In a
+non-interactive session they require `--yes`, which must only follow explicit
+user approval of the billed launch.
 
 ## Images
 
