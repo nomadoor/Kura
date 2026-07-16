@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors import launch_runpod_session
+from kura.executors import launch_runpod_session, runpod_gpu_availability
 from kura.notifications import notify as _notify
 from kura.render import _safe_stage_name, launch_render
 from kura.workspace import load_yaml as _load_yaml
@@ -36,6 +36,32 @@ def _render_runpod_config(config: dict[str, Any]) -> dict[str, Any]:
     else:
         runpod_config["ports"] = runpod_config.get("ports") if isinstance(runpod_config.get("ports"), list) else ["22/tcp"]
     return runpod_config
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "disabled"
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return f"{seconds}s"
+
+
+def _render_runpod_billing_plan(runpod_config: dict[str, Any], *, max_lease_sec: int) -> dict[str, Any]:
+    gpu_type_ids = runpod_config.get("gpu_type_ids")
+    if not isinstance(gpu_type_ids, list) or not all(isinstance(item, str) and item for item in gpu_type_ids):
+        raise ValueError("runpod.gpu_type_ids must be configured before showing a RunPod render plan")
+    measurement = runpod_gpu_availability(runpod_config, gpu_type_ids)
+    return {
+        "gpu_count": measurement.get("gpu_count", runpod_config.get("gpu_count", 1)),
+        "gpu_candidates": measurement.get("candidates", []),
+        "price_status": measurement.get("status", "unavailable"),
+        "price_checked_at": measurement.get("checked_at"),
+        "price_reason": measurement.get("reason"),
+        "maximum_lease": _format_duration(max_lease_sec),
+        "maximum_lease_sec": max_lease_sec,
+    }
 
 
 def _render_runpod_lora(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -> tuple[Path | None, str | None]:
@@ -160,8 +186,16 @@ def launch_render_runpod(
         if not isinstance(model_specs, list) or not isinstance(model_registry, dict):
             raise ValueError("runpod render requires a manifest compiled for executor.name=runpod; set executor.name=runpod in run.yaml and recompile before launching on RunPod")
         lora_source, lora_name = _render_runpod_lora(workspace, run_dir, frozen)
-        plan = {"executor": "runpod", "image": remote_image, "models": model_specs, "lora_name": lora_name, "ports": runpod_config.get("ports"), "gpu_type_ids": runpod_config.get("gpu_type_ids")}
+        plan = {
+            "executor": "runpod",
+            "image": remote_image,
+            "models": model_specs,
+            "lora_name": lora_name,
+            "ports": runpod_config.get("ports"),
+            "gpu_type_ids": runpod_config.get("gpu_type_ids"),
+        }
         if dry_run:
+            plan["billing"] = _render_runpod_billing_plan(runpod_config, max_lease_sec=max_lease_sec)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
         launch_runpod_session(

@@ -28,6 +28,10 @@ stop Pod
 
 - `kura run execute <run-id>` is the normal entry point and honors the RunPod
   executor frozen in the compiled run.
+- After showing the final plan and receiving the user's single explicit launch
+  approval, an agent runs `kura run execute <run-id> --yes`. The flag carries
+  that approval through the non-interactive launch gate; it must not cause a
+  second user prompt.
 - `kura run remote <run-id>` remains the low-level entry point for advanced
   lifecycle flags and recovery work.
 - `--hold-for 30m`: normal post-download review window.

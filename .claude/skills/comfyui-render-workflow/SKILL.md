@@ -17,6 +17,11 @@ Use this skill for render runs and workflow JSON changes.
 - Record generated images in `samples/images.jsonl`.
 - Never add `--yes` to a RunPod render launch without the user's explicit
   instruction to perform that billed launch.
+- Before requesting approval for a RunPod render, show
+  `kura render launch <run-id> --executor runpod --dry-run`, including its GPU
+  candidates, current hourly prices, and maximum lease. After the user's single
+  explicit approval, launch non-interactively with `--yes`; that flag carries
+  the approval through the launch gate and must not cause a second user prompt.
 - If local ComfyUI is unavailable or a local render fails, do not rewrite
   `run.yaml` from the local executor to `runpod`. A local-to-RunPod switch is a
   cost-bearing plan change: show the GPU, hourly price, and maximum lease, get

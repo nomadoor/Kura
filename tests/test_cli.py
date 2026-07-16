@@ -58,7 +58,7 @@ class InitCommandTests(unittest.TestCase):
         self.assertEqual(run_help.returncode, 0)
         self.assertIn("Run on RunPod, download outputs, then auto-stop", run_help.stdout)
 
-        for subcommand in (("run", "launch"), ("run", "remote"), ("render", "launch")):
+        for subcommand in (("run", "execute"), ("run", "launch"), ("run", "remote"), ("render", "launch")):
             launch_help = subprocess.run([*command, *subcommand, "--help"], text=True, capture_output=True, check=False)
             self.assertEqual(launch_help.returncode, 0)
             self.assertIn("--yes", launch_help.stdout)
@@ -2662,7 +2662,31 @@ class RenderNotificationTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 buffer = io.StringIO()
-                with contextlib.redirect_stdout(buffer):
+                availability = {
+                    "status": "ok",
+                    "checked_at": "2026-07-16T12:00:00+09:00",
+                    "gpu_count": 1,
+                    "candidates": [
+                        {
+                            "gpu_type_id": "NVIDIA RTX A5000",
+                            "display_name": "RTX A5000",
+                            "memory_gb": 24,
+                            "clouds": [
+                                {
+                                    "cloud_type": "SECURE",
+                                    "stock_status": "Low",
+                                    "available": True,
+                                    "price_per_hour": 0.29,
+                                    "available_gpu_counts": [1],
+                                }
+                            ],
+                        }
+                    ],
+                }
+                with contextlib.redirect_stdout(buffer), patch(
+                    "kura.run_commands.render_runpod.runpod_gpu_availability",
+                    return_value=availability,
+                ) as price_probe:
                     code = launch_run("render-1", executor="runpod", dry_run=True)
             finally:
                 os.chdir(previous)
@@ -2671,6 +2695,12 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(plan["image"], "remote/default-comfy")
             self.assertEqual(plan["executor"], "runpod")
             self.assertEqual(plan["models"][0]["repo"], "owner/toy")
+            price_probe.assert_called_once()
+            self.assertEqual(plan["billing"]["gpu_candidates"][0]["display_name"], "RTX A5000")
+            self.assertEqual(plan["billing"]["gpu_candidates"][0]["clouds"][0]["price_per_hour"], 0.29)
+            self.assertEqual(plan["billing"]["price_checked_at"], "2026-07-16T12:00:00+09:00")
+            self.assertEqual(plan["billing"]["maximum_lease"], "12h")
+            self.assertEqual(plan["billing"]["maximum_lease_sec"], 12 * 3600)
 
     def test_runpod_render_launch_requires_runpod_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -5419,13 +5449,14 @@ class RunPodLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.launch._run_path", return_value=run_dir),
                 patch("kura.run_commands.launch.run_remote", return_value=0) as remote,
             ):
-                self.assertEqual(execute_run("example", max_lease="3h"), 0)
+                self.assertEqual(execute_run("example", max_lease="3h", yes=True), 0)
 
         self.assertEqual(remote.call_args.args, ("example",))
         self.assertEqual(remote.call_args.kwargs["hold_for"], "0")
         self.assertEqual(remote.call_args.kwargs["max_lease"], "3h")
         self.assertEqual(remote.call_args.kwargs["wait_for_capacity"], "0")
         self.assertEqual(remote.call_args.kwargs["capacity_poll_interval"], "30s")
+        self.assertTrue(remote.call_args.kwargs["yes"])
 
     def test_execute_run_uses_frozen_capacity_wait_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

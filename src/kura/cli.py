@@ -1082,6 +1082,7 @@ def main() -> None:
     plan.set_defaults(func=cmd_run_plan)
     execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run")
     execute.add_argument("run_id")
+    execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
     execute.set_defaults(func=cmd_run_execute)
     stage = run_sub.add_parser("stage", help="Stage compiled inputs for a remote executor")
     stage.add_argument("run_id")

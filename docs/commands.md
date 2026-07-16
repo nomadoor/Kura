@@ -45,9 +45,13 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
 | `uv run kura run prune --docker-containers --docker-volumes` | Also clean up Kura-managed stopped containers/volumes (add `--yes` to delete) |
 
-Compile after editing `run.yaml`, review `run plan`, obtain the single launch
-approval, then use `run execute`. The agent normally performs compile for the
-user; it is listed below as a low-level command for inspection and development.
+Compile after editing `run.yaml`, review `run plan`, and obtain the single
+launch approval. After that explicit approval, a non-interactive agent uses
+`run execute <run-id> --yes`; `--yes` carries that approval to the launch gate
+and does not request a second approval. A human running `run execute` directly
+in an interactive terminal may omit `--yes` and answer the one launch prompt.
+The agent normally performs compile for the user; it is listed below as a
+low-level command for inspection and development.
 
 For RunPod runs, `run plan` measures current stock and hourly price for every
 ordered GPU/cloud candidate before approval. Choose an available alternative or
@@ -141,9 +145,13 @@ Useful low-level `run remote` flags:
 | `uv run kura render launch <run-id>` | Generate images through ComfyUI |
 | `uv run kura render launch <run-id> --executor runpod` | Generate images through a disposable RunPod ComfyUI Pod |
 
-RunPod render launches use the same interactive confirmation. In a
-non-interactive session they require `--yes`, which must only follow explicit
-user approval of the billed launch.
+Before approving a RunPod render, use
+`uv run kura render launch <run-id> --executor runpod --dry-run` to show the
+GPU candidates, current hourly prices, and maximum lease. After the user gives
+the single explicit approval, a non-interactive agent launches with `--yes`;
+that flag carries the approval through the launch gate and does not ask the
+user a second time. A human running the launch in an interactive terminal may
+omit `--yes` and answer the one launch prompt.
 
 ## Images
 
