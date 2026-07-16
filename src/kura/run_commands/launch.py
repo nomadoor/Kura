@@ -43,6 +43,7 @@ def run_remote(
     image: str | None = None,
     wait_for_capacity: Any = "0",
     capacity_poll_interval: Any = "30s",
+    yes: bool = False,
 ) -> int:
     run_dir = _run_path(run_id)
     launched = False
@@ -67,6 +68,8 @@ def run_remote(
             image=image,
             wait_for_capacity=wait_for_capacity_sec,
             capacity_poll_interval=capacity_poll_interval_sec,
+            yes=yes,
+            max_lease=max_lease_sec,
         )
         if launch_code:
             return launch_code
@@ -134,6 +137,7 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
         image=getattr(args, "image", None),
         wait_for_capacity=getattr(args, "wait_for_capacity", "0"),
         capacity_poll_interval=getattr(args, "capacity_poll_interval", "30s"),
+        yes=bool(getattr(args, "yes", False)),
     )
 
 
@@ -151,6 +155,7 @@ def execute_run(
     image: str | None = None,
     wait_for_capacity: Any = None,
     capacity_poll_interval: Any = None,
+    yes: bool = False,
 ) -> int:
     """Execute using the executor frozen in the compiled manifest."""
 
@@ -178,6 +183,7 @@ def execute_run(
             image=image,
             wait_for_capacity=frozen_wait if wait_for_capacity is None else wait_for_capacity,
             capacity_poll_interval=frozen_poll if capacity_poll_interval is None else capacity_poll_interval,
+            yes=yes,
         )
     if executor == "docker":
         return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
@@ -199,6 +205,7 @@ def cmd_run_execute(args: argparse.Namespace) -> int:
         image=getattr(args, "image", None),
         wait_for_capacity=getattr(args, "wait_for_capacity", None),
         capacity_poll_interval=getattr(args, "capacity_poll_interval", None),
+        yes=bool(getattr(args, "yes", False)),
     )
 
 
@@ -228,6 +235,8 @@ def launch_run(
     wait: bool = False,
     wait_for_capacity: Any = "0",
     capacity_poll_interval: Any = "30s",
+    yes: bool = False,
+    max_lease: Any = None,
 ) -> int:
     run_dir = _run_path(run_id)
     try:
@@ -238,7 +247,15 @@ def launch_run(
         return 1
     if run_type == "render":
         if executor == "runpod":
-            return launch_render_runpod(run_id, dry_run=dry_run, image=image, notify_channels=notify_channels)
+            render_max_lease_sec = 12 * 3600 if max_lease is None else _parse_duration_seconds(max_lease)
+            return launch_render_runpod(
+                run_id,
+                dry_run=dry_run,
+                image=image,
+                notify_channels=notify_channels,
+                yes=yes,
+                max_lease_sec=render_max_lease_sec,
+            )
         try:
             code = launch_render(_workspace(), run_dir, dry_run=dry_run, executor_name="local")
             if not dry_run:
@@ -339,6 +356,8 @@ def launch_run(
                     dry_run=dry_run,
                     wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity),
                     capacity_poll_interval_sec=_parse_duration_seconds(capacity_poll_interval),
+                    yes=yes,
+                    max_lease_sec=None if max_lease is None else _parse_duration_seconds(max_lease),
                 )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
@@ -358,4 +377,5 @@ def cmd_run_launch(args: argparse.Namespace) -> int:
         wait=bool(getattr(args, "wait", False)),
         wait_for_capacity=getattr(args, "wait_for_capacity", "0"),
         capacity_poll_interval=getattr(args, "capacity_poll_interval", "30s"),
+        yes=bool(getattr(args, "yes", False)),
     )

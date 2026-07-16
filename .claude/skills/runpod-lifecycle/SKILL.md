@@ -28,6 +28,10 @@ stop Pod
 
 - `kura run execute <run-id>` is the normal entry point and honors the RunPod
   executor frozen in the compiled run.
+- After showing the final plan and receiving the user's single explicit launch
+  approval, an agent runs `kura run execute <run-id> --yes`. The flag carries
+  that approval through the non-interactive launch gate; it must not cause a
+  second user prompt.
 - `kura run remote <run-id>` remains the low-level entry point for advanced
   lifecycle flags and recovery work.
 - `--hold-for 30m`: normal post-download review window.
@@ -45,9 +49,24 @@ stop Pod
   upload path cannot safely use RunPod's provider-side Deploy When Available
   subscription because the controller must still upload inputs, start training,
   and install the max-lease guard after Pod creation.
+- Confirm a bounded capacity wait once before entering its wait loop so it can
+  acquire unattended. The confirmation covers the configured creation-attempt
+  sequence and must warn that the displayed hourly price may change while
+  waiting; do not move the prompt to the eventual capacity-acquisition moment.
 
 ## Non-negotiables
 
+- Never add `--yes` to a RunPod launch unless the user explicitly instructed
+  that billed launch. In a non-interactive agent or script session, `--yes`
+  records that explicit instruction; it is not a convenience flag for bypassing
+  the launch gate. It skips only the question; Kura still prints the GPU, price,
+  and maximum-lease summary.
+- A local execution failure is not permission to switch providers. In
+  particular, do not rewrite `run.yaml` from a local executor to `runpod`
+  because Docker, ComfyUI, or another local service is unavailable. Switching
+  local to RunPod creates a new cost decision: show the GPU, hourly price, and
+  maximum lease, obtain user approval, then record and compile the approved
+  executor change.
 - Do not stop a disposable Pod until remote exit and local download are confirmed.
 - If download/completion is uncertain, leave the Pod running and print/notify recovery steps.
 - Do not add unbounded keep-alive flags. Use bounded leases only.
