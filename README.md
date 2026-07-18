@@ -7,7 +7,7 @@ Kura is a file-first experiment workspace for working with AI agents on LoRA tra
 
 You decide what you want and which data to use; the agent creates, runs, monitors, and compares the runs for you (you can also drive it manually from the CLI).
 
-<img width="1920" height="1080" alt="Kura" src="https://github.com/user-attachments/assets/a23f92f8-460c-40d8-be8f-e42a5ef06f72" />
+<img width="1905" height="1154" alt="kuramonitor" src="https://github.com/user-attachments/assets/89d09a7e-d5da-4496-86ee-aa14cda30058" />
 
 ## What Kura is
 
