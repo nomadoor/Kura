@@ -1,6 +1,7 @@
 # Kura
 
 [![日本語 README](https://img.shields.io/badge/README-日本語-blue)](README.ja.md)
+[![Krea 2 LoRA guide](https://img.shields.io/badge/Guide-Krea_2_LoRA-blue)](https://comfyui.nomadoor.net/ja/notes/kura-krea2-lora-training/)
 
 Kura is a file-first experiment workspace for working with AI agents on LoRA training and image-comparison runs.
 
@@ -143,6 +144,7 @@ Two notes on how trainer versions work:
 
 ## Learn more
 
+- [Training a Krea 2 LoRA with Kura](https://comfyui.nomadoor.net/ja/notes/kura-krea2-lora-training/) (Japanese): a complete walkthrough from dataset preparation to ComfyUI comparison
 - [docs/commands.md](docs/commands.md): full command reference
 - [docs/agent-first-cli.md](docs/agent-first-cli.md): what the agent authors, what the CLI guarantees, and how runs work without conversational state
 - [docs/backend-support.md](docs/backend-support.md): pinned backend versions and verified support paths

@@ -1,6 +1,7 @@
 # Kura
 
 [![English README](https://img.shields.io/badge/README-English-blue)](README.md)
+[![Krea 2 LoRA 学習ガイド](https://img.shields.io/badge/Guide-Krea_2_LoRA-blue)](https://comfyui.nomadoor.net/ja/notes/kura-krea2-lora-training/)
 
 Kura は、AIエージェントと一緒に LoRA 学習や生成比較を進めるための、ファイルベースの実験ワークスペースです。
 
@@ -143,6 +144,7 @@ trainer のバージョンについて2点だけ：
 
 ## もっと詳しく
 
+- [Kura で Krea 2 の LoRA を学習する](https://comfyui.nomadoor.net/ja/notes/kura-krea2-lora-training/)：データセット準備からComfyUIでの比較までの実例
 - [docs/commands.md](docs/commands.md)：コマンド早見表
 - [docs/agent-first-cli.md](docs/agent-first-cli.md)：AIが書くもの、CLIが保証するもの、会話状態なしでrunが動く仕組み
 - [docs/backend-support.md](docs/backend-support.md)：使用backendの固定バージョンと検証済み経路
