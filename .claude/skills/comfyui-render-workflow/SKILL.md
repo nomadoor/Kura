@@ -7,6 +7,10 @@ description: ComfyUI render workflow operations for Kura. Use when editing workf
 
 Use this skill for render runs and workflow JSON changes.
 
+For a render intended to evaluate a trained LoRA, complete the
+`lora-evaluation` skill first. That skill owns the evaluation question and
+model-aware prompt judgment; this skill owns ComfyUI execution.
+
 ## Rules
 
 - Render runs are Kura-native runs. Do not create a second session/result system.
@@ -100,6 +104,11 @@ images in managed cache, or become the endpoint for a normal render run.
 - Patch existing API workflow node IDs and fields only.
 - Validate node/field existence before launch.
 - Keep prompt text and seed decisions in promptsets/run files, not ad-hoc scripts.
+- Before authoring an evaluation promptset, inspect every workflow node that
+  supplies positive or negative conditioning. Extract its default prompt,
+  prefixes, and transformations as reference material; do not assume an
+  external workflow default is authoritative or appropriate for every model
+  variant. Record the adopted policy in the run's `evaluation:` block.
 
 ## RunPod model registry resolution
 

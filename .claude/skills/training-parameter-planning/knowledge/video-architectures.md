@@ -1,5 +1,7 @@
 # Video architectures — placeholder cards
 
+Prompt and evaluation knowledge belongs in matching `lora-evaluation/knowledge/<family>.md` cards when created.
+
 Split an architecture out into its own card (`wan.md`, `hunyuan_video.md`,
 `framepack.md`, `kandinsky5.md`, …) as soon as it has architecture-specific
 content. Until then, this is a weak fallback only; do not assume video

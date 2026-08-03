@@ -70,6 +70,14 @@ stop and ask the user to start or identify their local ComfyUI.
 - `monitor-tui` — reading `kura monitor` / `kura run watch`
 - `musubi-tuner-backend` / `ai-toolkit-backend` — trainer flag mechanics
 
+For a trained-LoRA evaluation, use this order:
+`dataset-prep -> training-parameter-planning -> backend skill -> training ->
+lora-evaluation -> model-family knowledge -> render execution -> notes`.
+Trainer backends provide training facts; model-family knowledge owns prompt
+semantics; `lora-evaluation` judges the plan. Do not bypass Kura to execute a
+video evaluation: Kura currently defines video evaluation categories but has
+no video render result path.
+
 ## Secrets and Artifacts
 
 Never commit dataset payloads, model weights, checkpoints, outputs, downloads, caches, credentials, or generated workspace data. Commit small manifests, schemas, fixtures, examples, and documentation instead.

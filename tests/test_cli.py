@@ -2027,6 +2027,10 @@ class RenderNotificationTests(unittest.TestCase):
                     },
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
+                    "evaluation": {
+                        "category": "custom_family_test",
+                        "future_field": {"preserved": True},
+                    },
                     "workflow_patches": {"prompt": {"node": "6", "field": "inputs.text"}, "negative_prompt": {"node": "7", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}, "lora": {"node": "12", "field": "inputs.lora_name"}},
                     "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": None},
                 }),
@@ -2036,6 +2040,10 @@ class RenderNotificationTests(unittest.TestCase):
             compile_render(root, run_dir)
             manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(set(manifest["comfyui"]), {"lora_dir", "lora_stage_subdir", "lora_stage_cleanup"})
+            self.assertEqual(
+                manifest["evaluation"],
+                {"category": "custom_family_test", "future_field": {"preserved": True}},
+            )
             captured: dict[str, Any] = {}
 
             class FakeClient:

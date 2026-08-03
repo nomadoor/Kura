@@ -1,5 +1,7 @@
 # krea2
 
+Prompt and evaluation knowledge belongs in `lora-evaluation/knowledge/krea2.md` when created.
+
 - VRAM class: ~24 GB is practical with `fp8_base` + `fp8_scaled` +
   `gradient_checkpointing` for 768/rank16/batch2 character LoRA. A5000-class
   24 GB OOMed at batch2 without gradient checkpointing.

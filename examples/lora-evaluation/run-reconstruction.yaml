@@ -1,0 +1,25 @@
+schema_version: 1
+id: example-lora-reconstruction
+type: render
+intent: Reconstruct a learned composition without claiming generalization.
+inputs:
+  train_run: example-train-run
+  checkpoint: {path: runs/example-train-run/outputs/example.safetensors, hash: null}
+  workflow: {path: workflows/example-api.json, digest: null}
+  promptset: {path: examples/lora-evaluation/promptset-reconstruction.jsonl, digest: null}
+generator: {name: comfyui, endpoint: 'http://127.0.0.1:8188'}
+executor: {name: local}
+workflow_patches: {}
+render: {output_dir: samples/images, timeout_sec: 600, default_seed: 42}
+evaluation:
+  category: reconstruction
+  fixed: [checkpoint, workflow, lora_strength, seed]
+  varied: [prompt]
+  model_family: example
+  model_variant: example
+  knowledge:
+    card: none
+    basis: [https://example.invalid/upstream-model-card]
+    confidence: unverified
+  prompt_policy: {prefix_origin: agent, transformations: []}
+  limits: Reconstruction is not evidence of generalization.

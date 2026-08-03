@@ -1,5 +1,7 @@
 # flux2 (klein 4b/9b, base)
 
+Prompt and evaluation knowledge belongs in `lora-evaluation/knowledge/flux2.md` when created.
+
 - Artifacts: do not infer from FLUX.1/Kontext. FLUX.2 has different model
   structure and text encoder handling; confirm the exact Musubi adapter recipe
   and available artifacts before proposing fp8/quantized variants.

@@ -1,5 +1,7 @@
 # sdxl (incl. Illustrious / WAI finetunes)
 
+Prompt and evaluation knowledge belongs in `lora-evaluation/knowledge/sdxl.md` when created.
+
 - VRAM class: character LoRA at 768 / batch 2 is the owner's practical
   starting point on this workspace. 1024 / batch 2 is a higher-cost option
   when the task benefits from it and hardware headroom is available. Add

@@ -1,3 +1,5 @@
+source: https://huggingface.co/circlestone-labs/Anima
+provenance: User-provided workflow export imported 2026-08-03; exact upstream file revision unverified.
 models:
   diffusion_models:
     anima-aesthetic-v1.1.safetensors:

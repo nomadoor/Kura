@@ -7,6 +7,10 @@ description: sd-scripts backend guidance for Kura. Use for sd-scripts model role
 
 Use this skill for `backend.name: sd-scripts` work.
 
+This backend owns training mechanics, not prompt semantics. For evaluation,
+use `lora-evaluation` and its model-family knowledge; do not duplicate Anima,
+SDXL, SD 1.5, or FLUX prompt policy here.
+
 ## Contract
 
 - Never run sd-scripts directly on the host. Compile through Kura and execute
