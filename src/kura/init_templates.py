@@ -170,26 +170,19 @@ CMD ["python", "/opt/ComfyUI/main.py", "--listen", "127.0.0.1", "--port", "8188"
 _SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE_RAW = """diff --git a/library/model_io.py b/library/model_io.py
 --- a/library/model_io.py
 +++ b/library/model_io.py
-@@ -355,7 +355,7 @@ def _load_target_model(args: argparse.Namespace, weight_dtype, device="cpu", une
-     from library.original_unet import UNet2DConditionModel
-<KURA_PATCH_CONTEXT_BLANK>
+@@ -357,3 +357,3 @@ def _load_target_model(args: argparse.Namespace, weight_dtype, device="cpu", une
      name_or_path = args.pretrained_model_name_or_path
 -    name_or_path = os.path.realpath(name_or_path) if os.path.islink(name_or_path) else name_or_path
 +    # Kura: retain the caller-visible .safetensors name; os.path.isfile follows symlinks.
      load_stable_diffusion_format = os.path.isfile(name_or_path)  # determine SD or Diffusers
-     if load_stable_diffusion_format:
-         logger.info(f"load StableDiffusion checkpoint: {name_or_path}")
 diff --git a/library/sdxl_train_util.py b/library/sdxl_train_util.py
 --- a/library/sdxl_train_util.py
 +++ b/library/sdxl_train_util.py
-@@ -76,6 +76,6 @@ def _load_target_model(
- ):
+@@ -77,3 +77,3 @@ def _load_target_model(
      # model_dtype only work with full fp16/bf16
 -    name_or_path = os.readlink(name_or_path) if os.path.islink(name_or_path) else name_or_path
 +    # Kura: retain the caller-visible .safetensors name; os.path.isfile follows symlinks.
      load_stable_diffusion_format = os.path.isfile(name_or_path)  # determine SD or Diffusers
-<KURA_PATCH_CONTEXT_BLANK>
-     if load_stable_diffusion_format:
 """
 SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE = _SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE_RAW.replace("<KURA_PATCH_CONTEXT_BLANK>", " ")
 

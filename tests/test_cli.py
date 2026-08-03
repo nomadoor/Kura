@@ -2000,7 +2000,7 @@ class RenderNotificationTests(unittest.TestCase):
                 path.mkdir(parents=True)
             (output_run.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
             (root / "workspace.yaml").write_text(
-                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
+                f"comfyui:\n  lora_dir: {lora_dir}\n  lora_stage_subdir: Kura_tmp\n  lora_stage_cleanup: remove_after_render\n  model_registry: {{checkpoints: {{base.safetensors: {{repo: example/repo}}}}}}\n  runpod: {{container_disk_gb: 200}}\n  local_note: should-not-freeze\n  custom: {{nested: private}}\n",
                 encoding="utf-8",
             )
             checkpoint = output_run / "example.safetensors"
@@ -7359,8 +7359,73 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertFalse(payload["checks"]["endpoint_reachable"])
             self.assertFalse(payload["checks"]["lora_stage_visible"])
-            self.assertIn("not ready", payload["diagnosis"])
+            self.assertIn("not reachable", payload["diagnosis"])
+            self.assertIn("Do not start a Docker ComfyUI", payload["diagnosis"])
             self.assertNotIn("not visible", payload["diagnosis"])
+
+    def test_doctor_comfyui_reports_alternate_default_endpoint_without_retargeting(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"KSampler": {}}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: http://127.0.0.1:8191}\n", encoding="utf-8")
+
+            def fake_urlopen(url: str, timeout: int = 5) -> FakeResponse:
+                if url == "http://127.0.0.1:8188/object_info":
+                    return FakeResponse()
+                raise OSError("connection refused")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", side_effect=fake_urlopen), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=False, workflow=None))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["diagnostics"]["endpoint"], "http://127.0.0.1:8191")
+            self.assertEqual(payload["diagnostics"]["candidate_endpoint"], "http://127.0.0.1:8188")
+            self.assertIn("do not retarget automatically", payload["warnings"][0])
+
+    def test_doctor_comfyui_workflow_reports_missing_local_model(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({
+                    "UNETLoader": {"input": {"required": {"unet_name": [["present.safetensors"], {}]}}},
+                }).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / "workflow.json"
+            workflow.write_text(json.dumps({"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "missing.safetensors"}}}), encoding="utf-8")
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: http://127.0.0.1:8188}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace(endpoint=None, probe_stage=False, workflow="workflow.json"))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertFalse(payload["checks"]["workflow_models_visible"])
+            self.assertEqual(payload["diagnostics"]["workflow_missing_models"][0]["name"], "missing.safetensors")
+            self.assertIn("Local render never downloads models", payload["diagnosis"])
 
     def test_doctor_comfyui_distinguishes_process_write_denial_from_visibility(self) -> None:
         class FakeResponse:

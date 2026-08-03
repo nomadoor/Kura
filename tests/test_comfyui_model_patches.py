@@ -4,10 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
-from kura.comfyui_models import DEFAULT_MODEL_REGISTRY, required_model_refs, resolve_model_specs
+from kura.comfyui_models import DEFAULT_MODEL_REGISTRY, endpoint_fingerprint, required_model_refs, resolve_model_specs, visible_model_refs
 from kura.init_templates import COMFYUI_DOCKERFILE_TEMPLATE
 from kura.render import _cleanup_lora_stage, _lora_insert_from_sidecar, _materialize_lora_stage, _model_patch_stage_plan, insert_lora_loader, launch_render, patch_workflow
 
@@ -16,6 +17,89 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComfyUIModelPatchTests(unittest.TestCase):
+    def test_workflow_model_visibility_uses_exact_endpoint_loader_lists(self) -> None:
+        workflow = {
+            "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "present.safetensors"}},
+            "2": {"class_type": "VAELoader", "inputs": {"vae_name": "missing.safetensors"}},
+        }
+        object_info = {
+            "UNETLoader": {"input": {"required": {"unet_name": [["present.safetensors"], {}]}}},
+            "VAELoader": {"input": {"required": {"vae_name": [["other.safetensors"], {}]}}},
+        }
+
+        visible, missing = visible_model_refs(workflow, object_info)
+
+        self.assertEqual([item["name"] for item in visible], ["present.safetensors"])
+        self.assertEqual([item["name"] for item in missing], ["missing.safetensors"])
+
+    def test_endpoint_fingerprint_is_stable_across_model_list_changes(self) -> None:
+        first = {"UNETLoader": {"input": {"required": {"unet_name": [["one"], {}]}}}, "KSampler": {}}
+        second = {"KSampler": {}, "UNETLoader": {"input": {"required": {"unet_name": [["two"], {}]}}}}
+        different = {**second, "CustomNode": {}}
+
+        self.assertEqual(endpoint_fingerprint(first), endpoint_fingerprint(second))
+        self.assertNotEqual(endpoint_fingerprint(first)["sha256"], endpoint_fingerprint(different)["sha256"])
+
+    def test_local_launch_rejects_endpoint_identity_change_before_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "render"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            expected = endpoint_fingerprint({"KSampler": {}})
+            manifest = {
+                "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                "executor": {"name": "local"},
+                "inputs": {"workflow": {"path": "workflows/test.json"}, "promptset": {"path": "promptsets/test.jsonl"}, "checkpoint": {}},
+                "workflow_patches": {},
+                "render": {"output_dir": "samples/images", "timeout_sec": 5},
+                "comfyui_endpoint_identity": expected,
+            }
+            (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
+            (resolved / "promptset_used.jsonl").write_text('{"id":"p1","prompt":"hello","seeds":[1]}\n', encoding="utf-8")
+            (run_dir / "status.json").write_text('{"state":"compiled"}', encoding="utf-8")
+
+            class DifferentClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def object_info(self) -> dict[str, object]:
+                    return {"KSampler": {}, "SmokeOnlyNode": {}}
+
+            with patch("kura.render.ComfyUIClient", DifferentClient):
+                self.assertEqual(launch_render(workspace, run_dir), 1)
+            self.assertIn("endpoint identity changed after compile", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+
+    def test_local_launch_rejects_manifest_compiled_without_endpoint_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "render"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            manifest = {
+                "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                "executor": {"name": "local"},
+                "inputs": {"workflow": {"path": "workflows/test.json"}, "promptset": {"path": "promptsets/test.jsonl"}, "checkpoint": {}},
+                "workflow_patches": {},
+                "render": {"output_dir": "samples/images", "timeout_sec": 5},
+            }
+            (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
+            (resolved / "promptset_used.jsonl").write_text('{"id":"p1","prompt":"hello","seeds":[1]}\n', encoding="utf-8")
+            (run_dir / "status.json").write_text('{"state":"compiled"}', encoding="utf-8")
+
+            class Client:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def object_info(self) -> dict[str, object]:
+                    return {"KSampler": {}}
+
+            with patch("kura.render.ComfyUIClient", Client):
+                self.assertEqual(launch_render(workspace, run_dir), 1)
+            self.assertIn("identity was not verified at compile time", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+
     def test_model_patch_loader_is_discovered_and_resolved(self) -> None:
         workflow = {"4": {"class_type": "ModelPatchLoader", "inputs": {"name": "control.safetensors"}}}
         registry = {"model_patches": {"control.safetensors": {"repo": "owner/repo", "filename": "control.safetensors", "revision": "a" * 40}}}

@@ -18,7 +18,9 @@ def main() -> int:
     if not WORKFLOWS.exists():
         pass
     else:
-        for path in sorted(WORKFLOWS.iterdir()):
+        for path in sorted(WORKFLOWS.rglob("*")):
+            if not path.is_file():
+                continue
             if path.name.endswith(":Zone.Identifier"):
                 errors.append(f"{path.relative_to(ROOT)} is a Windows Zone.Identifier sidecar")
                 continue
@@ -32,13 +34,16 @@ def main() -> int:
             if not isinstance(data, dict):
                 errors.append(f"{path.relative_to(ROOT)} must be an API-format object")
                 continue
-            if "nodes" in data and "links" in data:
+            api_required = path.parent == WORKFLOWS or path.stem.endswith("_api")
+            if api_required and "nodes" in data and "links" in data:
                 errors.append(f"{path.relative_to(ROOT)} looks like a UI workflow export; Kura needs API-format workflow JSON")
                 continue
             if not data:
                 errors.append(f"{path.relative_to(ROOT)} is empty")
     if PROMPTSETS.exists():
-        for path in sorted(PROMPTSETS.iterdir()):
+        for path in sorted(PROMPTSETS.rglob("*")):
+            if not path.is_file():
+                continue
             if path.name.endswith(":Zone.Identifier"):
                 errors.append(f"{path.relative_to(ROOT)} is a Windows Zone.Identifier sidecar")
                 continue

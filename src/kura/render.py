@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 
 from kura import __version__
-from kura.comfyui_models import merged_registry, resolve_model_specs
+from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
 from kura.workspace import dump_yaml
 
@@ -302,11 +302,21 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     return {"source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
 
 
-def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
+def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
-    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup", "model_registry", "runpod")
+    allowed = ["lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup"]
+    if include_remote:
+        allowed.extend(("model_registry", "runpod"))
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
+
+
+def _fetch_endpoint_object_info(endpoint: str, *, timeout: float = 3) -> dict[str, Any]:
+    with urllib.request.urlopen(f"{endpoint.rstrip('/')}/object_info", timeout=timeout) as response:
+        payload = json.loads(response.read())
+    if not isinstance(payload, dict):
+        raise ValueError("ComfyUI object_info must be a JSON object")
+    return payload
 
 
 def _materialize_lora_stage(plan: dict[str, Any]) -> None:
@@ -447,6 +457,12 @@ class ComfyUIClient:
             raise RuntimeError("ComfyUI object_info query failed for LoRA loaders: " + "; ".join(errors))
         return names
 
+    def object_info(self) -> dict[str, Any]:
+        response = self._json("/object_info")
+        if not isinstance(response, dict):
+            raise RuntimeError("ComfyUI object_info is not a JSON object")
+        return response
+
     def model_patch_names(self) -> set[str]:
         try:
             response = self._json("/object_info/ModelPatchLoader")
@@ -513,11 +529,12 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
-    comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"))
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    is_runpod = executor.get("name") == "runpod"
+    comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
-    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
-    if executor.get("name") == "runpod":
+    if is_runpod:
         sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
         workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
         registry = merged_registry(sidecar_models, workspace_models)
@@ -527,6 +544,17 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             raise ValueError("runpod ComfyUI render has unknown model loader entries; add comfyui.model_registry mappings for: " + labels)
         frozen["comfyui_model_registry"] = registry
         frozen["comfyui_models"] = specs
+    else:
+        endpoint = run.get("generator", {}).get("endpoint")
+        if isinstance(endpoint, str) and endpoint:
+            try:
+                object_info = _fetch_endpoint_object_info(endpoint)
+            except Exception as exc:
+                print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {_redact_url_userinfo(endpoint)}: {exc}", flush=True)
+            else:
+                visible, missing = visible_model_refs(workflow, object_info)
+                frozen["comfyui_endpoint_identity"] = endpoint_fingerprint(object_info)
+                frozen["comfyui_required_models"] = {"visible": visible, "missing": missing}
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
     if checkpoint_path:
         candidate = workspace / checkpoint_path
@@ -605,6 +633,26 @@ def launch_render(
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     status(run_dir, state="running", started=now(), ended=None, exit_code=None)
     try:
+        if resolved_executor == "local" and hasattr(client, "object_info"):
+            object_info = client.object_info()
+            expected_identity = frozen.get("comfyui_endpoint_identity")
+            observed_identity = endpoint_fingerprint(object_info)
+            if not isinstance(expected_identity, dict) or not expected_identity.get("sha256"):
+                raise ValueError(
+                    "local ComfyUI endpoint identity was not verified at compile time; verify the intended endpoint is reachable, then compile again"
+                )
+            if expected_identity.get("sha256") != observed_identity.get("sha256"):
+                raise ValueError(
+                    "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
+                    f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
+                )
+            _, missing = visible_model_refs(workflow, object_info)
+            if missing:
+                labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
+                raise ValueError(
+                    "ComfyUI endpoint cannot see workflow-required models: " + labels + ". "
+                    "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
+                )
         if lora_stage:
             _materialize_lora_stage(lora_stage)
             _ensure_lora_stage_visible(client, endpoint, lora_stage)

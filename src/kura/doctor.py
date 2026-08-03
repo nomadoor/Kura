@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from kura.comfyui_models import endpoint_fingerprint, visible_model_refs
 from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
@@ -826,6 +827,19 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         "lora_dir": str(lora_dir) if lora_dir else None,
         "stage_dir": str(stage_dir) if stage_dir else None,
     }
+    warnings: list[str] = []
+    lora_dir_inside_workspace = False
+    if lora_dir is not None:
+        try:
+            lora_dir.resolve().relative_to(workspace_root.resolve())
+            lora_dir_inside_workspace = True
+        except ValueError:
+            pass
+    checks["lora_dir_outside_workspace"] = not lora_dir_inside_workspace if lora_dir is not None else None
+    if lora_dir_inside_workspace:
+        warnings.append(
+            "configured comfyui.lora_dir is inside the Kura workspace; this looks like a managed/smoke directory, not a user ComfyUI model directory"
+        )
     stage_files = _kura_stage_files(stage_dir)
     diagnostics["kura_stage_file_count"] = len(stage_files)
     if stage_files:
@@ -835,16 +849,49 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
         print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
         return 1
+    object_info: dict[str, Any] | None = None
     try:
         object_info = _fetch_comfyui_object_info(endpoint)
         checks["endpoint_reachable"] = True
         checks["object_info"] = isinstance(object_info, dict)
         if isinstance(object_info, dict):
             diagnostics["lora_loader_count"] = _comfyui_lora_count(object_info)
+            diagnostics["endpoint_identity"] = endpoint_fingerprint(object_info)
             checks["core_model_patch_loader"] = "ModelPatchLoader" in object_info
             checks["core_anima_lllite_apply"] = "AnimaLLLiteApply" in object_info
     except Exception as exc:
         diagnostics["object_info_error"] = _redact_secret_text(str(exc))
+        configured_default = endpoint == "http://127.0.0.1:8188"
+        if not configured_default:
+            try:
+                candidate_info = _fetch_comfyui_object_info("http://127.0.0.1:8188", timeout=1)
+            except Exception:
+                pass
+            else:
+                diagnostics["candidate_endpoint"] = "http://127.0.0.1:8188"
+                diagnostics["candidate_endpoint_identity"] = endpoint_fingerprint(candidate_info)
+                warnings.append(
+                    "another ComfyUI is responding at http://127.0.0.1:8188; verify it with the user, but do not retarget automatically"
+                )
+    workflow_arg = getattr(args, "workflow", None)
+    if workflow_arg:
+        workflow_path = Path(str(workflow_arg))
+        if not workflow_path.is_absolute():
+            workflow_path = workspace_root / workflow_path
+        diagnostics["workflow"] = str(workflow_path)
+        try:
+            workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+            if not isinstance(workflow, dict):
+                raise ValueError("workflow must be an API-format JSON object")
+            if not isinstance(object_info, dict):
+                raise ValueError("configured endpoint object_info is unavailable")
+            visible, missing = visible_model_refs(workflow, object_info)
+            diagnostics["workflow_required_models"] = visible + missing
+            diagnostics["workflow_missing_models"] = missing
+            checks["workflow_models_visible"] = not missing
+        except Exception as exc:
+            checks["workflow_models_visible"] = False
+            diagnostics["workflow_check_error"] = _redact_secret_text(str(exc))
     if getattr(args, "probe_stage", False):
         if not (stage_dir and lora_dir and lora_dir.is_dir()):
             diagnostics["lora_stage_probe_error"] = "comfyui.lora_dir must exist before probing stage visibility"
@@ -879,9 +926,17 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         else:
             diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
     else:
-        diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."
-    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
-    ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False
+        diagnosis = (
+            "ComfyUI endpoint is not reachable. Ask the user to start their local ComfyUI or correct comfyui.endpoint. "
+            "Do not start a Docker ComfyUI: Kura's managed image is only for RunPod and disposable smoke tests."
+        )
+    if checks.get("workflow_models_visible") is False and checks["endpoint_reachable"]:
+        diagnosis = (
+            "ComfyUI is reachable, but it cannot see every workflow-required model. Verify the intended endpoint and the user's "
+            "ComfyUI model paths. Local render never downloads models."
+        )
+    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "warnings": warnings, "diagnosis": diagnosis}), indent=2))
+    ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False and checks.get("workflow_models_visible") is not False
     return 0 if ok else 1
 
 

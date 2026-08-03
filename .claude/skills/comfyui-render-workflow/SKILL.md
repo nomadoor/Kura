@@ -26,6 +26,12 @@ Use this skill for render runs and workflow JSON changes.
   `run.yaml` from the local executor to `runpod`. A local-to-RunPod switch is a
   cost-bearing plan change: show the GPU, hourly price, and maximum lease, get
   user approval, then record the approved executor and recompile.
+- A local render request authorizes HTTP calls to the configured ComfyUI only.
+  It does not authorize starting/restarting Docker, installing ComfyUI, or
+  downloading models. If the endpoint is unreachable, stop and ask the user to
+  start their instance or approve a corrected endpoint. A reachable instance
+  on another conventional port is a diagnostic hint, never an automatic
+  retarget.
 
 ## Making the LoRA/model visible to ComfyUI
 
@@ -44,7 +50,11 @@ Default flow when the user asks to test-generate with a Kura-trained LoRA:
    that checkpoint path as the render run's `inputs.checkpoint.path`, then
    compile the render run.
 2. Confirm ComfyUI is reachable at the endpoint (default `http://127.0.0.1:8188`).
-   If not, ask the user to start it.
+   If not, ask the user to start it or confirm a corrected endpoint. Do not
+   start a container or download anything as a fallback.
+   For a workflow-specific check, run
+   `uv run kura doctor comfyui --workflow <api-workflow.json>`; every loader
+   model must already be visible to that exact local endpoint.
 3. Run `uv run kura doctor comfyui --endpoint <url> --probe-stage` when a LoRA
    render will stage a local Kura output. This verifies the configured
    `comfyui.lora_dir` is visible to that exact endpoint.
@@ -78,10 +88,12 @@ does not forbid an agent, during diagnosis and with user-visible reasoning, from
 reading the user's ComfyUI configuration and proposing a corrected local
 `workspace.yaml` value.
 
-Optional (only if transient symlinks in the user's daily ComfyUI become a nuisance):
-launch a dedicated test instance on a separate port with its own
-`--extra-model-paths-config` pointing at a Kura-owned directory. Isolation comes from
-the separate config/dir, not the port; never edit the user's main ComfyUI config.
+Starting a dedicated smoke instance is a separate environment mutation and
+requires explicit user approval. If approved, label its container
+`io.kura.purpose=smoke`, use a separate endpoint and model-path config, record
+its ownership in the smoke evidence, and remove it before handoff. The smoke
+must not rewrite the user's `workspace.yaml`, leave downloads or generated
+images in managed cache, or become the endpoint for a normal render run.
 
 ## Workflow patches
 
@@ -91,6 +103,8 @@ the separate config/dir, not the port; never edit the user's main ComfyUI config
 
 ## RunPod model registry resolution
 
+This registry and its download behavior apply only to the RunPod executor.
+Local ComfyUI render never consumes the registry and never downloads a model.
 RunPod ComfyUI render may download workflow-required models automatically, but
 only from an explicit registry. Never infer a Hugging Face repo from a file name
 and silently download it; there is no trustworthy reverse lookup, and the wrong

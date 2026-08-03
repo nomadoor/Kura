@@ -8,6 +8,11 @@ training LoRAs, rendering images, preparing datasets. Assume that by default.
 **Using Kura (default):**
 
 - Work through the `kura` CLI (`uv run kura ...`) and workspace files.
+- Do not run state-changing Docker commands, invoke trainer/model-download
+  libraries directly, or acquire models outside Kura. Read-only diagnosis such
+  as `docker ps`, `docker inspect`, and reading user-approved ComfyUI config is
+  allowed. Any exceptional external mutation requires separate, explicit user
+  approval naming that action.
 - **Do not run git commands.** Do not modify Kura's source code, tests, or
   checks. The workspace being a git repository is an implementation detail;
   if the user explicitly asks to update Kura itself, treat that as a
@@ -50,6 +55,12 @@ Before any local run or real smoke that may download multi-GB models, run `uv ru
 Cleanup is intentionally guarded. Show `kura cleanup ...` dry-runs before deletion. Never delete datasets, outputs, downloads, or final artifacts unless the user explicitly asks; use `kura fix-permissions` before cleanup when root-owned Kura files block removal.
 
 Skills for usage sessions:
+
+A request to render, train, or use a workflow is not permission to download
+models outside the declared Kura plan. Disk doctor measures capacity; passing it
+does not grant download authority. Local ComfyUI render never downloads models
+and never starts a Docker ComfyUI. If the configured endpoint is unavailable,
+stop and ask the user to start or identify their local ComfyUI.
 
 - `training-parameter-planning` — proposing parameters, VRAM fit, trade-offs
 - `dataset-prep` — datasets, captions, trigger words, validation

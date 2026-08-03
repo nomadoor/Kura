@@ -115,6 +115,21 @@ workspace mount table.
 | `comfyui.model_registry` | Explicit ComfyUI model name to Hugging Face repo/file mappings for RunPod render | `{}` |
 | `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods | created by `kura init` |
 
+The local executor treats `comfyui.endpoint` as an external, user-managed
+service. Kura submits HTTP requests to that exact endpoint; it does not start or
+restart ComfyUI, start Docker, install ComfyUI, or download missing models.
+`lora_dir` and `model_patches_dir` must be directories scanned by that same
+instance and should normally live outside the Kura workspace. Use
+`kura doctor comfyui --workflow <api-workflow.json>` to verify the endpoint and
+the workflow's required models before launch.
+
+`comfyui.model_registry` and `comfyui.runpod` are RunPod-only configuration.
+They are not frozen into local render manifests and cannot authorize local
+downloads. An unreachable local endpoint or a missing model is a stop-and-ask
+condition, not permission to create a replacement service. Any dedicated smoke
+instance requires separate approval, isolated model paths, explicit ownership,
+and teardown without changing the normal workspace endpoint.
+
 If `comfyui.lora_dir` is changed after a render run was compiled, re-run:
 
 ```sh
