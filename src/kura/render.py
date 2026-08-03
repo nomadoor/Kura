@@ -311,7 +311,7 @@ def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, A
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
 
 
-def _fetch_endpoint_object_info(endpoint: str, *, timeout: float = 3) -> dict[str, Any]:
+def _fetch_endpoint_object_info(endpoint: str, *, timeout: float = 15) -> dict[str, Any]:
     with urllib.request.urlopen(f"{endpoint.rstrip('/')}/object_info", timeout=timeout) as response:
         payload = json.loads(response.read())
     if not isinstance(payload, dict):
@@ -617,6 +617,15 @@ def launch_render(
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
     model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
     details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    if resolved_executor == "local":
+        expected_identity = frozen.get("comfyui_endpoint_identity")
+        identity_verified = isinstance(expected_identity, dict) and bool(expected_identity.get("sha256"))
+        details["endpoint_identity_verified"] = identity_verified
+        if not identity_verified:
+            details["launch_blocker"] = (
+                "local ComfyUI endpoint identity was not verified at compile time; "
+                "verify the intended endpoint is reachable, then create and compile a new render run"
+            )
     if dry_run:
         print(json.dumps(details, ensure_ascii=False, indent=2))
         return 0

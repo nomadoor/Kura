@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
@@ -10,13 +11,28 @@ import yaml
 
 from kura.comfyui_models import DEFAULT_MODEL_REGISTRY, endpoint_fingerprint, required_model_refs, resolve_model_specs, visible_model_refs
 from kura.init_templates import COMFYUI_DOCKERFILE_TEMPLATE
-from kura.render import _cleanup_lora_stage, _lora_insert_from_sidecar, _materialize_lora_stage, _model_patch_stage_plan, insert_lora_loader, launch_render, patch_workflow
+from kura.render import _cleanup_lora_stage, _fetch_endpoint_object_info, _lora_insert_from_sidecar, _materialize_lora_stage, _model_patch_stage_plan, insert_lora_loader, launch_render, patch_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComfyUIModelPatchTests(unittest.TestCase):
+    def test_compile_endpoint_probe_allows_large_object_info_response_time(self) -> None:
+        class Response:
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                pass
+
+            def read(self) -> bytes:
+                return b'{"KSampler": {}}'
+
+        with patch("kura.render.urllib.request.urlopen", return_value=Response()) as urlopen:
+            self.assertEqual(_fetch_endpoint_object_info("http://127.0.0.1:8188"), {"KSampler": {}})
+        urlopen.assert_called_once_with("http://127.0.0.1:8188/object_info", timeout=15)
+
     def test_workflow_model_visibility_uses_exact_endpoint_loader_lists(self) -> None:
         workflow = {
             "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "present.safetensors"}},
@@ -88,6 +104,12 @@ class ComfyUIModelPatchTests(unittest.TestCase):
             (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
             (resolved / "promptset_used.jsonl").write_text('{"id":"p1","prompt":"hello","seeds":[1]}\n', encoding="utf-8")
             (run_dir / "status.json").write_text('{"state":"compiled"}', encoding="utf-8")
+
+            with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                self.assertEqual(launch_render(workspace, run_dir, dry_run=True), 0)
+            plan = json.loads(stdout.getvalue())
+            self.assertIs(plan["endpoint_identity_verified"], False)
+            self.assertIn("create and compile a new render run", plan["launch_blocker"])
 
             class Client:
                 def __init__(self, endpoint: str, timeout: int) -> None:
