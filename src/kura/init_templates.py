@@ -144,7 +144,7 @@ if __name__ == "__main__":
 COMFYUI_DOCKERFILE_TEMPLATE = """ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 FROM ${PYTORCH_BASE}
 
-ARG COMFYUI_REF=50e5270b86765bac2da70248d61050abba72b19f
+ARG COMFYUI_REF=0f42ba51463174fb255f2c4605ae0e0b441fe6d7
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_DEFAULT_TIMEOUT=180
 ENV PIP_RETRIES=5
@@ -167,6 +167,68 @@ CMD ["python", "/opt/ComfyUI/main.py", "--listen", "127.0.0.1", "--port", "8188"
 """
 
 
+_SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE_RAW = """diff --git a/library/model_io.py b/library/model_io.py
+--- a/library/model_io.py
++++ b/library/model_io.py
+@@ -355,7 +355,7 @@ def _load_target_model(args: argparse.Namespace, weight_dtype, device="cpu", une
+     from library.original_unet import UNet2DConditionModel
+<KURA_PATCH_CONTEXT_BLANK>
+     name_or_path = args.pretrained_model_name_or_path
+-    name_or_path = os.path.realpath(name_or_path) if os.path.islink(name_or_path) else name_or_path
++    # Kura: retain the caller-visible .safetensors name; os.path.isfile follows symlinks.
+     load_stable_diffusion_format = os.path.isfile(name_or_path)  # determine SD or Diffusers
+     if load_stable_diffusion_format:
+         logger.info(f"load StableDiffusion checkpoint: {name_or_path}")
+diff --git a/library/sdxl_train_util.py b/library/sdxl_train_util.py
+--- a/library/sdxl_train_util.py
++++ b/library/sdxl_train_util.py
+@@ -76,6 +76,6 @@ def _load_target_model(
+ ):
+     # model_dtype only work with full fp16/bf16
+-    name_or_path = os.readlink(name_or_path) if os.path.islink(name_or_path) else name_or_path
++    # Kura: retain the caller-visible .safetensors name; os.path.isfile follows symlinks.
+     load_stable_diffusion_format = os.path.isfile(name_or_path)  # determine SD or Diffusers
+<KURA_PATCH_CONTEXT_BLANK>
+     if load_stable_diffusion_format:
+"""
+SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE = _SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE_RAW.replace("<KURA_PATCH_CONTEXT_BLANK>", " ")
+
+
+SD_SCRIPTS_DOCKERFILE_TEMPLATE = """ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+FROM ${PYTORCH_BASE}
+
+ARG SD_SCRIPTS_REF=6721028c79ee85a78b3a06dfd8954dae310a1cce
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_DEFAULT_TIMEOUT=180
+ENV PIP_RETRIES=5
+ENV SD_SCRIPTS_ROOT=/opt/sd-scripts
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends build-essential git openssh-server libgl1 libglib2.0-0 \\
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/kohya-ss/sd-scripts.git "$SD_SCRIPTS_ROOT" \\
+    && cd "$SD_SCRIPTS_ROOT" \\
+    && git checkout "$SD_SCRIPTS_REF" \\
+    && test "$(git rev-parse HEAD)" = "$SD_SCRIPTS_REF" \\
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY docker/sd-scripts/patches/0001-preserve-safetensors-symlink-name.patch /tmp/kura-sd-scripts-patches/0001-preserve-safetensors-symlink-name.patch
+
+RUN cd "$SD_SCRIPTS_ROOT" \\
+    && git apply --check /tmp/kura-sd-scripts-patches/0001-preserve-safetensors-symlink-name.patch \\
+    && git apply /tmp/kura-sd-scripts-patches/0001-preserve-safetensors-symlink-name.patch
+
+LABEL org.opencontainers.image.source="https://github.com/kohya-ss/sd-scripts" \\
+      org.opencontainers.image.revision="6721028c79ee85a78b3a06dfd8954dae310a1cce" \\
+      io.kura.patch.symlink-safetensors="preserve-input-filename-v2" \\
+      io.kura.backend="sd-scripts"
+
+WORKDIR /workspace
+CMD ["sleep", "infinity"]
+"""
+
+
 COMFYUI_PREPARE_TEMPLATE = """#!/usr/bin/env python3
 from __future__ import annotations
 
@@ -184,9 +246,15 @@ MODEL_INPUTS = {
     "TripleCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2"), ("clip", "clip_name3")),
     "UNETLoader": (("diffusion_models", "unet_name"),),
     "ControlNetLoader": (("controlnet", "control_net_name"),),
+    "ModelPatchLoader": (("model_patches", "name"),),
 }
-MODEL_DIRS = {"checkpoints": "checkpoints", "vae": "vae", "clip": "clip", "diffusion_models": "diffusion_models", "controlnet": "controlnet"}
-MODEL_REGISTRY = {"checkpoints": {"v1-5-pruned-emaonly-fp16.safetensors": {"repo": "Comfy-Org/stable-diffusion-v1-5-archive", "filename": "v1-5-pruned-emaonly-fp16.safetensors"}}}
+MODEL_DIRS = {"checkpoints": "checkpoints", "vae": "vae", "clip": "clip", "diffusion_models": "diffusion_models", "controlnet": "controlnet", "model_patches": "model_patches"}
+MODEL_REGISTRY = {
+    "checkpoints": {"v1-5-pruned-emaonly-fp16.safetensors": {"repo": "Comfy-Org/stable-diffusion-v1-5-archive", "filename": "v1-5-pruned-emaonly-fp16.safetensors"}},
+    "diffusion_models": {"anima-base-v1.0.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/diffusion_models/anima-base-v1.0.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b"}},
+    "clip": {"qwen_3_06b_base.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/text_encoders/qwen_3_06b_base.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b", "target_dir": "text_encoders"}},
+    "vae": {"qwen_image_vae.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/vae/qwen_image_vae.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b"}},
+}
 
 
 def _safe_child(root: Path, relative: str) -> Path:
@@ -299,11 +367,11 @@ if __name__ == "__main__":
 
 def cmd_init(_: argparse.Namespace) -> int:
     root = Path.cwd()
-    for relative in ("datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner", "docker/comfyui"):
+    for relative in ("datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "docker/ai-toolkit", "docker/musubi-tuner", "docker/sd-scripts", "docker/comfyui"):
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
-        dump_yaml(workspace, {"schema_version": 1, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"images": {"ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}, "comfyui": {"local": "nomadoor/kura-comfyui:dev", "remote": "nomadoor/kura-comfyui:dev", "dockerfile": "docker/comfyui/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:0.10.22", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev", "comfyui": "nomadoor/kura-comfyui:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
+        dump_yaml(workspace, {"schema_version": 1, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"images": {"ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev", "remote": "nomadoor/kura-ai-toolkit:dev", "dockerfile": "docker/ai-toolkit/Dockerfile", "context": "."}, "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev", "remote": "nomadoor/kura-musubi-tuner:dev", "dockerfile": "docker/musubi-tuner/Dockerfile", "context": "."}, "sd-scripts": {"local": "nomadoor/kura-sd-scripts:dev", "remote": "nomadoor/kura-sd-scripts:dev", "dockerfile": "docker/sd-scripts/Dockerfile", "context": "."}, "comfyui": {"local": "nomadoor/kura-comfyui:dev", "remote": "nomadoor/kura-comfyui:dev", "dockerfile": "docker/comfyui/Dockerfile", "context": "."}}, "workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_patches_dir": "", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "symlink", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"default_image": {"ai-toolkit": "ostris/aitoolkit:0.10.22", "musubi-tuner": "nomadoor/kura-musubi-tuner:dev", "sd-scripts": "nomadoor/kura-sd-scripts:dev", "comfyui": "nomadoor/kura-comfyui:dev"}, "template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "container_cwd": "/app/ai-toolkit", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
     agents = root / "AGENTS.md"
     if not agents.exists():
         agents.write_text("# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n", encoding="utf-8")
@@ -329,6 +397,13 @@ def cmd_init(_: argparse.Namespace) -> int:
             "from pathlib import Path\n\n\nTARGET = Path(\"/opt/musubi-tuner/src/musubi_tuner/flux_2/flux2_utils.py\")\n\n\nOLD = \"\"\"    logger.info(f\\\"Loading state dict from {ckpt_path}\\\")\n    sd = load_split_weights(ckpt_path, device=str(device), disable_mmap=disable_mmap, dtype=dtype)\n    info = ae.load_state_dict(sd, strict=True, assign=True)\n\"\"\"\n\n\nNEW = \"\"\"    logger.info(f\\\"Loading state dict from {ckpt_path}\\\")\n    sd = load_split_weights(ckpt_path, device=str(device), disable_mmap=disable_mmap, dtype=dtype)\n    if any(\\\".down_blocks.\\\" in key or \\\".up_blocks.\\\" in key or key.endswith(\\\"conv_norm_out.weight\\\") for key in sd):\n        logger.info(\\\"Converting Diffusers-layout Flux2 VAE state dict\\\")\n        from musubi_tuner.ideogram4.ideogram4_autoencoder import convert_diffusers_state_dict\n\n        sd = convert_diffusers_state_dict(sd)\n    info = ae.load_state_dict(sd, strict=True, assign=True)\n\"\"\"\n\n\ndef main() -> None:\n    text = TARGET.read_text()\n    if NEW in text:\n        return\n    if OLD not in text:\n        raise SystemExit(f\"expected load_ae block not found in {TARGET}\")\n    TARGET.write_text(text.replace(OLD, NEW))\n\n\nif __name__ == \"__main__\":\n    main()\n",
             encoding="utf-8",
         )
+    sd_scripts_dockerfile = root / "docker/sd-scripts/Dockerfile"
+    if not sd_scripts_dockerfile.exists():
+        sd_scripts_dockerfile.write_text(SD_SCRIPTS_DOCKERFILE_TEMPLATE, encoding="utf-8")
+    sd_scripts_patch = root / "docker/sd-scripts/patches/0001-preserve-safetensors-symlink-name.patch"
+    if not sd_scripts_patch.exists():
+        sd_scripts_patch.parent.mkdir(parents=True, exist_ok=True)
+        sd_scripts_patch.write_text(SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE, encoding="utf-8")
     comfyui_dockerfile = root / "docker/comfyui/Dockerfile"
     if not comfyui_dockerfile.exists():
         comfyui_dockerfile.write_text(COMFYUI_DOCKERFILE_TEMPLATE, encoding="utf-8")

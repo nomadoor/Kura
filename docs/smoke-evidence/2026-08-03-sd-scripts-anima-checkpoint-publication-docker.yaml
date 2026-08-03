@@ -1,0 +1,60 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-08-03
+run_id: 20260803-1528_anima-checkpoint-live-smoke_dece
+realization:
+  id: 20260803-152953-663302
+  observation: 20260803-152953-663302.observed-20260803-153158-785741.json
+  container_id: 16d47cc20f26afd7cd88f015299b4329b5416a479cc6cbdf58ce5bae8525d7bf
+native_path:
+  architecture: anima
+  mode: lora
+  entrypoint: anima_train_network.py
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+adapter_source:
+  kind: source-tree-sha256
+  value: dd7ed527efeaabac646adbf9f398b7caebc6aee44d1e35b5e73783293f465a53
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+  gpu: NVIDIA GeForce RTX 4070 Ti
+training:
+  resolution: [768, 768]
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  network_dim: 16
+  network_alpha: 8
+  learning_rate: 0.00005
+  mixed_precision: bf16
+  optimizer: AdamW8bit
+  timestep_sampling: sigmoid
+  qwen_image_vae_2d: true
+  save_every_n_steps: 1
+  requested_steps: 3
+  observed_steps: 3
+outputs:
+  step_checkpoints:
+    - {step: 1, path: outputs/anima-checkpoint-live-smoke-step00000001.safetensors, size_bytes: 91860080, sha256: 746b38471a5722a65c90e9a92b35b1353f5783b1ac1337d602f9f244c080e8fd}
+    - {step: 2, path: outputs/anima-checkpoint-live-smoke-step00000002.safetensors, size_bytes: 91860080, sha256: eca473dad898b03aab4c357e9cc6f86effe5f1ec5fbd33cfa8b7ec7252092edc}
+    - {step: 3, path: outputs/anima-checkpoint-live-smoke-step00000003.safetensors, size_bytes: 91860080, sha256: 7959f5fc8e16ab3e479125007b6e9cf1ac440da5a2f88451fe76aa3ad4ce8b7c}
+  final:
+    path: outputs/anima-checkpoint-live-smoke.safetensors
+    size_bytes: 91860080
+    sha256: d697effa5c4684f8090591cc2ca7e76f1b42f44a765c8d53fd454315565ee30e
+  tensor_count_each: 840
+  converted_to_comfyui: true
+checks:
+  exit_code_zero: true
+  real_optimizer_steps: true
+  finite_loss: true
+  observed_final_loss: 0.055
+  native_safetensors_valid: true
+  converted_safetensors_valid: true
+  every_scheduled_checkpoint_published: true
+  final_alias_published: true
+  dataset_unchanged: true
+  docker_terminal_observed: true
+  outcome: passed

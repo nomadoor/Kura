@@ -11,7 +11,7 @@ Kura は、AIエージェントと一緒に LoRA 学習や生成比較を進め�
 
 ## Kura とは
 
-Kura は「学習ソフト」そのものではありません。[AI-Toolkit](https://github.com/ostris/ai-toolkit) や [Musubi Tuner](https://github.com/kohya-ss/musubi-tuner) といった学習ツールを、**安全に・記録を残しながら・AIから扱いやすく**するための、薄い管理レイヤーです。
+Kura は「学習ソフト」そのものではありません。[AI-Toolkit](https://github.com/ostris/ai-toolkit)、[Musubi Tuner](https://github.com/kohya-ss/musubi-tuner)、[sd-scripts](https://github.com/kohya-ss/sd-scripts) といった学習ツールを、**安全に・記録を残しながら・AIから扱いやすく**するための、薄い管理レイヤーです。
 
 学習は Docker（ローカル）または RunPod（リモート）で動かし、設定や結果はすべてただのファイルとして残るので、あとから誰でも中身を確認・再現できます。
 

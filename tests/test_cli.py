@@ -25,7 +25,7 @@ import yaml
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate_musubi_dataset_layout
-from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.run_commands.runpod_ssh import _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
@@ -1008,6 +1008,46 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertIn(["/usr/bin/docker", "image", "inspect", "override/musubi:test"], seen)
             self.assertTrue(any("override/musubi:test" in command for command in seen if command[:3] == ["/usr/bin/docker", "run", "--rm"]))
+
+    def test_doctor_sd_scripts_fails_when_a_required_option_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text(
+                yaml.safe_dump({"docker": {"images": {"sd-scripts": {"local": "kura/sd-scripts:test", "remote": "kura/sd-scripts:test", "dockerfile": "docker/sd-scripts/Dockerfile", "context": "."}}}}),
+                encoding="utf-8",
+            )
+            probe_payload = {
+                "scripts": {
+                    "anima_train_network.py": {
+                        "exists": True,
+                        "help_exit_code": 0,
+                        "required_options": {"--attn_mode": False},
+                    }
+                },
+                "imports": {"torch": "test"},
+                "compatibility": {"sd_checkpoint_symlink_safe": True, "sdxl_checkpoint_symlink_safe": True},
+                "torch": {"cuda_available": True},
+            }
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["/usr/bin/docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
+                if command[:3] == ["/usr/bin/docker", "run", "--rm"]:
+                    return subprocess.CompletedProcess(command, 1, json.dumps(probe_payload), "")
+                raise AssertionError(command)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.subprocess.run", side_effect=fake_run), patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    code = cmd_doctor_sd_scripts(argparse.Namespace(no_gpu=False, timeout=30.0, image=None))
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertFalse(payload["checks"]["probe_exit"])
+            self.assertFalse(payload["checks"]["tier1_scripts"])
+            self.assertIn("probe failed", payload["diagnosis"])
 
 
 class MonitorCommandTests(unittest.TestCase):
@@ -6705,6 +6745,35 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["outputs"], ["outputs/artifact.safetensors"])
             self.assertEqual(status["downloaded_run"], "downloads/example")
 
+    def test_run_download_records_recovery_without_publishing_it_as_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            downloaded = run_dir / "downloads" / "example"
+            (downloaded / "outputs").mkdir(parents=True)
+            (downloaded / "recovery" / "sd-scripts" / "anima-native").mkdir(parents=True)
+            (downloaded / "realizations").mkdir()
+            (downloaded / "outputs" / "converted.safetensors").write_text("converted", encoding="utf-8")
+            native = downloaded / "recovery" / "sd-scripts" / "anima-native" / "native.safetensors"
+            native.write_text("native", encoding="utf-8")
+            (downloaded / "realizations" / "remote-exit-20260101.json").write_text(
+                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
+            finally:
+                os.chdir(previous)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(code, 0)
+            self.assertEqual(status["outputs"], ["outputs/converted.safetensors"])
+            self.assertEqual(status["recovery_artifacts"], ["downloads/example/recovery/sd-scripts/anima-native/native.safetensors"])
+            self.assertFalse((run_dir / "outputs" / "native.safetensors").exists())
+
     def test_run_download_normalizes_ai_toolkit_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -7064,6 +7133,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                             },
                         },
                     },
+                    "ModelPatchLoader": {},
+                    "AnimaLLLiteApply": {},
                 }).encode("utf-8")
 
         with tempfile.TemporaryDirectory() as directory:
@@ -7082,6 +7153,32 @@ class RunPodLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
+
+    def test_doctor_comfyui_reports_core_anima_model_patch_support_without_gating_other_workflows(self) -> None:
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"LoraLoader": {"input": {"required": {"lora_name": [[], {}]}}}}).encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("comfyui: {endpoint: http://127.0.0.1:8188}\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.urllib.request.urlopen", return_value=FakeResponse()), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    code = cmd_doctor_comfyui(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertFalse(payload["checks"]["core_model_patch_loader"])
+            self.assertFalse(payload["checks"]["core_anima_lllite_apply"])
 
     def test_doctor_comfyui_reports_kura_stage_files(self) -> None:
         class FakeResponse:

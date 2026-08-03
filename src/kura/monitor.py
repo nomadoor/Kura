@@ -29,7 +29,7 @@ TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
 TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
 HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle|shared activity|shared idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
 HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
-KURA_STEP_RE = re.compile(r"\[kura\]\s+musubi step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
+KURA_STEP_RE = re.compile(r"\[kura\]\s+(?:musubi|sd-scripts) step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
 KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+downloaded\s+(?P<key>\S+)\s+->", re.IGNORECASE)
 
 
@@ -932,7 +932,7 @@ def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:
     display = _read_mapping(run_dir / "resolved" / "backend-display.lock.json")
     checkpoint = display.get("checkpoint") if isinstance(display.get("checkpoint"), dict) else {}
     every = _int_or_none(checkpoint.get("save_every_n_steps"))
-    if not steps or not every or checkpoint.get("prune_before_step") is not None or checkpoint.get("keep_last") is not None:
+    if not steps or not every or checkpoint.get("prune_before_step") is not None or checkpoint.get("keep_last") is not None or checkpoint.get("retention_window_steps") is not None:
         return None
     return max(steps // every, 1)
 

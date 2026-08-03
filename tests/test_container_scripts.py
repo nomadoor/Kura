@@ -13,10 +13,69 @@ import unittest
 from unittest.mock import patch
 
 from kura.container_scripts import script_source
-from kura.provenance import adapter_source_identity
+from kura.init_templates import SD_SCRIPTS_DOCKERFILE_TEMPLATE, SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE
+from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
 
 
 class ContainerScriptTests(unittest.TestCase):
+    def test_sd_scripts_init_template_carries_the_managed_symlink_patch(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        patch_text = (root / "docker/sd-scripts/patches/0001-preserve-safetensors-symlink-name.patch").read_text(encoding="utf-8")
+        self.assertEqual(SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE, patch_text)
+        self.assertIn("git apply --check", SD_SCRIPTS_DOCKERFILE_TEMPLATE)
+        self.assertIn('io.kura.patch.symlink-safetensors="preserve-input-filename-v2"', SD_SCRIPTS_DOCKERFILE_TEMPLATE)
+
+    def test_sd_scripts_probe_fails_closed_for_each_checkpoint_loader(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("sd_scripts_probe.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "library"
+            library.mkdir()
+            model_io = library / "model_io.py"
+            sdxl = library / "sdxl_train_util.py"
+            model_io.write_text("safe", encoding="utf-8")
+            sdxl.write_text("safe", encoding="utf-8")
+            self.assertEqual(namespace["symlink_compatibility"](root), {"sd_checkpoint_symlink_safe": True, "sdxl_checkpoint_symlink_safe": True})
+            sdxl.write_text("os.readlink(name_or_path)", encoding="utf-8")
+            self.assertFalse(namespace["symlink_compatibility"](root)["sdxl_checkpoint_symlink_safe"])
+            model_io.write_text("os.path.realpath(name_or_path)", encoding="utf-8")
+            self.assertFalse(namespace["symlink_compatibility"](root)["sd_checkpoint_symlink_safe"])
+
+    def test_adapter_identity_ignores_unrelated_registry_changes(self) -> None:
+        baseline = {name: adapter_source_identity(name)["value"] for name in ("ai-toolkit", "musubi-tuner")}
+        original = Path.read_bytes
+
+        def changed_registry(path):
+            payload = original(path)
+            return payload + (b"\n# unrelated registry entry\n" if path.name == "registry.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_registry):
+            changed = {name: adapter_source_identity(name)["value"] for name in baseline}
+
+        self.assertEqual(baseline, changed)
+
+    def test_adapter_identity_tracks_only_imported_shared_helper(self) -> None:
+        ai_baseline = adapter_source_identity("ai-toolkit")["value"]
+        musubi_baseline = adapter_source_identity("musubi-tuner")["value"]
+        original = Path.read_bytes
+
+        def changed_truthy(path):
+            payload = original(path)
+            if path.name == "shared.py":
+                return payload.replace(b"def _truthy(value: Any)", b"def _truthy(value: Any)  ")
+            return payload
+
+        with patch.object(Path, "read_bytes", changed_truthy):
+            self.assertEqual(ai_baseline, adapter_source_identity("ai-toolkit")["value"])
+            self.assertNotEqual(musubi_baseline, adapter_source_identity("musubi-tuner")["value"])
+
+    def test_legacy_adapter_identity_remains_available(self) -> None:
+        identity = legacy_adapter_source_identity("musubi-tuner")
+
+        self.assertEqual(identity["scope"], "legacy-whole-files")
+        self.assertEqual(len(identity["value"]), 64)
+
     def test_musubi_adapter_identity_includes_embedded_runtime_helpers(self) -> None:
         baseline = adapter_source_identity("musubi-tuner")["value"]
         original = Path.read_bytes
@@ -30,6 +89,19 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertNotEqual(baseline, changed)
 
+    def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
+        baseline = adapter_source_identity("sd-scripts")["value"]
+        original = Path.read_bytes
+
+        def changed_helper(path):
+            payload = original(path)
+            return payload + (b"changed" if path.name == "sd_scripts_publish_anima.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_helper):
+            changed = adapter_source_identity("sd-scripts")["value"]
+
+        self.assertNotEqual(baseline, changed)
+
     def test_container_scripts_compile(self) -> None:
         for name in (
             "hf_download.py",
@@ -37,6 +109,7 @@ class ContainerScriptTests(unittest.TestCase):
             "prune_checkpoints.py",
             "musubi_probe.py",
             "musubi_dataset_assert.py",
+            "sd_scripts_publish_anima.py",
         ):
             with self.subTest(name=name):
                 compile(script_source(name), name, "exec")

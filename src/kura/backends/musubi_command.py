@@ -9,12 +9,21 @@ from typing import Any
 import yaml
 
 from kura.container_scripts import script_source
-from kura.backends.common import _append_flag, _extra_args, _int_or_none, _musubi_backend_override, _require_paths, _script_command, _truthy
+from kura.backends.common import _musubi_backend_override, _require_paths
+from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _script_command as _shared_script_command, _truthy
 from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.run_envelope import validated_recipe
+
+
+def _extra_args(override: dict[str, Any]) -> list[str]:
+    return _shared_extra_args(override, backend_label="Musubi Tuner")
+
+
+def _script_command(commands: list[list[str]]) -> list[str]:
+    return _shared_script_command(commands, step_name="musubi")
 
 
 def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:

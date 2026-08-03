@@ -1,0 +1,27 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-07-31
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:28f16e9536e42c70c939a54a5a24659a9e393392595305cbc079dfe034a39983
+  base_image_digest: sha256:c16f4c749e2d9e96878875cdf6cc45cddda1d1a36fddd371dd6f2360f1b6e2a2
+  torch: 2.7.1+cu128
+  cuda: "12.8"
+  gpu: NVIDIA GeForce RTX 4070 Ti
+imports:
+  accelerate: 1.6.0
+  bitsandbytes: 0.50.0
+  safetensors: 0.4.5
+checks:
+  train_network.py: passed
+  sdxl_train_network.py: passed
+  flux_train_network.py: passed
+  anima_train_network.py: passed
+  anima_train_control_net_lllite.py: passed
+  networks/convert_anima_lora_to_comfy.py: passed
+  gpu_visible: true
+  outcome: passed

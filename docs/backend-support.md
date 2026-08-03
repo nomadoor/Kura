@@ -1,6 +1,6 @@
 # Backend support
 
-Snapshot: 2026-07-12.
+Snapshot: 2026-07-31.
 
 This page answers three questions: which upstream version Kura uses, whether
 Kura has an adapter, and how far that path has been tested. It intentionally
@@ -17,6 +17,7 @@ identity-bound evidence, not a second capability registry.
 | --- | --- | --- |
 | AI-Toolkit | Docker `0.10.22` | `ostris/aitoolkit:0.10.22`; embedded commit `a4bbe167ce03521bf9052d2349f01b2997d67ac7` |
 | Musubi Tuner | Git tag `v0.3.4` | commit `30c658c4f4b0bf05038b3346eff9670259b10fc7` |
+| sd-scripts | Git tag `v0.11.1` | commit `6721028c79ee85a78b3a06dfd8954dae310a1cce` |
 
 Mutable `latest` is not a supported default.
 
@@ -24,7 +25,7 @@ Mutable `latest` is not a supported default.
 
 | Mark | Meaning |
 | --- | --- |
-| ✅ | Local and RunPod execution, output recovery, and cleanup verified |
+| ✅ | All execution scopes claimed in Notes, output materialization, and executor cleanup are verified |
 | 🧪 | At least one real one-step training smoke passed |
 | 🔧 | Adapter compiles and image entrypoints start |
 | 🧩 | Native configuration can be expressed; no real smoke claim |
@@ -59,6 +60,12 @@ Mutable `latest` is not a supported default.
 | Musubi Tuner | HunyuanVideo 1.5 | Built-in | 🧪 | T2V and I2V compile paths covered |
 | Musubi Tuner | FramePack | Built-in | 🧪 | Normal, F1, and Single Frame compile paths covered. Evidence: `musubi-framepack-video-docker-2026-07-12` |
 | Musubi Tuner | Kandinsky 5 | Built-in | ⚠️ | Lite real-smoked; Pro remains capacity-dependent |
+| sd-scripts | Stable Diffusion 1.5 LoRA | Built-in | 🧪 | Local one-step LoRA passed with the v2 symlink compatibility path; its adapter identity is connected to the current tree by reviewed behavior-preserving migrations. Evidence: `sd-scripts-sd15-docker-v2-2026-08-01` |
+| sd-scripts | SDXL LoRA | Built-in | 🧪 | Local one-step LoRA passed through `sdxl_train_network.py`; its adapter identity is connected to the current tree by reviewed behavior-preserving migrations. Evidence: `sd-scripts-sdxl-docker-2026-08-01` |
+| sd-scripts | FLUX.1 LoRA | Built-in | 🧪 | Local one-step LoRA passed through `flux_train_network.py` on a 12 GiB-class GPU with fp8 base and 16-block swapping; its adapter identity is connected to the current tree by reviewed behavior-preserving migrations. Evidence: `sd-scripts-flux1-docker-2026-08-01` |
+| sd-scripts | Anima LoRA | Built-in | 🧪 | Local training published every retained step checkpoint plus the final alias as validated ComfyUI LoRAs; the prior compatibility smoke also completed a managed-ComfyUI render. Evidence: `sd-scripts-anima-checkpoint-publication-docker-2026-08-03` |
+| sd-scripts | Anima ControlNet-LLLite | Built-in | 🧪 | Local one-step training produced a v2 model patch and managed ComfyUI loaded it through `ModelPatchLoader` and `AnimaLLLiteApply`. Evidence: `sd-scripts-anima-lllite-docker-2026-08-03` |
+| sd-scripts | Other upstream families and modes | Explicit command only | ⚠️ | No built-in selector or support claim in the initial milestone |
 
 Musubi `v0.3.4` has no missing top-level Kura adapter. All 36 expected cache
 and training entrypoints pass image smoke. Variant coverage means Kura selects
@@ -73,3 +80,8 @@ until representative tests promote them.
 
 Real smoke validates execution, not LoRA quality. Quality still requires a
 meaningful training run followed by generation and human evaluation.
+
+All five sd-scripts Tier 1 paths have now completed a real optimizer step through
+local Docker. Both Anima output forms also completed their managed-ComfyUI load
+and render contracts. These are execution-compatibility results, not claims
+about output quality from the bounded one-step recipes.

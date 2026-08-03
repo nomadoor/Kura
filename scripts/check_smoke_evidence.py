@@ -9,10 +9,13 @@ from pathlib import Path
 
 import yaml
 
+from kura.provenance import adapter_source_identity
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = ROOT / "docs" / "backend-smoke-evidence.yaml"
 SUPPORT_PATH = ROOT / "docs" / "backend-support.md"
+MIGRATIONS_PATH = ROOT / "docs" / "adapter-source-identity-migrations.yaml"
 IDENTITY_KEYS = {"kind", "value"}
 EVIDENCE_KINDS = {"parser", "compile", "real-runtime", "real-optimizer-step"}
 EVIDENCE_REFERENCE_RE = re.compile(r"`([^`]+)`")
@@ -38,8 +41,33 @@ def _support_evidence_claims(text: str) -> list[tuple[int, str, str, list[str]]]
     return claims
 
 
+def _identity_reaches_current(record_id: str, backend: str, value: str, migrations: list[object]) -> bool:
+    current = adapter_source_identity(backend)["value"]
+    seen: set[str] = set()
+    while value != current and value not in seen:
+        seen.add(value)
+        candidates = [
+            item for item in migrations
+            if isinstance(item, dict)
+            and item.get("backend") == backend
+            and item.get("behavior_changed") is False
+            and isinstance(item.get("evidence_ids"), list)
+            and record_id in item["evidence_ids"]
+            and isinstance(item.get("previous"), dict)
+            and item["previous"].get("value") == value
+            and isinstance(item.get("replacement"), dict)
+            and isinstance(item["replacement"].get("value"), str)
+        ]
+        if len(candidates) != 1:
+            return False
+        value = candidates[0]["replacement"]["value"]
+    return value == current
+
+
 def main() -> int:
     payload = yaml.safe_load(PATH.read_text(encoding="utf-8"))
+    migrations_payload = yaml.safe_load(MIGRATIONS_PATH.read_text(encoding="utf-8"))
+    migrations = migrations_payload.get("records", []) if isinstance(migrations_payload, dict) else []
     failures: list[str] = []
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
         failures.append("schema_version must be 1")
@@ -92,9 +120,14 @@ def main() -> int:
             record_backend = record.get("backend")
             if isinstance(record_backend, str) and _normalized_backend(record_backend) != _normalized_backend(backend):
                 failures.append(f"{label} backend {backend!r} does not match evidence {record_id!r} backend {record_backend!r}")
+            if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and record_backend == "sd-scripts":
+                identity = record.get("adapter_source")
+                value = identity.get("value") if isinstance(identity, dict) else None
+                if not isinstance(value, str) or not _identity_reaches_current(record_id, record_backend, value, migrations):
+                    failures.append(f"{label} evidence {record_id!r} adapter identity does not reach the current adapter through an evidence-scoped behavior-preserving migration chain")
 
     for record_id, record in records_by_id.items():
-        if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and record_id not in referenced:
+        if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and record_id not in referenced and not record.get("superseded_by"):
             failures.append(f"passed optimizer evidence is not referenced by backend-support.md: {record_id}")
     if failures:
         raise SystemExit("smoke evidence check failed:\n" + "\n".join(f"- {item}" for item in failures))

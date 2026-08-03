@@ -1,0 +1,33 @@
+schema_version: 1
+component: managed-comfyui
+observed_at: 2026-07-31
+upstream:
+  repository: Comfy-Org/ComfyUI
+  commit: 0f42ba51463174fb255f2c4605ae0e0b441fe6d7
+  integration: Comfy-Org/ComfyUI#14954
+runtime:
+  image: nomadoor/kura-comfyui:dev
+  image_digest: sha256:64832a2eb96e0448eb49225b62670a5b2a1f228149e2ba7ee8d165f5e80b4110
+  gpu: NVIDIA GeForce RTX 4070 Ti
+checks:
+  exact_commit: passed
+  gpu_visible: true
+  model_patch_directory: passed
+  model_patch_loader_registered: passed
+  anima_lllite_apply_registered: passed
+  api_object_info:
+    ModelPatchLoader:
+      required_name_input: true
+    AnimaLLLiteApply:
+      required_inputs:
+        - model
+        - model_patch
+        - image
+        - strength
+        - start_percent
+        - end_percent
+  container_removed_after_probe: true
+  outcome: passed
+limits:
+  - This is a managed-image and node-contract probe, not an Anima render.
+  - The authored Anima LoRA and LLLite workflows remain unverified until real artifacts load and render.

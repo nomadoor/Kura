@@ -162,6 +162,12 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 return False
             output_dir = downloaded_run / "outputs"
             outputs = materialize_primary_outputs(output_dir)
+            recovery_root = downloaded_run / "recovery"
+            recovery_artifacts = [
+                str(path.relative_to(run_dir))
+                for path in sorted(recovery_root.rglob("*"))
+                if path.is_file()
+            ] if recovery_root.is_dir() else []
             steps: int | None = None
             if exit_code == 0:
                 try:
@@ -172,7 +178,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     pass
 
             def mutate(status: dict[str, Any]) -> None:
-                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
+                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
                 if steps is not None:
                     status["last_step"] = steps
                     status["total_steps"] = steps
@@ -242,6 +248,14 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             return extracted.returncode
         if not materialize_downloaded_status():
             raise ValueError("downloaded run snapshot is missing remote-exit; remote completion is not confirmed")
+        recovery_root = downloaded_run / "recovery"
+        recovery_artifacts = [
+            str(path.relative_to(run_dir))
+            for path in sorted(recovery_root.rglob("*"))
+            if path.is_file()
+        ] if recovery_root.is_dir() else []
+        if recovery_artifacts:
+            append_run_event(run_dir, {"event": "run_recovery_artifacts_downloaded", "timestamp": datetime.now().astimezone().isoformat(), "kind": "non-final-intermediate", "artifacts": recovery_artifacts})
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)

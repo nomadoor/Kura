@@ -20,6 +20,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura doctor docker` | Check Docker / GPU / cache readiness |
 | `uv run kura doctor disk` | Report local disk, cache, Docker storage, and permission risks |
 | `uv run kura doctor musubi` | Smoke-test Musubi adapter scripts in the configured image |
+| `uv run kura doctor sd-scripts` | Smoke-test the pinned sd-scripts identity and Tier 1 entrypoints |
 | `uv run kura doctor runpod` | Check RunPod API, Pods, and Network Volumes |
 | `uv run kura doctor comfyui` | Check local ComfyUI endpoint and LoRA staging config |
 | `uv run kura doctor comfyui --endpoint http://127.0.0.1:8189` | Check a specific ComfyUI endpoint against the configured LoRA staging directory |
@@ -38,7 +39,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
+| `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner\|sd-scripts] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
@@ -161,4 +162,5 @@ Image names are set in `workspace.yaml`. Build only when needed.
 | --- | --- |
 | `uv run kura image build ai-toolkit [--ref <upstream-image>]` | Build the AI-Toolkit image; `--ref` overrides the pinned upstream image reference |
 | `uv run kura image build musubi-tuner [--ref <git-ref>]` | Build the Musubi Tuner image; `--ref` overrides the pinned upstream release |
+| `uv run kura image build sd-scripts [--ref <git-ref>]` | Build the sd-scripts image; `--ref` overrides the pinned upstream commit |
 | `uv run kura image build comfyui --ref <ref>` | Build the ComfyUI render image |

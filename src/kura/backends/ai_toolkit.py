@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from kura.backends.common import _datasets
+from kura.backends.shared import _datasets
 from kura.fsio import atomic_write_yaml
 from kura.run_envelope import backend_config, validated_recipe
 from kura.provenance import artifact_pinning
