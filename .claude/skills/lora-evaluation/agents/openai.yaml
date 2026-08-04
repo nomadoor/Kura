@@ -1,0 +1,4 @@
+interface:
+  display_name: "LoRA Evaluation"
+  short_description: "Plan evidence-based LoRA evaluation runs"
+  default_prompt: "Use $lora-evaluation to design a model-aware LoRA evaluation plan before rendering."

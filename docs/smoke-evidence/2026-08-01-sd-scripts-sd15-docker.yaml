@@ -1,0 +1,44 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-08-01
+run_id: 20260801-0657_sd-scripts-smoke-sd15_8994
+native_path:
+  architecture: sd15
+  mode: lora
+  entrypoint: train_network.py
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+adapter_source:
+  kind: source-tree-sha256
+  value: 6c3c8936e6f1d258f58239fb344a71844222d7f65fa58c7acff6fa8fffb05980
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:09ea364f638fee13d85eb0f7fcb396fce5f4f04c3c403fab195c7dea345a07f5
+  compatibility_patch: preserve-input-filename-v1
+  gpu: NVIDIA GeForce RTX 4070 Ti
+training:
+  resolution: [256, 256]
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  network_dim: 4
+  network_alpha: 1
+  mixed_precision: bf16
+  optimizer: AdamW8bit
+  requested_steps: 1
+  observed_steps: 1
+output:
+  path: outputs/20260801-0657_sd-scripts-smoke-sd15_8994.safetensors
+  size_bytes: 9551840
+  sha256: 6c7e7e6a83915e52127bcfad59ccd0f945a3ce727343030fd60b743e613243e8
+checks:
+  exit_code_zero: true
+  real_optimizer_step: true
+  lora_safetensors_valid: true
+  dataset_unchanged: true
+  output_materialized: true
+  outcome: passed
+notes:
+  - The first attempt exposed upstream symlink realpath handling that removed the safetensors suffix.
+  - The passing managed image carries the fail-closed compatibility patch recorded above; shared Hugging Face cache links remain symlinks.

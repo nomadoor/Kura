@@ -1,0 +1,64 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-08-03
+run_id: 20260801-1720_sd-scripts-smoke-anima-lora_f699
+realization:
+  id: 20260801-175736-339780
+  observation: 20260801-175736-339780.observed-20260801-181653-647987.json
+  container_id: 807bf7985cc17ebe844da110fa963938b459573760ad4eb8eccb86308b5fcdae
+native_path:
+  architecture: anima
+  mode: lora
+  entrypoint: anima_train_network.py
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+adapter_source:
+  kind: source-tree-sha256
+  value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+  gpu: NVIDIA GeForce RTX 4070 Ti
+training:
+  resolution: [512, 512]
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  network_dim: 8
+  network_alpha: 1
+  learning_rate: 0.0001
+  mixed_precision: bf16
+  optimizer: AdamW8bit
+  timestep_sampling: sigmoid
+  qwen_image_vae_2d: true
+  requested_steps: 1
+  observed_steps: 1
+output:
+  path: outputs/20260801-1720_sd-scripts-smoke-anima-lora_f699.safetensors
+  size_bytes: 45982432
+  sha256: 0807db3941fd72fa417c5bb3377f54952e0a12a52646d8f3df6f74a05818368b
+  tensor_count: 840
+  converted_to_comfyui: true
+render:
+  run_id: 20260803-1100_sd-scripts-anima-lora-smoke_84a0
+  realization: 20260803-110125-645079
+  comfyui_commit: 0f42ba51463174fb255f2c4605ae0e0b441fe6d7
+  comfyui_image_digest: sha256:64832a2eb96e0448eb49225b62670a5b2a1f228149e2ba7ee8d165f5e80b4110
+  workflow_path: docs/smoke-evidence/workflows/anima-lora-api.pre-auraflow.json
+  workflow_digest: sha256:b9efd1fb2cf05d90bbed34c64cb54372a6745ea917fba3a7266ebc03f9001263
+  workflow_note: Recorded before the authored smoke workflow added ModelSamplingAuraFlow; this historical file preserves the executed graph.
+  promptset_digest: sha256:ba3b30d01ceb5303e3bc88d04ecdb97ef7547c1d24ce38fe94de3c14f7750a7c
+  image: samples/images/anima_compatibility_seed42_0.png
+  image_sha256: cfecc883701288004ef9aaaeded0043c25d77d8b8011714c87e2baf04c31eef3
+checks:
+  exit_code_zero: true
+  real_optimizer_step: true
+  finite_loss: true
+  observed_loss: 0.0054
+  native_safetensors_valid: true
+  converted_safetensors_valid: true
+  dataset_unchanged: true
+  docker_terminal_observed: true
+  managed_comfyui_render_completed: true
+  outcome: passed

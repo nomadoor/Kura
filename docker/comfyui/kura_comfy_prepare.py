@@ -23,6 +23,7 @@ MODEL_INPUTS: dict[str, tuple[tuple[str, str], ...]] = {
     "TripleCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2"), ("clip", "clip_name3")),
     "UNETLoader": (("diffusion_models", "unet_name"),),
     "ControlNetLoader": (("controlnet", "control_net_name"),),
+    "ModelPatchLoader": (("model_patches", "name"),),
 }
 
 MODEL_DIRS = {
@@ -31,6 +32,7 @@ MODEL_DIRS = {
     "clip": "clip",
     "diffusion_models": "diffusion_models",
     "controlnet": "controlnet",
+    "model_patches": "model_patches",
 }
 
 MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
@@ -39,7 +41,16 @@ MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
             "repo": "Comfy-Org/stable-diffusion-v1-5-archive",
             "filename": "v1-5-pruned-emaonly-fp16.safetensors",
         }
-    }
+    },
+    "diffusion_models": {
+        "anima-base-v1.0.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/diffusion_models/anima-base-v1.0.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b"}
+    },
+    "clip": {
+        "qwen_3_06b_base.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/text_encoders/qwen_3_06b_base.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b", "target_dir": "text_encoders"}
+    },
+    "vae": {
+        "qwen_image_vae.safetensors": {"repo": "circlestone-labs/Anima", "filename": "split_files/vae/qwen_image_vae.safetensors", "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b"}
+    },
 }
 
 
@@ -167,7 +178,9 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
     for ref in _required_models(workflow):
         spec = _resolve(ref, registry)
         if spec is None:
-            unknown.append(ref)
+            staged = _safe_child(models_root, f"{MODEL_DIRS.get(ref['type'], ref['type'])}/{ref['name']}")
+            if not staged.is_file():
+                unknown.append(ref)
         else:
             specs.append(spec)
     if unknown:

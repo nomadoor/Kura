@@ -1,0 +1,2 @@
+{"id":"outfit-a","prompt":"Replace with the approved fixed prefix and the first outfit only.","negative_prompt":"Replace with the approved fixed negative prompt.","seeds":[42]}
+{"id":"outfit-b","prompt":"Replace with the same approved fixed prefix and the second outfit only.","negative_prompt":"Replace with the same approved fixed negative prompt.","seeds":[42]}

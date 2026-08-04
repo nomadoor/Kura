@@ -23,7 +23,7 @@ from kura import __version__
 from kura.backends import backend_names, get_backend
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
 from kura.dataset_observations import observe_dataset
-from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_secrets, cmd_doctor_workspace
+from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
@@ -921,11 +921,12 @@ def cmd_image_build(args: argparse.Namespace) -> int:
             if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
                 print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
                 return 1
-    ref_args = {"ai-toolkit": "AI_TOOLKIT_IMAGE", "musubi-tuner": "MUSUBI_TUNER_REF", "comfyui": "COMFYUI_REF"}
+    ref_args = {"ai-toolkit": "AI_TOOLKIT_IMAGE", "musubi-tuner": "MUSUBI_TUNER_REF", "sd-scripts": "SD_SCRIPTS_REF", "comfyui": "COMFYUI_REF"}
     default_refs = {
         "ai-toolkit": "ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438",
         "musubi-tuner": "v0.3.4",
-        "comfyui": "50e5270b86765bac2da70248d61050abba72b19f",
+        "sd-scripts": "6721028c79ee85a78b3a06dfd8954dae310a1cce",
+        "comfyui": "0f42ba51463174fb255f2c4605ae0e0b441fe6d7",
     }
     ref_arg = ref_args[args.name]
     default_ref = default_refs[args.name]
@@ -1178,15 +1179,15 @@ def main() -> None:
     image = sub.add_parser("image", help="Build, inspect, and publish runtime images")
     image_sub = image.add_subparsers(dest="image_command", required=True)
     build = image_sub.add_parser("build", help="Build a runtime image")
-    build.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "comfyui"))
+    build.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "sd-scripts", "comfyui"))
     build.add_argument("--ref")
     build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds the safety threshold")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
-    inspect.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "comfyui"))
+    inspect.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "sd-scripts", "comfyui"))
     inspect.set_defaults(func=cmd_image_inspect)
     publish = image_sub.add_parser("publish", help="Publish a runtime image")
-    publish.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "comfyui"))
+    publish.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "sd-scripts", "comfyui"))
     publish.add_argument("--dry-run", action="store_true")
     publish.set_defaults(func=cmd_image_publish)
 
@@ -1203,11 +1204,17 @@ def main() -> None:
     doctor_musubi.add_argument("--script-timeout", type=float, default=25.0, help="Per-script --help timeout in seconds")
     doctor_musubi.add_argument("--image", help="Override the Musubi image to probe")
     doctor_musubi.set_defaults(func=cmd_doctor_musubi)
+    doctor_sd_scripts = doctor_sub.add_parser("sd-scripts", help="Smoke-test sd-scripts Tier 1 entrypoints in the configured image")
+    doctor_sd_scripts.add_argument("--no-gpu", action="store_true", help="Do not pass --gpus all to the Docker smoke container")
+    doctor_sd_scripts.add_argument("--timeout", type=float, default=900.0, help="Overall Docker probe timeout in seconds")
+    doctor_sd_scripts.add_argument("--image", help="Override the sd-scripts image to probe")
+    doctor_sd_scripts.set_defaults(func=cmd_doctor_sd_scripts)
     doctor_runpod = doctor_sub.add_parser("runpod", help="Check RunPod API, Pods, and Network Volumes")
     doctor_runpod.set_defaults(func=cmd_doctor_runpod)
     doctor_comfyui = doctor_sub.add_parser("comfyui", help="Check local ComfyUI endpoint and LoRA staging config")
     doctor_comfyui.add_argument("--endpoint", help="Check this ComfyUI endpoint instead of comfyui.endpoint from workspace.yaml")
     doctor_comfyui.add_argument("--probe-stage", action="store_true", help="Temporarily stage a probe LoRA file and verify the endpoint can see it")
+    doctor_comfyui.add_argument("--workflow", help="Compare an API-format workflow's required models with the configured endpoint")
     doctor_comfyui.set_defaults(func=cmd_doctor_comfyui)
     doctor_secrets = doctor_sub.add_parser("secrets", help="Check for obvious secret handling problems")
     doctor_secrets.set_defaults(func=cmd_doctor_secrets)

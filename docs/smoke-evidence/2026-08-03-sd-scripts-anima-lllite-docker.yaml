@@ -1,0 +1,72 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-08-03
+run_id: 20260803-1109_sd-scripts-smoke-anima-lllite_d29b
+realization:
+  id: 20260803-111556-722441
+  observation: 20260803-111556-722441.observed-20260803-111658-463761.json
+  container_id: 203f2989f19c2318a14f1f122fe6dcc5b98096b4ffba3ce375e2b7a111b3ca7a
+native_path:
+  architecture: anima
+  mode: controlnet_lllite
+  entrypoint: anima_train_control_net_lllite.py
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+adapter_source:
+  kind: source-tree-sha256
+  value: d3464e2c80842bad1f9338e1b3a71184130bda6b04e518dd7c8ac837c1497c95
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+  gpu: NVIDIA GeForce RTX 4070 Ti
+training:
+  resolution: [512, 512]
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.00005
+  mixed_precision: bf16
+  optimizer: AdamW8bit
+  timestep_sampling: shift
+  discrete_flow_shift: 3.0
+  attn_mode: sdpa
+  cond_emb_dim: 32
+  lllite_cond_dim: 64
+  lllite_cond_resblocks: 1
+  lllite_mlp_dim: 64
+  lllite_target_layers: self_attn_q
+  requested_steps: 1
+  observed_steps: 1
+output:
+  path: outputs/20260803-1109_sd-scripts-smoke-anima-lllite_d29b.safetensors
+  size_bytes: 31282000
+  sha256: d89853d4e416cfe5754587361c753c38ac15f4dd298e3710380ac8116a41416e
+  tensor_count: 276
+  lllite_version: '2'
+  modelspec_architecture: anima-preview/control-net-lllite
+render:
+  run_id: 20260803-1117_sd-scripts-anima-lllite-smoke_dd52
+  realization: 20260803-111807-908849
+  comfyui_commit: 0f42ba51463174fb255f2c4605ae0e0b441fe6d7
+  comfyui_image_digest: sha256:64832a2eb96e0448eb49225b62670a5b2a1f228149e2ba7ee8d165f5e80b4110
+  workflow_path: docs/smoke-evidence/workflows/anima-lllite-api.pre-auraflow.json
+  workflow_digest: sha256:c2281c5973c8dffb7df5bb7dceb9064dd1ac274e5a2f9b7a59705f7fad15f824
+  workflow_note: Recorded before the authored smoke workflow added ModelSamplingAuraFlow; this historical file preserves the executed graph.
+  promptset_digest: sha256:ba3b30d01ceb5303e3bc88d04ecdb97ef7547c1d24ce38fe94de3c14f7750a7c
+  image: samples/images/anima_compatibility_seed42_0.png
+  image_sha256: 116e1923d75fa7e91520f5f6e5e06678bfd148e5ab4cca2e797aa6907dd80e2f
+  loader: ModelPatchLoader
+  apply_node: AnimaLLLiteApply
+checks:
+  exit_code_zero: true
+  real_optimizer_step: true
+  finite_loss: true
+  observed_loss: 0.0121
+  safetensors_valid: true
+  lllite_version_two: true
+  core_loader_key_present: true
+  dataset_unchanged: true
+  docker_terminal_observed: true
+  managed_comfyui_render_completed: true
+  outcome: passed

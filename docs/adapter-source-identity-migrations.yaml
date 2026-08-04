@@ -1,0 +1,218 @@
+schema_version: 1
+description: >-
+  Mechanical identity transitions. These records explain source-identity
+  changes only; they do not transfer runtime evidence to behavior changes.
+  The legacy helper applies the old algorithm to the current tree and therefore
+  cannot reproduce these previous values without the corresponding historical
+  tree. Evidence older than the listed transition pairs remains stale for its
+  original identity and is not implicitly migrated.
+records:
+  - id: scoped-identity-ai-toolkit-2026-07-31
+    backend: ai-toolkit
+    reason: registry removal and byte-identical shared-helper relocation
+    behavior_changed: false
+    previous:
+      kind: source-tree-sha256
+      scope: legacy-whole-files
+      value: 022cfaab2cd373ec7ff56fb00a3e87a0c2bc4d0f733df1e680a3c40291dc27a9
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 98925c87a75df9b4a87bef7731e5cfcb45b9fd8ca6068208222d833d2269c2ba
+  - id: scoped-identity-musubi-tuner-2026-07-31
+    backend: musubi-tuner
+    reason: registry removal and behavior-preserving shared-helper extraction
+    behavior_changed: false
+    previous:
+      kind: source-tree-sha256
+      scope: legacy-whole-files
+      value: 029a144f81be5b1babdb1c7d6221a2cfd3d25dafc316ce8cff9ccdf204b2c8d3
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 3a3e82976a654c2f812606651d5ba136dbd1f2c0d11509b6b02a51769269b2be
+  - id: sd-scripts-anima-attention-contract-2026-08-03
+    backend: sd-scripts
+    reason: >-
+      Add explicit Anima attention-mode validation and the SDPA default only
+      for ControlNet-LLLite. The recorded SD15, SDXL, FLUX.1, and Anima LoRA
+      smoke configurations produce unchanged training argv.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: d3464e2c80842bad1f9338e1b3a71184130bda6b04e518dd7c8ac837c1497c95
+  - id: sd-scripts-release-review-guards-2026-08-03
+    backend: sd-scripts
+    reason: >-
+      Add compile-time type and duplicate-flag guards, reject unsupported
+      combinations, validate model downloads, harden run-scoped dataset
+      staging, and require the already-supported Anima attention option in
+      the doctor probe. These changes leave the five recorded smoke argv and
+      valid dataset staging behavior unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: d3464e2c80842bad1f9338e1b3a71184130bda6b04e518dd7c8ac837c1497c95
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: a9b5a9237cdd49b6826c9eae537402a25bc438ff82c90f35765c8ba30f7eb149
+  - id: sd-scripts-checkpoint-window-display-2026-08-03
+    backend: sd-scripts
+    reason: >-
+      Correct the plan projection for upstream --save_last_n_steps from a
+      checkpoint count to a retention window measured in optimizer steps.
+      Training argv and all five recorded smoke behaviors are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: a9b5a9237cdd49b6826c9eae537402a25bc438ff82c90f35765c8ba30f7eb149
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: b25696c9adfef4e15bcb01d61378eac104ed60e3eb49a4f24677e51138c625ca
+  - id: sd-scripts-anima-checkpoint-publication-unaffected-paths-2026-08-03
+    backend: sd-scripts
+    reason: >-
+      Add the Anima LoRA checkpoint publisher to the runtime identity and route
+      only the Anima LoRA training child through it. SD 1.5, SDXL, FLUX.1, and
+      Anima LLLite training argv and runtime behavior are unchanged. Anima LoRA
+      is deliberately excluded because its publication behavior changed and is
+      covered by a new real optimizer-step observation at the replacement
+      identity.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lllite-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: b25696c9adfef4e15bcb01d61378eac104ed60e3eb49a4f24677e51138c625ca
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: dd7ed527efeaabac646adbf9f398b7caebc6aee44d1e35b5e73783293f465a53
+  - id: sd-scripts-anima-checkpoint-completeness-guard-2026-08-03
+    backend: sd-scripts
+    reason: >-
+      Require the complete safetensors data length before polling publishes a
+      visible file, and retry transient converter races while the trainer is
+      still alive. All recorded successful smokes consumed complete files, so
+      their argv, converted tensors, terminal state, and published artifacts
+      are unchanged. The newly added truncated-data test covers the previously
+      unobserved partial-write branch directly.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: dd7ed527efeaabac646adbf9f398b7caebc6aee44d1e35b5e73783293f465a53
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 7a057bf6256490a82ec18720311a7d447dd5577a1ee730dfdf46b54f757ec111
+  - id: sd-scripts-anima-checkpoint-listing-retry-2026-08-03
+    backend: sd-scripts
+    reason: >-
+      Retry transient native-output directory listing failures while the
+      trainer is alive, while preserving strict listing after trainer exit.
+      Recorded successful smokes had no listing failure, so their commands,
+      converted tensors, terminal state, and published artifacts are unchanged.
+      A deterministic unit test covers the newly handled RunPod-storage branch.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 7a057bf6256490a82ec18720311a7d447dd5577a1ee730dfdf46b54f757ec111
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 55347d8b8213b5041c142f6be0a0067b1b7e9477ae96842ce6fd1462b8a8a9c5
+  - id: sd-scripts-pr-review-edge-guards-2026-08-04
+    backend: sd-scripts
+    reason: >-
+      Add fail-closed handling for invalid or ambiguous configuration, bounded
+      probe timeout reporting, chunked dataset hashing, and shell-safe progress
+      labels. The recorded successful smoke configurations use a single primary
+      filename, dotted caption extensions, finite numeric cache estimates,
+      complete safetensors headers, and responsive help commands. Their argv,
+      staged file identities, optimizer step, and published artifacts are
+      therefore unchanged; focused regression tests cover each new edge branch.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 55347d8b8213b5041c142f6be0a0067b1b7e9477ae96842ce6fd1462b8a8a9c5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: ba9e486f9ad22da820f4a1985604edb65f997d11305b7a6a5360d591aed801d5
+  - id: sd-scripts-host-dataset-chunked-hashing-2026-08-04
+    backend: sd-scripts
+    reason: >-
+      Calculate the same SHA-256 dataset identities with bounded host memory by
+      reading files in chunks. Digest values, frozen dataset locks, staged
+      inputs, generated argv, and all recorded successful smoke behavior are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: ba9e486f9ad22da820f4a1985604edb65f997d11305b7a6a5360d591aed801d5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 271fd9b21c4a023111e0bedd72ff26838db8cf04195d8fe0b67eb47c2590fb74

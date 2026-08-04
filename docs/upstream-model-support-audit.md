@@ -1,6 +1,6 @@
 # Upstream trainer and model-support audit
 
-Snapshot date: 2026-07-11.
+Snapshot date: 2026-07-31.
 
 This audit separates upstream capability from what Kura can safely claim. A
 trainer containing a model class is not, by itself, proof that Kura's generated
@@ -13,6 +13,7 @@ that model.
 | --- | --- | --- | --- |
 | AI-Toolkit | source head `96a3a0611176d2d4f4f319ad5840b4effa191b70`; official Docker `0.10.22` contains `a4bbe167ce03521bf9052d2349f01b2997d67ac7` | no GitHub releases; versioned official Docker images | local image contained `dba092fc15b915c33d1c2221815906a9af4807c3` (`0.10.16` generation); RunPod followed mutable `latest` |
 | Musubi Tuner | `v0.3.4`, commit `30c658c4f4b0bf05038b3346eff9670259b10fc7` | latest stable GitHub release | local and published `nomadoor/kura-musubi-tuner:dev` already contain this exact commit |
+| sd-scripts | `v0.11.1`, commit `6721028c79ee85a78b3a06dfd8954dae310a1cce` | audited stable release | all five Tier 1 optimizer steps and both Anima managed renders recorded |
 
 Primary sources:
 
@@ -21,6 +22,8 @@ Primary sources:
 - [AI-Toolkit official Docker tags](https://hub.docker.com/r/ostris/aitoolkit/tags)
 - [Musubi Tuner repository and support overview](https://github.com/kohya-ss/musubi-tuner)
 - [Musubi Tuner v0.3.4](https://github.com/kohya-ss/musubi-tuner/releases/tag/v0.3.4)
+- [sd-scripts v0.11.1](https://github.com/kohya-ss/sd-scripts/tree/v0.11.1)
+- [ComfyUI core Anima LLLite support, PR #14954](https://github.com/Comfy-Org/ComfyUI/pull/14954)
 
 ## Confidence vocabulary
 
@@ -107,6 +110,39 @@ is required when scripts, mandatory model roles, dataset shape, cache behavior,
 or output behavior change. Merely substituting weights within the same contract
 does not require a complete matrix rerun.
 
+## sd-scripts
+
+The initial Kura selector table intentionally covers five execution contracts,
+not every family advertised by sd-scripts:
+
+| Kura Tier 1 path | Upstream entrypoint / network | Current evidence |
+| --- | --- | --- |
+| Stable Diffusion 1.5 LoRA | `train_network.py` / `networks.lora` | one-step local Docker run recorded |
+| SDXL LoRA | `sdxl_train_network.py` / `networks.lora` | one-step local Docker run recorded |
+| FLUX.1 LoRA | `flux_train_network.py` / `networks.lora_flux` | one-step local Docker run recorded |
+| Anima LoRA | `anima_train_network.py` / `networks.lora_anima` | one-step local Docker run, native-to-ComfyUI conversion, and managed-ComfyUI render recorded |
+| Anima ControlNet-LLLite | `anima_train_control_net_lllite.py` | one-step paired local Docker run, v2 artifact validation, and core managed-ComfyUI render recorded |
+
+All inputs are projected into an upstream two-level dataset TOML. Kura stages a
+run-scoped symlink view below `runs/<id>/cache/sd-scripts/datasets` so native
+disk caches cannot modify the shared `datasets/` tree. Explicit model paths or
+immutable Hugging Face file specifications fill architecture-specific roles;
+Kura does not maintain a second catalog of every sd-scripts-supported model.
+
+Anima LoRA is trained in the native sd-scripts form, validated, converted by
+the pinned upstream converter, validated again, and only then moved into
+`outputs/`. A conversion failure retains the native weight under the separate
+top-level `recovery/` namespace. Anima LLLite remains a model-patch artifact:
+the validator requires `lllite.version=2`, and the authored ComfyUI workflow
+uses core `ModelPatchLoader` followed by `AnimaLLLiteApply`.
+The sd-scripts doctor probe verifies that both Anima training entrypoints
+publish the `--attn_mode` CLI option before either built-in path is launched.
+
+The managed ComfyUI image is pinned to merge commit
+`0f42ba51463174fb255f2c4605ae0e0b441fe6d7`, which contains PR #14954. All five
+optimizer-step contracts and both Anima render loads are now recorded; recovery
+behavior remains separately covered by focused failure-path tests.
+
 ## Image findings and policy
 
 Before this audit, three different meanings of freshness were mixed:
@@ -135,6 +171,12 @@ The corrected policy is:
 
 Validation completed during this audit:
 
+- built the managed ComfyUI image at pinned merge commit
+  `0f42ba51463174fb255f2c4605ae0e0b441fe6d7`, verified GPU visibility, and
+  queried the live API registry for core `ModelPatchLoader` and
+  `AnimaLLLiteApply`; this is recorded in
+  `smoke-evidence/2026-07-31-comfyui-anima-core.yaml` and does not yet claim a
+  successful Anima render;
 - built the pinned AI-Toolkit 0.10.22 image as
   `nomadoor/kura-ai-toolkit:dev` and confirmed its embedded upstream commit is
   `a4bbe167ce03521bf9052d2349f01b2997d67ac7`;

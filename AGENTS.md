@@ -8,6 +8,11 @@ training LoRAs, rendering images, preparing datasets. Assume that by default.
 **Using Kura (default):**
 
 - Work through the `kura` CLI (`uv run kura ...`) and workspace files.
+- Do not run state-changing Docker commands, invoke trainer/model-download
+  libraries directly, or acquire models outside Kura. Read-only diagnosis such
+  as `docker ps`, `docker inspect`, and reading user-approved ComfyUI config is
+  allowed. Any exceptional external mutation requires separate, explicit user
+  approval naming that action.
 - **Do not run git commands.** Do not modify Kura's source code, tests, or
   checks. The workspace being a git repository is an implementation detail;
   if the user explicitly asks to update Kura itself, treat that as a
@@ -51,6 +56,12 @@ Cleanup is intentionally guarded. Show `kura cleanup ...` dry-runs before deleti
 
 Skills for usage sessions:
 
+A request to render, train, or use a workflow is not permission to download
+models outside the declared Kura plan. Disk doctor measures capacity; passing it
+does not grant download authority. Local ComfyUI render never downloads models
+and never starts a Docker ComfyUI. If the configured endpoint is unavailable,
+stop and ask the user to start or identify their local ComfyUI.
+
 - `training-parameter-planning` — proposing parameters, VRAM fit, trade-offs
 - `dataset-prep` — datasets, captions, trigger words, validation
 - `local-disk-safety` — disk, WSL2, Docker storage, cleanup, checkpoints
@@ -58,6 +69,14 @@ Skills for usage sessions:
 - `comfyui-render-workflow` — render runs, workflows, comparisons
 - `monitor-tui` — reading `kura monitor` / `kura run watch`
 - `musubi-tuner-backend` / `ai-toolkit-backend` — trainer flag mechanics
+
+For a trained-LoRA evaluation, use this order:
+`dataset-prep -> training-parameter-planning -> backend skill -> training ->
+lora-evaluation -> model-family knowledge -> render execution -> notes`.
+Trainer backends provide training facts; model-family knowledge owns prompt
+semantics; `lora-evaluation` judges the plan. Do not bypass Kura to execute a
+video evaluation: Kura currently defines video evaluation categories but has
+no video render result path.
 
 ## Secrets and Artifacts
 

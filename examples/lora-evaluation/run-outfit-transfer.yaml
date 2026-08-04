@@ -1,0 +1,30 @@
+schema_version: 1
+id: example-lora-outfit-transfer
+type: render
+intent: Test outfit transfer while holding other declared conditions fixed.
+inputs:
+  train_run: example-train-run
+  checkpoint: {path: runs/example-train-run/outputs/example.safetensors, hash: null}
+  workflow: {path: workflows/example-api.json, digest: null}
+  promptset: {path: examples/lora-evaluation/promptset-outfit-transfer.jsonl, digest: null}
+generator: {name: comfyui, endpoint: 'http://127.0.0.1:8188'}
+executor: {name: local}
+workflow_patches: {}
+render: {output_dir: samples/images, timeout_sec: 600, default_seed: 42}
+evaluation:
+  category: outfit_transfer
+  fixed: [checkpoint, seed, workflow, lora_strength, prompt_prefix]
+  varied: [outfit]
+  model_family: anima
+  model_variant: aesthetic
+  knowledge:
+    card: .claude/skills/lora-evaluation/knowledge/anima.md
+    card_verified_at: '2026-08-03'
+    source_url: https://huggingface.co/circlestone-labs/Anima
+    source_revision: main
+    applies_to_model_revision: 594c27fea35648b87c86a9b4d5436a6024c820b5
+    revision_match: unverified
+  prompt_policy:
+    prefix_origin: knowledge_card
+    transformations: [Changed only the outfit description.]
+  limits: This run evaluates outfit transfer only.

@@ -17,6 +17,7 @@ from typing import Any
 
 import yaml
 
+from kura.comfyui_models import endpoint_fingerprint, visible_model_refs
 from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
@@ -33,10 +34,12 @@ from kura.workspace import workspace_relative_path as _workspace_relative_path
 RECOMMENDED_LOCAL_IMAGES = {
     "ai-toolkit": "nomadoor/kura-ai-toolkit:dev",
     "musubi-tuner": "nomadoor/kura-musubi-tuner:dev",
+    "sd-scripts": "nomadoor/kura-sd-scripts:dev",
 }
 LEGACY_LOCAL_IMAGES = {
     "ai-toolkit": "kura/ai-toolkit:dev",
     "musubi-tuner": "kura/musubi-tuner:dev",
+    "sd-scripts": "kura/sd-scripts:dev",
 }
 
 
@@ -602,6 +605,72 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     return 0 if checks["adapter_scripts_exist"] and (args.skip_help or checks["adapter_help_smoke"]) else 1
 
 
+def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
+    try:
+        workspace_root = _require_workspace()
+        image = args.image or _image_config("sd-scripts")["local"]
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"sd-scripts: configuration error: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    docker = shutil.which("docker")
+    checks: dict[str, Any] = {"docker_command": bool(docker), "local_image": False, "probe_exit": False, "tier1_scripts": False, "imports": False, "sd_checkpoint_symlink_compat": False, "sdxl_checkpoint_symlink_compat": False, "gpu_available": None if args.no_gpu else False}
+    diagnostics: dict[str, Any] = {"workspace_root": str(workspace_root), "image": image, "script_root": "/opt/sd-scripts", "gpu": not args.no_gpu}
+    if not docker:
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Docker CLI was not found on PATH."}, indent=2))
+        return 1
+    try:
+        inspected = subprocess.run([docker, "image", "inspect", image], text=True, capture_output=True, check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        diagnostics["image_inspect_error"] = "timed out after 30s"
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Configured sd-scripts image inspection timed out."}, indent=2))
+        return 1
+    checks["local_image"] = inspected.returncode == 0
+    if not checks["local_image"]:
+        diagnostics["image_inspect_stderr"] = _redact_secret_text(inspected.stderr.strip())
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Configured sd-scripts image is missing. Build it with: kura image build sd-scripts"}, indent=2))
+        return 1
+    command = [docker, "run", "--rm"]
+    if not args.no_gpu:
+        command.extend(["--gpus", "all"])
+    command.extend(["--entrypoint", "python", image, "-c", script_source("sd_scripts_probe.py")])
+    try:
+        probe = subprocess.run(command, text=True, capture_output=True, check=False, timeout=args.timeout)
+    except subprocess.TimeoutExpired as exc:
+        diagnostics["probe_error"] = f"timed out after {exc.timeout}s"
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "sd-scripts image probe timed out."}, indent=2))
+        return 1
+    diagnostics["probe_returncode"] = probe.returncode
+    checks["probe_exit"] = probe.returncode == 0
+    if probe.stderr.strip():
+        diagnostics["probe_stderr"] = _redact_secret_text(probe.stderr.strip()[-4000:])
+    try:
+        payload = json.loads(probe.stdout)
+    except json.JSONDecodeError:
+        payload = None
+        diagnostics["probe_stdout_tail"] = _redact_secret_text(probe.stdout[-4000:])
+    if isinstance(payload, dict):
+        diagnostics["probe"] = payload
+        scripts = payload.get("scripts") if isinstance(payload.get("scripts"), dict) else {}
+        imports = payload.get("imports") if isinstance(payload.get("imports"), dict) else {}
+        compatibility = payload.get("compatibility") if isinstance(payload.get("compatibility"), dict) else {}
+        checks["tier1_scripts"] = bool(scripts) and all(
+            isinstance(value, dict)
+            and value.get("exists") is True
+            and value.get("help_exit_code") == 0
+            and all(option is True for option in (value.get("required_options") or {}).values())
+            for value in scripts.values()
+        )
+        checks["imports"] = bool(imports) and all(not isinstance(value, dict) for value in imports.values())
+        checks["sd_checkpoint_symlink_compat"] = compatibility.get("sd_checkpoint_symlink_safe") is True
+        checks["sdxl_checkpoint_symlink_compat"] = compatibility.get("sdxl_checkpoint_symlink_safe") is True
+        if not args.no_gpu:
+            checks["gpu_available"] = payload.get("torch", {}).get("cuda_available") is True if isinstance(payload.get("torch"), dict) else False
+    passed = all(value is True or value is None for value in checks.values())
+    diagnosis = "sd-scripts Tier 1 scripts, imports, and runtime passed." if passed else "sd-scripts image probe failed; inspect the per-script and import diagnostics."
+    print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    return 0 if passed else 1
+
+
 def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
@@ -755,12 +824,27 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         "stage_dir_exists": bool(stage_dir and stage_dir.is_dir()),
         "stage_dir_writable": bool(stage_dir and stage_dir.is_dir() and os.access(stage_dir, os.W_OK)),
         "lora_stage_visible": None,
+        "core_model_patch_loader": None,
+        "core_anima_lllite_apply": None,
     }
     diagnostics: dict[str, Any] = {
         "endpoint": _redact_url_userinfo(endpoint),
         "lora_dir": str(lora_dir) if lora_dir else None,
         "stage_dir": str(stage_dir) if stage_dir else None,
     }
+    warnings: list[str] = []
+    lora_dir_inside_workspace = False
+    if lora_dir is not None:
+        try:
+            lora_dir.resolve().relative_to(workspace_root.resolve())
+            lora_dir_inside_workspace = True
+        except ValueError:
+            pass
+    checks["lora_dir_outside_workspace"] = not lora_dir_inside_workspace if lora_dir is not None else None
+    if lora_dir_inside_workspace:
+        warnings.append(
+            "configured comfyui.lora_dir is inside the Kura workspace; this looks like a managed/smoke directory, not a user ComfyUI model directory"
+        )
     stage_files = _kura_stage_files(stage_dir)
     diagnostics["kura_stage_file_count"] = len(stage_files)
     if stage_files:
@@ -770,14 +854,53 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
         print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
         return 1
+    object_info: dict[str, Any] | None = None
     try:
         object_info = _fetch_comfyui_object_info(endpoint)
         checks["endpoint_reachable"] = True
         checks["object_info"] = isinstance(object_info, dict)
         if isinstance(object_info, dict):
             diagnostics["lora_loader_count"] = _comfyui_lora_count(object_info)
+            diagnostics["endpoint_identity"] = endpoint_fingerprint(object_info)
+            checks["core_model_patch_loader"] = "ModelPatchLoader" in object_info
+            checks["core_anima_lllite_apply"] = "AnimaLLLiteApply" in object_info
     except Exception as exc:
         diagnostics["object_info_error"] = _redact_secret_text(str(exc))
+        configured_default = endpoint == "http://127.0.0.1:8188"
+        if not configured_default:
+            try:
+                candidate_info = _fetch_comfyui_object_info("http://127.0.0.1:8188", timeout=1)
+            except Exception:
+                pass
+            else:
+                diagnostics["candidate_endpoint"] = "http://127.0.0.1:8188"
+                diagnostics["candidate_endpoint_identity"] = endpoint_fingerprint(candidate_info)
+                warnings.append(
+                    "another ComfyUI is responding at http://127.0.0.1:8188; verify it with the user, but do not retarget automatically"
+                )
+    workflow_arg = getattr(args, "workflow", None)
+    if workflow_arg:
+        checks["workflow_loaded"] = False
+        checks["workflow_models_visible"] = None
+        workflow_path = Path(str(workflow_arg))
+        if not workflow_path.is_absolute():
+            workflow_path = workspace_root / workflow_path
+        diagnostics["workflow"] = str(workflow_path)
+        try:
+            workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+            if not isinstance(workflow, dict):
+                raise ValueError("workflow must be an API-format JSON object")
+            checks["workflow_loaded"] = True
+            if not isinstance(object_info, dict):
+                raise ValueError("configured endpoint object_info is unavailable")
+            visible, missing = visible_model_refs(workflow, object_info)
+            diagnostics["workflow_required_models"] = visible + missing
+            diagnostics["workflow_missing_models"] = missing
+            checks["workflow_models_visible"] = not missing
+        except Exception as exc:
+            if checks["workflow_loaded"]:
+                checks["workflow_models_visible"] = False
+            diagnostics["workflow_check_error"] = _redact_secret_text(str(exc))
     if getattr(args, "probe_stage", False):
         if not (stage_dir and lora_dir and lora_dir.is_dir()):
             diagnostics["lora_stage_probe_error"] = "comfyui.lora_dir must exist before probing stage visibility"
@@ -812,9 +935,17 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         else:
             diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
     else:
-        diagnosis = "ComfyUI endpoint is not ready; start ComfyUI or check comfyui.endpoint in workspace.yaml."
-    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
-    ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False
+        diagnosis = (
+            "ComfyUI endpoint is not reachable. Ask the user to start their local ComfyUI or correct comfyui.endpoint. "
+            "Do not start a Docker ComfyUI: Kura's managed image is only for RunPod and disposable smoke tests."
+        )
+    if checks.get("workflow_models_visible") is False and checks["endpoint_reachable"]:
+        diagnosis = (
+            "ComfyUI is reachable, but it cannot see every workflow-required model. Verify the intended endpoint and the user's "
+            "ComfyUI model paths. Local render never downloads models."
+        )
+    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "warnings": warnings, "diagnosis": diagnosis}), indent=2))
+    ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False and checks.get("workflow_models_visible") is not False
     return 0 if ok else 1
 
 

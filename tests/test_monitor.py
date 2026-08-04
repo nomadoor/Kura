@@ -420,6 +420,19 @@ class MonitorProjectionTests(unittest.TestCase):
 
             self.assertEqual(summary.activity, "downloading dit raw.safetensors · 2.0GB")
 
+    def test_sd_scripts_label_uses_generic_step_activity_parser(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "sd"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("id: sd\ntype: train\nbackend: {name: sd-scripts}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text("[kura] sd-scripts step 3/5: launch\n", encoding="utf-8")
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.activity, "launch · step 3/5")
+
     def test_hf_download_activity_contract_matches_container_producer(self) -> None:
         source = inspect.getsource(hf_download)
         self.assertIn("hf download shared activity", source)

@@ -18,6 +18,8 @@ CHECKS = [
     [sys.executable, "scripts/check_model_artifacts.py"],
     [sys.executable, "scripts/check_secrets.py"],
     [sys.executable, "scripts/check_workflows.py"],
+    [sys.executable, "scripts/check_evaluation_knowledge.py"],
+    [sys.executable, "scripts/check_evaluation_blocks.py"],
     [sys.executable, "scripts/check_readme_cli_sync.py"],
     [sys.executable, "scripts/check_runpod_safety.py"],
 ]

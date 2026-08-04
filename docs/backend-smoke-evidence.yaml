@@ -3,6 +3,136 @@ description: >-
   Historical execution observations. Records are evidence for the stated
   identity tuple, not declarations of backend capability.
 records:
+  - id: sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: dd7ed527efeaabac646adbf9f398b7caebc6aee44d1e35b5e73783293f465a53
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: anima
+      mode: lora
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-03
+    artifact: smoke-evidence/2026-08-03-sd-scripts-anima-checkpoint-publication-docker.yaml
+  - id: sd-scripts-anima-lllite-docker-2026-08-03
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: d3464e2c80842bad1f9338e1b3a71184130bda6b04e518dd7c8ac837c1497c95
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: anima
+      mode: controlnet_lllite
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-03
+    artifact: smoke-evidence/2026-08-03-sd-scripts-anima-lllite-docker.yaml
+  - id: sd-scripts-anima-lora-docker-2026-08-03
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: anima
+      mode: lora
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-03
+    artifact: smoke-evidence/2026-08-03-sd-scripts-anima-lora-docker.yaml
+    superseded_by: sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+  - id: sd-scripts-flux1-docker-2026-08-01
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: flux1
+      mode: lora
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-01
+    artifact: smoke-evidence/2026-08-01-sd-scripts-flux1-docker.yaml
+  - id: sd-scripts-sdxl-docker-2026-08-01
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: sdxl
+      mode: lora
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-01
+    artifact: smoke-evidence/2026-08-01-sd-scripts-sdxl-docker.yaml
+  - id: sd-scripts-sd15-docker-v2-2026-08-01
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: sd15
+      mode: lora
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-01
+    artifact: smoke-evidence/2026-08-01-sd-scripts-sd15-docker-v2.yaml
+  - id: sd-scripts-sd15-docker-2026-08-01
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 6c3c8936e6f1d258f58239fb344a71844222d7f65fa58c7acff6fa8fffb05980
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:09ea364f638fee13d85eb0f7fcb396fce5f4f04c3c403fab195c7dea345a07f5
+    native_path:
+      architecture: sd15
+      mode: lora
+      executor: docker
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    superseded_by: sd-scripts-sd15-docker-v2-2026-08-01
+    observed_at: 2026-08-01
+    artifact: smoke-evidence/2026-08-01-sd-scripts-sd15-docker.yaml
+  - id: sd-scripts-tier1-image-2026-07-31
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: d2f07d2caf24d47eef53dfc34e8ae6f361dd5b56324743f0f658610be98e3e32
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:28f16e9536e42c70c939a54a5a24659a9e393392595305cbc079dfe034a39983
+    native_path:
+      tier: 1
+      executor: docker
+      probe: parser-help-and-imports
+    evidence_kind: parser
+    outcome: passed
+    observed_at: 2026-07-31
+    artifact: smoke-evidence/2026-07-31-sd-scripts-tier1-image.yaml
   - id: ai-toolkit-sdxl-docker-2026-07-12
     backend: ai-toolkit
     adapter_source:

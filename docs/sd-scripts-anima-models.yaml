@@ -1,0 +1,12 @@
+dit:
+  repo: circlestone-labs/Anima
+  filename: split_files/diffusion_models/anima-base-v1.0.safetensors
+  revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+qwen3:
+  repo: circlestone-labs/Anima
+  filename: split_files/text_encoders/qwen_3_06b_base.safetensors
+  revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+vae:
+  repo: circlestone-labs/Anima
+  filename: split_files/vae/qwen_image_vae.safetensors
+  revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b

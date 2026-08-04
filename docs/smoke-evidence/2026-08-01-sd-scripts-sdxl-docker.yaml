@@ -1,0 +1,57 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-08-01
+run_id: 20260801-0932_sd-scripts-smoke-sdxl_4d96
+realization:
+  id: 20260801-112343-369140
+  observation: 20260801-112343-369140.observed-20260801-112631-321873.json
+  container_id: f0de4998938cb68a45dd5352674e54738e9f6c27a8018e2d9bd30ab108bfa825
+native_path:
+  architecture: sdxl
+  mode: lora
+  entrypoint: sdxl_train_network.py
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+adapter_source:
+  kind: source-tree-sha256
+  value: b5e014c5ca7642ed38c7352bf905bb2da9eb3506fbf220545f3558b1253f53de
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+  compatibility_patch: preserve-input-filename-v2
+  gpu: NVIDIA GeForce RTX 4070 Ti
+training:
+  resolution: [512, 512]
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  network_dim: 8
+  network_alpha: 4
+  network_train_unet_only: true
+  learning_rate: 0.0001
+  mixed_precision: bf16
+  optimizer: AdamW8bit
+  cache_latents_to_disk: true
+  cache_text_encoder_outputs_to_disk: true
+  requested_steps: 1
+  observed_steps: 1
+output:
+  path: outputs/20260801-0932_sd-scripts-smoke-sdxl_4d96.safetensors
+  size_bytes: 85423848
+  sha256: bbcf17afea1b18bc17c7107b435003913cda8d0856cf52c3e1f57ebd22839125
+checks:
+  exit_code_zero: true
+  real_optimizer_step: true
+  finite_loss: true
+  observed_loss: 0.0444
+  lora_safetensors_valid: true
+  tensor_count: 2166
+  dataset_unchanged: true
+  output_materialized: true
+  docker_terminal_observed: true
+  outcome: passed
+notes:
+  - The successful realization loaded the SDXL checkpoint through the patched symlink path and matched all U-Net, text-encoder, and VAE keys.
+  - An earlier realization for the same compiled run ended with exit 255 when Docker Desktop crashed; it is preserved separately in the run realization history and is not this passing observation.
+  - The trainer could not embed its own Git commit because the container rejected the repository ownership; Kura records the exact pinned upstream commit independently above.

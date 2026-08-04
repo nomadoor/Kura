@@ -11,6 +11,8 @@ from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tu
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
+from kura.backends.sd_scripts import command_sd_scripts, compile_sd_scripts, display_sd_scripts
+from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 
 
 Compile = Callable[[dict[str, Any], Path, Path | None, bool], dict[str, Any]]
@@ -39,9 +41,14 @@ def _compile_musubi(run: dict[str, Any], resolved: Path, workspace: Path | None,
     return compile_musubi_tuner(run, resolved / "musubi", workspace=workspace, strict=strict)
 
 
+def _compile_sd_scripts(run: dict[str, Any], resolved: Path, workspace: Path | None, strict: bool) -> dict[str, Any]:
+    return compile_sd_scripts(run, resolved / "sd-scripts", workspace=workspace, strict=strict)
+
+
 BACKENDS: dict[str, BackendAdapter] = {
     "ai-toolkit": BackendAdapter("ai-toolkit", "ai-toolkit", _compile_ai, command_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, default_ports=("8675/http", "22/tcp")),
     "musubi-tuner": BackendAdapter("musubi-tuner", "musubi-tuner", _compile_musubi, command_musubi_tuner, display_musubi_tuner, requirements_musubi, musubi_model_download_specs, validate_musubi_dataset_layout),
+    "sd-scripts": BackendAdapter("sd-scripts", "sd-scripts", _compile_sd_scripts, command_sd_scripts, display_sd_scripts, requirements_sd_scripts, sd_scripts_model_download_specs),
 }
 
 

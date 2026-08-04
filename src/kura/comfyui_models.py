@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -14,6 +16,7 @@ MODEL_INPUTS: dict[str, tuple[tuple[str, str], ...]] = {
     "TripleCLIPLoader": (("clip", "clip_name1"), ("clip", "clip_name2"), ("clip", "clip_name3")),
     "UNETLoader": (("diffusion_models", "unet_name"),),
     "ControlNetLoader": (("controlnet", "control_net_name"),),
+    "ModelPatchLoader": (("model_patches", "name"),),
 }
 
 
@@ -23,6 +26,7 @@ COMFYUI_MODEL_DIRS = {
     "clip": "clip",
     "diffusion_models": "diffusion_models",
     "controlnet": "controlnet",
+    "model_patches": "model_patches",
 }
 
 
@@ -32,7 +36,29 @@ DEFAULT_MODEL_REGISTRY: dict[str, dict[str, dict[str, str]]] = {
             "repo": "Comfy-Org/stable-diffusion-v1-5-archive",
             "filename": "v1-5-pruned-emaonly-fp16.safetensors",
         }
-    }
+    },
+    "diffusion_models": {
+        "anima-base-v1.0.safetensors": {
+            "repo": "circlestone-labs/Anima",
+            "filename": "split_files/diffusion_models/anima-base-v1.0.safetensors",
+            "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b",
+        }
+    },
+    "clip": {
+        "qwen_3_06b_base.safetensors": {
+            "repo": "circlestone-labs/Anima",
+            "filename": "split_files/text_encoders/qwen_3_06b_base.safetensors",
+            "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b",
+            "target_dir": "text_encoders",
+        }
+    },
+    "vae": {
+        "qwen_image_vae.safetensors": {
+            "repo": "circlestone-labs/Anima",
+            "filename": "split_files/vae/qwen_image_vae.safetensors",
+            "revision": "f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b",
+        }
+    },
 }
 
 
@@ -89,6 +115,44 @@ def required_model_refs(workflow: dict[str, Any]) -> list[dict[str, str]]:
             seen.add(key)
             refs.append({"node": str(node_id), "class_type": class_type, "input": input_name, "type": model_type, "name": value})
     return refs
+
+
+def visible_model_refs(
+    workflow: dict[str, Any],
+    object_info: dict[str, Any],
+    *,
+    ignored_inputs: set[tuple[str, str]] | None = None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Split workflow model references by visibility at one ComfyUI endpoint."""
+
+    visible: list[dict[str, str]] = []
+    missing: list[dict[str, str]] = []
+    for ref in required_model_refs(workflow):
+        if ignored_inputs and (ref["node"], ref["input"]) in ignored_inputs:
+            continue
+        node = object_info.get(ref["class_type"])
+        required = node.get("input", {}).get("required", {}) if isinstance(node, dict) else {}
+        raw = required.get(ref["input"]) if isinstance(required, dict) else None
+        names = raw[0] if isinstance(raw, list) and raw and isinstance(raw[0], list) else []
+        (visible if ref["name"] in names else missing).append(ref)
+    return visible, missing
+
+
+def endpoint_fingerprint(object_info: dict[str, Any]) -> dict[str, Any]:
+    """Return a stable identity hint for distinguishing ComfyUI instances.
+
+    Model lists are deliberately excluded: users may add models between compile
+    and launch. The registered node set still distinguishes a daily instance
+    with custom nodes from Kura's minimal smoke image in the common case.
+    """
+
+    node_types = sorted(str(name) for name in object_info)
+    encoded = json.dumps(node_types, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return {
+        "kind": "comfyui-object-info-node-set-v1",
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "node_type_count": len(node_types),
+    }
 
 
 def resolve_model_specs(workflow: dict[str, Any], registry: Any) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:

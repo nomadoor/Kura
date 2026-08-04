@@ -1,0 +1,24 @@
+source: https://huggingface.co/circlestone-labs/Anima
+provenance: User-provided workflow export imported 2026-08-03; exact upstream file revision unverified.
+models:
+  diffusion_models:
+    anima-aesthetic-v1.1.safetensors:
+      repo: circlestone-labs/Anima
+      filename: split_files/diffusion_models/anima-aesthetic-v1.1.safetensors
+      revision: 594c27fea35648b87c86a9b4d5436a6024c820b5
+  clip:
+    qwen_3_06b_base.safetensors:
+      repo: circlestone-labs/Anima
+      filename: split_files/text_encoders/qwen_3_06b_base.safetensors
+      revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+      target_dir: text_encoders
+  vae:
+    qwen_image_vae.safetensors:
+      repo: circlestone-labs/Anima
+      filename: split_files/vae/qwen_image_vae.safetensors
+      revision: f7382c4bf9d7ffe4ceea593a0adbb470c56dd79b
+lora_insert:
+  kind: model_only
+  model_node: "37"
+  model_output: 0
+  strength_model: 1.0

@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from kura.container_scripts import script_source
-from kura.backends.common import _musubi_backend_override, _truthy
+from kura.backends.common import _musubi_backend_override
+from kura.backends.shared import _truthy
 from kura.provenance import artifact_pinning
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {

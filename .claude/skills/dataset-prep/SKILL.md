@@ -18,6 +18,11 @@ Use this skill for dataset operations.
 ## Caption edits
 
 - Make caption transformations deterministic and reviewable.
+- Before creating captions, inspect the target model-family's caption culture
+  through `lora-evaluation/knowledge/<family>.md` or upstream primary sources.
+  Record whether captions are tags, natural language, structured data, or a
+  mixture. Do not infer that a documented inference-time tag order is a proven
+  training requirement.
 - For trigger words, prepend consistently and avoid duplicate prefixes.
 - Preserve original files unless the user asks for in-place edits.
 

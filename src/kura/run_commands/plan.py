@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -259,6 +260,7 @@ def _checkpoint_retention_policy_present(important_config: dict[str, Any]) -> bo
     return bool(
         _as_positive_int(important_config.get("prune_before_step"))
         or important_config.get("keep_last")
+        or _as_positive_int(important_config.get("retention_window_steps"))
     )
 
 
@@ -592,6 +594,37 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
     return records
 
 
+def _sd_scripts_disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    if backend.get("name") != "sd-scripts":
+        return {"enabled": False, "bytes": 0, "status": "not-applicable"}
+    native = backend_config(run, "sd-scripts")
+    enabled = any(native.get(key) is True for key in ("cache_latents_to_disk", "cache_text_encoder_outputs_to_disk"))
+    if not enabled:
+        return {"enabled": False, "bytes": 0, "status": "disabled"}
+    value = native.get("disk_cache_estimate_gb")
+    if isinstance(value, bool):
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
+    try:
+        gib = float(value)
+    except (TypeError, ValueError):
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "set backend.config.disk_cache_estimate_gb after measuring the smoke recipe"}
+    if not math.isfinite(gib) or gib <= 0:
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
+    return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate"}
+
+
+def _sd_scripts_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
+    estimate = _sd_scripts_disk_cache_estimate(run)
+    if not estimate["enabled"]:
+        return []
+    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
+    if estimate["status"] == "unknown":
+        severity = "info" if safety.get("allow_unknown_disk_cache") is True else "error"
+        return [_preflight_record("sd-scripts-disk-cache", severity, f"disk cache size is unknown; {estimate.get('detail')}", "run.yaml")]
+    return [_preflight_record("sd-scripts-disk-cache", "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
+
+
 def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         _checkpoint_safety_preflight(run)
@@ -670,6 +703,7 @@ def collect_run_preflight(
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
+    records.extend(_sd_scripts_cache_preflight_report(run))
     important = (_adapter_display(run).get("checkpoint") or {})
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
@@ -712,19 +746,20 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
     container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=50)
     container_disk_bytes = container_disk_gib * 1024**3
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    estimated_write_bytes = int(download_estimate.get("bytes") or 0) + int(checkpoint_estimate.get("bytes") or 0)
+    disk_cache_estimate = _sd_scripts_disk_cache_estimate(run)
+    estimated_write_bytes = int(download_estimate.get("bytes") or 0) + int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0)
     if estimated_write_bytes > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
         required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
         raise ValueError(
             f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
-            "(model downloads plus checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
+            "(model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
             "safety.allow_runpod_disk_risk: true if intentional"
         )
     return {
         "container_disk_gib": container_disk_gib,
         "container_disk_bytes": container_disk_bytes,
         "estimated_write_bytes": estimated_write_bytes,
-        "estimates": {"musubi_downloads": download_estimate, "checkpoints": checkpoint_estimate},
+        "estimates": {"model_downloads": download_estimate, "musubi_downloads": download_estimate, "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate},
     }
 
 
@@ -753,9 +788,10 @@ def _local_launch_disk_preflight(
     if enforce_model_download_safety:
         _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
+    disk_cache_estimate = _sd_scripts_disk_cache_estimate(run)
     write_estimates = {
         "hf_cache": int(download_estimate.get("bytes") or 0),
-        "workspace": int(checkpoint_estimate.get("bytes") or 0),
+        "workspace": int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0),
     }
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
@@ -822,7 +858,7 @@ def _local_launch_disk_preflight(
     return {
         "required_gib": required_gib,
         "floor_bytes": floor_bytes,
-        "estimates": {"musubi_downloads": download_estimate, "checkpoints": checkpoint_estimate},
+        "estimates": {"model_downloads": download_estimate, "musubi_downloads": download_estimate, "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate},
         "paths": checked,
         "docker_storage": docker_storage,
     }
@@ -932,6 +968,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resources": resources,
         "runpod_capacity": _runpod_capacity_payload(run, workspace_config),
         "model_downloads": download_estimate,
+        "disk_cache": _sd_scripts_disk_cache_estimate(run),
         "preflight": preflight,
     }
 
@@ -1178,6 +1215,14 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                     f"{_format_plan_value(failure.get('artifact'))}: "
                     f"{_format_plan_value(failure.get('status'))} ({_format_plan_value(failure.get('detail'))})"
                 )
+    disk_cache = payload.get("disk_cache") if isinstance(payload.get("disk_cache"), dict) else {}
+    if disk_cache.get("enabled"):
+        lines.append("")
+        lines.append("Run-scoped disk cache")
+        _append_kv(lines, "status", disk_cache.get("status"))
+        _append_kv(lines, "estimate", _format_bytes(disk_cache.get("bytes")) if disk_cache.get("status") != "unknown" else "unknown")
+        if disk_cache.get("detail"):
+            _append_kv(lines, "detail", disk_cache.get("detail"))
     preflight = payload.get("preflight") if isinstance(payload.get("preflight"), list) else []
     if preflight:
         lines.append("")

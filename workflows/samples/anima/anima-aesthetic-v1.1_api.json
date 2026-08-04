@@ -1,0 +1,158 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 123,
+      "steps": 30,
+      "cfg": 4,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "54",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "60",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": "safe, masterpiece, best quality, score_9, score_8_up, anime screenshot, modern japanese illustration, high quality anime key visual, clean thin lineart, delicate linework, restrained line weight, refined anatomy, elegant proportions, slightly sharp face, narrow expressive eyes, subtle eyelashes, small nose, soft blush, muted but vivid colors, rich summer colors, bright but controlled saturation, dusty teal shadows, warm orange highlights, golden summer sunlight, soft cel shading, reduced palette, beautiful reflected light, beautiful window reflections, beautiful street reflections, emotional lighting, calm graphic balance, polished rendering,\n\n1girl, solo, giant japanese high school girl, school uniform, summer uniform, short sleeve blouse, pleated skirt, loose socks, loafers, drinking a frappuccino from a clear plastic cup with a straw, candid pose, natural posture, relaxed expression, slightly amused, not looking at viewer, no eye contact, looking to the side, look side, looking down toward the city, face turned away from camera, side profile feeling,\n\nclose high oblique view, near aerial angle, medium wide shot, the camera is close to the giant girl, the girl dominates the composition, large foreground character, her upper body and legs are clearly visible, she occupies about half of the image height, enormous scale contrast, miniature Tokyo-like city below and behind her,\n\nShe is casually sitting on the edge of a tall building, leaning lightly against another nearby building as if it were a wall. The city below is tiny compared to her. The moment feels ordinary to her but absurd to the viewer, like a quiet summer afternoon in an impossible world.\n\nA richly rendered Tokyo-like summer city spreads below her, dense but readable: sunlit rooftops, narrow streets, train tracks, rooftop machinery, glass windows, signs, tiny cars, intersections, convenience-store-like corners, vending machines, and layered buildings. The background has the richness of an anime film background, with detailed architecture, warm sunlight, blue-green shadows, bright reflected light, and a vivid summer atmosphere.\n\nKeep the character clean and elegant with thin anime lineart and soft cel shading, while the city background is richer, more textured, and more detailed. The contrast between the clean character and the dense vivid city is important. The image should feel natural, funny, and surreal at the same time, not like a posed pinup.\n\nsummer daylight, blue sky feeling, hot summer air, sunlit concrete, saturated teal shadows, warm peach highlights, sparkling window reflections, bright rooftop highlights, soft atmospheric depth, colorful but not garish, calm whimsical mood",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "worst quality, low quality, score_1, close-up face only, portrait crop, poolside, float ring, beach ball, toy boat, water gun, chibi, giant eyes, thick lineart, western comic, photorealistic, 3d, cgi, painterly, watercolor, muddy colors, neon colors, text, logo, watermark, looking at viewer",
+      "clip": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "37": {
+    "inputs": {
+      "unet_name": "anima-aesthetic-v1.1.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "39": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "54": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "56": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "60": {
+    "inputs": {
+      "width": [
+        "73",
+        0
+      ],
+      "height": [
+        "73",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": {
+      "title": "Empty Latent Image"
+    }
+  },
+  "73": {
+    "inputs": {
+      "aspect_ratio": "4:3 (Standard)",
+      "megapixels": 1,
+      "multiple": 16
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector"
+    }
+  }
+}

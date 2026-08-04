@@ -1,0 +1,16 @@
+schema_version: 1
+type: render
+intent: "Load and render a Kura-produced Anima LLLite model patch in managed ComfyUI"
+inputs:
+  train_run: null
+  checkpoint: {path: runs/replace-with-train-run/outputs/replace-with-anima-lllite.safetensors, hash: null}
+  workflow: {path: examples/sd-scripts-anima-smoke/anima-lllite-api.json, digest: null}
+  promptset: {path: examples/sd-scripts-anima-smoke/promptset.jsonl, digest: null}
+generator: {name: comfyui, endpoint: "http://127.0.0.1:8188"}
+executor: {name: local}
+workflow_patches:
+  prompt: {node: "7", field: inputs.text}
+  negative_prompt: {node: "8", field: inputs.text}
+  seed: {node: "10", field: inputs.seed}
+  model_patch: {node: "4", field: inputs.name}
+render: {output_dir: samples/images, timeout_sec: 900, default_seed: 42}

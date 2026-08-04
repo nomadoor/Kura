@@ -27,7 +27,7 @@ or change them. Overriding them (e.g. pointing at your own registry after
 `kura image build` / `kura image publish`) is an escape hatch for developing
 Kura itself, not part of normal use. Trainer freshness works differently per
 backend by design. AI-Toolkit extends a versioned upstream official image,
-while the Musubi Tuner image is paired with Kura's Musubi adapters. Both
+while the Musubi Tuner and sd-scripts images are paired with Kura's adapters. All
 defaults move only after compatibility checks; a mutable upstream tag is not a
 reproducible run contract.
 
@@ -37,6 +37,8 @@ reproducible run contract.
 | `docker.images.ai-toolkit.remote` | Image name used when publishing your own AI-Toolkit image | `nomadoor/kura-ai-toolkit:dev` |
 | `docker.images.musubi-tuner.local` | Local Docker image used for Musubi Tuner runs | `nomadoor/kura-musubi-tuner:dev` |
 | `docker.images.musubi-tuner.remote` | Image name used for RunPod when not using the default image override | `nomadoor/kura-musubi-tuner:dev` |
+| `docker.images.sd-scripts.local` | Local Docker image used for sd-scripts runs | `nomadoor/kura-sd-scripts:dev` |
+| `docker.images.sd-scripts.remote` | Image name used when publishing your own sd-scripts image | `nomadoor/kura-sd-scripts:dev` |
 | `docker.workspace_target` | Container path for the mounted workspace. Kura currently supports only `/workspace`; other values are rejected at launch because backend artifacts compile `/workspace/...` paths. | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
@@ -74,6 +76,22 @@ Kura-managed convenience layer for container paths and may contain symlinks; the
 lock file is the reproducible source of truth for which Hugging Face repo/files
 were selected.
 
+sd-scripts downloads and explicit paths are frozen in
+`resolved/sd-scripts/model-bundle.lock.yaml`. If
+`cache_latents_to_disk` or `cache_text_encoder_outputs_to_disk` is enabled,
+set `backend.config.disk_cache_estimate_gb` to a measured positive estimate.
+An unknown estimate blocks launch unless the reviewed run explicitly records
+`safety.allow_unknown_disk_cache: true`. Cache files stay below the individual
+run; the shared dataset remains unchanged.
+
+Built-in sd-scripts selectors reject unknown `backend.config` keys. FLUX and
+Anima flow-matching controls (`timestep_sampling`, `discrete_flow_shift`, and
+`sigmoid_scale`), FLUX `guidance_scale` / `model_prediction_type`, Anima
+`qwen_image_vae_2d` / `vae_chunk_size`, and SDXL `unet_lr` /
+`text_encoder_lr1` / `text_encoder_lr2` are validated native fields and appear
+in the run plan. Use `extra_args` only for an audited upstream option not owned
+by the built-in selector; adapter-owned flags cannot be duplicated there.
+
 Path namespace depends on the consumer. Container command specs may use
 `/workspace/...`, but host-consumed workspace artifacts should be
 workspace-relative or host-resolvable. `kura doctor disk` reports Kura symlinks
@@ -90,8 +108,27 @@ workspace mount table.
 | `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
 | `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI | `symlink` |
 | `comfyui.lora_stage_cleanup` | Whether temporary staged LoRAs are removed after render | `remove_after_render` |
+| `comfyui.model_patches_dir` | Host path to ComfyUI `models/model_patches`; required and non-empty when a render workflow declares a `model_patch` patch | `""` |
+| `comfyui.model_patch_stage_subdir` | Temporary subdirectory under `model_patches_dir` | `Kura_tmp` |
+| `comfyui.model_patch_stage_mode` | How render runs expose a local model patch to ComfyUI | `symlink` |
+| `comfyui.model_patch_stage_cleanup` | Whether temporary staged model patches are removed after render | `remove_after_render` |
 | `comfyui.model_registry` | Explicit ComfyUI model name to Hugging Face repo/file mappings for RunPod render | `{}` |
 | `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods | created by `kura init` |
+
+The local executor treats `comfyui.endpoint` as an external, user-managed
+service. Kura submits HTTP requests to that exact endpoint; it does not start or
+restart ComfyUI, start Docker, install ComfyUI, or download missing models.
+`lora_dir` and `model_patches_dir` must be directories scanned by that same
+instance and should normally live outside the Kura workspace. Use
+`kura doctor comfyui --workflow <api-workflow.json>` to verify the endpoint and
+the workflow's required models before launch.
+
+`comfyui.model_registry` and `comfyui.runpod` are RunPod-only configuration.
+They are not frozen into local render manifests and cannot authorize local
+downloads. An unreachable local endpoint or a missing model is a stop-and-ask
+condition, not permission to create a replacement service. Any dedicated smoke
+instance requires separate approval, isolated model paths, explicit ownership,
+and teardown without changing the normal workspace endpoint.
 
 If `comfyui.lora_dir` is changed after a render run was compiled, re-run:
 
@@ -107,6 +144,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | --- | --- | --- |
 | `runpod.default_image.ai-toolkit` | Default AI-Toolkit remote image/template image | `ostris/aitoolkit:0.10.22` |
 | `runpod.default_image.musubi-tuner` | Default Musubi remote image | `nomadoor/kura-musubi-tuner:dev` |
+| `runpod.default_image.sd-scripts` | Default sd-scripts remote image | `nomadoor/kura-sd-scripts:dev` |
 | `runpod.default_image.comfyui` | Default ComfyUI remote render image | `nomadoor/kura-comfyui:dev` |
 | `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
 | `runpod.api_key_env` | Environment variable that holds the RunPod API key | `RUNPOD_API_KEY` |
@@ -153,6 +191,7 @@ checkpoint estimate against `runpod.container_disk_gb`.
 ```sh
 uv run kura doctor workspace
 uv run kura doctor docker
+uv run kura doctor sd-scripts
 uv run kura doctor comfyui
 uv run kura doctor runpod
 ```

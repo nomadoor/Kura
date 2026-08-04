@@ -1,0 +1,15 @@
+schema_version: 1
+type: render
+intent: "Load and render a Kura-produced Anima LoRA in managed ComfyUI"
+inputs:
+  train_run: null
+  checkpoint: {path: runs/replace-with-train-run/outputs/replace-with-anima-lora.safetensors, hash: null}
+  workflow: {path: examples/sd-scripts-anima-smoke/anima-lora-api.json, digest: null}
+  promptset: {path: examples/sd-scripts-anima-smoke/promptset.jsonl, digest: null}
+generator: {name: comfyui, endpoint: "http://127.0.0.1:8188"}
+executor: {name: local}
+workflow_patches:
+  prompt: {node: "4", field: inputs.text}
+  negative_prompt: {node: "5", field: inputs.text}
+  seed: {node: "7", field: inputs.seed}
+render: {output_dir: samples/images, timeout_sec: 900, default_seed: 42}

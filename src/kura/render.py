@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 
 from kura import __version__
-from kura.comfyui_models import merged_registry, resolve_model_specs
+from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
 from kura.workspace import dump_yaml
 
@@ -105,9 +105,9 @@ def _set_path(document: dict[str, Any], node: str, field: str, value: Any) -> No
     target[pieces[-1]] = value
 
 
-def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt: str, negative_prompt: str, seed: int, checkpoint: str) -> dict[str, Any]:
+def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt: str, negative_prompt: str, seed: int, checkpoint: str, model_patch: str | None = None) -> dict[str, Any]:
     patched = deepcopy(workflow)
-    values = {"prompt": prompt, "negative_prompt": negative_prompt, "seed": seed, "lora": checkpoint, "checkpoint": checkpoint}
+    values = {"prompt": prompt, "negative_prompt": negative_prompt, "seed": seed, "lora": checkpoint, "checkpoint": checkpoint, "model_patch": model_patch if model_patch is not None else checkpoint}
     for name, value in values.items():
         patch = patches.get(name)
         if patch is None:
@@ -277,11 +277,60 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     }
 
 
-def _freeze_comfyui_config(comfyui: Any) -> dict[str, Any]:
+def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+    if "model_patch" not in frozen.get("workflow_patches", {}):
+        return None
+    source = _workspace_path(workspace, checkpoint.get("path"))
+    if source is None or not source.is_file() or source.suffix != ".safetensors":
+        return None
+    comfyui = frozen.get("comfyui", {})
+    if not isinstance(comfyui, dict):
+        return None
+    directory = _workspace_path(workspace, comfyui.get("model_patches_dir"))
+    if directory is None:
+        raise ValueError("comfyui.model_patches_dir is required to stage a model_patch checkpoint")
+    stage_subdir = str(comfyui.get("model_patch_stage_subdir") or "Kura_tmp").strip("/\\")
+    if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
+        raise ValueError("comfyui.model_patch_stage_subdir must be a safe relative directory name")
+    mode = str(comfyui.get("model_patch_stage_mode") or "symlink").strip().lower()
+    if mode not in ("symlink", "copy"):
+        raise ValueError("comfyui.model_patch_stage_mode must be symlink or copy")
+    cleanup = str(comfyui.get("model_patch_stage_cleanup") or "remove_after_render").strip().lower()
+    if cleanup not in ("remove_after_render", "keep"):
+        raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
+    target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
+    return {"source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
+
+
+def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, str]]:
+    ignored: set[tuple[str, str]] = set()
+    patches = frozen.get("workflow_patches")
+    if not isinstance(patches, dict):
+        return ignored
+    patch = patches.get("model_patch")
+    if isinstance(patch, dict):
+        node = patch.get("node")
+        field = patch.get("field")
+        if isinstance(node, (str, int)) and isinstance(field, str) and field.startswith("inputs."):
+            ignored.add((str(node), field.removeprefix("inputs.")))
+    return ignored
+
+
+def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
-    allowed = ("lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_registry", "runpod")
+    allowed = ["lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup"]
+    if include_remote:
+        allowed.extend(("model_registry", "runpod"))
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
+
+
+def _fetch_endpoint_object_info(endpoint: str, *, timeout: float = 15) -> dict[str, Any]:
+    with urllib.request.urlopen(f"{endpoint.rstrip('/')}/object_info", timeout=timeout) as response:
+        payload = json.loads(response.read())
+    if not isinstance(payload, dict):
+        raise ValueError("ComfyUI object_info must be a JSON object")
+    return payload
 
 
 def _materialize_lora_stage(plan: dict[str, Any]) -> None:
@@ -318,6 +367,22 @@ def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
             target.unlink()
     except OSError:
         pass
+
+
+def _ensure_model_patch_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] | None) -> None:
+    if not plan:
+        return
+    name = str(plan.get("model_patch_name", ""))
+    safe_endpoint = _redact_url_userinfo(endpoint)
+    try:
+        if name in client.model_patch_names():
+            return
+        time.sleep(0.5)
+        if name in client.model_patch_names():
+            return
+    except RuntimeError as exc:
+        raise ValueError(f"ComfyUI model-patch visibility could not be checked; endpoint={safe_endpoint}; error={exc}") from exc
+    raise ValueError(f"ComfyUI model-patch stage is not visible; endpoint={safe_endpoint}; model_patch_name={name}")
 
 
 def _lora_name_visible(client: Any, lora_name: str) -> bool:
@@ -406,6 +471,24 @@ class ComfyUIClient:
             raise RuntimeError("ComfyUI object_info query failed for LoRA loaders: " + "; ".join(errors))
         return names
 
+    def object_info(self) -> dict[str, Any]:
+        response = self._json("/object_info")
+        if not isinstance(response, dict):
+            raise RuntimeError("ComfyUI object_info is not a JSON object")
+        return response
+
+    def model_patch_names(self) -> set[str]:
+        try:
+            response = self._json("/object_info/ModelPatchLoader")
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"ModelPatchLoader object_info query failed: {exc}") from exc
+        node = response.get("ModelPatchLoader")
+        required = node.get("input", {}).get("required", {}) if isinstance(node, dict) else {}
+        raw = required.get("name") if isinstance(required, dict) else None
+        if isinstance(raw, list) and raw and isinstance(raw[0], list):
+            return {str(item) for item in raw[0]}
+        return set()
+
     def queue(self, workflow: dict[str, Any]) -> str:
         response = self._json("/prompt", {"prompt": workflow, "client_id": str(uuid.uuid4())})
         prompt_id = response.get("prompt_id")
@@ -460,11 +543,12 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
-    comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"))
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    is_runpod = executor.get("name") == "runpod"
+    comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
-    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
-    if executor.get("name") == "runpod":
+    if is_runpod:
         sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
         workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
         registry = merged_registry(sidecar_models, workspace_models)
@@ -474,6 +558,19 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             raise ValueError("runpod ComfyUI render has unknown model loader entries; add comfyui.model_registry mappings for: " + labels)
         frozen["comfyui_model_registry"] = registry
         frozen["comfyui_models"] = specs
+    else:
+        if "model_patch" in frozen.get("workflow_patches", {}) and _model_patch_stage_plan(workspace, run_dir, frozen, inputs.get("checkpoint", {})) is None:
+            raise ValueError("local model_patch render requires a readable .safetensors checkpoint and configured comfyui.model_patches_dir")
+        endpoint = run.get("generator", {}).get("endpoint")
+        if isinstance(endpoint, str) and endpoint:
+            try:
+                object_info = _fetch_endpoint_object_info(endpoint)
+            except Exception as exc:
+                print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {_redact_url_userinfo(endpoint)}: {exc}", flush=True)
+            else:
+                visible, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
+                frozen["comfyui_endpoint_identity"] = endpoint_fingerprint(object_info)
+                frozen["comfyui_required_models"] = {"visible": visible, "missing": missing}
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
     if checkpoint_path:
         candidate = workspace / checkpoint_path
@@ -511,6 +608,8 @@ def launch_render(
     resolved_executor = executor_name or frozen.get("executor", {}).get("name")
     if frozen.get("generator", {}).get("name") != "comfyui" or resolved_executor not in ("local", "runpod"):
         raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
+    if resolved_executor == "runpod" and "model_patch" in frozen.get("workflow_patches", {}):
+        raise ValueError("ComfyUI model patch staging is not supported for the runpod executor")
     current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     allowed_states = {"compiled"} if resolved_executor == "local" else {"compiled", "running"}
     if current_status.get("state") not in allowed_states:
@@ -530,8 +629,19 @@ def launch_render(
         raise ValueError("promptset has no seeds and render.default_seed is not set")
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
     lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+    model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
-    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "lora_stage": lora_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
+    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    if resolved_executor == "local":
+        expected_identity = frozen.get("comfyui_endpoint_identity")
+        identity_verified = isinstance(expected_identity, dict) and bool(expected_identity.get("sha256"))
+        details["endpoint_identity_verified"] = identity_verified
+        if not identity_verified:
+            details["launch_blocker"] = (
+                "local ComfyUI endpoint identity was not verified at compile time; "
+                "verify the intended endpoint is reachable, then create and compile a new render run"
+            )
     if dry_run:
         print(json.dumps(details, ensure_ascii=False, indent=2))
         return 0
@@ -548,13 +658,36 @@ def launch_render(
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     status(run_dir, state="running", started=now(), ended=None, exit_code=None)
     try:
+        if resolved_executor == "local" and hasattr(client, "object_info"):
+            object_info = client.object_info()
+            expected_identity = frozen.get("comfyui_endpoint_identity")
+            observed_identity = endpoint_fingerprint(object_info)
+            if not isinstance(expected_identity, dict) or not expected_identity.get("sha256"):
+                raise ValueError(
+                    "local ComfyUI endpoint identity was not verified at compile time; verify the intended endpoint is reachable, then compile again"
+                )
+            if expected_identity.get("sha256") != observed_identity.get("sha256"):
+                raise ValueError(
+                    "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
+                    f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
+                )
+            _, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
+            if missing:
+                labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
+                raise ValueError(
+                    "ComfyUI endpoint cannot see workflow-required models: " + labels + ". "
+                    "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
+                )
         if lora_stage:
             _materialize_lora_stage(lora_stage)
             _ensure_lora_stage_visible(client, endpoint, lora_stage)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage})
+        if model_patch_stage:
+            _materialize_lora_stage(model_patch_stage)
+            _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
+        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage})
         generated = 0
         for item, seed in pairs:
-            patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name)
+            patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name)
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
@@ -573,7 +706,7 @@ def launch_render(
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
         status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, image_count=generated)
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
@@ -582,8 +715,9 @@ def launch_render(
         with stdout_log.open("a", encoding="utf-8") as handle:
             handle.write(f"{type(exc).__name__}: {exc}\n")
         status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, lora_stage=lora_stage, error=str(exc))
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:
         _cleanup_lora_stage(lora_stage)
+        _cleanup_lora_stage(model_patch_stage)
