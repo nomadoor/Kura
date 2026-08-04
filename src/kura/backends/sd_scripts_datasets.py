@@ -35,7 +35,11 @@ def _selected_files(directory: Path, suffixes: set[str] | None = None) -> list[P
 
 def _identity(path: Path) -> dict[str, Any]:
     stat = path.stat()
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    digest = hasher.hexdigest()
     return {"sha256": digest, "size_bytes": stat.st_size}
 
 

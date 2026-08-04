@@ -193,3 +193,26 @@ records:
       kind: source-tree-sha256
       scope: selected-adapter-v1
       value: ba9e486f9ad22da820f4a1985604edb65f997d11305b7a6a5360d591aed801d5
+  - id: sd-scripts-host-dataset-chunked-hashing-2026-08-04
+    backend: sd-scripts
+    reason: >-
+      Calculate the same SHA-256 dataset identities with bounded host memory by
+      reading files in chunks. Digest values, frozen dataset locks, staged
+      inputs, generated argv, and all recorded successful smoke behavior are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: ba9e486f9ad22da820f4a1985604edb65f997d11305b7a6a5360d591aed801d5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 271fd9b21c4a023111e0bedd72ff26838db8cf04195d8fe0b67eb47c2590fb74

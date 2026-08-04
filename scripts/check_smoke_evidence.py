@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -102,8 +103,27 @@ def main() -> int:
         if not isinstance(record.get("observed_at"), (str, date, datetime)):
             failures.append(f"{label}.observed_at must be a date")
         artifact = record.get("artifact")
-        if isinstance(artifact, str) and not (PATH.parent / artifact).is_file():
+        artifact_path = PATH.parent / artifact if isinstance(artifact, str) else None
+        if isinstance(artifact, str) and not artifact_path.is_file():
             failures.append(f"{label}.artifact does not exist: {artifact}")
+        elif artifact_path is not None:
+            evidence = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
+            render = evidence.get("render") if isinstance(evidence, dict) else None
+            if isinstance(render, dict) and isinstance(render.get("workflow_digest"), str):
+                workflow_path_value = render.get("workflow_path")
+                workflow_note = render.get("workflow_note")
+                if not isinstance(workflow_path_value, str) or not workflow_path_value:
+                    failures.append(f"{label}.artifact render.workflow_path is required with workflow_digest")
+                else:
+                    workflow_path = ROOT / workflow_path_value
+                    if not workflow_path.is_file():
+                        failures.append(f"{label}.artifact render.workflow_path does not exist: {workflow_path_value}")
+                    else:
+                        observed_digest = "sha256:" + hashlib.sha256(workflow_path.read_bytes()).hexdigest()
+                        if observed_digest != render["workflow_digest"]:
+                            failures.append(f"{label}.artifact render.workflow_digest does not match {workflow_path_value}")
+                if not isinstance(workflow_note, str) or not workflow_note:
+                    failures.append(f"{label}.artifact render.workflow_note must explain the recorded workflow provenance")
 
     referenced: set[str] = set()
     support_text = SUPPORT_PATH.read_text(encoding="utf-8")

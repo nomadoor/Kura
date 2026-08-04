@@ -50,7 +50,9 @@ render:
   realization: 20260803-111807-908849
   comfyui_commit: 0f42ba51463174fb255f2c4605ae0e0b441fe6d7
   comfyui_image_digest: sha256:64832a2eb96e0448eb49225b62670a5b2a1f228149e2ba7ee8d165f5e80b4110
+  workflow_path: docs/smoke-evidence/workflows/anima-lllite-api.pre-auraflow.json
   workflow_digest: sha256:c2281c5973c8dffb7df5bb7dceb9064dd1ac274e5a2f9b7a59705f7fad15f824
+  workflow_note: Recorded before the authored smoke workflow added ModelSamplingAuraFlow; this historical file preserves the executed graph.
   promptset_digest: sha256:ba3b30d01ceb5303e3bc88d04ecdb97ef7547c1d24ce38fe94de3c14f7750a7c
   image: samples/images/anima_compatibility_seed42_0.png
   image_sha256: 116e1923d75fa7e91520f5f6e5e06678bfd148e5ab4cca2e797aa6907dd80e2f
