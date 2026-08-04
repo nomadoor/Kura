@@ -290,7 +290,7 @@ def _resolve(ref: dict[str, str], registry: dict[str, Any]) -> dict[str, str] | 
     filename = entry.get("filename") or entry.get("file") or ref["name"]
     if not repo or not filename:
         return None
-    spec = {**ref, "repo": repo, "filename": filename, "target_dir": MODEL_DIRS.get(ref["type"], ref["type"]), "target_name": entry.get("target_name") or ref["name"]}
+    spec = {**ref, "repo": repo, "filename": filename, "target_dir": entry.get("target_dir") or MODEL_DIRS.get(ref["type"], ref["type"]), "target_name": entry.get("target_name") or ref["name"]}
     if entry.get("revision"):
         spec["revision"] = entry["revision"]
     if entry.get("subfolder"):
@@ -304,7 +304,9 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
     for ref in _required_models(workflow):
         spec = _resolve(ref, registry)
         if spec is None:
-            unknown.append(ref)
+            staged = _safe_child(models_root, f"{MODEL_DIRS.get(ref['type'], ref['type'])}/{ref['name']}")
+            if not staged.is_file():
+                unknown.append(ref)
         else:
             specs.append(spec)
     if unknown:

@@ -26,6 +26,8 @@ def header(path):
             value = json.loads(handle.read(size))
         except Exception as exc:
             fail(f"invalid safetensors header: {path}: {exc}")
+    if not isinstance(value, dict):
+        fail(f"safetensors header must be an object: {path}")
     keys = [key for key in value if key != "__metadata__"]
     if not keys:
         fail(f"safetensors has no tensors: {path}")

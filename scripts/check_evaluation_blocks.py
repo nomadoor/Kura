@@ -38,7 +38,7 @@ def evaluation_errors(evaluation: Any, *, label: str) -> tuple[list[str], list[s
         return [f"{label}.evaluation must be a mapping"], warnings
     for key, expected in REQUIRED.items():
         value = evaluation.get(key)
-        if not isinstance(value, expected) or isinstance(value, str) and not value.strip():
+        if not isinstance(value, expected) or (isinstance(value, str) and not value.strip()):
             errors.append(f"{label}.evaluation.{key} must be a non-empty {expected.__name__}")
     for key in ("fixed", "varied"):
         value = evaluation.get(key)
@@ -90,7 +90,7 @@ def candidate_paths() -> list[Path]:
     for base in (ROOT / "examples", ROOT / "runs"):
         if not base.exists():
             continue
-        paths.extend(base.rglob("run.yaml"))
+        paths.extend(base.rglob("run*.yaml"))
         paths.extend(base.rglob("manifest.lock.yaml"))
     return sorted(set(paths))
 

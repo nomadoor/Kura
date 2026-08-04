@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from kura.backends.sd_scripts import OWNED_FLAGS, command_sd_scripts, compile_sd_scripts, display_sd_scripts
-from kura.backends.sd_scripts_models import requirements_sd_scripts
+from kura.backends.sd_scripts_datasets import write_sd_scripts_dataset_config
+from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.container_scripts import script_source
 from kura.run_commands.plan import _sd_scripts_cache_preflight_report, _sd_scripts_disk_cache_estimate
 
@@ -60,6 +61,43 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
 
 
 class SdScriptsBackendTests(unittest.TestCase):
+    def test_model_downloads_always_include_selected_primary_filename(self) -> None:
+        run = base_run()
+        run["backend"]["config"].pop("model_paths")
+        run["backend"]["config"]["model_downloads"] = {
+            "base": {"repo": "owner/model", "filename": "primary.safetensors", "filenames": ["companion.json"]}
+        }
+
+        specs, paths = sd_scripts_model_download_specs(run)
+
+        self.assertEqual([item["filename"] for item in specs], ["primary.safetensors", "companion.json"])
+        self.assertTrue(paths["base"].endswith("/primary.safetensors"))
+
+    def test_dataset_config_rejects_missing_declared_dataset_and_invalid_caption_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "dataset.toml"
+            run = base_run()
+            run["datasets"] = []
+            run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0].pop("dataset_id")
+            with self.assertRaisesRegex(ValueError, "at least one declared dataset"):
+                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=False)
+
+            run = base_run()
+            run["backend"]["config"]["dataset_config"]["general"]["caption_extension"] = "txt"
+            images = root / "datasets" / "sample" / "images"
+            images.mkdir(parents=True)
+            (images / "one.png").write_bytes(b"image")
+            with self.assertRaisesRegex(ValueError, "must start with a dot"):
+                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True)
+
+    def test_disk_cache_estimate_rejects_boolean_and_non_finite_values(self) -> None:
+        for value in (True, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                run = base_run()
+                run["backend"]["config"].update({"cache_latents_to_disk": True, "disk_cache_estimate_gb": value})
+                self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
+
     def test_tier1_entrypoints_and_model_roles(self) -> None:
         expected = {
             ("sd15", "lora"): ("train_network.py", "networks.lora"),

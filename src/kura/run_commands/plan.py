@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -602,12 +603,14 @@ def _sd_scripts_disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
     if not enabled:
         return {"enabled": False, "bytes": 0, "status": "disabled"}
     value = native.get("disk_cache_estimate_gb")
+    if isinstance(value, bool):
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
     try:
         gib = float(value)
     except (TypeError, ValueError):
         return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "set backend.config.disk_cache_estimate_gb after measuring the smoke recipe"}
-    if gib <= 0:
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be positive"}
+    if not math.isfinite(gib) or gib <= 0:
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
     return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate"}
 
 

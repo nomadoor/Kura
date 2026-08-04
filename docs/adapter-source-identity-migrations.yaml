@@ -167,3 +167,29 @@ records:
       kind: source-tree-sha256
       scope: selected-adapter-v1
       value: 55347d8b8213b5041c142f6be0a0067b1b7e9477ae96842ce6fd1462b8a8a9c5
+  - id: sd-scripts-pr-review-edge-guards-2026-08-04
+    backend: sd-scripts
+    reason: >-
+      Add fail-closed handling for invalid or ambiguous configuration, bounded
+      probe timeout reporting, chunked dataset hashing, and shell-safe progress
+      labels. The recorded successful smoke configurations use a single primary
+      filename, dotted caption extensions, finite numeric cache estimates,
+      complete safetensors headers, and responsive help commands. Their argv,
+      staged file identities, optimizer step, and published artifacts are
+      therefore unchanged; focused regression tests cover each new edge branch.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 55347d8b8213b5041c142f6be0a0067b1b7e9477ae96842ce6fd1462b8a8a9c5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: ba9e486f9ad22da820f4a1985604edb65f997d11305b7a6a5360d591aed801d5

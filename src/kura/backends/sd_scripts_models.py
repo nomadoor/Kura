@@ -92,6 +92,8 @@ def sd_scripts_model_download_specs(run: dict[str, Any], existing_paths: dict[st
             raise ValueError(f"sd-scripts model_downloads.{role} requires repo_id and filename")
         filename = _safe_filename(filename)
         filenames = [_safe_filename(item) for item in (filenames or [filename])]
+        if filename not in filenames:
+            filenames.insert(0, filename)
         for item_filename in filenames:
             spec = {"key": role, "repo_id": repo_id, "filename": item_filename, "link_path": _cache_path(repo_id, role, item_filename)}
             for key in ("revision", "repo_type"):

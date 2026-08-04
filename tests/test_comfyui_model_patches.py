@@ -48,6 +48,15 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in visible], ["present.safetensors"])
         self.assertEqual([item["name"] for item in missing], ["missing.safetensors"])
 
+    def test_workflow_model_visibility_ignores_dynamically_staged_patch_input(self) -> None:
+        workflow = {"4": {"class_type": "ModelPatchLoader", "inputs": {"name": "Kura_tmp/placeholder.safetensors"}}}
+        object_info = {"ModelPatchLoader": {"input": {"required": {"name": [["other.safetensors"], {}]}}}}
+
+        visible, missing = visible_model_refs(workflow, object_info, ignored_inputs={("4", "name")})
+
+        self.assertEqual(visible, [])
+        self.assertEqual(missing, [])
+
     def test_endpoint_fingerprint_is_stable_across_model_list_changes(self) -> None:
         first = {"UNETLoader": {"input": {"required": {"unet_name": [["one"], {}]}}}, "KSampler": {}}
         second = {"KSampler": {}, "UNETLoader": {"input": {"required": {"unet_name": [["two"], {}]}}}}
@@ -137,6 +146,21 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         for section, name in (("diffusion_models", "anima-base-v1.0.safetensors"), ("clip", "qwen_3_06b_base.safetensors"), ("vae", "qwen_image_vae.safetensors")):
             self.assertEqual(len(DEFAULT_MODEL_REGISTRY[section][name]["revision"]), 40)
 
+    def test_comfyui_prepare_accepts_an_already_staged_model_patch(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("kura_comfy_prepare_review", ROOT / "docker/comfyui/kura_comfy_prepare.py")
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staged = root / "ComfyUI" / "models" / "model_patches" / "Kura_tmp" / "trained.safetensors"
+            staged.parent.mkdir(parents=True)
+            staged.write_bytes(b"weights")
+            workflow = {"4": {"class_type": "ModelPatchLoader", "inputs": {"name": "Kura_tmp/trained.safetensors"}}}
+            self.assertEqual(module.prepare(workflow, comfyui_root=root / "ComfyUI", cache_dir=None, registry={}), [])
+
     def test_model_patch_checkpoint_stages_outside_lora_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -212,7 +236,8 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         node_id, loader = loaders[0]
         self.assertEqual(loader["inputs"]["model"], ["1", 0])
         self.assertEqual(loader["inputs"]["lora_name"], "Kura_tmp/trained-anima.safetensors")
-        self.assertEqual(patched["7"]["inputs"]["model"], [node_id, 0])
+        self.assertEqual(patched["10"]["inputs"]["model"], [node_id, 0])
+        self.assertEqual(patched["7"]["inputs"]["model"], ["10", 0])
 
 
 if __name__ == "__main__":

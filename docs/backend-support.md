@@ -1,6 +1,6 @@
 # Backend support
 
-Snapshot: 2026-07-31.
+Snapshot: 2026-08-04.
 
 This page answers three questions: which upstream version Kura uses, whether
 Kura has an adapter, and how far that path has been tested. It intentionally

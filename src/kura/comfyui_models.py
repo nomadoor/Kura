@@ -117,12 +117,19 @@ def required_model_refs(workflow: dict[str, Any]) -> list[dict[str, str]]:
     return refs
 
 
-def visible_model_refs(workflow: dict[str, Any], object_info: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def visible_model_refs(
+    workflow: dict[str, Any],
+    object_info: dict[str, Any],
+    *,
+    ignored_inputs: set[tuple[str, str]] | None = None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Split workflow model references by visibility at one ComfyUI endpoint."""
 
     visible: list[dict[str, str]] = []
     missing: list[dict[str, str]] = []
     for ref in required_model_refs(workflow):
+        if ignored_inputs and (ref["node"], ref["input"]) in ignored_inputs:
+            continue
         node = object_info.get(ref["class_type"])
         required = node.get("input", {}).get("required", {}) if isinstance(node, dict) else {}
         raw = required.get(ref["input"]) if isinstance(required, dict) else None

@@ -118,12 +118,13 @@ def main() -> int:
                 failures.append(f"{label} references unknown evidence record: {record_id}")
                 continue
             record_backend = record.get("backend")
-            if isinstance(record_backend, str) and _normalized_backend(record_backend) != _normalized_backend(backend):
+            canonical_backend = _normalized_backend(record_backend) if isinstance(record_backend, str) else ""
+            if canonical_backend != _normalized_backend(backend):
                 failures.append(f"{label} backend {backend!r} does not match evidence {record_id!r} backend {record_backend!r}")
-            if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and record_backend == "sd-scripts":
+            if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and canonical_backend == _normalized_backend("sd-scripts"):
                 identity = record.get("adapter_source")
                 value = identity.get("value") if isinstance(identity, dict) else None
-                if not isinstance(value, str) or not _identity_reaches_current(record_id, record_backend, value, migrations):
+                if not isinstance(value, str) or not _identity_reaches_current(record_id, "sd-scripts", value, migrations):
                     failures.append(f"{label} evidence {record_id!r} adapter identity does not reach the current adapter through an evidence-scoped behavior-preserving migration chain")
 
     for record_id, record in records_by_id.items():

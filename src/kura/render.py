@@ -302,6 +302,20 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     return {"source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
 
 
+def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, str]]:
+    ignored: set[tuple[str, str]] = set()
+    patches = frozen.get("workflow_patches")
+    if not isinstance(patches, dict):
+        return ignored
+    patch = patches.get("model_patch")
+    if isinstance(patch, dict):
+        node = patch.get("node")
+        field = patch.get("field")
+        if isinstance(node, (str, int)) and isinstance(field, str) and field.startswith("inputs."):
+            ignored.add((str(node), field.removeprefix("inputs.")))
+    return ignored
+
+
 def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
@@ -545,6 +559,8 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["comfyui_model_registry"] = registry
         frozen["comfyui_models"] = specs
     else:
+        if "model_patch" in frozen.get("workflow_patches", {}) and _model_patch_stage_plan(workspace, run_dir, frozen, inputs.get("checkpoint", {})) is None:
+            raise ValueError("local model_patch render requires a readable .safetensors checkpoint and configured comfyui.model_patches_dir")
         endpoint = run.get("generator", {}).get("endpoint")
         if isinstance(endpoint, str) and endpoint:
             try:
@@ -552,7 +568,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             except Exception as exc:
                 print(f"warning: ComfyUI endpoint identity is unavailable at compile time: {_redact_url_userinfo(endpoint)}: {exc}", flush=True)
             else:
-                visible, missing = visible_model_refs(workflow, object_info)
+                visible, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
                 frozen["comfyui_endpoint_identity"] = endpoint_fingerprint(object_info)
                 frozen["comfyui_required_models"] = {"visible": visible, "missing": missing}
     checkpoint_path = inputs.get("checkpoint", {}).get("path")
@@ -655,7 +671,7 @@ def launch_render(
                     "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
                     f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
                 )
-            _, missing = visible_model_refs(workflow, object_info)
+            _, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
             if missing:
                 labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
                 raise ValueError(

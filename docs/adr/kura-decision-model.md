@@ -4,7 +4,7 @@ Status: accepted owner decision.
 
 Date: 2026-07-03
 
-Updated: 2026-07-15 — RunPod Pod-creation confirmation behavior.
+Updated: 2026-08-04 — local render authority and acquisition boundary.
 
 ## Mission (owner statement)
 
@@ -91,6 +91,21 @@ The work is to unify them under one name and one report structure
 (check / severity / fact / affected file), shown in `kura run plan` and
 enforced at launch. Severities are `error` / `warning` / `info` only.
 There is no "quality error": code never blocks on training quality.
+
+### Local render authority and acquisition boundary
+
+Local render is the explicit exception to Kura-managed training execution: it
+uses the user-started ComfyUI endpoint recorded in the run. A local render
+request authorizes HTTP use of that endpoint only. It does not authorize Kura
+or an agent to start a Docker ComfyUI, install another ComfyUI, retarget to a
+different responding endpoint, or acquire model files. Those actions require a
+separate explicit request. Kura freezes and verifies the endpoint identity and
+reports missing workflow models without downloading them.
+
+Kura's managed ComfyUI image and model acquisition path are limited to the
+RunPod executor and explicitly labelled disposable smoke tests. Smoke resources
+must use an explicit temporary endpoint and verified cleanup, and must not
+rewrite the user's local ComfyUI configuration.
 
 ### validate / inspect split
 

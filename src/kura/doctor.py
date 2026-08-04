@@ -618,7 +618,12 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
     if not docker:
         print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Docker CLI was not found on PATH."}, indent=2))
         return 1
-    inspected = subprocess.run([docker, "image", "inspect", image], text=True, capture_output=True, check=False, timeout=30)
+    try:
+        inspected = subprocess.run([docker, "image", "inspect", image], text=True, capture_output=True, check=False, timeout=30)
+    except subprocess.TimeoutExpired:
+        diagnostics["image_inspect_error"] = "timed out after 30s"
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Configured sd-scripts image inspection timed out."}, indent=2))
+        return 1
     checks["local_image"] = inspected.returncode == 0
     if not checks["local_image"]:
         diagnostics["image_inspect_stderr"] = _redact_secret_text(inspected.stderr.strip())
@@ -875,6 +880,8 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
                 )
     workflow_arg = getattr(args, "workflow", None)
     if workflow_arg:
+        checks["workflow_loaded"] = False
+        checks["workflow_models_visible"] = None
         workflow_path = Path(str(workflow_arg))
         if not workflow_path.is_absolute():
             workflow_path = workspace_root / workflow_path
@@ -883,6 +890,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
             workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
             if not isinstance(workflow, dict):
                 raise ValueError("workflow must be an API-format JSON object")
+            checks["workflow_loaded"] = True
             if not isinstance(object_info, dict):
                 raise ValueError("configured endpoint object_info is unavailable")
             visible, missing = visible_model_refs(workflow, object_info)
@@ -890,7 +898,8 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
             diagnostics["workflow_missing_models"] = missing
             checks["workflow_models_visible"] = not missing
         except Exception as exc:
-            checks["workflow_models_visible"] = False
+            if checks["workflow_loaded"]:
+                checks["workflow_models_visible"] = False
             diagnostics["workflow_check_error"] = _redact_secret_text(str(exc))
     if getattr(args, "probe_stage", False):
         if not (stage_dir and lora_dir and lora_dir.is_dir()):

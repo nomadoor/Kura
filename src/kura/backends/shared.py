@@ -35,7 +35,8 @@ def _script_command(commands: list[list[str]], *, step_name: str, probe_root: st
         lines.append(f"cd {shlex.quote(probe_root)}")
     for index, command in enumerate(commands, 1):
         label = "hf_hub_download" if command[:2] == ["python", "-c"] and len(command) > 2 and "hf_hub_download" in command[2] else (command[1] if len(command) > 1 else command[0])
-        lines.append(f"echo '[kura] {step_name} step {index}/{len(commands)}: {shlex.quote(label)}'")
+        message = f"[kura] {step_name} step {index}/{len(commands)}: {label}"
+        lines.append(f"echo {shlex.quote(message)}")
         lines.append(shlex.join(command))
     return ["bash", "-lc", "\n".join(lines)]
 

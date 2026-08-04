@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 import secrets
 import struct
 import subprocess
@@ -247,12 +249,16 @@ def validate_result(root: Path, run_id: str, dataset_id: str, spec: SmokeSpec) -
             loaded = json.loads(observation_path.read_text(encoding="utf-8"))
             observation = loaded if isinstance(loaded, dict) else {}
     local_docker = not isinstance(status.get("pod_id"), str)
+    stdout_path = run_dir / "logs" / "stdout.log"
+    stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.is_file() else ""
+    losses = [float(match) for match in re.findall(r"(?:\bloss:\s*|\bavr_loss=)([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", stdout_text, flags=re.IGNORECASE)]
     checks = {
         "completed": status.get("state") == "completed" and status.get("exit_code") == 0,
         "one_step": status.get("last_step") == 1 and status.get("total_steps") == 1,
         "entrypoint": spec.expected_script in command,
         "output": bool(outputs),
         "output_metadata": metadata_ok,
+        "finite_loss": bool(losses) and all(math.isfinite(loss) for loss in losses),
         "dataset_unchanged": before == after,
         "docker_terminal_observed": not local_docker or (observation.get("state") == "completed" and observation.get("exit_code") == 0 and isinstance(observation.get("container_id"), str)),
         "recovery_complete": status.get("host") != "runpod" or status.get("recovery_required") is False,

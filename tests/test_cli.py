@@ -6774,13 +6774,17 @@ class RunPodLifecycleTests(unittest.TestCase):
             os.chdir(root)
             try:
                 code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
+                retry_code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
             finally:
                 os.chdir(previous)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(code, 0)
+            self.assertEqual(retry_code, 0)
             self.assertEqual(status["outputs"], ["outputs/converted.safetensors"])
             self.assertEqual(status["recovery_artifacts"], ["downloads/example/recovery/sd-scripts/anima-native/native.safetensors"])
             self.assertFalse((run_dir / "outputs" / "native.safetensors").exists())
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(sum(item.get("event") == "run_recovery_artifacts_downloaded" for item in events), 1)
 
     def test_run_download_normalizes_ai_toolkit_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

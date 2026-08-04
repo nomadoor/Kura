@@ -47,12 +47,17 @@ def main():
         path = root / name
         item = {"exists": path.is_file()}
         if path.is_file():
-            process = subprocess.run([sys.executable, str(path), "--help"], cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-            item["help_exit_code"] = process.returncode
-            required = REQUIRED_OPTIONS.get(name, ())
-            item["required_options"] = {option: option in process.stdout for option in required}
-            if process.returncode:
-                item["error"] = process.stderr[-1000:]
+            try:
+                process = subprocess.run([sys.executable, str(path), "--help"], cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            except subprocess.TimeoutExpired:
+                item["help_exit_code"] = 1
+                item["error"] = "timed out after 120 seconds"
+            else:
+                item["help_exit_code"] = process.returncode
+                required = REQUIRED_OPTIONS.get(name, ())
+                item["required_options"] = {option: option in process.stdout for option in required}
+                if process.returncode:
+                    item["error"] = process.stderr[-1000:]
         result["scripts"][name] = item
     for name in ("torch", "accelerate", "bitsandbytes", "safetensors"):
         try:

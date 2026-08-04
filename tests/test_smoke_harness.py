@@ -166,6 +166,8 @@ class SdScriptsRealSmokeHarnessTests(unittest.TestCase):
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "outputs").mkdir()
             (run_dir / "realizations").mkdir()
+            (run_dir / "logs").mkdir()
+            (run_dir / "logs" / "stdout.log").write_text("steps: 100% 1/1 [avr_loss=0.125]\n", encoding="utf-8")
             observation = "realizations/local.observed.json"
             (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "docker", "last_observation": observation}), encoding="utf-8")
             (run_dir / observation).write_text(json.dumps({"state": "completed", "exit_code": 0, "container_id": "container"}), encoding="utf-8")

@@ -24,7 +24,7 @@ ENTRYPOINTS = {
     ("anima", "controlnet_lllite"): "anima_train_control_net_lllite.py",
 }
 NETWORK_MODULES = {"sd15": "networks.lora", "sdxl": "networks.lora", "flux1": "networks.lora_flux", "anima": "networks.lora_anima"}
-SECRET_FRAGMENTS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY")
+SECRET_FRAGMENTS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY")
 OWNED_FLAGS = {
     "--dataset_config", "--pretrained_model_name_or_path", "--clip_l", "--t5xxl", "--ae", "--qwen3", "--vae",
     "--llm_adapter_path", "--t5_tokenizer_path", "--network_module", "--network_dim", "--network_alpha",

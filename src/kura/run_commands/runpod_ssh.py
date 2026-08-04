@@ -152,14 +152,28 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     shutil.rmtree(legacy_root)
             return outputs
 
-        def materialize_downloaded_status() -> bool:
+        def record_recovery_download(recovery_artifacts: list[str]) -> None:
+            if not recovery_artifacts:
+                return
+            events_path = run_dir / "logs" / "events.jsonl"
+            if events_path.is_file():
+                for line in events_path.read_text(encoding="utf-8").splitlines():
+                    try:
+                        prior = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if prior.get("event") == "run_recovery_artifacts_downloaded" and prior.get("artifacts") == recovery_artifacts:
+                        return
+            append_run_event(run_dir, {"event": "run_recovery_artifacts_downloaded", "timestamp": datetime.now().astimezone().isoformat(), "kind": "non-final-intermediate", "artifacts": recovery_artifacts})
+
+        def materialize_downloaded_status() -> tuple[bool, list[str]]:
             exits = sorted((downloaded_run / "realizations").glob("remote-exit-*.json"))
             if not exits:
-                return False
+                return False, []
             remote_exit = json.loads(exits[-1].read_text(encoding="utf-8"))
             exit_code = remote_exit.get("exit_code")
             if not isinstance(exit_code, int):
-                return False
+                return False, []
             output_dir = downloaded_run / "outputs"
             outputs = materialize_primary_outputs(output_dir)
             recovery_root = downloaded_run / "recovery"
@@ -184,15 +198,18 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     status["total_steps"] = steps
 
             _mutate_run_status(run_dir, mutate)
-            return True
+            return True, recovery_artifacts
 
         if downloaded_run.exists() and not force:
-            if materialize_downloaded_status():
+            materialized, recovery_artifacts = materialize_downloaded_status()
+            if materialized:
+                record_recovery_download(recovery_artifacts)
                 print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
                 return 0
             raise ValueError("downloaded run snapshot is missing remote-exit; use --force to retry or inspect the Pod before stopping it")
         if downloaded_run.exists() and force:
             shutil.rmtree(downloaded_run)
+            _mutate_run_status(run_dir, lambda status: status.update({"recovery_artifacts": []}))
         if not shutil.which("runpodctl"):
             raise ValueError("runpodctl is not installed locally; install it before downloading")
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -246,16 +263,10 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         local_archive.unlink(missing_ok=True)
         if extracted.returncode:
             return extracted.returncode
-        if not materialize_downloaded_status():
+        materialized, recovery_artifacts = materialize_downloaded_status()
+        if not materialized:
             raise ValueError("downloaded run snapshot is missing remote-exit; remote completion is not confirmed")
-        recovery_root = downloaded_run / "recovery"
-        recovery_artifacts = [
-            str(path.relative_to(run_dir))
-            for path in sorted(recovery_root.rglob("*"))
-            if path.is_file()
-        ] if recovery_root.is_dir() else []
-        if recovery_artifacts:
-            append_run_event(run_dir, {"event": "run_recovery_artifacts_downloaded", "timestamp": datetime.now().astimezone().isoformat(), "kind": "non-final-intermediate", "artifacts": recovery_artifacts})
+        record_recovery_download(recovery_artifacts)
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)

@@ -21,6 +21,14 @@ def contained(root, path):
         return False
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     lock_path = pathlib.Path(sys.argv[1])
     workspace = pathlib.Path(sys.argv[2])
@@ -45,7 +53,7 @@ def main():
         identity = item.get("identity") or {}
         if source.stat().st_size != identity.get("size_bytes"):
             fail(f"frozen source size changed: {item['source']}")
-        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        digest = sha256_file(source)
         if digest != identity.get("sha256"):
             fail(f"frozen source digest changed: {item['source']}")
         destination.parent.mkdir(parents=True, exist_ok=True)

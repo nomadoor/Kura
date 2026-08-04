@@ -178,7 +178,9 @@ def prepare(workflow: dict[str, Any], *, comfyui_root: Path, cache_dir: Path | N
     for ref in _required_models(workflow):
         spec = _resolve(ref, registry)
         if spec is None:
-            unknown.append(ref)
+            staged = _safe_child(models_root, f"{MODEL_DIRS.get(ref['type'], ref['type'])}/{ref['name']}")
+            if not staged.is_file():
+                unknown.append(ref)
         else:
             specs.append(spec)
     if unknown:

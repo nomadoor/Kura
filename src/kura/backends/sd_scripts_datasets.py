@@ -51,6 +51,8 @@ def _clean_keys(values: Any, allowed: set[str], *, field: str) -> dict[str, Any]
 
 
 def write_sd_scripts_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None, strict: bool) -> dict[str, Any]:
+    if strict and workspace is None:
+        raise ValueError("sd-scripts strict dataset compilation requires the workspace path")
     native = backend_config(run, "sd-scripts")
     config = native.get("dataset_config")
     if not isinstance(config, dict):
@@ -82,6 +84,8 @@ def write_sd_scripts_dataset_config(run: dict[str, Any], destination: Path, *, w
             clean = _clean_keys(subset, SUBSET_KEYS, field=f"dataset_config.datasets[{dataset_index}].subsets[{subset_index}]")
             dataset_id = clean.pop("dataset_id", None)
             if not isinstance(dataset_id, str) or not dataset_id:
+                if not declared_ids:
+                    raise ValueError("sd-scripts dataset_config requires at least one declared dataset in datasets[]")
                 if len(declared_ids) == 1:
                     dataset_id = next(iter(declared_ids))
                 else:
@@ -106,7 +110,9 @@ def write_sd_scripts_dataset_config(run: dict[str, Any], destination: Path, *, w
                     raise ValueError(f"sd-scripts subset has no images: {dataset_id}/{image_subdir}")
                 captions = _selected_files(dataset_root / caption_subdir, None)
                 caption_extension = str(clean.get("caption_extension") or general.get("caption_extension") or ".txt")
-                captions_by_stem = {path.relative_to(dataset_root / caption_subdir).with_suffix("").as_posix(): path for path in captions if path.suffix == caption_extension}
+                if not caption_extension.startswith("."):
+                    raise ValueError("sd-scripts caption_extension must start with a dot")
+                captions_by_stem = {path.relative_to(dataset_root / caption_subdir).with_suffix("").as_posix(): path for path in captions if path.suffix.lower() == caption_extension.lower()}
                 for image in images:
                     relative = image.relative_to(dataset_root / image_subdir)
                     targets = [(image, image_stage / relative)]
@@ -141,8 +147,6 @@ def write_sd_scripts_dataset_config(run: dict[str, Any], destination: Path, *, w
             for key, value in clean.items():
                 lines.append(f"{key} = {_toml_scalar(value)}")
             subset_locks.append({"dataset_id": dataset_id, "image_subdir": image_subdir.as_posix(), "conditioning_subdir": conditioning_subdir.as_posix() if conditioning_subdir else None, "image_count": len(images), "conditioning_count": len(conditions), "stage": stage_base.as_posix()})
-    if strict and workspace is None:
-        raise ValueError("sd-scripts strict dataset compilation requires the workspace path")
     destination.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(destination, "\n".join(lines) + "\n")
     lock = {"schema_version": 1, "backend": "sd-scripts", "run_id": run["id"], "stage_root": stage_root, "subsets": subset_locks, "files": frozen}
