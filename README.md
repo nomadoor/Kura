@@ -137,10 +137,11 @@ git pull
 
 That is the whole update. Dependencies re-sync automatically on the next `uv run kura ...`, and the training Docker images are part of Kura: they are pulled automatically when needed and move forward together with Kura releases. You never build or manage images yourself.
 
-Two notes on how trainer versions work:
+Trainer versions are managed as follows:
 
 - **AI-Toolkit** runs on a Kura-tested version of the upstream official image. Kura updates that pin deliberately after compatibility checks; it does not follow the mutable `latest` tag during normal runs.
 - **Musubi Tuner** has no official image, so Kura ships one that is tested against Kura's own Musubi support. A newer Musubi alone would not add new model support anyway — that always needs a Kura update too — so the image updates together with Kura, and "what does my Kura support?" always has one answer: whatever your current Kura supports.
+- **sd-scripts** runs from a Kura-managed image pinned to an audited upstream release. Kura 0.2.0 has real local optimizer-step tests for SD 1.5, SDXL, FLUX.1, Anima LoRA, and Anima ControlNet-LLLite; see the [backend support matrix](docs/backend-support.md) for the exact scope. These tests establish execution compatibility, not LoRA quality for every dataset or configuration.
 
 ## Learn more
 

@@ -137,10 +137,11 @@ git pull
 
 更新はこれだけです。依存関係は次の `uv run kura ...` 実行時に自動で揃い、学習用の Docker イメージは Kura の一部として、必要なときに自動で pull され、Kura の更新と一緒に前へ進みます。**ユーザーがイメージをビルド・管理することはありません。**
 
-trainer のバージョンについて2点だけ：
+trainer のバージョンは次のように管理されます：
 
 - **AI-Toolkit** はKuraで互換性を確認した本家公式イメージのバージョンで動きます。通常実行では可変の`latest`を追わず、互換性確認後にKura側の固定値を更新します。
 - **Musubi Tuner** には公式イメージがないため、Kura が「Kura の Musubi 対応でテスト済みのイメージ」を同梱しています。そもそも Musubi だけ新しくしても新モデルは学習できず（Kura 側の対応が常に必要）、イメージは Kura の更新と一緒に進みます。「自分の Kura は何に対応しているか？」の答えは常に「今の Kura が対応しているもの」の一つだけです。
+- **sd-scripts** は、監査済みの upstream release に固定した Kura 管理イメージで動きます。Kura 0.2.0では、SD 1.5、SDXL、FLUX.1、Anima LoRA、Anima ControlNet-LLLiteについて、ローカル環境で実際に optimizer step まで通しています。正確な検証範囲は[backend対応表](docs/backend-support.md)を参照してください。これは実行互換性の確認であり、あらゆるdatasetや設定でのLoRA品質を保証するものではありません。
 
 ## もっと詳しく
 

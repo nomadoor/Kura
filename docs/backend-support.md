@@ -1,6 +1,6 @@
 # Backend support
 
-Snapshot: 2026-08-04.
+Kura 0.2.0 support snapshot: 2026-08-04.
 
 This page answers three questions: which upstream version Kura uses, whether
 Kura has an adapter, and how far that path has been tested. It intentionally
@@ -35,7 +35,7 @@ Mutable `latest` is not a supported default.
 
 ## Support matrix
 
-| Backend | Model family | Adapter | Status | Notes |
+| Backend | Model family | Adapter | Status | Verified scope |
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |
 | AI-Toolkit | SD 1.5 | Generic native-config projection | 🧪 | Local one-step path verified |
