@@ -47,7 +47,7 @@ class InitCommandTests(unittest.TestCase):
         command = [sys.executable, "-c", "from kura.cli import main; main()"]
         version = subprocess.run([*command, "--version"], text=True, capture_output=True, check=False)
         self.assertEqual(version.returncode, 0)
-        self.assertIn("kura 0.1.0", version.stdout)
+        self.assertIn("kura 0.2.0", version.stdout)
 
         help_result = subprocess.run([*command, "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(help_result.returncode, 0)
