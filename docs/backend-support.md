@@ -25,7 +25,7 @@ Mutable `latest` is not a supported default.
 
 | Mark | Meaning |
 | --- | --- |
-| ✅ | All execution scopes claimed in Notes, output materialization, and executor cleanup are verified |
+| ✅ | All execution scopes claimed in Verified scope, output materialization, and executor cleanup are verified |
 | 🧪 | At least one real one-step training smoke passed |
 | 🔧 | Adapter compiles and image entrypoints start |
 | 🧩 | Native configuration can be expressed; no real smoke claim |
