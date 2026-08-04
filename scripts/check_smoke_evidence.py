@@ -109,19 +109,22 @@ def main() -> int:
         elif artifact_path is not None:
             evidence = yaml.safe_load(artifact_path.read_text(encoding="utf-8"))
             render = evidence.get("render") if isinstance(evidence, dict) else None
-            if isinstance(render, dict) and isinstance(render.get("workflow_digest"), str):
+            if isinstance(render, dict):
                 workflow_path_value = render.get("workflow_path")
+                workflow_digest = render.get("workflow_digest")
                 workflow_note = render.get("workflow_note")
                 if not isinstance(workflow_path_value, str) or not workflow_path_value:
-                    failures.append(f"{label}.artifact render.workflow_path is required with workflow_digest")
+                    failures.append(f"{label}.artifact render.workflow_path must be a non-empty string")
                 else:
                     workflow_path = ROOT / workflow_path_value
                     if not workflow_path.is_file():
                         failures.append(f"{label}.artifact render.workflow_path does not exist: {workflow_path_value}")
-                    else:
+                    elif isinstance(workflow_digest, str) and workflow_digest:
                         observed_digest = "sha256:" + hashlib.sha256(workflow_path.read_bytes()).hexdigest()
-                        if observed_digest != render["workflow_digest"]:
+                        if observed_digest != workflow_digest:
                             failures.append(f"{label}.artifact render.workflow_digest does not match {workflow_path_value}")
+                if not isinstance(workflow_digest, str) or not workflow_digest:
+                    failures.append(f"{label}.artifact render.workflow_digest must be a non-empty string")
                 if not isinstance(workflow_note, str) or not workflow_note:
                     failures.append(f"{label}.artifact render.workflow_note must explain the recorded workflow provenance")
 

@@ -75,6 +75,9 @@ incident and is retained because it is a legitimate RunPod/smoke artifact.
 
 ## Containment and corrective policy
 
+The durable owner decision for these boundaries is recorded in
+[Kura decision model: local render authority and acquisition boundary](../adr/kura-decision-model.md#local-render-authority-and-acquisition-boundary).
+
 - Local render uses a user-started ComfyUI over HTTP. Kura does not start a
   local Docker ComfyUI and does not acquire models for local render.
 - A render request is not authorization for a multi-GB download or any
