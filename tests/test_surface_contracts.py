@@ -53,6 +53,14 @@ class SurfaceContractTests(unittest.TestCase):
             validate_workspace_config({SENTINEL: {}})
         self.assertIn("unsupported section", str(caught.exception))
 
+    def test_non_string_mapping_keys_are_rejected_without_a_traceback(self) -> None:
+        for config in ({7: {}}, {"docker": {}, 7: {}}, {"runpod": {7: True}}, {"runpod": {"default_image": {7: "image"}}}):
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    validate_workspace_config(config)
+                self.assertIn("7", str(caught.exception))
+                self.assertIn("kura doctor workspace", str(caught.exception))
+
     def test_workspace_names_the_fix_for_a_plausible_misspelling(self) -> None:
         with self.assertRaises(ValueError) as caught:
             validate_workspace_config({"comfyui": {"input_stage_mod": "copy"}})
@@ -100,6 +108,21 @@ class SurfaceContractTests(unittest.TestCase):
                     validate_workspace_config(config)
                 self.assertIn(expected, str(caught.exception))
 
+    def test_interpreted_values_are_type_checked_at_workspace_load(self) -> None:
+        malformed = (
+            ({"docker": {"gpu": "true"}}, "must be boolean"),
+            ({"docker": {"mounts": [{"source": ".", "target": "/workspace", "mode": "write"}]}}, "'ro', 'rw'"),
+            ({"comfyui": {"input_stage_mode": "hardlink"}}, "'symlink', 'copy'"),
+            ({"comfyui": {"model_registry": {"checkpoints": {"model.safetensors": {"repo": 7}}}}}, "must be string"),
+            ({"runpod": {"container_disk_gb": "80"}}, "must be integer"),
+            ({"runpod": {"ports": [22]}}, "runpod.ports[0] must be string"),
+        )
+        for config, expected in malformed:
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    validate_workspace_config(config)
+                self.assertIn(expected, str(caught.exception))
+
     def test_workspace_does_not_advertise_run_only_or_unused_render_overrides(self) -> None:
         for config, rejected in (
             ({"safety": {"allow_many_checkpoints": True}}, "safety"),
@@ -116,9 +139,10 @@ class SurfaceContractTests(unittest.TestCase):
 
     def test_workspace_schema_description_exposes_nested_contract(self) -> None:
         settings = workspace_schema_description()
-        self.assertEqual(settings["docker"]["images"]["<name>"]["dockerfile"], "value")
-        self.assertEqual(settings["runpod"]["object_store"]["bucket"], "value")
-        self.assertEqual(settings["comfyui"]["runpod"]["container_disk_gb"], "value")
+        self.assertEqual(settings["docker"]["images"]["<name>"]["dockerfile"], "string")
+        self.assertEqual(settings["runpod"]["object_store"]["bucket"], "string")
+        self.assertEqual(settings["comfyui"]["runpod"]["container_disk_gb"], "integer")
+        self.assertEqual(settings["docker"]["mounts"]["list_of"]["mode"]["choices"], ["ro", "rw"])
 
     def test_doctor_workspace_reports_nested_contract_error_without_source_reading(self) -> None:
         from kura.doctor import cmd_doctor_workspace
