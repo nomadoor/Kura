@@ -352,36 +352,7 @@ class CoreKeyReconciliationTest(unittest.TestCase):
             self.assertIn("comes from the run", str(caught.exception))
 
 
-class ImageVisibilityAndErrorSurfaceTest(unittest.TestCase):
-    PLANS = [{"image_name": "Kura_tmp/a.png"}]
-
-    def test_unavailable_listing_warns_instead_of_blocking(self) -> None:
-        from kura.render import _ensure_image_stage_visible
-
-        class Broken:
-            def input_image_names(self):
-                raise RuntimeError("LoadImage object_info query failed")
-
-        _ensure_image_stage_visible(Broken(), "http://127.0.0.1:8188", self.PLANS)
-
-    def test_empty_listing_warns_instead_of_blocking(self) -> None:
-        from kura.render import _ensure_image_stage_visible
-
-        class Empty:
-            def input_image_names(self):
-                return set()
-
-        _ensure_image_stage_visible(Empty(), "http://127.0.0.1:8188", self.PLANS)
-
-    def test_populated_listing_missing_the_name_still_only_warns(self) -> None:
-        from kura.render import _ensure_image_stage_visible
-
-        class Other:
-            def input_image_names(self):
-                return {"someone-elses.png"}
-
-        _ensure_image_stage_visible(Other(), "http://127.0.0.1:8188", self.PLANS)
-
+class ComfyUIErrorSurfaceTest(unittest.TestCase):
     def test_http_error_body_is_surfaced(self) -> None:
         import urllib.error
         import urllib.request

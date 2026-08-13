@@ -118,7 +118,7 @@ workspace mount table.
 | `comfyui.model_patch_stage_cleanup` | Whether temporary staged model patches are removed after render | `remove_after_render` |
 | `comfyui.input_dir` | Host path to ComfyUI `input`; required and non-empty when a render promptset supplies images through a `type: image` patch binding | `""` |
 | `comfyui.input_stage_subdir` | Temporary subdirectory under `input_dir` | `Kura_tmp` |
-| `comfyui.input_stage_mode` | How render runs expose a promptset image to ComfyUI | `symlink` |
+| `comfyui.input_stage_mode` | How render runs expose a promptset image to ComfyUI; ComfyUI rejects symlinked `LoadImage` inputs, so this defaults to copying | `copy` |
 | `comfyui.input_stage_cleanup` | Whether temporary staged images are removed after render | `remove_after_render` |
 | `comfyui.model_registry` | Explicit ComfyUI model name to Hugging Face repo/file mappings for RunPod render | `{}` |
 | `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods | created by `kura init` |

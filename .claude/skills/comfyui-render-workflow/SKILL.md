@@ -125,8 +125,15 @@ workflow_patches:
   Every other binding reads the promptset key of the same name.
 - `type: image` means the value is an image path relative to the promptset's own
   directory. Compile copies it into `resolved/images/` and launch stages it into
-  `comfyui.input_dir` the same way LoRAs are staged. Never upload through the
-  ComfyUI API and never write into ComfyUI's directories by hand.
+  `comfyui.input_dir`, then removes it. Never upload through the ComfyUI API and
+  never write into ComfyUI's directories by hand.
+- Image staging copies; it does not symlink. ComfyUI resolves `LoadImage` paths
+  and rejects one that leaves its input directory, so a symlinked input fails
+  validation with "Invalid image file" even though a symlinked LoRA loads fine.
+- ComfyUI does not list files inside input subdirectories in
+  `/object_info/LoadImage`, so a correctly staged image never appears there.
+  Absence from that list is not evidence of a staging problem; the queue-time
+  rejection is, and it names the file.
 - Promptset keys Kura owns directly: `id`, `prompt`, `negative_prompt`, `seeds`,
   and `meta`. Put provenance (source spec, authored size, generator version)
   under `meta` — anything else must be bound or compile fails.

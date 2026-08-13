@@ -489,9 +489,18 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     stage_subdir = str(comfyui.get("input_stage_subdir") or "Kura_tmp").strip("/\\")
     if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.input_stage_subdir must be a safe relative directory name")
-    mode = str(comfyui.get("input_stage_mode") or "symlink").strip().lower()
+    # Copy, not symlink: ComfyUI resolves LoadImage paths and rejects one that
+    # leaves its input directory, so a symlinked input fails validation at queue
+    # time even though a symlinked model loads fine.
+    mode = str(comfyui.get("input_stage_mode") or "copy").strip().lower()
     if mode not in ("symlink", "copy"):
         raise ValueError("comfyui.input_stage_mode must be symlink or copy")
+    if mode == "symlink":
+        print(
+            "warning: comfyui.input_stage_mode=symlink is set, but ComfyUI rejects symlinked LoadImage inputs "
+            "(\"Invalid image file\"). Use copy unless this endpoint is known to accept them.",
+            flush=True,
+        )
     cleanup = str(comfyui.get("input_stage_cleanup") or "remove_after_render").strip().lower()
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.input_stage_cleanup must be remove_after_render or keep")
@@ -517,37 +526,13 @@ def _image_values_for_item(item: dict[str, Any], patches: Any, plans: list[dict[
     return values
 
 
-def _ensure_image_stage_visible(client: Any, endpoint: str, plans: list[dict[str, Any]]) -> None:
-    """Check staged images against ComfyUI's input listing when that listing works.
-
-    Unlike a LoRA, a wrong image name cannot render silently: ComfyUI validates
-    `LoadImage.image` when the prompt is queued and rejects an unknown name. Some
-    builds also stop enumerating input files entirely, which makes an empty or
-    unavailable listing say nothing about staging. So this warns rather than
-    blocking, and leaves the server-side rejection as the real gate.
-    """
-    if not plans:
-        return
-    safe_endpoint = _redact_url_userinfo(endpoint)
-    expected = {plan["image_name"] for plan in plans}
-    try:
-        visible = client.input_image_names()
-        if expected - visible:
-            time.sleep(0.5)
-            visible = client.input_image_names()
-    except RuntimeError as exc:
-        print(f"warning: ComfyUI input-image listing is unavailable, so staging was not pre-checked; endpoint={safe_endpoint}: {exc}", flush=True)
-        return
-    if not visible:
-        print(f"warning: ComfyUI reports no input images at all, so staging was not pre-checked; endpoint={safe_endpoint}", flush=True)
-        return
-    missing = sorted(expected - visible)
-    if missing:
-        print(
-            "warning: ComfyUI does not list staged promptset images: " + ", ".join(missing) + f"; endpoint={safe_endpoint}. "
-            "If the render fails on LoadImage, set comfyui.input_dir to the input directory used by that ComfyUI instance and compile again.",
-            flush=True,
-        )
+# There is deliberately no staged-image visibility pre-check. ComfyUI's
+# `/object_info/LoadImage` listing does not enumerate files inside input
+# subdirectories, so a correctly staged image never appears there and the check
+# only ever produced a false warning. Unlike a LoRA — where a name ComfyUI
+# cannot see is silently ignored and the wrong weights render — an unusable
+# image name is rejected outright when the prompt is queued, and that rejection
+# names the file. The server-side validation is the gate.
 
 
 def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, str]]:
@@ -768,18 +753,6 @@ class ComfyUIClient:
             return {str(item) for item in raw[0]}
         return set()
 
-    def input_image_names(self) -> set[str]:
-        try:
-            response = self._json("/object_info/LoadImage")
-        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"LoadImage object_info query failed: {exc}") from exc
-        node = response.get("LoadImage")
-        required = node.get("input", {}).get("required", {}) if isinstance(node, dict) else {}
-        raw = required.get("image") if isinstance(required, dict) else None
-        if isinstance(raw, list) and raw and isinstance(raw[0], list):
-            return {str(item) for item in raw[0]}
-        return set()
-
     def queue(self, workflow: dict[str, Any]) -> str:
         response = self._json("/prompt", {"prompt": workflow, "client_id": str(uuid.uuid4())})
         prompt_id = response.get("prompt_id")
@@ -988,7 +961,6 @@ def launch_render(
             _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
         for plan in image_stages:
             _materialize_lora_stage(plan)
-        _ensure_image_stage_visible(client, endpoint, image_stages)
         event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages})
         generated = 0
         for item, seed in pairs:
