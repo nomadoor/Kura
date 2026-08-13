@@ -352,5 +352,57 @@ class CoreKeyReconciliationTest(unittest.TestCase):
             self.assertIn("comes from the run", str(caught.exception))
 
 
+class ImageVisibilityAndErrorSurfaceTest(unittest.TestCase):
+    PLANS = [{"image_name": "Kura_tmp/a.png"}]
+
+    def test_unavailable_listing_warns_instead_of_blocking(self) -> None:
+        from kura.render import _ensure_image_stage_visible
+
+        class Broken:
+            def input_image_names(self):
+                raise RuntimeError("LoadImage object_info query failed")
+
+        _ensure_image_stage_visible(Broken(), "http://127.0.0.1:8188", self.PLANS)
+
+    def test_empty_listing_warns_instead_of_blocking(self) -> None:
+        from kura.render import _ensure_image_stage_visible
+
+        class Empty:
+            def input_image_names(self):
+                return set()
+
+        _ensure_image_stage_visible(Empty(), "http://127.0.0.1:8188", self.PLANS)
+
+    def test_populated_listing_missing_the_name_still_only_warns(self) -> None:
+        from kura.render import _ensure_image_stage_visible
+
+        class Other:
+            def input_image_names(self):
+                return {"someone-elses.png"}
+
+        _ensure_image_stage_visible(Other(), "http://127.0.0.1:8188", self.PLANS)
+
+    def test_http_error_body_is_surfaced(self) -> None:
+        import urllib.error
+        import urllib.request
+        from io import BytesIO
+
+        from kura.render import ComfyUIClient
+
+        body = b'{"error": {"message": "Prompt outputs failed validation"}, "node_errors": {"1": {"errors": [{"details": "image - Invalid image file: Kura_tmp/a.png"}]}}}'
+
+        def raise_http(request, timeout=None):
+            raise urllib.error.HTTPError(request.full_url, 400, "Bad Request", {}, BytesIO(body))
+
+        original = urllib.request.urlopen
+        urllib.request.urlopen = raise_http
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                ComfyUIClient("http://127.0.0.1:8188", 5).queue({})
+        finally:
+            urllib.request.urlopen = original
+        self.assertIn("Invalid image file: Kura_tmp/a.png", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -518,25 +518,36 @@ def _image_values_for_item(item: dict[str, Any], patches: Any, plans: list[dict[
 
 
 def _ensure_image_stage_visible(client: Any, endpoint: str, plans: list[dict[str, Any]]) -> None:
+    """Check staged images against ComfyUI's input listing when that listing works.
+
+    Unlike a LoRA, a wrong image name cannot render silently: ComfyUI validates
+    `LoadImage.image` when the prompt is queued and rejects an unknown name. Some
+    builds also stop enumerating input files entirely, which makes an empty or
+    unavailable listing say nothing about staging. So this warns rather than
+    blocking, and leaves the server-side rejection as the real gate.
+    """
     if not plans:
         return
     safe_endpoint = _redact_url_userinfo(endpoint)
     expected = {plan["image_name"] for plan in plans}
     try:
         visible = client.input_image_names()
+        if expected - visible:
+            time.sleep(0.5)
+            visible = client.input_image_names()
     except RuntimeError as exc:
-        raise ValueError(f"ComfyUI input-image visibility could not be checked; endpoint={safe_endpoint}; error={exc}") from exc
+        print(f"warning: ComfyUI input-image listing is unavailable, so staging was not pre-checked; endpoint={safe_endpoint}: {exc}", flush=True)
+        return
+    if not visible:
+        print(f"warning: ComfyUI reports no input images at all, so staging was not pre-checked; endpoint={safe_endpoint}", flush=True)
+        return
     missing = sorted(expected - visible)
-    if not missing:
-        return
-    time.sleep(0.5)
-    missing = sorted(expected - client.input_image_names())
-    if not missing:
-        return
-    raise ValueError(
-        "ComfyUI cannot see staged promptset images: " + ", ".join(missing) + ". "
-        f"endpoint={safe_endpoint}; set comfyui.input_dir to the input directory used by that ComfyUI instance and compile the render run again."
-    )
+    if missing:
+        print(
+            "warning: ComfyUI does not list staged promptset images: " + ", ".join(missing) + f"; endpoint={safe_endpoint}. "
+            "If the render fails on LoadImage, set comfyui.input_dir to the input directory used by that ComfyUI instance and compile again.",
+            flush=True,
+        )
 
 
 def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, str]]:
@@ -703,8 +714,19 @@ class ComfyUIClient:
     def _json(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = urllib.request.Request(f"{self.endpoint}{path}", data=data, headers={"Content-Type": "application/json"} if data else {})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read())
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            # ComfyUI reports which node and input it rejected in the response body.
+            # Without it a caller only sees "HTTP Error 400: Bad Request".
+            try:
+                detail = exc.read().decode("utf-8", "replace").strip()
+            except OSError:
+                detail = ""
+            raise urllib.error.HTTPError(
+                exc.url, exc.code, f"{exc.reason}: {detail[:1000]}" if detail else exc.reason, exc.headers, None
+            ) from None
 
     def lora_names(self) -> set[str]:
         names: set[str] = set()
