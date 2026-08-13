@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from kura.backends import get_backend
+from kura.backends import get_backend, validate_backend_config
 from kura.executors import runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -889,6 +889,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     run = _load_yaml(source)
     if run.get("type") != "train":
         raise ValueError("kura run plan is for train runs; render runs use `kura render` commands")
+    validate_backend_config(run)
 
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}

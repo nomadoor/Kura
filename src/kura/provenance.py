@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     backend_root = package_root / "backends"
     container_root = package_root / "container_scripts"
     shared = backend_root / "shared.py"
+    registry = backend_root / "registry.py"
     if backend_name == "ai-toolkit":
         paths = [backend_root / "ai_toolkit.py"]
         symbols = [(shared, "_datasets")]
@@ -115,7 +117,41 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         raise ValueError("source identity input is missing: " + ", ".join(path.name for path in missing))
     parts = [(path.relative_to(package_root).as_posix(), path.read_bytes()) for path in [*paths, *runtime_paths]]
     parts.extend((f"{path.relative_to(package_root).as_posix()}:{symbol}", _source_symbol(path, symbol)) for path, symbol in symbols)
-    return _hash_source_parts(parts, backend_name, scope="selected-adapter-v1")
+    # Surface membership changes which authored intent reaches the adapter and
+    # therefore belongs to adapter identity even though registry dispatch itself
+    # remains outside the per-adapter source hash.
+    from kura.backends.registry import _GENERAL_ML_ALIASES, _GENERAL_UNAVAILABLE, get_backend
+
+    surface = get_backend(backend_name).surface
+    parts.append(("backends/registry.py:validate_backend_config", _source_symbol(registry, "validate_backend_config")))
+    parts.append((
+        "backend-surface-contract.json",
+        json.dumps(
+            {
+                "fields": sorted(surface.fields),
+                "escape_hatches": sorted(surface.escape_hatches),
+                "conditions": [
+                    {
+                        "field": item.field,
+                        "when_any": [
+                            {selector: list(allowed) for selector, allowed in clause}
+                            for clause in item.when_any
+                        ],
+                    }
+                    for item in surface.conditions
+                ],
+                "selector_defaults": dict(surface.selector_defaults),
+                "aliases": {
+                    key: value for key, value in _GENERAL_ML_ALIASES.items()
+                    if value in surface.fields | surface.escape_hatches
+                },
+                "unavailable": {**_GENERAL_UNAVAILABLE, **dict(surface.unavailable)},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+    ))
+    return _hash_source_parts(parts, backend_name, scope="selected-adapter-v2")
 
 
 def image_reference_identity(reference: str, observed_id: str | None = None) -> dict[str, Any]:

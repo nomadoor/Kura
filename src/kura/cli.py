@@ -20,7 +20,7 @@ from copy import deepcopy
 import yaml
 
 from kura import __version__
-from kura.backends import backend_names, get_backend
+from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
@@ -116,6 +116,7 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
     native = backend_config(run, backend_name)
+    validate_backend_config(run)
     validated_recipe(run, required=native.get("command") is None)
     adapter = get_backend(backend_name)
     if adapter.validate_dataset is not None:
@@ -245,6 +246,32 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
+    return 0
+
+
+def cmd_run_capabilities(args: argparse.Namespace) -> int:
+    payload = backend_capabilities(args.backend)
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    print(f"backend: {payload['backend']}")
+    print("common recipe fields: " + ", ".join(payload["common_recipe_fields"]))
+    print("backend.config fields (always applicable): " + ", ".join(payload["config_fields"]))
+    if payload["conditional_fields"]:
+        print("backend.config fields (conditional):")
+        for field, contract in payload["conditional_fields"].items():
+            clauses = []
+            for clause in contract["when_any"]:
+                clauses.append(" and ".join(
+                    f"{selector}=" + "|".join(str(value) for value in allowed)
+                    for selector, allowed in clause.items()
+                ))
+            print(f"  {field}: " + " or ".join(clauses))
+    if payload["unsupported_fields"]:
+        print("unsupported fields:")
+        for field, reason in payload["unsupported_fields"].items():
+            print(f"  {field}: {reason}")
+    print("escape hatches (inner values are not validated): " + ", ".join(payload["escape_hatches"]))
     return 0
 
 
@@ -1071,6 +1098,10 @@ def main() -> None:
     new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
     new.add_argument("--gpu")
     new.set_defaults(func=cmd_run_new)
+    capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface")
+    capabilities.add_argument("backend", choices=backend_names())
+    capabilities.add_argument("--json", action="store_true", help="Print the surface contract as JSON")
+    capabilities.set_defaults(func=cmd_run_capabilities)
     compile_parser = run_sub.add_parser("compile", help="Freeze run.yaml into resolved inputs")
     compile_parser.add_argument("run_id")
     compile_parser.set_defaults(func=cmd_run_compile)

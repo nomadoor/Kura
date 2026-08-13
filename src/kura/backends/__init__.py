@@ -7,7 +7,7 @@ from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tu
 from kura.backends.musubi_models import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, musubi_model_download_specs
 from kura.backends.sd_scripts import command_sd_scripts, compile_sd_scripts, display_sd_scripts
 from kura.backends.sd_scripts_models import sd_scripts_model_download_specs
-from kura.backends.registry import BACKENDS, BackendAdapter, backend_names, get_backend
+from kura.backends.registry import BACKENDS, BackendAdapter, BackendSurface, backend_capabilities, backend_names, get_backend, validate_backend_config
 
 __all__ = [
     "MUSUBI_ADAPTER_SCRIPTS",
@@ -23,6 +23,9 @@ __all__ = [
     "sd_scripts_model_download_specs",
     "BACKENDS",
     "BackendAdapter",
+    "BackendSurface",
+    "backend_capabilities",
     "backend_names",
     "get_backend",
+    "validate_backend_config",
 ]

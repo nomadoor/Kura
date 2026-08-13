@@ -84,7 +84,11 @@ An unknown estimate blocks launch unless the reviewed run explicitly records
 `safety.allow_unknown_disk_cache: true`. Cache files stay below the individual
 run; the shared dataset remains unchanged.
 
-Built-in sd-scripts selectors reject unknown `backend.config` keys. FLUX and
+All registered training adapters reject unknown top-level `backend.config`
+keys. Use `uv run kura run capabilities <backend>` (or `--json`) to inspect the
+always-applicable fields, architecture/mode-conditional fields, and explicitly
+unverified escape hatches. A conditional field used with the wrong selector is
+rejected before compilation rather than silently ignored. FLUX and
 Anima flow-matching controls (`timestep_sampling`, `discrete_flow_shift`, and
 `sigmoid_scale`), FLUX `guidance_scale` / `model_prediction_type`, Anima
 `qwen_image_vae_2d` / `vae_chunk_size`, and SDXL `unet_lr` /

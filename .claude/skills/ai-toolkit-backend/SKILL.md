@@ -42,6 +42,10 @@ cost, or is expected to increase elapsed time beyond roughly 2x.
   choice as a proposal, then record it in `run.yaml`.
 - Before launch, follow AGENTS.md: show `uv run kura run plan <run-id>` and get
   explicit approval.
+- Author ordinary controls using the names from
+  `uv run kura run capabilities ai-toolkit`; reserve `native_config` for an
+  explicitly reviewed raw AI-Toolkit process override. Do not use the removed
+  ambiguous `backend.config.config` spelling.
 
 ## Useful commands
 
@@ -50,6 +54,7 @@ uv run kura image build ai-toolkit --ref <branch-or-commit>
 uv run kura image inspect ai-toolkit
 uv run kura image publish ai-toolkit --dry-run
 uv run kura doctor docker
+uv run kura run capabilities ai-toolkit
 uv run kura run compile <run-id>
 uv run kura run launch <run-id> --executor docker --dry-run
 ```

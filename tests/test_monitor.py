@@ -55,7 +55,7 @@ class MonitorProjectionTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "ai"
             run_dir.mkdir(parents=True)
-            run = {"id": "ai", "type": "train", "recipe": {"steps": 10, "seed": 1}, "backend": {"name": "ai-toolkit", "config": {"config": {"network": {"linear": 8, "linear_alpha": 4}, "train": {"lr": 0.0001, "batch_size": 2}}}}}
+            run = {"id": "ai", "type": "train", "recipe": {"steps": 10, "seed": 1}, "backend": {"name": "ai-toolkit", "config": {"network_dim": 8, "network_alpha": 4, "learning_rate": 0.0001, "batch_size": 2}}}
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             summary = collect_run_summaries(root)[0]
         self.assertEqual(summary.key_config["rank"], 8)

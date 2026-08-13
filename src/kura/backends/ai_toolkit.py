@@ -40,29 +40,29 @@ def _nested(mapping: Any, *path: str) -> Any:
 def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display."""
     native = _ai_toolkit_backend_override(run)
-    config = native.get("config") if isinstance(native.get("config"), dict) else {}
+    config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
     first_dataset = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
     return {
         "architecture": native.get("model_arch") or _nested(config, "model", "arch"),
-        "rank": _nested(config, "network", "linear"),
-        "alpha": _nested(config, "network", "linear_alpha"),
-        "learning_rate": _nested(config, "train", "lr"),
-        "scheduler": _nested(config, "train", "lr_scheduler"),
-        "batch_size": _nested(config, "train", "batch_size"),
-        "gradient_accumulation_steps": _nested(config, "train", "gradient_accumulation_steps"),
+        "rank": native.get("network_dim") or _nested(config, "network", "linear"),
+        "alpha": native.get("network_alpha") or _nested(config, "network", "linear_alpha"),
+        "learning_rate": native.get("learning_rate") or _nested(config, "train", "lr"),
+        "scheduler": native.get("lr_scheduler") or _nested(config, "train", "lr_scheduler"),
+        "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
+        "gradient_accumulation_steps": native.get("gradient_accumulation_steps") or _nested(config, "train", "gradient_accumulation_steps"),
         "resolution": first_dataset.get("resolution") or native.get("resolution"),
-        "optimizer": _nested(config, "train", "optimizer"),
-        "precision": _nested(config, "train", "dtype"),
+        "optimizer": native.get("optimizer_type") or _nested(config, "train", "optimizer"),
+        "precision": native.get("mixed_precision") or _nested(config, "train", "dtype"),
         "memory": {
-            "gradient_checkpointing": _nested(config, "train", "gradient_checkpointing"),
-            "low_vram": _nested(config, "model", "low_vram"),
-            "quantize": _nested(config, "model", "quantize"),
-            "quantize_te": _nested(config, "model", "quantize_te"),
+            "gradient_checkpointing": native.get("gradient_checkpointing") if "gradient_checkpointing" in native else _nested(config, "train", "gradient_checkpointing"),
+            "low_vram": native.get("low_vram") if "low_vram" in native else _nested(config, "model", "low_vram"),
+            "quantize": native.get("quantize") if "quantize" in native else _nested(config, "model", "quantize"),
+            "quantize_te": native.get("quantize_te") if "quantize_te" in native else _nested(config, "model", "quantize_te"),
         },
         "checkpoint": {
-            "save_every_n_steps": _nested(config, "save", "save_every"),
-            "keep_last": _nested(config, "save", "max_step_saves_to_keep"),
+            "save_every_n_steps": native.get("save_every_n_steps") or _nested(config, "save", "save_every"),
+            "keep_last": native.get("save_last_n_steps") or _nested(config, "save", "max_step_saves_to_keep"),
         },
     }
 
@@ -93,12 +93,26 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
     recipe = validated_recipe(run, required=override.get("command") is None)
     model = run.get("model", {})
     datasets = _datasets(run)
-    native = override.get("config")
+    native = override.get("native_config")
     if isinstance(native, dict):
         native_train = native.get("train")
         duplicated = sorted({"steps", "seed"} & set(native_train)) if isinstance(native_train, dict) else []
         if duplicated:
-            raise ValueError("AI-Toolkit backend.config.config.train duplicates common recipe field(s): " + ", ".join(duplicated))
+            raise ValueError("AI-Toolkit backend.config.native_config.train duplicates common recipe field(s): " + ", ".join(duplicated))
+        protected: list[str] = []
+        for key in ("name", "type", "training_folder", "device", "datasets"):
+            if key in native:
+                protected.append(key)
+        native_model = native.get("model")
+        if isinstance(native_model, dict) and "name_or_path" in native_model:
+            protected.append("model.name_or_path")
+        if "model_arch" in override and isinstance(native_model, dict) and "arch" in native_model:
+            protected.append("model.arch (duplicates backend.config.model_arch)")
+        if protected:
+            raise ValueError(
+                "AI-Toolkit backend.config.native_config overrides Kura-owned field(s): "
+                + ", ".join(protected)
+            )
     config = {
         "job": "extension",
         "config": {
@@ -116,14 +130,39 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         },
     }
     process = config["config"]["process"][0]
-    if "config" in override and not isinstance(native, dict):
-        raise ValueError("backend.config.config must be a mapping for AI-Toolkit.")
+    if "native_config" in override and not isinstance(native, dict):
+        raise ValueError("backend.config.native_config must be a mapping for AI-Toolkit.")
     if isinstance(native, dict):
         for section, values in native.items():
             if section in process and isinstance(process[section], dict) and isinstance(values, dict):
                 process[section].update(deepcopy(values))
             else:
                 process[section] = deepcopy(values)
+    ordinary = {
+        "network": {"linear": "network_dim", "linear_alpha": "network_alpha"},
+        "train": {
+            "lr": "learning_rate", "lr_scheduler": "lr_scheduler", "optimizer": "optimizer_type",
+            "dtype": "mixed_precision", "batch_size": "batch_size",
+            "gradient_accumulation_steps": "gradient_accumulation_steps",
+            "gradient_checkpointing": "gradient_checkpointing",
+        },
+        "model": {"low_vram": "low_vram", "quantize": "quantize", "quantize_te": "quantize_te"},
+        "save": {"save_every": "save_every_n_steps", "max_step_saves_to_keep": "save_last_n_steps"},
+    }
+    for section, fields in ordinary.items():
+        for native_key, authored_key in fields.items():
+            if authored_key in override:
+                raw_section = native.get(section) if isinstance(native, dict) else None
+                if isinstance(raw_section, dict) and native_key in raw_section:
+                    raise ValueError(
+                        f"AI-Toolkit backend.config.{authored_key} duplicates "
+                        f"backend.config.native_config.{section}.{native_key}"
+                    )
+                process.setdefault(section, {})[native_key] = deepcopy(override[authored_key])
+    if override.get("resolution") is not None:
+        for dataset in process.get("datasets", []):
+            if isinstance(dataset, dict):
+                dataset["resolution"] = deepcopy(override["resolution"])
     atomic_write_yaml(destination.with_suffix(".yaml"), config)
     return command_ai_toolkit(run)
 
@@ -137,6 +176,9 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
         cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
         return {"cwd": cwd, "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}
+    combined = sorted(set(override) - {"command"})
+    if combined:
+        raise ValueError("AI-Toolkit explicit command cannot be combined with: " + ", ".join(combined))
     if not isinstance(command, dict):
         raise ValueError(
             "AI-Toolkit command is not configured. "
