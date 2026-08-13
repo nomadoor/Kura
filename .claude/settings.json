@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "ask": [
+      "Edit(src/**)",
+      "Write(src/**)",
+      "Edit(tests/**)",
+      "Write(tests/**)",
+      "Edit(scripts/**)",
+      "Write(scripts/**)",
+      "Edit(docker/**)",
+      "Write(docker/**)"
+    ]
+  }
+}

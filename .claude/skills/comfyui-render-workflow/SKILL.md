@@ -130,6 +130,14 @@ workflow_patches:
 - Promptset keys Kura owns directly: `id`, `prompt`, `negative_prompt`, `seeds`,
   and `meta`. Put provenance (source spec, authored size, generator version)
   under `meta` — anything else must be bound or compile fails.
+- `prompt`, `negative_prompt`, and `seed` need bindings too. An unbound one is
+  not a harmless default: the workflow renders its own value while Kura records
+  the promptset's in file names and `samples/images.jsonl`. If the workflow
+  really does fix one, say so with `render.workflow_fixed: [<name>]` rather than
+  leaving the disagreement unstated.
+- Never set `seed`, `lora`, `checkpoint`, or `model_patch` on an item; those come
+  from the run. Per-case seeds go in `seeds`.
+- `id` must be a single safe file name, unique in the promptset.
 - Patch existing API workflow node IDs and fields only.
 - Validate node/field existence before launch.
 - Keep prompt text and seed decisions in promptsets/run files, not ad-hoc scripts.

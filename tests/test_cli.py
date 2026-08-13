@@ -2207,7 +2207,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "local"},
                     "workflow_patches": {},
-                    "render": {"default_seed": None},
+                    "render": {"default_seed": None, "workflow_fixed": ["prompt", "negative_prompt", "seed"]},
                 }),
                 encoding="utf-8",
             )
@@ -2483,7 +2483,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
-                    "render": {"default_seed": None},
+                    "render": {"default_seed": None, "workflow_fixed": ["prompt", "negative_prompt", "seed"]},
                 }),
                 encoding="utf-8",
             )
@@ -2517,7 +2517,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
-                    "render": {"default_seed": None},
+                    "render": {"default_seed": None, "workflow_fixed": ["prompt", "negative_prompt", "seed"]},
                 }),
                 encoding="utf-8",
             )
@@ -2556,7 +2556,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
-                    "render": {"default_seed": None},
+                    "render": {"default_seed": None, "workflow_fixed": ["prompt", "negative_prompt", "seed"]},
                 }),
                 encoding="utf-8",
             )
@@ -2606,7 +2606,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
-                    "render": {"default_seed": None},
+                    "render": {"default_seed": None, "workflow_fixed": ["prompt", "negative_prompt", "seed"]},
                 }),
                 encoding="utf-8",
             )
@@ -2658,7 +2658,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                     "executor": {"name": "runpod"},
                     "workflow_patches": {},
-                    "render": {"default_seed": None},
+                    "render": {"default_seed": None, "workflow_fixed": ["prompt", "negative_prompt", "seed"]},
                 }),
                 encoding="utf-8",
             )

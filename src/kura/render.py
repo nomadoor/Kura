@@ -34,6 +34,16 @@ PROMPTSET_CORE_KEYS = frozenset({"id", "prompt", "negative_prompt", "seeds", "me
 # `negative_prompt` stays optional for promptsets that do not set one.
 PATCHES_WITHOUT_ITEM_KEY = frozenset({"lora", "checkpoint", "model_patch", "seed", "negative_prompt"})
 
+# Patch names an item must never carry: writing them there looks like it sets a
+# per-case value, but the value would come from the run and the item would be
+# ignored. `seeds` is the per-item spelling; `seed` is the binding name.
+ITEM_FORBIDDEN_KEYS = frozenset({"lora", "checkpoint", "model_patch", "seed"})
+
+# Core keys that must be bound when the promptset supplies them. Without a
+# binding the value is carried into filenames and images.jsonl while the
+# workflow renders its own hardcoded one.
+CORE_KEYS_REQUIRING_BINDINGS = ("prompt", "negative_prompt", "seed")
+
 
 def now() -> str:
     return datetime.now().astimezone().isoformat()
@@ -146,16 +156,55 @@ def validate_patch_bindings(workflow: dict[str, Any], patches: Any) -> None:
             raise ValueError(f"workflow_patches.{name} does not match this workflow: {exc}") from exc
 
 
-def reconcile_promptset(items: list[dict[str, Any]], patches: Any) -> None:
+def _core_binding_required(name: str, items: list[dict[str, Any]], default_seed: Any) -> bool:
+    if name == "prompt":
+        return True
+    if name == "negative_prompt":
+        return any(str(item.get("negative_prompt", "")).strip() for item in items)
+    return default_seed is not None or any(item.get("seeds") for item in items)
+
+
+def reconcile_promptset(items: list[dict[str, Any]], patches: Any, *, default_seed: Any = None, workflow_fixed: Any = None) -> None:
     """Fail when a promptset and the declared bindings disagree about which parameters exist.
 
     Kura cannot know whether an unbound key is an input the user expects to take
     effect or provenance from whatever generated the promptset, so it refuses to
-    guess in either direction.
+    guess in either direction. Core keys are checked too: an unbound `prompt` or
+    `seed` still reaches file names and `samples/images.jsonl` while the workflow
+    renders its own hardcoded value, which is the silently-wrong result this
+    whole contract exists to prevent.
     """
     bound = set(patches) if isinstance(patches, dict) else set()
+    fixed = set(workflow_fixed) if isinstance(workflow_fixed, (list, tuple, set)) else set()
+    unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
+    if unknown_fixed:
+        raise ValueError(
+            f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}"
+        )
+    conflicting = sorted(fixed & bound)
+    if conflicting:
+        raise ValueError(
+            f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}; a parameter is either bound or fixed by the workflow"
+        )
+    for name in CORE_KEYS_REQUIRING_BINDINGS:
+        if name in bound or name in fixed:
+            continue
+        if not _core_binding_required(name, items, default_seed):
+            continue
+        source = "render.default_seed or promptset seeds" if name == "seed" else f"promptset {name}"
+        raise ValueError(
+            f"this render uses {source} but run.yaml workflow_patches has no {name} binding, so the workflow would render its own "
+            f"value while Kura recorded yours. Bind {name} to a workflow node/field, or list it under render.workflow_fixed to "
+            "declare that this workflow deliberately fixes it."
+        )
     required = {name for name in bound if name not in PATCHES_WITHOUT_ITEM_KEY}
     for item in items:
+        forbidden = sorted(set(item) & ITEM_FORBIDDEN_KEYS)
+        if forbidden:
+            raise ValueError(
+                f"promptset item {item['id']!r} sets {', '.join(forbidden)}, which comes from the run rather than the item and would be "
+                "ignored. Use `seeds` for per-case seeds; the checkpoint is set by inputs.checkpoint."
+            )
         unbound = sorted(set(item) - PROMPTSET_CORE_KEYS - bound)
         if unbound:
             raise ValueError(
@@ -409,11 +458,13 @@ def _freeze_promptset_images(run_dir: Path, promptset_path: Path, items: list[di
                 raise ValueError(f"promptset item {item['id']!r} {name} escapes the promptset directory: {raw}")
             if not source.is_file():
                 raise ValueError(f"promptset item {item['id']!r} {name} does not exist: {source}")
-            target_dir = frozen_root / name
+            target_dir = (frozen_root / name).resolve()
             target_dir.mkdir(parents=True, exist_ok=True)
-            target = target_dir / f"{item['id']}{source.suffix}"
+            target = (target_dir / f"{item['id']}{source.suffix}").resolve()
+            if target.parent != target_dir:
+                raise ValueError(f"promptset item {item['id']!r} does not resolve to a frozen image inside the run")
             shutil.copyfile(source, target)
-            relative = target.relative_to(run_dir).as_posix()
+            relative = target.relative_to(run_dir.resolve()).as_posix()
             item[name] = relative
             records.append({"patch": name, "prompt_id": item["id"], "source": str(source), "resolved": relative, "digest": digest(target)})
     return records
@@ -609,8 +660,24 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
     )
 
 
+def _validate_prompt_id(value: Any, line_number: int) -> str:
+    """Ids become file names under `resolved/` and `samples/`, so they must be inert.
+
+    An id is joined into output paths; anything that can traverse or collide would
+    let a promptset write outside its run or silently overwrite another case.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"promptset:{line_number}: id and prompt are required")
+    if value in (".", "..") or set(value) & set("/\\") or "\x00" in value:
+        raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
+    if value != Path(value).name or value.startswith("."):
+        raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
+    return value
+
+
 def promptset(path: Path) -> list[dict[str, Any]]:
     prompts: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
@@ -618,8 +685,12 @@ def promptset(path: Path) -> list[dict[str, Any]]:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ValueError(f"promptset:{line_number}: invalid JSON ({exc.msg})") from exc
-        if not isinstance(item, dict) or not item.get("id") or not item.get("prompt"):
+        if not isinstance(item, dict) or not item.get("prompt"):
             raise ValueError(f"promptset:{line_number}: id and prompt are required")
+        item_id = _validate_prompt_id(item.get("id"), line_number)
+        if item_id in seen:
+            raise ValueError(f"promptset:{line_number}: duplicate id {item_id!r} (already used on line {seen[item_id]})")
+        seen[item_id] = line_number
         prompts.append(item)
     return prompts
 
@@ -730,7 +801,8 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     patches = run.get("workflow_patches", {})
     items = promptset(promptset_path)
     validate_patch_bindings(workflow, patches)
-    reconcile_promptset(items, patches)
+    render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
+    reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=render_settings.get("workflow_fixed"))
     resolved = run_dir / "resolved"
     resolved.mkdir(exist_ok=True)
     frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)

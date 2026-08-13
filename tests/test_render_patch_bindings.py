@@ -181,6 +181,22 @@ class RenderImageBindingTest(unittest.TestCase):
             source.write_bytes(b"changed-after-compile")
             self.assertEqual(frozen_image.read_bytes(), b"control-a")
 
+    def test_compile_cannot_write_outside_the_frozen_image_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
+            run_dir = self._workspace(
+                root, patches=patches,
+                items=[{"id": "../../../run", "prompt": "x", "seeds": [1], "control_image": "payload.yaml"}],
+            )
+            run_yaml = run_dir / "run.yaml"
+            before = run_yaml.read_bytes()
+            (root / "promptsets" / "grid" / "payload.yaml").write_bytes(b"type: pwned\n")
+            with self.assertRaises(ValueError) as caught:
+                compile_render(root, run_dir)
+            self.assertIn("single safe file name", str(caught.exception))
+            self.assertEqual(run_yaml.read_bytes(), before)
+
     def test_compile_rejects_a_missing_or_escaping_control_image(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -254,6 +270,86 @@ class RenderImageBindingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PromptIdSafetyTest(unittest.TestCase):
+    def _write(self, root: Path, items: list[dict[str, Any]]) -> Path:
+        path = root / "prompts.jsonl"
+        path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+        return path
+
+    def test_traversing_id_is_rejected(self) -> None:
+        from kura.render import promptset
+
+        with tempfile.TemporaryDirectory() as tmp:
+            for bad in ("../../../run", "a/b", "..", ".", "a\\b", ".hidden"):
+                path = self._write(Path(tmp), [{"id": bad, "prompt": "x"}])
+                with self.assertRaises(ValueError, msg=bad) as caught:
+                    promptset(path)
+                self.assertIn("single safe file name", str(caught.exception))
+
+    def test_duplicate_ids_are_rejected(self) -> None:
+        from kura.render import promptset
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(Path(tmp), [{"id": "a", "prompt": "x"}, {"id": "a", "prompt": "y"}])
+            with self.assertRaises(ValueError) as caught:
+                promptset(path)
+            self.assertIn("duplicate id", str(caught.exception))
+
+    def test_ordinary_ids_still_load(self) -> None:
+        from kura.render import promptset
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(Path(tmp), [{"id": "01_portrait", "prompt": "x"}, {"id": "b-2.v1", "prompt": "y"}])
+            self.assertEqual([item["id"] for item in promptset(path)], ["01_portrait", "b-2.v1"])
+
+
+class CoreKeyReconciliationTest(unittest.TestCase):
+    ITEMS = [{"id": "a", "prompt": "USER PROMPT", "seeds": [123]}]
+
+    def test_unbound_prompt_is_rejected(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset(self.ITEMS, {})
+        self.assertIn("no prompt binding", str(caught.exception))
+
+    def test_unbound_seed_is_rejected(self) -> None:
+        patches = {"prompt": {"node": "6", "field": "inputs.text"}}
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset(self.ITEMS, patches)
+        self.assertIn("no seed binding", str(caught.exception))
+
+    def test_unbound_negative_prompt_is_rejected_only_when_used(self) -> None:
+        patches = {"prompt": {"node": "6", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}}
+        reconcile_promptset(self.ITEMS, patches)
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset([{**self.ITEMS[0], "negative_prompt": "blurry"}], patches)
+        self.assertIn("no negative_prompt binding", str(caught.exception))
+
+    def test_default_seed_alone_requires_a_seed_binding(self) -> None:
+        patches = {"prompt": {"node": "6", "field": "inputs.text"}}
+        with self.assertRaises(ValueError):
+            reconcile_promptset([{"id": "a", "prompt": "x"}], patches, default_seed=42)
+        reconcile_promptset([{"id": "a", "prompt": "x"}], patches)
+
+    def test_workflow_fixed_declares_a_deliberately_hardcoded_parameter(self) -> None:
+        reconcile_promptset(self.ITEMS, {}, workflow_fixed=["prompt", "seed"])
+
+    def test_workflow_fixed_rejects_unknown_and_conflicting_names(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset(self.ITEMS, {}, workflow_fixed=["prompt", "seed", "strength"])
+        self.assertIn("strength", str(caught.exception))
+        patches = {"prompt": {"node": "6", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}}
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset(self.ITEMS, patches, workflow_fixed=["prompt"])
+        self.assertIn("both claim", str(caught.exception))
+
+    def test_run_sourced_names_are_rejected_as_item_keys(self) -> None:
+        patches = {"prompt": {"node": "6", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}}
+        for key, value in (("seed", 456), ("lora", "other.safetensors"), ("model_patch", "p.safetensors"), ("checkpoint", "c")):
+            with self.assertRaises(ValueError, msg=key) as caught:
+                reconcile_promptset([{**self.ITEMS[0], key: value}], patches)
+            self.assertIn("comes from the run", str(caught.exception))
 
 
 if __name__ == "__main__":

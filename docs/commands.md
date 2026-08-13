@@ -183,11 +183,27 @@ checkpoint. Every other binding reads the promptset key of the same name.
 `kura render compile` copies it into `resolved/images/` and `kura render launch`
 stages it into `comfyui.input_dir`, then removes it afterwards.
 
+`id` becomes a file name under `resolved/` and `samples/`, so it must be a single
+safe name — no path separators, no `.`/`..`, no leading dot — and must be unique
+within the promptset.
+
 `kura render compile` refuses to guess when the two disagree. It fails when a
-promptset key has no binding, when a bound key is missing from an item, and when
-a binding names a node or field the workflow does not have. A key with no home in
-the workflow — a `width` for a workflow that takes its resolution from the loaded
-image — is a signal to fix the promptset or the run, not to build around Kura.
+promptset key has no binding, when a bound key is missing from an item, when a
+binding names a node or field the workflow does not have, and when an item sets a
+run-sourced name (`seed`, `lora`, `checkpoint`, `model_patch`) that would be
+ignored. A key with no home in the workflow — a `width` for a workflow that takes
+its resolution from the loaded image — is a signal to fix the promptset or the
+run, not to build around Kura.
+
+`prompt`, `negative_prompt`, and `seed` are checked the same way. Rendering with
+prompts or seeds but no matching binding fails compile, because the workflow would
+render its own hardcoded value while `samples/images.jsonl` recorded yours. When a
+workflow genuinely fixes one of these, declare it instead of binding it:
+
+```yaml
+render:
+  workflow_fixed: [negative_prompt]
+```
 
 ## Images
 
