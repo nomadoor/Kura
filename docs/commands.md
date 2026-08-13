@@ -40,6 +40,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | Command | Purpose |
 | --- | --- |
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner\|sd-scripts] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
+| `uv run kura run capabilities <backend> [--json]` | Show the `backend.config` fields that backend accepts, which of them apply only to some architectures or modes, its unverified escape hatches, and concepts it does not support |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
@@ -228,3 +229,22 @@ Image names are set in `workspace.yaml`. Build only when needed.
 | `uv run kura image build musubi-tuner [--ref <git-ref>]` | Build the Musubi Tuner image; `--ref` overrides the pinned upstream release |
 | `uv run kura image build sd-scripts [--ref <git-ref>]` | Build the sd-scripts image; `--ref` overrides the pinned upstream commit |
 | `uv run kura image build comfyui --ref <ref>` | Build the ComfyUI render image |
+
+## Upgrading to 0.3.0
+
+`workspace.yaml`, `run.yaml` `backend.config`, and render promptsets are now
+closed: a value with no consumer is refused where the file is loaded instead of
+being accepted and ignored. A workspace that worked on 0.2.0 can therefore fail
+on the first command after upgrading. Every message names the fix, and nothing
+is silently changed.
+
+| What you may see | What to do |
+| --- | --- |
+| `workspace.yaml contains obsolete setting(s) ... Delete these lines.` | Delete them. `kura init` wrote `runpod.container_cwd` in older versions and nothing has read it since the container working directory started coming from the backend adapter. |
+| `workspace.yaml <section> contains unsupported key(s): 'x'; use 'y'` | Correct the key. `uv run kura doctor workspace` prints every accepted section and key. |
+| `<backend> backend.config contains unsupported key(s): 'optimizer'; use 'optimizer_type'` | Correct the key. `uv run kura run capabilities <backend>` prints the accepted fields, including which ones apply only to some architectures or modes. |
+| `promptset item '<id>' declares <key> but run.yaml workflow_patches has no binding for it` | Bind the key to a workflow node/field, move it under `meta` if it is provenance rather than a render input, or remove it. |
+| AI-Toolkit `backend.config.config` is rejected | Use the ordinary fields (`learning_rate`, `optimizer_type`, `lr_scheduler`, …). Raw nested process overrides move to `backend.config.native_config`, which is reported as an unverified escape hatch. |
+
+Compiled runs from 0.2.0 are unaffected: `resolved/` stays immutable and is not
+re-validated. The checks apply when a run is compiled or a workspace is loaded.
