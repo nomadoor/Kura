@@ -142,6 +142,11 @@ workflow_patches:
   the promptset's in file names and `samples/images.jsonl`. If the workflow
   really does fix one, say so with `render.workflow_fixed: [<name>]` rather than
   leaving the disagreement unstated.
+- `workflow_fixed` is a declaration that Kura does not own the parameter, not a
+  way to keep using it. The value is recorded as `null`, and fixing `seed` also
+  forbids `seeds` / `render.default_seed` so cases are not expanded along a
+  parameter the workflow controls. Never reach for it to silence a binding error
+  on a parameter the workflow actually exposes — bind that one.
 - Never set `seed`, `lora`, `checkpoint`, or `model_patch` on an item; those come
   from the run. Per-case seeds go in `seeds`.
 - `id` must be a single safe file name, unique in the promptset.

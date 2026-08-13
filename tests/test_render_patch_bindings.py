@@ -333,7 +333,15 @@ class CoreKeyReconciliationTest(unittest.TestCase):
         reconcile_promptset([{"id": "a", "prompt": "x"}], patches)
 
     def test_workflow_fixed_declares_a_deliberately_hardcoded_parameter(self) -> None:
-        reconcile_promptset(self.ITEMS, {}, workflow_fixed=["prompt", "seed"])
+        reconcile_promptset([{"id": "a", "prompt": "x"}], {}, workflow_fixed=["prompt", "seed"])
+
+    def test_fixed_seed_forbids_per_case_seeds(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset(self.ITEMS, {}, workflow_fixed=["prompt", "seed"])
+        self.assertIn("set seeds", str(caught.exception))
+        with self.assertRaises(ValueError) as caught:
+            reconcile_promptset([{"id": "a", "prompt": "x"}], {}, default_seed=42, workflow_fixed=["prompt", "seed"])
+        self.assertIn("default_seed must be null", str(caught.exception))
 
     def test_workflow_fixed_rejects_unknown_and_conflicting_names(self) -> None:
         with self.assertRaises(ValueError) as caught:
@@ -373,6 +381,84 @@ class ComfyUIErrorSurfaceTest(unittest.TestCase):
         finally:
             urllib.request.urlopen = original
         self.assertIn("Invalid image file: Kura_tmp/a.png", str(caught.exception))
+
+
+class BindingNameSafetyTest(unittest.TestCase):
+    def test_traversing_binding_name_is_rejected(self) -> None:
+        for bad in ("../../../../../tmp/escape", "a/b", "..", ".", ".hidden", 7, ""):
+            patches = {bad: {"node": "15", "field": "inputs.image", "type": "image"}}
+            with self.assertRaises(ValueError, msg=repr(bad)) as caught:
+                validate_patch_bindings(WORKFLOW, patches)
+            self.assertIn("plain names", str(caught.exception))
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                image_patch_names(patches)
+
+    def test_compile_cannot_escape_through_a_binding_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            escape = Path(tmp) / "escape"
+            patches = {**BASE_PATCHES, "../../../../escape/control": {"node": "15", "field": "inputs.image", "type": "image"}}
+            run_dir = RenderImageBindingTest()._workspace(
+                root, patches=patches,
+                items=[{"id": "a", "prompt": "x", "seeds": [1], "../../../../escape/control": "a/control.png"}],
+            )
+            source = root / "promptsets" / "grid" / "a" / "control.png"
+            source.parent.mkdir()
+            source.write_bytes(b"control-a")
+            with self.assertRaises(ValueError) as caught:
+                compile_render(root, run_dir)
+            self.assertIn("plain names", str(caught.exception))
+            self.assertFalse(escape.exists())
+
+
+class WorkflowFixedRecordTest(unittest.TestCase):
+    def test_fixed_prompt_and_seed_are_not_claimed_in_the_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = RenderImageBindingTest()._workspace(
+                root, patches={},
+                items=[{"id": "case_a", "prompt": "PROMPT A"}, {"id": "case_b", "prompt": "PROMPT B"}],
+            )
+            run_yaml = run_dir / "run.yaml"
+            run = yaml.safe_load(run_yaml.read_text())
+            run["render"]["default_seed"] = None
+            run["render"]["workflow_fixed"] = ["prompt", "negative_prompt", "seed"]
+            run_yaml.write_text(yaml.safe_dump(run), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            queued: list[dict[str, Any]] = []
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    queued.append(workflow)
+                    return f"prompt-{len(queued)}"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "out.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"bytes"
+
+            import kura.render as render_module
+
+            original = render_module.ComfyUIClient
+            render_module.ComfyUIClient = FakeClient  # type: ignore[assignment]
+            try:
+                self.assertEqual(launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188"), 0)
+            finally:
+                render_module.ComfyUIClient = original  # type: ignore[assignment]
+
+            self.assertEqual(len(queued), 2, "a fixed seed must not expand cases")
+            self.assertEqual(queued[0]["6"]["inputs"]["text"], "", "the workflow prompt must be left alone")
+            records = [json.loads(line) for line in (run_dir / "samples" / "images.jsonl").read_text().splitlines()]
+            self.assertEqual([r["prompt"] for r in records], [None, None])
+            self.assertEqual([r["negative_prompt"] for r in records], [None, None])
+            self.assertEqual([r["seed"] for r in records], [None, None])
+            self.assertEqual(records[0]["workflow_fixed"], ["prompt", "negative_prompt", "seed"])
+            self.assertEqual([r["file"] for r in records], ["samples/images/case_a_0.png", "samples/images/case_b_0.png"])
 
 
 if __name__ == "__main__":

@@ -2475,7 +2475,7 @@ class RenderNotificationTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
             (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "missing.safetensors"}}}), encoding="utf-8")
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2509,7 +2509,7 @@ class RenderNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2548,7 +2548,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: curated/toy.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2598,7 +2598,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: direct.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2650,7 +2650,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: curated/toy.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",

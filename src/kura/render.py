@@ -126,7 +126,20 @@ def _set_path(document: dict[str, Any], node: str, field: str, value: Any) -> No
     target[pieces[-1]] = value
 
 
-def _binding_target(name: str, patch: Any) -> tuple[str, str, str]:
+def is_safe_component(value: Any) -> bool:
+    """True when a value can be joined into a path without escaping or colliding."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return False
+    if set(value) & set("/\\") or value in (".", "..") or value.startswith("."):
+        return False
+    return value == Path(value).name
+
+
+def _binding_target(name: Any, patch: Any) -> tuple[str, str, str]:
+    # A binding name reaches the filesystem as `resolved/images/<name>/` and as a
+    # staged file name, so it is constrained the same way a promptset id is.
+    if not is_safe_component(name):
+        raise ValueError(f"workflow_patches keys must be plain names, not paths: {name!r}")
     if not isinstance(patch, dict) or not isinstance(patch.get("node"), str) or not isinstance(patch.get("field"), str):
         raise ValueError(f"workflow_patches.{name} requires node and field")
     kind = patch.get("type", "value")
@@ -186,6 +199,23 @@ def reconcile_promptset(items: list[dict[str, Any]], patches: Any, *, default_se
         raise ValueError(
             f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}; a parameter is either bound or fixed by the workflow"
         )
+    if "seed" in fixed:
+        # Kura must not expand cases along a parameter the workflow controls; every
+        # image would be identical while file names and images.jsonl claimed a seed.
+        if default_seed is not None:
+            raise ValueError("render.workflow_fixed includes seed, so render.default_seed must be null")
+        seeded = [item["id"] for item in items if item.get("seeds")]
+        if seeded:
+            raise ValueError(
+                f"render.workflow_fixed includes seed, but these promptset items set seeds: {', '.join(seeded)}. "
+                "The workflow would render its own seed for every one of them. Remove the seeds, or bind seed to a workflow node/field."
+            )
+    for name in ("prompt", "negative_prompt"):
+        if name in fixed and any(str(item.get(name, "")).strip() for item in items):
+            print(
+                f"warning: render.workflow_fixed includes {name}, so promptset {name} values are not rendered and are recorded as null.",
+                flush=True,
+            )
     for name in CORE_KEYS_REQUIRING_BINDINGS:
         if name in bound or name in fixed:
             continue
@@ -458,7 +488,11 @@ def _freeze_promptset_images(run_dir: Path, promptset_path: Path, items: list[di
                 raise ValueError(f"promptset item {item['id']!r} {name} escapes the promptset directory: {raw}")
             if not source.is_file():
                 raise ValueError(f"promptset item {item['id']!r} {name} does not exist: {source}")
-            target_dir = (frozen_root / name).resolve()
+            frozen_root.mkdir(parents=True, exist_ok=True)
+            resolved_root = frozen_root.resolve()
+            target_dir = (resolved_root / name).resolve()
+            if target_dir.parent != resolved_root:
+                raise ValueError(f"workflow_patches.{name} does not resolve to a frozen image directory inside the run")
             target_dir.mkdir(parents=True, exist_ok=True)
             target = (target_dir / f"{item['id']}{source.suffix}").resolve()
             if target.parent != target_dir:
@@ -664,9 +698,7 @@ def _validate_prompt_id(value: Any, line_number: int) -> str:
     """
     if not isinstance(value, str) or not value:
         raise ValueError(f"promptset:{line_number}: id and prompt are required")
-    if value in (".", "..") or set(value) & set("/\\") or "\x00" in value:
-        raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
-    if value != Path(value).name or value.startswith("."):
+    if not is_safe_component(value):
         raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
     return value
 
@@ -898,9 +930,15 @@ def launch_render(
     prompts = promptset(promptset_used_path)
     checkpoint = inputs.get("checkpoint", {})
     default_seed = frozen.get("render", {}).get("default_seed")
-    pairs = [(item, seed) for item in prompts for seed in item.get("seeds", [default_seed]) if seed is not None]
-    if not pairs:
-        raise ValueError("promptset has no seeds and render.default_seed is not set")
+    workflow_fixed = frozen.get("render", {}).get("workflow_fixed") or []
+    if "seed" in workflow_fixed:
+        # The workflow owns the seed, so there is nothing to vary and nothing Kura
+        # may claim about it. One image per case, and the record says seed=None.
+        pairs = [(item, None) for item in prompts]
+    else:
+        pairs = [(item, seed) for item in prompts for seed in item.get("seeds", [default_seed]) if seed is not None]
+        if not pairs:
+            raise ValueError("promptset has no seeds and render.default_seed is not set")
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
     lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
     model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
@@ -972,11 +1010,15 @@ def launch_render(
                 handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
             for index, image in enumerate(client.wait(prompt_id)):
                 suffix = Path(image.get("filename", "image.png")).suffix or ".png"
-                relative = f"samples/images/{item['id']}_seed{seed}_{index}{suffix}"
+                seed_segment = "" if seed is None else f"_seed{seed}"
+                relative = f"samples/images/{item['id']}{seed_segment}_{index}{suffix}"
                 image_path = run_dir / relative
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 image_path.write_bytes(client.download(image))
-                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": item["prompt"], "negative_prompt": item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "created": now()}
+                # A parameter the workflow fixes was never Kura's to set, and Kura
+                # cannot read it back without a binding. Record it as unknown
+                # rather than repeating a promptset value that did not reach the render.
+                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item["prompt"], "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
@@ -984,7 +1026,7 @@ def launch_render(
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
         status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, image_count=generated)
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
