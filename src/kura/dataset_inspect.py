@@ -114,6 +114,13 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
         lines.append("  observations.aspect_ratio_mismatches: (none)")
     findings = report.get("structural_findings") if isinstance(report.get("structural_findings"), list) else []
     lines.append(f"  structural_findings.count: {len(findings)}")
+    finding_codes = Counter(
+        code
+        for item in findings
+        if isinstance(item, dict) and isinstance((code := item.get("code")), str) and code
+    )
+    for code, count in sorted(finding_codes.items()):
+        lines.append(f"  structural_findings.{code}: {count}")
     videos = report.get("videos") if isinstance(report.get("videos"), dict) else {}
     lines.append(f"  videos.count: {videos.get('count')}")
     return "\n".join(lines)

@@ -90,6 +90,30 @@ class DatasetInspectTests(unittest.TestCase):
         self.assertIn("observations.aspect_ratio_mismatches.control: 1", text)
         self.assertIn("structural_findings.count: 0", text)
 
+    def test_text_report_groups_structural_findings_by_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "findings"
+            images = dataset / "images"
+            images.mkdir(parents=True)
+            (images / "one.png").write_bytes(png_bytes(1, 1))
+            (dataset / "dataset.yaml").write_text("stats:\n  count: 2\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text(
+                "{not json}\n" + json.dumps({"id": "one", "path": "images/one.png", "caption": "plain"}) + "\n",
+                encoding="utf-8",
+            )
+
+            report = inspect_dataset("findings", workspace=root)
+
+        text = format_dataset_inspect(report)
+        self.assertIn("structural_findings.count: 2", text)
+        self.assertIn("structural_findings.declared_count_mismatch: 1", text)
+        self.assertIn("structural_findings.invalid_items_jsonl: 1", text)
+        self.assertLess(
+            text.index("structural_findings.declared_count_mismatch"),
+            text.index("structural_findings.invalid_items_jsonl"),
+        )
+
     def test_inspect_reports_dataset_facts_without_verdicts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
