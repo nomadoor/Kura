@@ -161,7 +161,7 @@ A promptset is JSONL, one case per line. Kura owns five keys directly:
 | Key | Meaning |
 | --- | --- |
 | `id` | Case identifier; required, and used to name output files |
-| `prompt` | Positive prompt; required |
+| `prompt` | Positive prompt; required unless `render.workflow_fixed` declares `prompt` |
 | `negative_prompt` | Negative prompt; optional |
 | `seeds` | Seeds to render for this case; falls back to `render.default_seed` |
 | `meta` | Provenance that is not a render input, ignored by rendering |
@@ -212,6 +212,9 @@ which parameters the run did not own. Fixing `seed` also stops case expansion â€
 `render.default_seed` must be null, no item may carry `seeds`, each case renders
 once, and the file name drops its `_seed` segment. Otherwise Kura would queue one
 image per seed, name them apart, and record seeds that never reached the workflow.
+When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
+placeholder that is never rendered would make the file claim an input Kura does
+not own.
 
 ## Images
 

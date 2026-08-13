@@ -11,6 +11,23 @@ For a render intended to evaluate a trained LoRA, complete the
 `lora-evaluation` skill first. That skill owns the evaluation question and
 model-aware prompt judgment; this skill owns ComfyUI execution.
 
+## Stop conditions
+
+Stop and report to the user when:
+
+1. Compile says a promptset key is unbound.
+2. The workflow has no node/field for a required parameter.
+3. Local ComfyUI is unavailable or is not the configured endpoint.
+4. A required model is not visible.
+5. Completing the task would require editing Kura source.
+
+Do not split runs, derive workflows, call ComfyUI directly, download models, or
+edit Kura to route around a stop. Translate the failure for the user: name the
+promptset key, say whether the workflow has a matching node/field, distinguish a
+run.yaml binding fix from a workflow limitation, and state when Kura itself
+would need a separately authorized change. Do not describe a missing binding as
+a missing Kura capability.
+
 ## Rules
 
 - Render runs are Kura-native runs. Do not create a second session/result system.
@@ -145,8 +162,9 @@ workflow_patches:
 - `workflow_fixed` is a declaration that Kura does not own the parameter, not a
   way to keep using it. The value is recorded as `null`, and fixing `seed` also
   forbids `seeds` / `render.default_seed` so cases are not expanded along a
-  parameter the workflow controls. Never reach for it to silence a binding error
-  on a parameter the workflow actually exposes — bind that one.
+  parameter the workflow controls. A promptset may omit `prompt` when prompt is
+  workflow-fixed. Never reach for `workflow_fixed` to silence a binding error on
+  a parameter the workflow actually exposes — bind that one.
 - Never set `seed`, `lora`, `checkpoint`, or `model_patch` on an item; those come
   from the run. Per-case seeds go in `seeds`.
 - `id` must be a single safe file name, unique in the promptset.

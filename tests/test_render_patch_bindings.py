@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import sys
 import tempfile
 import unittest
@@ -304,6 +305,15 @@ class PromptIdSafetyTest(unittest.TestCase):
             path = self._write(Path(tmp), [{"id": "01_portrait", "prompt": "x"}, {"id": "b-2.v1", "prompt": "y"}])
             self.assertEqual([item["id"] for item in promptset(path)], ["01_portrait", "b-2.v1"])
 
+    def test_prompt_can_be_omitted_only_when_the_caller_declares_it_fixed(self) -> None:
+        from kura.render import promptset
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(Path(tmp), [{"id": "fixed_prompt_case"}])
+            with self.assertRaises(ValueError):
+                promptset(path)
+            self.assertEqual(promptset(path, require_prompt=False), [{"id": "fixed_prompt_case"}])
+
 
 class CoreKeyReconciliationTest(unittest.TestCase):
     ITEMS = [{"id": "a", "prompt": "USER PROMPT", "seeds": [123]}]
@@ -351,6 +361,12 @@ class CoreKeyReconciliationTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             reconcile_promptset(self.ITEMS, patches, workflow_fixed=["prompt"])
         self.assertIn("both claim", str(caught.exception))
+
+    def test_workflow_fixed_rejects_non_list_shapes(self) -> None:
+        for malformed in ("prompt", {"prompt": True}, 7, ["prompt", 7]):
+            with self.assertRaises(ValueError, msg=repr(malformed)) as caught:
+                reconcile_promptset(self.ITEMS, {}, workflow_fixed=malformed)
+            self.assertIn("must be a list of names", str(caught.exception))
 
     def test_run_sourced_names_are_rejected_as_item_keys(self) -> None:
         patches = {"prompt": {"node": "6", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}}
@@ -411,13 +427,36 @@ class BindingNameSafetyTest(unittest.TestCase):
             self.assertFalse(escape.exists())
 
 
+class WorkflowRepositoryCheckTest(unittest.TestCase):
+    def test_standalone_promptset_rejects_unsafe_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            promptsets = root / "promptsets"
+            promptsets.mkdir()
+            (promptsets / "unsafe.jsonl").write_text(
+                json.dumps({"id": "../../escape", "prompt": "x"}) + "\n",
+                encoding="utf-8",
+            )
+            spec = importlib.util.spec_from_file_location(
+                "kura_check_workflows_test",
+                Path(__file__).resolve().parents[1] / "scripts" / "check_workflows.py",
+            )
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.ROOT = root
+            module.WORKFLOWS = root / "workflows"
+            module.PROMPTSETS = promptsets
+            self.assertEqual(module.main(), 1)
+
+
 class WorkflowFixedRecordTest(unittest.TestCase):
     def test_fixed_prompt_and_seed_are_not_claimed_in_the_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_dir = RenderImageBindingTest()._workspace(
                 root, patches={},
-                items=[{"id": "case_a", "prompt": "PROMPT A"}, {"id": "case_b", "prompt": "PROMPT B"}],
+                items=[{"id": "case_a"}, {"id": "case_b"}],
             )
             run_yaml = run_dir / "run.yaml"
             run = yaml.safe_load(run_yaml.read_text())
@@ -459,6 +498,32 @@ class WorkflowFixedRecordTest(unittest.TestCase):
             self.assertEqual([r["seed"] for r in records], [None, None])
             self.assertEqual(records[0]["workflow_fixed"], ["prompt", "negative_prompt", "seed"])
             self.assertEqual([r["file"] for r in records], ["samples/images/case_a_0.png", "samples/images/case_b_0.png"])
+
+    def test_missing_prompt_is_rejected_when_workflow_does_not_fix_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = RenderImageBindingTest()._workspace(
+                root, patches={"prompt": {"node": "6", "field": "inputs.text"}},
+                items=[{"id": "case_a"}],
+            )
+            with self.assertRaises(ValueError) as caught:
+                compile_render(root, run_dir)
+            self.assertIn("id and prompt are required", str(caught.exception))
+
+    def test_compile_rejects_scalar_workflow_fixed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = RenderImageBindingTest()._workspace(
+                root, patches=BASE_PATCHES,
+                items=[{"id": "case_a", "prompt": "x", "seeds": [1]}],
+            )
+            run_yaml = run_dir / "run.yaml"
+            run = yaml.safe_load(run_yaml.read_text())
+            run["render"]["workflow_fixed"] = "prompt"
+            run_yaml.write_text(yaml.safe_dump(run), encoding="utf-8")
+            with self.assertRaises(ValueError) as caught:
+                compile_render(root, run_dir)
+            self.assertIn("must be a list of names", str(caught.exception))
 
 
 if __name__ == "__main__":

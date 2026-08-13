@@ -135,6 +135,15 @@ def is_safe_component(value: Any) -> bool:
     return value == Path(value).name
 
 
+def normalized_workflow_fixed(value: Any) -> list[str]:
+    """Return the declared fixed core inputs, rejecting YAML shape mistakes."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("render.workflow_fixed must be a list of names, for example: [prompt, seed]")
+    return value
+
+
 def _binding_target(name: Any, patch: Any) -> tuple[str, str, str]:
     # A binding name reaches the filesystem as `resolved/images/<name>/` and as a
     # staged file name, so it is constrained the same way a promptset id is.
@@ -188,7 +197,7 @@ def reconcile_promptset(items: list[dict[str, Any]], patches: Any, *, default_se
     whole contract exists to prevent.
     """
     bound = set(patches) if isinstance(patches, dict) else set()
-    fixed = set(workflow_fixed) if isinstance(workflow_fixed, (list, tuple, set)) else set()
+    fixed = set(normalized_workflow_fixed(workflow_fixed))
     unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
     if unknown_fixed:
         raise ValueError(
@@ -703,7 +712,7 @@ def _validate_prompt_id(value: Any, line_number: int) -> str:
     return value
 
 
-def promptset(path: Path) -> list[dict[str, Any]]:
+def promptset(path: Path, *, require_prompt: bool = True) -> list[dict[str, Any]]:
     prompts: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -713,7 +722,7 @@ def promptset(path: Path) -> list[dict[str, Any]]:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ValueError(f"promptset:{line_number}: invalid JSON ({exc.msg})") from exc
-        if not isinstance(item, dict) or not item.get("prompt"):
+        if not isinstance(item, dict) or (require_prompt and not item.get("prompt")):
             raise ValueError(f"promptset:{line_number}: id and prompt are required")
         item_id = _validate_prompt_id(item.get("id"), line_number)
         if item_id in seen:
@@ -825,11 +834,13 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         raise ValueError(f"workflow is not valid JSON: {exc}") from exc
     sidecar = _workflow_sidecar(workflow_path)
     lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
-    patches = run.get("workflow_patches", {})
-    items = promptset(promptset_path)
-    validate_patch_bindings(workflow, patches)
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
-    reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=render_settings.get("workflow_fixed"))
+    workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
+    fixed = set(workflow_fixed)
+    patches = run.get("workflow_patches", {})
+    items = promptset(promptset_path, require_prompt="prompt" not in fixed)
+    validate_patch_bindings(workflow, patches)
+    reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
     resolved = run_dir / "resolved"
     resolved.mkdir(exist_ok=True)
     frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)
@@ -927,10 +938,10 @@ def launch_render(
     promptset_used_path = run_dir / "resolved" / "promptset_used.jsonl"
     if not promptset_used_path.is_file():
         raise ValueError("render promptset is not frozen; run kura render compile first")
-    prompts = promptset(promptset_used_path)
+    workflow_fixed = normalized_workflow_fixed(frozen.get("render", {}).get("workflow_fixed"))
+    prompts = promptset(promptset_used_path, require_prompt="prompt" not in workflow_fixed)
     checkpoint = inputs.get("checkpoint", {})
     default_seed = frozen.get("render", {}).get("default_seed")
-    workflow_fixed = frozen.get("render", {}).get("workflow_fixed") or []
     if "seed" in workflow_fixed:
         # The workflow owns the seed, so there is nothing to vary and nothing Kura
         # may claim about it. One image per case, and the record says seed=None.
@@ -1003,7 +1014,7 @@ def launch_render(
         generated = 0
         for item, seed in pairs:
             patches = frozen.get("workflow_patches", {})
-            patched = patch_workflow(workflow, patches, prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name, item=item, image_values=_image_values_for_item(item, patches, image_stages))
+            patched = patch_workflow(workflow, patches, prompt=item.get("prompt", ""), negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name, item=item, image_values=_image_values_for_item(item, patches, image_stages))
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
@@ -1018,7 +1029,7 @@ def launch_render(
                 # A parameter the workflow fixes was never Kura's to set, and Kura
                 # cannot read it back without a binding. Record it as unknown
                 # rather than repeating a promptset value that did not reach the render.
-                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item["prompt"], "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
+                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item.get("prompt", ""), "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})

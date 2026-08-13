@@ -13,18 +13,23 @@ training LoRAs, rendering images, preparing datasets. Assume that by default.
   as `docker ps`, `docker inspect`, and reading user-approved ComfyUI config is
   allowed. Any exceptional external mutation requires separate, explicit user
   approval naming that action.
-- **Do not run git commands.** Do not modify Kura's source code, tests, or
-  checks. The workspace being a git repository is an implementation detail;
-  if the user explicitly asks to update Kura itself, treat that as a
-  maintenance action and confirm the update target before using git for that
-  update.
+- Reading Kura is always allowed, including source, tests, docs, skills, and
+  read-only Git inspection such as `git status`, `git log`, `git diff`, and
+  `git show`. Do not run Git commands that change the worktree, index, history,
+  remotes, or external state. Do not modify Kura's source code, tests, or checks.
+  If the user explicitly asks to update Kura itself, treat that as a maintenance
+  action and confirm the update target before making those changes. Reviewing or
+  diagnosing Kura is not permission to modify it.
 - Skills may direct you to update knowledge files (training knowledge cards,
-  run `notes.md`). Edit those files; leave git entirely alone.
+  run `notes.md`). Edit those files, but do not stage, commit, or otherwise
+  mutate Git state unless the user separately authorizes Kura maintenance.
 - Read: Core Model and Using Kura below. Skip the Developing Kura section.
 
-Writes to `src/`, `tests/`, `scripts/`, and `docker/` prompt for approval by
-configuration, not by memory. Treat that prompt as the session-kind boundary: in
-a usage session the answer is no, and the need to edit Kura is a finding to
+In supported Claude Code sessions, repository permissions ask before direct
+Edit/Write operations in `src/`, `tests/`, `scripts/`, and `docker/`. This is
+defense in depth, not the source of authority. It does not cover every agent or
+every shell-based write path; all agents must still follow the authorization
+rules in this file. In a usage session, the need to edit Kura is a finding to
 report, not a step to take.
 
 **When Kura cannot express the task.** Every rule here says do X or do not do Y;

@@ -9,6 +9,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from kura.render import is_safe_component  # noqa: E402
+
+
 WORKFLOWS = ROOT / "workflows"
 PROMPTSETS = ROOT / "promptsets"
 
@@ -70,8 +75,14 @@ def main() -> int:
                 except json.JSONDecodeError as exc:
                     errors.append(f"{path.relative_to(ROOT)}:{index} invalid JSONL: {exc}")
                     continue
-                if not isinstance(item, dict) or "id" not in item or "prompt" not in item:
-                    errors.append(f"{path.relative_to(ROOT)}:{index} must contain at least id and prompt")
+                # Whether prompt is required depends on the consuming render run:
+                # a workflow-fixed prompt is deliberately absent. Compile owns that
+                # agreement; this repository-wide check only validates standalone
+                # promptset structure that can be judged without guessing a run.
+                if not isinstance(item, dict) or "id" not in item:
+                    errors.append(f"{path.relative_to(ROOT)}:{index} must contain at least id")
+                elif not is_safe_component(item["id"]):
+                    errors.append(f"{path.relative_to(ROOT)}:{index} id must be a single safe file name, not a path")
     if errors:
         print("Workflow validation failed:", file=sys.stderr)
         for error in errors:
