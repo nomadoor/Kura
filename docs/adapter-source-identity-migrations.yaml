@@ -7,6 +7,78 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: backend-surface-contract-ai-toolkit-2026-08-13
+    backend: ai-toolkit
+    reason: >-
+      Include the declared authoring surface in adapter identity, reject
+      unknown outer keys, and replace the old raw config spelling with ordinary
+      owned fields plus the explicitly unverified native_config escape hatch.
+      The identity also records semantic correction and unsupported-concept
+      messages. Recompiling both recorded SDXL settings through the ordinary
+      fields produces a structurally identical AI-Toolkit process mapping and
+      the same runtime command; YAML key order alone differs.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 98925c87a75df9b4a87bef7731e5cfcb45b9fd8ca6068208222d833d2269c2ba
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 15b4b86ca8085693b3fe8c7b080c7aac2e3afc359ee7fff27cac223a41a58314
+  - id: backend-surface-contract-musubi-2026-08-13
+    backend: musubi-tuner
+    reason: >-
+      Include the declared and selector-conditional authoring surface in
+      adapter identity; reject unknown or inapplicable outer keys; and fail if
+      a built-in path does not produce exactly one training command. The
+      recorded paths use applicable declared keys and still produce exactly
+      one training command, so their generated commands and runtime behavior
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 53cf630a361c3c599db4443eebae9c655677b05bc69ffdfb55e81fd0e77ffd9e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7e9d64c7bc319f1d111ccb6eef943c1862d20e0833b044bd0d3a91ce561b0960
+  - id: backend-surface-contract-sd-scripts-2026-08-13
+    backend: sd-scripts
+    reason: >-
+      Include the architecture/mode-conditional authoring surface in adapter
+      identity and route unknown or inapplicable key errors through the shared
+      actionable message. Record reasons for known but unowned deepspeed,
+      fused-backward, and batch placements. All listed evidence uses applicable
+      declared keys, so generated configs, commands, optimizer steps, and
+      artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+      - sd-scripts-anima-lora-docker-2026-08-03
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sd15-docker-2026-08-01
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v1
+      value: 271fd9b21c4a023111e0bedd72ff26838db8cf04195d8fe0b67eb47c2590fb74
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c1451dc93ccda483da9ed7d470d3382f12d1074271928bbbbdea2826400c92ea
   - id: scoped-identity-ai-toolkit-2026-07-31
     backend: ai-toolkit
     reason: registry removal and byte-identical shared-helper relocation

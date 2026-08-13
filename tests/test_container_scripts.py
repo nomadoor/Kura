@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
 import io
 import json
 import os
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from kura.container_scripts import script_source
+from kura.backends import BACKENDS, BackendSurface
 from kura.init_templates import SD_SCRIPTS_DOCKERFILE_TEMPLATE, SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE
 from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
 
@@ -69,6 +71,19 @@ class ContainerScriptTests(unittest.TestCase):
         with patch.object(Path, "read_bytes", changed_truthy):
             self.assertEqual(ai_baseline, adapter_source_identity("ai-toolkit")["value"])
             self.assertNotEqual(musubi_baseline, adapter_source_identity("musubi-tuner")["value"])
+
+    def test_adapter_identity_tracks_declared_surface(self) -> None:
+        baseline = adapter_source_identity("ai-toolkit")
+        adapter = BACKENDS["ai-toolkit"]
+        changed_surface = BackendSurface(
+            fields=adapter.surface.fields | {"future_field"},
+            escape_hatches=adapter.surface.escape_hatches,
+        )
+        with patch.dict(BACKENDS, {"ai-toolkit": replace(adapter, surface=changed_surface)}):
+            changed = adapter_source_identity("ai-toolkit")
+
+        self.assertEqual(baseline["scope"], "selected-adapter-v2")
+        self.assertNotEqual(baseline["value"], changed["value"])
 
     def test_legacy_adapter_identity_remains_available(self) -> None:
         identity = legacy_adapter_source_identity("musubi-tuner")

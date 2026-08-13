@@ -54,26 +54,32 @@ is extra gates). Rules:
 
 Gather these before proposing parameters:
 
-1. `uv run kura run plan <run-id>` — the Resources section (local GPU and
+1. `uv run kura run capabilities <backend> --json` — the public authored
+   vocabulary for the selected adapter. Check each field's architecture/mode
+   applicability before writing `backend.config`; do not grep adapter source or
+   guess a near-synonym such as `optimizer`/`scheduler`. Treat listed escape
+   hatches as unverified native input, not ordinary Kura configuration.
+2. `uv run kura run plan <run-id>` — the Resources section (local GPU and
    VRAM, executor, architecture, artifact filenames, memory flags) and the
-   model download estimate.
-2. The dataset facts, gathered **before** proposing anything: item count,
+   model download estimate. A surface-contract refusal here means the draft is
+   not an approvable plan; correct `run.yaml` before showing it to the user.
+3. The dataset facts, gathered **before** proposing anything: item count,
    resolution distribution, caption statistics (empty / duplicates / trigger
    word occurrences), pair integrity, task type. Use `kura dataset inspect`
    once it exists; until then use `kura dataset validate` plus a manual look,
    and the `dataset-prep` skill. Never propose parameters without this
    material.
-3. Knowledge cards: read **only** the cards that match this run —
+4. Knowledge cards: read **only** the cards that match this run —
    `knowledge/<architecture>.md` (the architecture string from the plan's
    Resources section) and `knowledge/user-preferences.md`. Do not bulk-read
    the whole knowledge directory. If no exact card exists and the architecture
    is a video adapter (`wan`, `hunyuan_video`, `hunyuan_video_1_5`,
    `framepack`, `kandinsky5`), read `knowledge/video-architectures.md` as a
    placeholder and treat it as a weak starting point.
-4. Prior evidence: `runs/` history for the same architecture on this
+5. Prior evidence: `runs/` history for the same architecture on this
    hardware — successful configs, OOM failures, observed speed. Real outcomes
    on this machine beat any rule of thumb.
-5. Backend mechanics: `musubi-tuner-backend` / `ai-toolkit-backend` skills for
+6. Backend mechanics: `musubi-tuner-backend` / `ai-toolkit-backend` skills for
    flag names, constraints, and interactions.
 
 ## Building the proposal

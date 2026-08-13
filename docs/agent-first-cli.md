@@ -49,8 +49,18 @@ For training, `resolved/backend-command.lock.json` is the command that executes.
 Kura does not regenerate it from newer adapter code at launch. A run missing
 that lock must be recompiled as a new run.
 
-New training runs use `backend.name` plus opaque `backend.config`. Only
-optimizer-step count and seed currently have proven common recipe semantics:
+New training runs use `backend.name` plus an adapter-declared
+`backend.config`. Inspect that public surface before authoring instead of
+reading adapter source or guessing a trainer's spelling:
+
+```bash
+uv run kura run capabilities musubi-tuner
+uv run kura run capabilities ai-toolkit --json
+```
+
+Unknown top-level keys are rejected with a correction when Kura knows the
+likely spelling. Only optimizer-step count and seed currently have proven
+common recipe semantics:
 
 ```yaml
 schema_version: 2
@@ -67,6 +77,14 @@ recipe:
 
 `params` and `backend_overrides` are rejected. Accepting multiple spellings or
 merging config sources would hide which native decision actually ran.
+
+Capability output separates ordinary fields from escape hatches. Escape-hatch
+contents are frozen with the run but are marked unverified: using `command`,
+`extra_args`, a native dataset config, or AI-Toolkit `native_config` requires
+knowledge of that trainer. AI-Toolkit's ordinary controls use the same authored
+spellings shown by the capability command, such as `learning_rate`,
+`optimizer_type`, `network_dim`, and `batch_size`; raw nested process overrides
+belong under `native_config`.
 
 ## What Kura does not normalize
 

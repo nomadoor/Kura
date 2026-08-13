@@ -15,6 +15,8 @@ Use this skill for `backend.name: musubi-tuner` work.
 - Validate model roles by safetensors headers; do not trust filenames.
 - Never use FLUX.1 `ae.safetensors` as a normal FLUX.2 VAE.
 - Keep ComfyUI as an output compatibility target, not a training dependency.
+- Query `uv run kura run capabilities musubi-tuner` before authoring
+  `backend.config`; do not discover accepted keys by reading adapter source.
 
 ## Resource policy
 

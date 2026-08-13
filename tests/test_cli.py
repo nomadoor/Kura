@@ -3286,7 +3286,8 @@ class RunPodPullSelectionTests(unittest.TestCase):
             item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": len(payload), "mtime_ns": 10}
             (destination / item["name"]).write_bytes(payload)
             (run_dir / "status.json").write_text(json.dumps({"mirrored_outputs": [{"name": item["name"], "remote_path": item["path"], "remote_mtime_ns": item["mtime_ns"]}]}), encoding="utf-8")
-            with patch("kura.run_commands.runpod_ssh._run_bounded") as transfer:
+            with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded") as transfer:
                 pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
             transfer.assert_not_called()
             self.assertTrue(pulled[0]["skipped"])
@@ -3378,7 +3379,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         return {
             "id": "ai-toolkit-example",
             "type": "train",
-            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"config": {"network": {"linear": 4, "linear_alpha": 4}, "train": {"lr": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer": "adamw8bit"}, "model": {"quantize": False, "quantize_te": False, "low_vram": False}}, "dataset_folder": "/workspace/datasets/tiny/images"}},
+            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False, "dataset_folder": "/workspace/datasets/tiny/images"}},
             "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
             "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
             "recipe": {"steps": 1, "seed": 42},
@@ -3405,14 +3406,14 @@ class AiToolkitBackendTests(unittest.TestCase):
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
         run = self._run()
-        run["backend"] = {"name": "ai-toolkit", "config": {"config": ["not", "a", "mapping"]}}
+        run["backend"] = {"name": "ai-toolkit", "config": {"native_config": ["not", "a", "mapping"]}}
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "backend.config.config"):
+            with self.assertRaisesRegex(ValueError, "backend.config.native_config"):
                 compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
 
     def test_compile_rejects_native_steps_that_duplicate_recipe(self) -> None:
         run = self._run()
-        run["backend"]["config"]["config"]["train"]["steps"] = 2
+        run["backend"]["config"]["native_config"] = {"train": {"steps": 2}}
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
                 compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
@@ -3669,7 +3670,7 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_rejects_secret_explicit_env(self) -> None:
         run = self._run()
         run["recipe"] = {}
-        run["backend"]["config"]["command"] = {"cwd": "/opt/musubi-tuner", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "secret"}}
+        run["backend"]["config"] = {"command": {"cwd": "/opt/musubi-tuner", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "secret"}}}
 
         with self.assertRaisesRegex(ValueError, "env must not contain secrets"):
             command_musubi_tuner(run)
