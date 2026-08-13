@@ -179,9 +179,11 @@ workflow_patches:
 
 `lora`, `checkpoint`, and `model_patch` take their value from the run's
 checkpoint. Every other binding reads the promptset key of the same name.
-`type: image` marks a value as a path relative to the promptset's own directory;
-`kura render compile` copies it into `resolved/images/` and `kura render launch`
-stages it into `comfyui.input_dir`, then removes it afterwards.
+`type: image` is supported only by the local executor. It marks a value as a
+path relative to the promptset's own directory; `kura render compile` copies it
+into `resolved/images/` and `kura render launch` stages it into
+`comfyui.input_dir`, then removes it afterwards. RunPod compile rejects image
+bindings before creating frozen image artifacts.
 
 `id` becomes a file name under `resolved/` and `samples/`, so it must be a single
 safe name — no path separators, no `.`/`..`, no leading dot — and must be unique

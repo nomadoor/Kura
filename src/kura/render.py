@@ -437,6 +437,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     stage_dir = (lora_dir / stage_subdir).resolve()
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {
+        "kind": "LoRA",
         "source": str(source),
         "target": str(target),
         "lora_name": f"{stage_subdir}/{target.name}",
@@ -468,7 +469,7 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
     target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
-    return {"source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
+    return {"kind": "model patch", "source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
 
 
 def _freeze_promptset_images(run_dir: Path, promptset_path: Path, items: list[dict[str, Any]], patches: Any) -> list[dict[str, Any]]:
@@ -554,7 +555,7 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
                 continue
             key = source.relative_to(run_dir).as_posix()
             target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
-            plans[key] = {"patch": name, "frozen": key, "source": str(source), "target": str(target), "image_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
+            plans[key] = {"kind": "image", "patch": name, "frozen": key, "source": str(source), "target": str(target), "image_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
     return list(plans.values())
 
 
@@ -609,7 +610,7 @@ def _fetch_endpoint_object_info(endpoint: str, *, timeout: float = 15) -> dict[s
     return payload
 
 
-def _materialize_lora_stage(plan: dict[str, Any]) -> None:
+def _materialize_stage(plan: dict[str, Any]) -> None:
     source = Path(plan["source"])
     target = Path(plan["target"])
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -620,7 +621,7 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
         if target.is_file() and not target.is_symlink() and digest(target) == digest(source):
             plan["created"] = False
             return
-        raise ValueError(f"ComfyUI LoRA stage target already exists with different content: {target}")
+        raise ValueError(f"ComfyUI {plan.get('kind', 'file')} stage target already exists with different content: {target}")
     if plan["mode"] == "copy":
         shutil.copy2(source, target)
         plan["created"] = True
@@ -634,7 +635,7 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
         plan["created"] = True
 
 
-def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
+def _cleanup_stage(plan: dict[str, Any] | None) -> None:
     if not plan or plan.get("cleanup") != "remove_after_render" or not plan.get("created"):
         return
     target = Path(str(plan.get("target", "")))
@@ -841,6 +842,10 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     items = promptset(promptset_path, require_prompt="prompt" not in fixed)
     validate_patch_bindings(workflow, patches)
     reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    is_runpod = executor.get("name") == "runpod"
+    if is_runpod and image_patch_names(patches):
+        raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
     resolved = run_dir / "resolved"
     resolved.mkdir(exist_ok=True)
     frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)
@@ -851,16 +856,12 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
-    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
-    is_runpod = executor.get("name") == "runpod"
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
     if frozen_images:
         frozen["promptset_images"] = frozen_images
     if is_runpod:
-        if image_patch_names(patches):
-            raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
         sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
         workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
         registry = merged_registry(sidecar_models, workspace_models)
@@ -947,7 +948,7 @@ def launch_render(
         # may claim about it. One image per case, and the record says seed=None.
         pairs = [(item, None) for item in prompts]
     else:
-        pairs = [(item, seed) for item in prompts for seed in item.get("seeds", [default_seed]) if seed is not None]
+        pairs = [(item, seed) for item in prompts for seed in (item.get("seeds") or [default_seed]) if seed is not None]
         if not pairs:
             raise ValueError("promptset has no seeds and render.default_seed is not set")
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
@@ -1003,13 +1004,13 @@ def launch_render(
                     "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
                 )
         if lora_stage:
-            _materialize_lora_stage(lora_stage)
+            _materialize_stage(lora_stage)
             _ensure_lora_stage_visible(client, endpoint, lora_stage)
         if model_patch_stage:
-            _materialize_lora_stage(model_patch_stage)
+            _materialize_stage(model_patch_stage)
             _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
         for plan in image_stages:
-            _materialize_lora_stage(plan)
+            _materialize_stage(plan)
         event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages})
         generated = 0
         for item, seed in pairs:
@@ -1050,7 +1051,7 @@ def launch_render(
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:
-        _cleanup_lora_stage(lora_stage)
-        _cleanup_lora_stage(model_patch_stage)
+        _cleanup_stage(lora_stage)
+        _cleanup_stage(model_patch_stage)
         for plan in image_stages:
-            _cleanup_lora_stage(plan)
+            _cleanup_stage(plan)

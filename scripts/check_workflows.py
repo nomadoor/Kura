@@ -69,6 +69,7 @@ def main() -> int:
                 continue
             if not lines:
                 errors.append(f"{path.relative_to(ROOT)} is empty")
+            seen_ids: dict[str, int] = {}
             for index, line in enumerate(lines, 1):
                 try:
                     item = json.loads(line)
@@ -83,6 +84,13 @@ def main() -> int:
                     errors.append(f"{path.relative_to(ROOT)}:{index} must contain at least id")
                 elif not is_safe_component(item["id"]):
                     errors.append(f"{path.relative_to(ROOT)}:{index} id must be a single safe file name, not a path")
+                elif item["id"] in seen_ids:
+                    errors.append(
+                        f"{path.relative_to(ROOT)}:{index} duplicate id {item['id']!r} "
+                        f"(already used on line {seen_ids[item['id']]})"
+                    )
+                else:
+                    seen_ids[item["id"]] = index
     if errors:
         print("Workflow validation failed:", file=sys.stderr)
         for error in errors:

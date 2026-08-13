@@ -36,6 +36,44 @@ BASE_PATCHES = {
 }
 
 
+def _workspace(root: Path, *, patches: dict[str, Any], items: list[dict[str, Any]], input_dir: Path | None = None, executor: str = "local") -> Path:
+    run_dir = root / "runs" / "render-1"
+    (run_dir / "resolved").mkdir(parents=True)
+    (root / "workflows").mkdir()
+    (root / "promptsets" / "grid").mkdir(parents=True)
+    train_out = root / "runs" / "train-1" / "outputs"
+    train_out.mkdir(parents=True)
+    (train_out.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
+    (train_out / "example.safetensors").write_bytes(b"fake-lora")
+    comfyui = {"lora_dir": str(root / "loras")}
+    if input_dir is not None:
+        comfyui.update({"input_dir": str(input_dir), "input_stage_subdir": "Kura_tmp", "input_stage_mode": "copy"})
+    (root / "workspace.yaml").write_text(yaml.safe_dump({"comfyui": comfyui}), encoding="utf-8")
+    (root / "workflows" / "wf.json").write_text(json.dumps(WORKFLOW), encoding="utf-8")
+    (root / "promptsets" / "grid" / "prompts.jsonl").write_text(
+        "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8",
+    )
+    (run_dir / "run.yaml").write_text(
+        yaml.safe_dump({
+            "schema_version": 1,
+            "type": "render",
+            "inputs": {
+                "train_run": "train-1",
+                "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
+                "workflow": {"path": "workflows/wf.json", "digest": None},
+                "promptset": {"path": "promptsets/grid/prompts.jsonl", "digest": None},
+            },
+            "generator": {"name": "comfyui", "endpoint": ""},
+            "executor": {"name": executor},
+            "workflow_patches": patches,
+            "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": 42},
+        }),
+        encoding="utf-8",
+    )
+    (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+    return run_dir
+
+
 class PatchBindingTest(unittest.TestCase):
     def test_binding_to_missing_node_is_rejected(self) -> None:
         with self.assertRaises(ValueError) as caught:
@@ -111,47 +149,10 @@ class ReconcilePromptsetTest(unittest.TestCase):
 
 
 class RenderImageBindingTest(unittest.TestCase):
-    def _workspace(self, root: Path, *, patches: dict[str, Any], items: list[dict[str, Any]], input_dir: Path | None = None) -> Path:
-        run_dir = root / "runs" / "render-1"
-        (run_dir / "resolved").mkdir(parents=True)
-        (root / "workflows").mkdir()
-        (root / "promptsets" / "grid").mkdir(parents=True)
-        train_out = root / "runs" / "train-1" / "outputs"
-        train_out.mkdir(parents=True)
-        (train_out.parent / "run.yaml").write_text("id: train-1\ntype: train\n", encoding="utf-8")
-        (train_out / "example.safetensors").write_bytes(b"fake-lora")
-        comfyui = {"lora_dir": str(root / "loras")}
-        if input_dir is not None:
-            comfyui.update({"input_dir": str(input_dir), "input_stage_subdir": "Kura_tmp", "input_stage_mode": "copy"})
-        (root / "workspace.yaml").write_text(yaml.safe_dump({"comfyui": comfyui}), encoding="utf-8")
-        (root / "workflows" / "wf.json").write_text(json.dumps(WORKFLOW), encoding="utf-8")
-        (root / "promptsets" / "grid" / "prompts.jsonl").write_text(
-            "".join(json.dumps(item) + "\n" for item in items), encoding="utf-8",
-        )
-        (run_dir / "run.yaml").write_text(
-            yaml.safe_dump({
-                "schema_version": 1,
-                "type": "render",
-                "inputs": {
-                    "train_run": "train-1",
-                    "checkpoint": {"path": "runs/train-1/outputs/example.safetensors", "hash": None},
-                    "workflow": {"path": "workflows/wf.json", "digest": None},
-                    "promptset": {"path": "promptsets/grid/prompts.jsonl", "digest": None},
-                },
-                "generator": {"name": "comfyui", "endpoint": ""},
-                "executor": {"name": "local"},
-                "workflow_patches": patches,
-                "render": {"output_dir": "samples/images", "timeout_sec": 5, "default_seed": 42},
-            }),
-            encoding="utf-8",
-        )
-        (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
-        return run_dir
-
     def test_compile_rejects_promptset_key_the_workflow_cannot_accept(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            run_dir = self._workspace(
+            run_dir = _workspace(
                 root, patches=BASE_PATCHES,
                 items=[{"id": "a", "prompt": "x", "seeds": [1], "width": 512, "height": 768}],
             )
@@ -164,7 +165,7 @@ class RenderImageBindingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
-            run_dir = self._workspace(
+            run_dir = _workspace(
                 root, patches=patches,
                 items=[{"id": "a", "prompt": "x", "seeds": [1], "control_image": "a/control.png"}],
             )
@@ -186,7 +187,7 @@ class RenderImageBindingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
-            run_dir = self._workspace(
+            run_dir = _workspace(
                 root, patches=patches,
                 items=[{"id": "../../../run", "prompt": "x", "seeds": [1], "control_image": "payload.yaml"}],
             )
@@ -202,7 +203,7 @@ class RenderImageBindingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
-            run_dir = self._workspace(
+            run_dir = _workspace(
                 root, patches=patches,
                 items=[{"id": "a", "prompt": "x", "seeds": [1], "control_image": "a/missing.png"}],
             )
@@ -216,7 +217,7 @@ class RenderImageBindingTest(unittest.TestCase):
             input_dir = root / "comfy-input"
             input_dir.mkdir()
             patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
-            run_dir = self._workspace(
+            run_dir = _workspace(
                 root, patches=patches, input_dir=input_dir,
                 items=[
                     {"id": "a", "prompt": "x", "seeds": [1], "control_image": "a/control.png"},
@@ -234,9 +235,6 @@ class RenderImageBindingTest(unittest.TestCase):
             class FakeClient:
                 def __init__(self, endpoint: str, timeout: int) -> None:
                     pass
-
-                def input_image_names(self) -> set[str]:
-                    return {f"Kura_tmp/{path.name}" for path in (input_dir / "Kura_tmp").glob("*")}
 
                 def queue(self, workflow: dict[str, Any]) -> str:
                     queued.append(workflow)
@@ -268,9 +266,55 @@ class RenderImageBindingTest(unittest.TestCase):
             records = [json.loads(line) for line in (run_dir / "samples" / "images.jsonl").read_text().splitlines()]
             self.assertEqual(records[0]["patch_inputs"]["control_image"], "resolved/images/control_image/a.png")
 
+    def test_runpod_rejection_does_not_freeze_control_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
+            run_dir = _workspace(
+                root, patches=patches, executor="runpod",
+                items=[{"id": "a", "prompt": "x", "seeds": [1], "control_image": "a/control.png"}],
+            )
+            source = root / "promptsets" / "grid" / "a" / "control.png"
+            source.parent.mkdir()
+            source.write_bytes(b"control-a")
+            with self.assertRaises(ValueError) as caught:
+                compile_render(root, run_dir)
+            self.assertIn("not supported for the runpod executor", str(caught.exception))
+            self.assertFalse((run_dir / "resolved" / "images").exists())
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_explicit_empty_seeds_fall_back_to_default_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = _workspace(root, patches=BASE_PATCHES, items=[{"id": "a", "prompt": "x", "seeds": []}])
+            compile_render(root, run_dir)
+            queued: list[dict[str, Any]] = []
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def lora_names(self) -> set[str]:
+                    return {"Kura_tmp/example.safetensors"}
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    queued.append(workflow)
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "out.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"image-bytes"
+
+            import kura.render as render_module
+
+            original = render_module.ComfyUIClient
+            render_module.ComfyUIClient = FakeClient  # type: ignore[assignment]
+            try:
+                self.assertEqual(launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188", manage_lora_stage=False), 0)
+            finally:
+                render_module.ComfyUIClient = original  # type: ignore[assignment]
+            self.assertEqual(queued[0]["3"]["inputs"]["seed"], 42)
 
 
 class PromptIdSafetyTest(unittest.TestCase):
@@ -414,7 +458,7 @@ class BindingNameSafetyTest(unittest.TestCase):
             root = Path(tmp)
             escape = Path(tmp) / "escape"
             patches = {**BASE_PATCHES, "../../../../escape/control": {"node": "15", "field": "inputs.image", "type": "image"}}
-            run_dir = RenderImageBindingTest()._workspace(
+            run_dir = _workspace(
                 root, patches=patches,
                 items=[{"id": "a", "prompt": "x", "seeds": [1], "../../../../escape/control": "a/control.png"}],
             )
@@ -449,12 +493,33 @@ class WorkflowRepositoryCheckTest(unittest.TestCase):
             module.PROMPTSETS = promptsets
             self.assertEqual(module.main(), 1)
 
+    def test_standalone_promptset_rejects_duplicate_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            promptsets = root / "promptsets"
+            promptsets.mkdir()
+            (promptsets / "duplicate.jsonl").write_text(
+                json.dumps({"id": "same", "prompt": "x"}) + "\n" + json.dumps({"id": "same", "prompt": "y"}) + "\n",
+                encoding="utf-8",
+            )
+            spec = importlib.util.spec_from_file_location(
+                "kura_check_workflows_duplicate_test",
+                Path(__file__).resolve().parents[1] / "scripts" / "check_workflows.py",
+            )
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.ROOT = root
+            module.WORKFLOWS = root / "workflows"
+            module.PROMPTSETS = promptsets
+            self.assertEqual(module.main(), 1)
+
 
 class WorkflowFixedRecordTest(unittest.TestCase):
     def test_fixed_prompt_and_seed_are_not_claimed_in_the_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            run_dir = RenderImageBindingTest()._workspace(
+            run_dir = _workspace(
                 root, patches={},
                 items=[{"id": "case_a"}, {"id": "case_b"}],
             )
@@ -502,7 +567,7 @@ class WorkflowFixedRecordTest(unittest.TestCase):
     def test_missing_prompt_is_rejected_when_workflow_does_not_fix_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            run_dir = RenderImageBindingTest()._workspace(
+            run_dir = _workspace(
                 root, patches={"prompt": {"node": "6", "field": "inputs.text"}},
                 items=[{"id": "case_a"}],
             )
@@ -513,7 +578,7 @@ class WorkflowFixedRecordTest(unittest.TestCase):
     def test_compile_rejects_scalar_workflow_fixed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            run_dir = RenderImageBindingTest()._workspace(
+            run_dir = _workspace(
                 root, patches=BASE_PATCHES,
                 items=[{"id": "case_a", "prompt": "x", "seeds": [1]}],
             )

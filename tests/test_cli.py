@@ -34,7 +34,7 @@ from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error
 from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
-from kura.render import _cleanup_lora_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_lora_stage, _safe_stage_name, compile_render, launch_render
+from kura.render import _cleanup_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _runpod_image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
@@ -686,12 +686,30 @@ class DoctorDockerTests(unittest.TestCase):
             def fake_disk_usage(path: Path) -> dict[str, object]:
                 return {"path": str(path), "probe": str(path), "total_bytes": 500 * 1024**3, "used_bytes": 100 * 1024**3, "free_bytes": 400 * 1024**3}
 
+            def fake_probe(paths: dict[str, Path], config: dict[str, object] | None = None) -> dict[str, StorageStatus]:
+                return {
+                    name: StorageStatus(
+                        path=str(path),
+                        probe=str(path),
+                        backing_id="test-disk",
+                        backing_kind="filesystem",
+                        linux_free_bytes=400 * 1024**3,
+                        linux_total_bytes=500 * 1024**3,
+                        host_free_bytes=None,
+                        effective_free_bytes=400 * 1024**3,
+                        confidence="exact",
+                        mount={"available": True},
+                    )
+                    for name, path in paths.items()
+                }
+
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
                     patch("kura.doctor._path_size_bytes", side_effect=fake_size),
                     patch("kura.doctor._disk_usage_for", side_effect=fake_disk_usage),
+                    patch("kura.doctor.probe_storages", side_effect=fake_probe),
                     patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
                     patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
@@ -2475,7 +2493,7 @@ class RenderNotificationTests(unittest.TestCase):
             run_dir.mkdir(parents=True)
             (root / "workspace.yaml").write_text("comfyui:\n  model_registry: {}\n", encoding="utf-8")
             (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "missing.safetensors"}}}), encoding="utf-8")
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2509,7 +2527,7 @@ class RenderNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "workflows" / "wf.json").write_text(json.dumps({"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "toy.safetensors"}}}), encoding="utf-8")
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2548,7 +2566,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: curated/toy.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2598,7 +2616,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: direct.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2650,7 +2668,7 @@ class RenderNotificationTests(unittest.TestCase):
                 "      filename: curated/toy.safetensors\n",
                 encoding="utf-8",
             )
-            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1", "prompt": "hello"}) + "\n", encoding="utf-8")
+            (root / "promptsets" / "prompts.jsonl").write_text(json.dumps({"id": "p1"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump({
                     "type": "render",
@@ -2810,8 +2828,8 @@ class RenderNotificationTests(unittest.TestCase):
                 "created": False,
             }
 
-            _materialize_lora_stage(plan)
-            _cleanup_lora_stage(plan)
+            _materialize_stage(plan)
+            _cleanup_stage(plan)
 
             self.assertFalse(plan["created"])
             self.assertTrue(target.exists())
@@ -2834,7 +2852,7 @@ class RenderNotificationTests(unittest.TestCase):
             }
 
             with self.assertRaisesRegex(ValueError, "different content"):
-                _materialize_lora_stage(plan)
+                _materialize_stage(plan)
 
     def test_render_fails_when_configured_lora_dir_is_not_visible_to_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -140,10 +140,11 @@ workflow_patches:
 - `lora` / `checkpoint` / `model_patch` take their value from the run's
   checkpoint; `seed` comes from the item's `seeds` (or `render.default_seed`).
   Every other binding reads the promptset key of the same name.
-- `type: image` means the value is an image path relative to the promptset's own
-  directory. Compile copies it into `resolved/images/` and launch stages it into
-  `comfyui.input_dir`, then removes it. Never upload through the ComfyUI API and
-  never write into ComfyUI's directories by hand.
+- `type: image` is local-executor only and means the value is an image path
+  relative to the promptset's own directory. Compile copies it into
+  `resolved/images/` and launch stages it into `comfyui.input_dir`, then removes
+  it. RunPod compile rejects image bindings before freezing them. Never upload
+  through the ComfyUI API and never write into ComfyUI's directories by hand.
 - Image staging copies; it does not symlink. ComfyUI resolves `LoadImage` paths
   and rejects one that leaves its input directory, so a symlinked input fails
   validation with "Invalid image file" even though a symlinked LoRA loads fine.
