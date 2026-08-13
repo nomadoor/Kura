@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -282,6 +282,26 @@ class RenderImageBindingTest(unittest.TestCase):
             self.assertIn("not supported for the runpod executor", str(caught.exception))
             self.assertFalse((run_dir / "resolved" / "images").exists())
 
+    def test_late_compile_validation_does_not_freeze_control_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            patches = {
+                **BASE_PATCHES,
+                "model_patch": {"node": "12", "field": "inputs.lora_name"},
+                "control_image": {"node": "15", "field": "inputs.image", "type": "image"},
+            }
+            run_dir = _workspace(
+                root, patches=patches,
+                items=[{"id": "a", "prompt": "x", "seeds": [1], "control_image": "a/control.png"}],
+            )
+            source = root / "promptsets" / "grid" / "a" / "control.png"
+            source.parent.mkdir()
+            source.write_bytes(b"control-a")
+            with self.assertRaises(ValueError) as caught:
+                compile_render(root, run_dir)
+            self.assertIn("comfyui.model_patches_dir is required", str(caught.exception))
+            self.assertFalse((run_dir / "resolved" / "images").exists())
+
     def test_explicit_empty_seeds_fall_back_to_default_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -360,7 +380,7 @@ class PromptIdSafetyTest(unittest.TestCase):
 
 
 class CoreKeyReconciliationTest(unittest.TestCase):
-    ITEMS = [{"id": "a", "prompt": "USER PROMPT", "seeds": [123]}]
+    ITEMS: ClassVar[list[dict[str, Any]]] = [{"id": "a", "prompt": "USER PROMPT", "seeds": [123]}]
 
     def test_unbound_prompt_is_rejected(self) -> None:
         with self.assertRaises(ValueError) as caught:
@@ -574,6 +594,39 @@ class WorkflowFixedRecordTest(unittest.TestCase):
             with self.assertRaises(ValueError) as caught:
                 compile_render(root, run_dir)
             self.assertIn("id and prompt are required", str(caught.exception))
+
+    def test_failed_realization_records_workflow_fixed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = _workspace(root, patches={}, items=[{"id": "case_a"}])
+            run_yaml = run_dir / "run.yaml"
+            run = yaml.safe_load(run_yaml.read_text())
+            run["render"]["default_seed"] = None
+            run["render"]["workflow_fixed"] = ["prompt", "negative_prompt", "seed"]
+            run_yaml.write_text(yaml.safe_dump(run), encoding="utf-8")
+            compile_render(root, run_dir)
+
+            class FailingClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    raise RuntimeError("queue failed")
+
+            import kura.render as render_module
+
+            original = render_module.ComfyUIClient
+            render_module.ComfyUIClient = FailingClient  # type: ignore[assignment]
+            try:
+                self.assertEqual(
+                    launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188", manage_lora_stage=False),
+                    1,
+                )
+            finally:
+                render_module.ComfyUIClient = original  # type: ignore[assignment]
+            current = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            realization = json.loads((run_dir / current["last_realization"]).read_text(encoding="utf-8"))
+            self.assertEqual(realization["workflow_fixed"], ["prompt", "negative_prompt", "seed"])
 
     def test_compile_rejects_scalar_workflow_fixed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

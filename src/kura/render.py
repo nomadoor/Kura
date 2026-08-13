@@ -846,9 +846,6 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     is_runpod = executor.get("name") == "runpod"
     if is_runpod and image_patch_names(patches):
         raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
-    resolved = run_dir / "resolved"
-    resolved.mkdir(exist_ok=True)
-    frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)
     frozen = deepcopy(run)
     frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
@@ -859,8 +856,6 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
-    if frozen_images:
-        frozen["promptset_images"] = frozen_images
     if is_runpod:
         sidecar_models = sidecar.get("models") if isinstance(sidecar, dict) else {}
         workspace_models = comfyui.get("model_registry") if isinstance(comfyui, dict) else {}
@@ -891,6 +886,14 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             frozen["inputs"].setdefault("checkpoint", {})["hash"] = digest(candidate)
         elif not inputs.get("checkpoint", {}).get("hash"):
             print("warning: checkpoint hash is unavailable", flush=True)
+    # Image freezing mutates resolved/ and the in-memory promptset. Keep it
+    # after every validation and digest step so a rejected compile leaves no
+    # unreferenced image copies behind.
+    resolved = run_dir / "resolved"
+    resolved.mkdir(exist_ok=True)
+    frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)
+    if frozen_images:
+        frozen["promptset_images"] = frozen_images
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
     dump_yaml(resolved / "manifest.lock.yaml", frozen)
     atomic_write_json(resolved / "workflow_used.json", workflow)
@@ -1047,7 +1050,7 @@ def launch_render(
         with stdout_log.open("a", encoding="utf-8") as handle:
             handle.write(f"{type(exc).__name__}: {exc}\n")
         status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, error=str(exc))
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:
