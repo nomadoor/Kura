@@ -25,6 +25,7 @@ from kura.executors import _redact_secret_text, _redact_secrets
 from kura.paths import inspect_workspace_symlinks
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storages
+from kura.workspace import WORKSPACE_OPEN_SUBTREES, WORKSPACE_SURFACE
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -1020,6 +1021,11 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
         "workspace_yaml": (workspace / "workspace.yaml").is_file(),
         "subdirs": subdirs,
         "docker_images": image_diagnostics,
+        "settings": {
+            section: sorted(keys) if keys else "scalar"
+            for section, keys in sorted(WORKSPACE_SURFACE.items())
+        },
+        "uninterpreted_subtrees": sorted(WORKSPACE_OPEN_SUBTREES),
         "warnings": warnings,
     }, indent=2))
     return 1 if warnings else 0

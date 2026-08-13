@@ -17,6 +17,15 @@ Use this skill before changing production code in `src/kura/`, tests, executor/b
 ## Architectural invariants
 
 - Kura is file-first. Do not introduce a hidden database, queue, daemon, or second truth store.
+- Every surface a user or agent authors is closed. A value with no declared
+  consumer is refused where the file is loaded; it is never accepted and ignored.
+  A subtree Kura deliberately does not interpret is named as such (an escape
+  hatch, or `WORKSPACE_OPEN_SUBTREES`), never left implicit. Adding a consumer
+  for a new key means adding it to that surface's declaration in the same change,
+  and `tests/test_surface_contracts.py` walks the declarations, so a new surface
+  belongs in that registry too. This rule was implemented twice, never written
+  down, and then lost on the third and fourth consumers — a silently dropped
+  setting makes `run.yaml` and `workspace.yaml` lie about what executed.
 - `run.yaml` is human/agent intent.
 - `resolved/` is compile-time immutable input.
 - Launch/runtime facts go into append-only `realizations/`.

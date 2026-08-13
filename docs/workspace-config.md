@@ -6,6 +6,16 @@ created by `kura init`. Relative host paths are resolved from the workspace root
 This page is intentionally short: it is mostly for AI agents that need to adjust
 runtime configuration without guessing.
 
+The file is a closed contract. Every section and key below is one Kura reads, and
+anything else is refused when the workspace is loaded — a misspelled
+`comfyui.input_stage_mod` would otherwise leave the staging mode on its default
+while the file recorded the intended one. Settings an older Kura wrote but no
+longer reads are reported as obsolete and should be deleted rather than
+corrected. Run `kura doctor workspace` to print the accepted settings instead of
+reading the source; its `settings` field lists every section and key, and
+`uninterpreted_subtrees` lists the places whose inner names are your data rather
+than Kura vocabulary (`docker.images`, `comfyui.model_registry`, and the like).
+
 ## Storage
 
 | Key | Purpose | Default |
