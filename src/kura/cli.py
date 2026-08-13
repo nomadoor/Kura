@@ -142,6 +142,52 @@ def _now() -> datetime:
     return datetime.now().astimezone()
 
 
+RUN_BURST_LIMIT = 10
+RUN_BURST_WINDOW_MINUTES = 60
+
+
+def _recent_run_count(now: datetime, *, window_minutes: int = RUN_BURST_WINDOW_MINUTES) -> int:
+    """Count runs whose id timestamp falls inside the recent window.
+
+    Run ids start with `%Y%m%d-%H%M`, so this reads directory names only and does
+    not depend on filesystem timestamps or on opening every run.
+    """
+    try:
+        entries = [path.name for path in (_workspace() / "runs").iterdir() if path.is_dir()]
+    except OSError:
+        return 0
+    count = 0
+    for name in entries:
+        try:
+            created = datetime.strptime(name[:13], "%Y%m%d-%H%M").replace(tzinfo=now.tzinfo)
+        except ValueError:
+            continue
+        if 0 <= (now - created).total_seconds() <= window_minutes * 60:
+            count += 1
+    return count
+
+
+def _run_burst_blocker(now: datetime, *, approved: bool) -> str | None:
+    """Ask before a session turns one experiment into a pile of runs.
+
+    Each run is individually cheap and reversible, which is exactly why nothing
+    else stops this: the cost only shows up in aggregate. Creating many runs at
+    once usually means a parameter that should vary inside one run is being
+    varied by cloning runs instead.
+    """
+    if approved:
+        return None
+    recent = _recent_run_count(now)
+    if recent < RUN_BURST_LIMIT:
+        return None
+    return (
+        f"{recent} runs were already created in the last {RUN_BURST_WINDOW_MINUTES} minutes. "
+        "Before creating more, check whether the parameter you are varying can be bound in one run "
+        "(run.yaml workflow_patches plus a promptset column) instead of cloned across runs. "
+        "If many runs really are the intent, tell the user the total and the purpose, then pass --batch-approved."
+    )
+
+
 def cmd_dataset_validate(args: argparse.Namespace) -> int:
     directory = Path(args.dataset_dir)
     errors: list[str] = []
@@ -224,6 +270,10 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         print("slug must contain letters or numbers", file=sys.stderr)
         return 1
     timestamp = _now()
+    blocker = _run_burst_blocker(timestamp, approved=getattr(args, "batch_approved", False))
+    if blocker:
+        print(blocker, file=sys.stderr)
+        return 1
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
     run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -279,7 +329,11 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     safe_slug = re.sub(r"[^a-z0-9-]+", "-", args.slug.lower()).strip("-")
     if not safe_slug:
         print("slug must contain letters or numbers", file=sys.stderr); return 1
-    timestamp = _now(); run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
+    timestamp = _now()
+    blocker = _run_burst_blocker(timestamp, approved=getattr(args, "batch_approved", False))
+    if blocker:
+        print(blocker, file=sys.stderr); return 1
+    run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "promptset": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
@@ -1097,6 +1151,7 @@ def main() -> None:
     new.add_argument("--backend", default="ai-toolkit", choices=backend_names())
     new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
     new.add_argument("--gpu")
+    new.add_argument("--batch-approved", action="store_true", help="The user approved creating many runs in one session")
     new.set_defaults(func=cmd_run_new)
     capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface")
     capabilities.add_argument("backend", choices=backend_names())
@@ -1191,6 +1246,7 @@ def main() -> None:
     render_sub = render.add_subparsers(dest="render_command", required=True)
     render_new = render_sub.add_parser("new", help="Create a ComfyUI render run")
     render_new.add_argument("--slug", required=True)
+    render_new.add_argument("--batch-approved", action="store_true", help="The user approved creating many runs in one session")
     render_new.set_defaults(func=cmd_render_new)
     render_compile = render_sub.add_parser("compile", help="Freeze workflow and promptset inputs")
     render_compile.add_argument("run_id")

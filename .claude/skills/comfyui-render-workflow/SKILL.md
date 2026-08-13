@@ -1,6 +1,6 @@
 ---
 name: comfyui-render-workflow
-description: ComfyUI render workflow operations for Kura. Use when editing workflows/*.json, render run.yaml files, workflow_patches, promptsets, image comparison generation, ComfyUI endpoint behavior, or render result collection.
+description: ComfyUI render workflow operations for Kura. Use when editing workflows/*.json, render run.yaml files, workflow_patches, promptsets, image comparison generation, ComfyUI endpoint behavior, or render result collection. Also use when a render must vary any per-case input — control/reference images, ControlNet or LLLite strength, CFG, steps, resolution — or when Kura appears unable to change something the workflow needs.
 ---
 
 # ComfyUI Render Workflow
@@ -101,9 +101,55 @@ images in managed cache, or become the endpoint for a normal render run.
 
 ## Workflow patches
 
+`workflow_patches` is an open binding table: any name maps to a node and field
+in the user's API workflow, and the value comes from the promptset item of the
+same name. There is no fixed list of patchable parameters.
+
+```yaml
+workflow_patches:
+  prompt:        {node: "5",  field: inputs.text}
+  negative_prompt: {node: "4", field: inputs.text}
+  seed:          {node: "8",  field: inputs.seed}
+  model_patch:   {node: "11", field: inputs.name}
+  control_image: {node: "15", field: inputs.image, type: image}
+  strength:      {node: "17", field: inputs.strength}
+```
+
+- `lora` / `checkpoint` / `model_patch` take their value from the run's
+  checkpoint; `seed` comes from the item's `seeds` (or `render.default_seed`).
+  Every other binding reads the promptset key of the same name.
+- `type: image` means the value is an image path relative to the promptset's own
+  directory. Compile copies it into `resolved/images/` and launch stages it into
+  `comfyui.input_dir` the same way LoRAs are staged. Never upload through the
+  ComfyUI API and never write into ComfyUI's directories by hand.
+- Promptset keys Kura owns directly: `id`, `prompt`, `negative_prompt`, `seeds`,
+  and `meta`. Put provenance (source spec, authored size, generator version)
+  under `meta` — anything else must be bound or compile fails.
 - Patch existing API workflow node IDs and fields only.
 - Validate node/field existence before launch.
 - Keep prompt text and seed decisions in promptsets/run files, not ad-hoc scripts.
+
+### When a parameter looks unpatchable
+
+`kura render compile` fails when the promptset and the bindings disagree. Read
+the message literally; it is the contract talking, not a defect to route around.
+
+Before concluding Kura cannot do something, re-read the user's workflow and add
+the binding. Most "Kura cannot vary X" conclusions are a missing binding.
+
+If the workflow genuinely has no node/field for X, **stop and tell the user**.
+Do not:
+
+- author a new workflow, or a variant per case;
+- split the promptset into one file per case;
+- create a run per value of X;
+- add a custom node to reach an input core ComfyUI already exposes;
+- call ComfyUI's HTTP API directly to do what the run should do.
+
+Say which parameter has no home in this workflow and let the user decide. A
+workflow that derives a value from another input — resolution taken from the
+loaded image, for instance — has no width/height to patch, and that is a correct
+answer, not a limitation to work around.
 - Before authoring an evaluation promptset, inspect every workflow node that
   supplies positive or negative conditioning. Extract its default prompt,
   prefixes, and transformations as reference material; do not assume an

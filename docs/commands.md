@@ -154,6 +154,41 @@ that flag carries the approval through the launch gate and does not ask the
 user a second time. A human running the launch in an interactive terminal may
 omit `--yes` and answer the one launch prompt.
 
+### Promptsets and workflow patches
+
+A promptset is JSONL, one case per line. Kura owns five keys directly:
+
+| Key | Meaning |
+| --- | --- |
+| `id` | Case identifier; required, and used to name output files |
+| `prompt` | Positive prompt; required |
+| `negative_prompt` | Negative prompt; optional |
+| `seeds` | Seeds to render for this case; falls back to `render.default_seed` |
+| `meta` | Provenance that is not a render input, ignored by rendering |
+
+Any other key must be bound in the run's `workflow_patches`, which maps a name
+to a node and field of the API workflow:
+
+```yaml
+workflow_patches:
+  prompt:        {node: "5",  field: inputs.text}
+  seed:          {node: "8",  field: inputs.seed}
+  control_image: {node: "15", field: inputs.image, type: image}
+  strength:      {node: "17", field: inputs.strength}
+```
+
+`lora`, `checkpoint`, and `model_patch` take their value from the run's
+checkpoint. Every other binding reads the promptset key of the same name.
+`type: image` marks a value as a path relative to the promptset's own directory;
+`kura render compile` copies it into `resolved/images/` and `kura render launch`
+stages it into `comfyui.input_dir`, then removes it afterwards.
+
+`kura render compile` refuses to guess when the two disagree. It fails when a
+promptset key has no binding, when a bound key is missing from an item, and when
+a binding names a node or field the workflow does not have. A key with no home in
+the workflow — a `width` for a workflow that takes its resolution from the loaded
+image — is a signal to fix the promptset or the run, not to build around Kura.
+
 ## Images
 
 Image names are set in `workspace.yaml`. Build only when needed.

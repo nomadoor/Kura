@@ -116,13 +116,17 @@ workspace mount table.
 | `comfyui.model_patch_stage_subdir` | Temporary subdirectory under `model_patches_dir` | `Kura_tmp` |
 | `comfyui.model_patch_stage_mode` | How render runs expose a local model patch to ComfyUI | `symlink` |
 | `comfyui.model_patch_stage_cleanup` | Whether temporary staged model patches are removed after render | `remove_after_render` |
+| `comfyui.input_dir` | Host path to ComfyUI `input`; required and non-empty when a render promptset supplies images through a `type: image` patch binding | `""` |
+| `comfyui.input_stage_subdir` | Temporary subdirectory under `input_dir` | `Kura_tmp` |
+| `comfyui.input_stage_mode` | How render runs expose a promptset image to ComfyUI | `symlink` |
+| `comfyui.input_stage_cleanup` | Whether temporary staged images are removed after render | `remove_after_render` |
 | `comfyui.model_registry` | Explicit ComfyUI model name to Hugging Face repo/file mappings for RunPod render | `{}` |
 | `comfyui.runpod` | Optional RunPod overrides for ComfyUI render Pods | created by `kura init` |
 
 The local executor treats `comfyui.endpoint` as an external, user-managed
 service. Kura submits HTTP requests to that exact endpoint; it does not start or
 restart ComfyUI, start Docker, install ComfyUI, or download missing models.
-`lora_dir` and `model_patches_dir` must be directories scanned by that same
+`lora_dir`, `model_patches_dir`, and `input_dir` must be directories scanned by that same
 instance and should normally live outside the Kura workspace. Use
 `kura doctor comfyui --workflow <api-workflow.json>` to verify the endpoint and
 the workflow's required models before launch.
