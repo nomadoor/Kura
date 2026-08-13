@@ -16,6 +16,11 @@ model-aware prompt judgment; this skill owns ComfyUI execution.
 - Render runs are Kura-native runs. Do not create a second session/result system.
 - ComfyUI is the only render generator for now.
 - Use API-format workflow JSON accepted by `/prompt`; UI workflow exports are not valid.
+- A workflow may be stored twice on purpose: `<name>.json` (UI export) beside
+  `<name>_api.json` (API export). The API format drops Note nodes, so the UI file
+  is where model links and authoring notes survive. Render from the `_api.json`;
+  read the UI file when you need to know where a model came from. Never treat the
+  UI file as a defect to clean up, and never render from it.
 - Default endpoint should remain `http://127.0.0.1:8188` unless the run explicitly says otherwise.
 - Freeze workflow and promptset at compile time under `resolved/`.
 - Record generated images in `samples/images.jsonl`.

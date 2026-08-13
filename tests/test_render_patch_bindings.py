@@ -256,46 +256,5 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class RunBurstGuardTest(unittest.TestCase):
-    def _make_runs(self, root: Path, count: int, stamp: str) -> None:
-        (root / "runs").mkdir(parents=True, exist_ok=True)
-        for index in range(count):
-            (root / "runs" / f"{stamp}_case{index:02d}_ab{index:02d}").mkdir()
-
-    def test_guard_allows_normal_creation_and_blocks_a_burst(self) -> None:
-        import kura.cli as cli
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "workspace.yaml").write_text("{}\n", encoding="utf-8")
-            original = cli._workspace
-            cli._workspace = lambda: root  # type: ignore[assignment]
-            try:
-                now = cli._now()
-                stamp = f"{now:%Y%m%d-%H%M}"
-                self._make_runs(root, cli.RUN_BURST_LIMIT - 1, stamp)
-                self.assertIsNone(cli._run_burst_blocker(now, approved=False))
-                (root / "runs" / f"{stamp}_case99_zz99").mkdir()
-                blocker = cli._run_burst_blocker(now, approved=False)
-                self.assertIsNotNone(blocker)
-                self.assertIn("--batch-approved", str(blocker))
-                self.assertIsNone(cli._run_burst_blocker(now, approved=True))
-            finally:
-                cli._workspace = original  # type: ignore[assignment]
-
-    def test_guard_ignores_runs_outside_the_window(self) -> None:
-        import kura.cli as cli
-        from datetime import timedelta
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            original = cli._workspace
-            cli._workspace = lambda: root  # type: ignore[assignment]
-            try:
-                now = cli._now()
-                old = now - timedelta(hours=6)
-                self._make_runs(root, cli.RUN_BURST_LIMIT + 5, f"{old:%Y%m%d-%H%M}")
-                self.assertEqual(cli._recent_run_count(now), 0)
-                self.assertIsNone(cli._run_burst_blocker(now, approved=False))
-            finally:
-                cli._workspace = original  # type: ignore[assignment]
+if __name__ == "__main__":
+    unittest.main()

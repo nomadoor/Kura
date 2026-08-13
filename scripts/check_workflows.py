@@ -36,7 +36,15 @@ def main() -> int:
                 continue
             api_required = path.parent == WORKFLOWS or path.stem.endswith("_api")
             if api_required and "nodes" in data and "links" in data:
-                errors.append(f"{path.relative_to(ROOT)} looks like a UI workflow export; Kura needs API-format workflow JSON")
+                # A UI export kept beside its `_api.json` twin is deliberate: the API
+                # format drops Note nodes, so the UI file is where model links and
+                # authoring notes survive. Kura renders from the `_api.json`.
+                if path.with_name(f"{path.stem}_api.json").is_file():
+                    continue
+                errors.append(
+                    f"{path.relative_to(ROOT)} looks like a UI workflow export; Kura needs API-format workflow JSON. "
+                    f"To keep this file for its Note nodes, save the API export beside it as {path.stem}_api.json"
+                )
                 continue
             if not data:
                 errors.append(f"{path.relative_to(ROOT)} is empty")
