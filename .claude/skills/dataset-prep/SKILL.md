@@ -29,9 +29,15 @@ Use this skill for dataset operations.
 ## Validation
 
 ```sh
+uv run kura dataset inspect datasets/<id>
 uv run kura dataset validate datasets/<id>
 uv run kura run compile <run-id>
 ```
+
+During preparation, read the inspect output for declared-count, missing-caption,
+condition-pair, and aspect-ratio mismatch facts before authoring a run. Present
+those measurements to the user without treating the command as a verdict or
+editing the dataset automatically.
 
 ## Visual review
 
