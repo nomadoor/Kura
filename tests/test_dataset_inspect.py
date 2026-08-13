@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from kura.cli import cmd_dataset_inspect
-from kura.dataset_inspect import inspect_dataset
+from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
 
 
 def png_bytes(width: int, height: int) -> bytes:
@@ -20,6 +20,76 @@ def png_bytes(width: int, height: int) -> bytes:
 
 
 class DatasetInspectTests(unittest.TestCase):
+    def test_image_only_declared_layout_is_not_paired_control(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "lora"
+            images = dataset / "images"
+            images.mkdir(parents=True)
+            (images / "one.png").write_bytes(png_bytes(1, 1))
+            (dataset / "dataset.yaml").write_text(
+                "layout:\n  root: images\n  image_dir: images\n",
+                encoding="utf-8",
+            )
+            (dataset / "items.jsonl").write_text(
+                json.dumps({"id": "one", "path": "images/one.png", "caption": "plain", "role": "target"}) + "\n",
+                encoding="utf-8",
+            )
+
+            report = inspect_dataset("lora", workspace=root)
+
+        self.assertEqual(
+            report["paired_control"],
+            {
+                "applicable": False,
+                "source_count": None,
+                "target_count": None,
+                "missing_source_count": None,
+                "missing_target_count": None,
+                "directory_source_count": 0,
+                "directory_target_count": 1,
+                "directory_missing_source_count": None,
+                "directory_missing_target_count": None,
+            },
+        )
+        self.assertIn("paired_control: (not applicable)", format_dataset_inspect(report))
+
+    def test_declared_layout_drives_pair_counts_and_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "declared"
+            targets = dataset / "renders"
+            controls = dataset / "guides"
+            captions = dataset / "texts"
+            targets.mkdir(parents=True)
+            controls.mkdir()
+            captions.mkdir()
+            (targets / "one.png").write_bytes(png_bytes(2, 1))
+            (targets / "two.png").write_bytes(png_bytes(1, 1))
+            (controls / "one.png").write_bytes(png_bytes(1, 1))
+            (captions / "one.txt").write_text("one", encoding="utf-8")
+            (captions / "two.txt").write_text("two", encoding="utf-8")
+            (dataset / "dataset.yaml").write_text(
+                "stats:\n  count: 2\nlayout:\n  target_dir: renders\n  control_dir: guides\n  caption_dir: texts\n",
+                encoding="utf-8",
+            )
+
+            report = inspect_dataset("declared", workspace=root)
+
+        paired = report["paired_control"]
+        self.assertEqual(paired["directory_source_count"], 1)
+        self.assertEqual(paired["directory_target_count"], 2)
+        self.assertEqual(paired["directory_missing_source_count"], 1)
+        self.assertEqual(paired["directory_missing_target_count"], 0)
+        self.assertEqual(report["observations"]["sample_count"], 2)
+        self.assertEqual(report["observations"]["captions_missing"], 0)
+        self.assertEqual(report["observations"]["condition_counts"], {"control": 1})
+        self.assertEqual(report["observations"]["aspect_ratio_mismatches"], {"control": 1})
+        self.assertEqual(report["structural_findings"], [])
+        text = format_dataset_inspect(report)
+        self.assertIn("observations.aspect_ratio_mismatches.control: 1", text)
+        self.assertIn("structural_findings.count: 0", text)
+
     def test_inspect_reports_dataset_facts_without_verdicts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -60,6 +130,7 @@ class DatasetInspectTests(unittest.TestCase):
         self.assertEqual(report["paired_control"]["target_count"], 5)
         self.assertEqual(report["paired_control"]["missing_source_count"], 4)
         self.assertEqual(report["paired_control"]["directory_missing_source_count"], 1)
+        self.assertIn("observations.aspect_ratio_mismatches: (none)", format_dataset_inspect(report))
 
     def test_dataset_inspect_json_cli(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

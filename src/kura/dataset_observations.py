@@ -112,7 +112,21 @@ def _jsonl_records(path: Path) -> tuple[list[tuple[int, dict[str, Any]]], list[d
 
 
 def _layout_directories(root: Path, layout: dict[str, Any]) -> dict[str, Path]:
+    result = declared_layout_directories(root, layout)
     layout_root = _safe_path(root, layout.get("root") or ".")
+    if "target" not in result:
+        for candidate in (root / "images", root / "image", layout_root, root):
+            if candidate.is_dir() and any(path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in candidate.iterdir()):
+                result["target"] = candidate
+                break
+    if "caption" not in result and "target" in result:
+        result["caption"] = result["target"]
+    return result
+
+
+def declared_layout_directories(root: Path, layout: dict[str, Any]) -> dict[str, Path]:
+    """Resolve only directories explicitly named by dataset.yaml layout."""
+
     declarations = {
         "target": layout.get("target_dir") or layout.get("image_dir"),
         "caption": layout.get("caption_dir"),
@@ -124,13 +138,6 @@ def _layout_directories(root: Path, layout: dict[str, Any]) -> dict[str, Path]:
     for role, value in declarations.items():
         if isinstance(value, str) and value:
             result[role] = _safe_path(root, value)
-    if "target" not in result:
-        for candidate in (root / "images", root / "image", layout_root, root):
-            if candidate.is_dir() and any(path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in candidate.iterdir()):
-                result["target"] = candidate
-                break
-    if "caption" not in result and "target" in result:
-        result["caption"] = result["target"]
     return result
 
 

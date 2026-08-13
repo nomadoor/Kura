@@ -35,6 +35,9 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
     videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in VIDEO_SUFFIXES]
     captions = [_caption_text(item) for item in records]
     trigger_word = metadata.get("trigger_word") if isinstance(metadata.get("trigger_word"), str) else None
+    from kura.dataset_observations import observe_dataset
+
+    observation = observe_dataset(dataset_path)
 
     return {
         "dataset": {
@@ -50,6 +53,8 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
         },
         "captions": _caption_summary(captions, trigger_word=trigger_word),
         "paired_control": _paired_summary(dataset_path, records, metadata),
+        "observations": observation["observations"],
+        "structural_findings": observation["structural_findings"],
         "videos": _video_summary(videos),
         "items_jsonl": {
             "records": len(records),
@@ -92,6 +97,23 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
         lines.append(f"  paired_control.missing_target_count: {paired.get('missing_target_count')}")
     else:
         lines.append("  paired_control: (not applicable)")
+    observations = report.get("observations") if isinstance(report.get("observations"), dict) else {}
+    for key in ("sample_count", "declared_count", "captions_present", "captions_missing"):
+        lines.append(f"  observations.{key}: {observations.get(key)}")
+    condition_counts = _sorted_counts(observations.get("condition_counts"))
+    if condition_counts:
+        for name, count in condition_counts:
+            lines.append(f"  observations.condition_counts.{name}: {count}")
+    else:
+        lines.append("  observations.condition_counts: (none)")
+    aspect_mismatches = _sorted_counts(observations.get("aspect_ratio_mismatches"))
+    if aspect_mismatches:
+        for name, count in aspect_mismatches:
+            lines.append(f"  observations.aspect_ratio_mismatches.{name}: {count}")
+    else:
+        lines.append("  observations.aspect_ratio_mismatches: (none)")
+    findings = report.get("structural_findings") if isinstance(report.get("structural_findings"), list) else []
+    lines.append(f"  structural_findings.count: {len(findings)}")
     videos = report.get("videos") if isinstance(report.get("videos"), dict) else {}
     lines.append(f"  videos.count: {videos.get('count')}")
     return "\n".join(lines)
@@ -261,8 +283,8 @@ def _webp_size(data: bytes) -> tuple[int, int] | None:
 def _paired_summary(dataset_path: Path, records: list[dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
     source_items = [item for item in records if _first_present(item, SOURCE_KEYS)]
     target_items = [item for item in records if _first_present(item, TARGET_KEYS)]
-    dir_summary = _paired_directory_summary(dataset_path)
-    applicable = bool(source_items or dir_summary["source_count"] or dir_summary["target_count"] or _declares_paired_control(metadata))
+    dir_summary = _paired_directory_summary(dataset_path, metadata)
+    applicable = bool(source_items or dir_summary["source_count"] or _declares_paired_control(metadata))
     missing_source_items = sum(1 for item in target_items if not _first_present(item, SOURCE_KEYS)) if applicable else None
     missing_target_items = sum(1 for item in source_items if not _first_present(item, TARGET_KEYS)) if applicable else None
     return {
@@ -295,9 +317,14 @@ def _first_present(item: dict[str, Any], keys: tuple[str, ...]) -> str | None:
     return None
 
 
-def _paired_directory_summary(dataset_path: Path) -> dict[str, int]:
-    source_dirs = [dataset_path / name for name in ("source", "sources", "control", "controls", "conditioning", "condition")]
-    target_dirs = [dataset_path / name for name in ("target", "targets")]
+def _paired_directory_summary(dataset_path: Path, metadata: dict[str, Any]) -> dict[str, int]:
+    from kura.dataset_observations import declared_layout_directories
+
+    layout = metadata.get("layout") if isinstance(metadata.get("layout"), dict) else {}
+    declared = declared_layout_directories(dataset_path.resolve(), layout)
+    source_paths = [declared[role] for role in ("source", "control", "reference") if role in declared]
+    source_dirs = source_paths or [dataset_path / name for name in ("source", "sources", "control", "controls", "conditioning", "condition")]
+    target_dirs = [declared["target"]] if "target" in declared else [dataset_path / name for name in ("target", "targets")]
     source_files = _images_under_first_existing(source_dirs)
     target_files = _images_under_first_existing(target_dirs)
     source_stems = {path.stem for path in source_files}
@@ -315,6 +342,10 @@ def _images_under_first_existing(directories: list[Path]) -> list[Path]:
         if directory.is_dir():
             return [path for path in _iter_files(directory) if path.suffix.lower() in IMAGE_SUFFIXES]
     return []
+
+
+def _sorted_counts(value: Any) -> list[tuple[str, Any]]:
+    return sorted(value.items()) if isinstance(value, dict) else []
 
 
 def _video_summary(videos: list[Path]) -> dict[str, Any]:
