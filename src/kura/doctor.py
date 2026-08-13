@@ -25,6 +25,7 @@ from kura.executors import _redact_secret_text, _redact_secrets
 from kura.paths import inspect_workspace_symlinks
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storages
+from kura.workspace import validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -1014,12 +1015,22 @@ def _workspace_image_diagnostics(workspace: Path) -> tuple[dict[str, Any], list[
 def cmd_doctor_workspace(_: argparse.Namespace) -> int:
     workspace = _workspace()
     image_diagnostics, warnings = _workspace_image_diagnostics(workspace)
+    configuration_error: str | None = None
+    workspace_yaml = workspace / "workspace.yaml"
+    if workspace_yaml.is_file():
+        try:
+            validate_workspace_config(yaml.safe_load(workspace_yaml.read_text(encoding="utf-8")))
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            configuration_error = _safe_error(exc)
+            warnings.append(configuration_error)
     subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets", "docker")}
     print(json.dumps({
         "workspace_root": str(workspace),
         "workspace_yaml": (workspace / "workspace.yaml").is_file(),
         "subdirs": subdirs,
         "docker_images": image_diagnostics,
+        "settings": workspace_schema_description(),
+        "configuration_error": configuration_error,
         "warnings": warnings,
     }, indent=2))
     return 1 if warnings else 0
