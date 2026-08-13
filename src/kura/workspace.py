@@ -38,41 +38,96 @@ def require_workspace() -> Path:
     return root
 
 
-# The authoring surface of workspace.yaml. Kura reads these keys, so a value
-# outside this map has no consumer: it would sit in the file looking configured
-# while the code it was meant to change runs on its default. Each section is
-# closed, and a subtree Kura deliberately does not interpret is named in
-# WORKSPACE_OPEN_SUBTREES rather than left implicit.
-WORKSPACE_SURFACE: dict[str, frozenset[str]] = {
-    "schema_version": frozenset(),
-    "name": frozenset(),
-    "storage": frozenset({"host_drive", "docker_data_drive"}),
-    "docker": frozenset({"images", "workspace_target", "gpu", "mounts", "min_free_gb"}),
-    "comfyui": frozenset({
-        "endpoint", "lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup",
-        "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup",
-        "input_dir", "input_stage_subdir", "input_stage_mode", "input_stage_cleanup",
-        "model_registry", "runpod",
-    }),
-    "runpod": frozenset({
-        "default_image", "template_id", "api_key_env", "storage_mode", "object_store",
-        "gpu_type_ids", "gpu_type_priority", "gpu_count", "container_disk_gb", "volume_in_gb",
-        "workspace_path", "ports", "backend_ports", "cloud_type", "cloud_types", "country_codes",
-        "data_center_ids", "data_center_priority", "interruptible", "support_public_ip",
-        "download_min_free_gb",
-    }),
-    "safety": frozenset({
-        "allow_large_model_downloads", "allow_many_checkpoints", "allow_runpod_disk_risk",
-        "allow_storage_risk", "allow_unknown_disk_cache", "checkpoint_estimate_gb",
-        "large_model_download_gb", "max_run_disk_gb",
-    }),
+def _value() -> dict[str, Any]:
+    return {"kind": "value"}
+
+
+def _mapping(fields: dict[str, Any], *, additional: dict[str, Any] | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {"kind": "mapping", "fields": fields}
+    if additional is not None:
+        schema["additional"] = additional
+    return schema
+
+
+def _sequence(items: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "sequence", "items": items}
+
+
+def _dynamic(values: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "dynamic_mapping", "values": values}
+
+
+# One recursive declaration owns both validation and discovery output. Dynamic
+# keys are allowed only where the names really are user data (for example an
+# image alias or a ComfyUI model filename); the value under each such name still
+# has a closed schema when Kura interprets it.
+_DOCKER_IMAGE = _mapping({name: _value() for name in ("local", "remote", "dockerfile", "context")})
+_DOCKER_MOUNT = _mapping({name: _value() for name in ("source", "target", "mode")})
+_MODEL_ENTRY = _mapping({
+    name: _value()
+    for name in (
+        "repo", "repo_id", "url", "direct_url", "filename", "file", "revision",
+        "subfolder", "target_dir", "target_name",
+    )
+})
+_MODEL_SECTION = _dynamic(_MODEL_ENTRY)
+_MODEL_REGISTRY = _mapping({"models": _dynamic(_MODEL_SECTION)}, additional=_MODEL_SECTION)
+_OBJECT_STORE = _mapping({
+    name: _value()
+    for name in ("endpoint_url", "bucket", "region", "prefix", "access_key_env", "secret_key_env")
+})
+_RUNPOD_FIELDS: dict[str, Any] = {
+    "default_image": _dynamic(_value()),
+    "template_id": _value(),
+    "api_key_env": _value(),
+    "storage_mode": _value(),
+    "object_store": _OBJECT_STORE,
+    "gpu_type_ids": _sequence(_value()),
+    "gpu_type_priority": _value(),
+    "gpu_count": _value(),
+    "container_disk_gb": _value(),
+    "volume_in_gb": _value(),
+    "workspace_path": _value(),
+    "ports": _sequence(_value()),
+    "backend_ports": _dynamic(_sequence(_value())),
+    "cloud_type": _value(),
+    "cloud_types": _sequence(_value()),
+    "country_codes": _sequence(_value()),
+    "data_center_ids": _sequence(_value()),
+    "data_center_priority": _value(),
+    "interruptible": _value(),
+    "support_public_ip": _value(),
+    "download_min_free_gb": _value(),
 }
 
-# Subtrees whose inner keys are user data rather than Kura vocabulary. Kura does
-# not interpret their names, so it does not police them either.
-WORKSPACE_OPEN_SUBTREES = frozenset({
-    "docker.images", "docker.mounts", "comfyui.model_registry", "comfyui.runpod",
-    "runpod.default_image", "runpod.backend_ports",
+WORKSPACE_SCHEMA = _mapping({
+    "schema_version": _value(),
+    "name": _value(),
+    "storage": _mapping({"host_drive": _value(), "docker_data_drive": _value()}),
+    "docker": _mapping({
+        "images": _dynamic(_DOCKER_IMAGE),
+        "workspace_target": _value(),
+        "gpu": _value(),
+        "mounts": _sequence(_DOCKER_MOUNT),
+        "min_free_gb": _value(),
+        "build_cache_limit_gb": _value(),
+    }),
+    "comfyui": _mapping({
+        **{name: _value() for name in (
+            "endpoint", "lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup",
+            "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup",
+            "input_dir", "input_stage_subdir", "input_stage_mode", "input_stage_cleanup",
+        )},
+        "model_registry": _MODEL_REGISTRY,
+        # Render sessions use RunPod compute/network settings, but do not use a
+        # training template, object staging, or the later download-space check.
+        "runpod": _mapping({
+            name: schema
+            for name, schema in _RUNPOD_FIELDS.items()
+            if name not in {"template_id", "storage_mode", "object_store", "download_min_free_gb"}
+        }),
+    }),
+    "runpod": _mapping(_RUNPOD_FIELDS),
 })
 
 # Keys earlier Kura versions wrote but nothing reads any more. They are reported
@@ -91,11 +146,74 @@ _WORKSPACE_ALIASES = {
 }
 
 
-def _closest_workspace_key(name: str, accepted: frozenset[str]) -> str | None:
+def _closest_workspace_key(name: str, accepted: set[str]) -> str | None:
     from difflib import get_close_matches
 
-    matches = get_close_matches(name, sorted(accepted), n=1, cutoff=0.8)
+    # Candidates are restricted to sibling keys in the same schema node, so a
+    # lower spelling threshold cannot suggest a field from another concept.
+    matches = get_close_matches(name, sorted(accepted), n=1, cutoff=0.72)
     return matches[0] if matches else None
+
+
+def _workspace_schema_error(source: str, path: str, message: str) -> ValueError:
+    location = f" {path}" if path else ""
+    return ValueError(f"{source}{location} {message}. Run `kura doctor workspace` for the accepted settings.")
+
+
+def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str, path: str) -> None:
+    kind = schema["kind"]
+    if kind == "value":
+        if isinstance(value, (dict, list)):
+            raise _workspace_schema_error(source, path, "must be a scalar value")
+        return
+    if kind == "sequence":
+        if not isinstance(value, list):
+            raise _workspace_schema_error(source, path, "must be a list")
+        for index, item in enumerate(value):
+            _validate_workspace_value(item, schema["items"], source=source, path=f"{path}[{index}]")
+        return
+    if not isinstance(value, dict):
+        raise _workspace_schema_error(source, path, "must be a mapping")
+    if kind == "dynamic_mapping":
+        for name, item in value.items():
+            _validate_workspace_value(item, schema["values"], source=source, path=f"{path}.{name}")
+        return
+    fields = schema["fields"]
+    additional = schema.get("additional")
+    unknown = sorted(name for name in value if name not in fields and additional is None)
+    if unknown:
+        obsolete = [name for name in unknown if f"{path}.{name}" in WORKSPACE_OBSOLETE_KEYS]
+        if obsolete:
+            reasons = ", ".join(f"{path}.{name} ({WORKSPACE_OBSOLETE_KEYS[f'{path}.{name}']})" for name in obsolete)
+            raise ValueError(f"{source} contains obsolete setting(s) that Kura no longer reads: {reasons}. Delete these lines.")
+        details = []
+        for name in unknown:
+            alias = _WORKSPACE_ALIASES.get(name)
+            alias_applies = bool(alias) and (not path or alias.rsplit(".", 1)[0] == path)
+            suggestion = alias if alias_applies else _closest_workspace_key(name, set(fields))
+            display = suggestion if not path else suggestion.split(".")[-1] if suggestion else None
+            details.append(f"{name!r}; use {display!r}" if display else repr(name))
+        label = "section(s)" if not path else "key(s)"
+        raise _workspace_schema_error(source, path, f"contains unsupported {label}: " + ", ".join(details))
+    for name, item in value.items():
+        child = fields.get(name, additional)
+        _validate_workspace_value(item, child, source=source, path=f"{path}.{name}" if path else name)
+
+
+def workspace_schema_description(schema: dict[str, Any] | None = None) -> Any:
+    """Return a JSON-serializable description used by `doctor workspace`."""
+    node = schema or WORKSPACE_SCHEMA
+    kind = node["kind"]
+    if kind == "value":
+        return "value"
+    if kind == "sequence":
+        return {"list_of": workspace_schema_description(node["items"])}
+    if kind == "dynamic_mapping":
+        return {"<name>": workspace_schema_description(node["values"])}
+    described = {name: workspace_schema_description(child) for name, child in sorted(node["fields"].items())}
+    if "additional" in node:
+        described["<name>"] = workspace_schema_description(node["additional"])
+    return described
 
 
 def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") -> None:
@@ -107,42 +225,7 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     """
     if not isinstance(config, dict):
         raise ValueError(f"{source} must contain a YAML mapping")
-    unknown_sections = sorted(set(config) - set(WORKSPACE_SURFACE))
-    if unknown_sections:
-        details = []
-        for name in unknown_sections:
-            suggestion = _WORKSPACE_ALIASES.get(name) or _closest_workspace_key(name, frozenset(WORKSPACE_SURFACE))
-            details.append(f"{name!r}; use {suggestion!r}" if suggestion else repr(name))
-        raise ValueError(
-            f"{source} contains unsupported section(s): " + ", ".join(details)
-            + ". Run `kura doctor workspace` for the accepted settings."
-        )
-    for section, accepted in WORKSPACE_SURFACE.items():
-        if not accepted or section not in config:
-            continue
-        values = config[section]
-        if values is None:
-            continue
-        if not isinstance(values, dict):
-            raise ValueError(f"{source} {section} must be a mapping")
-        unknown = sorted(set(values) - accepted)
-        if not unknown:
-            continue
-        obsolete = [name for name in unknown if f"{section}.{name}" in WORKSPACE_OBSOLETE_KEYS]
-        if obsolete:
-            reasons = ", ".join(f"{section}.{name} ({WORKSPACE_OBSOLETE_KEYS[f'{section}.{name}']})" for name in obsolete)
-            raise ValueError(
-                f"{source} contains obsolete setting(s) that Kura no longer reads: {reasons}. Delete these lines."
-            )
-        details = []
-        for name in unknown:
-            alias = _WORKSPACE_ALIASES.get(name)
-            suggestion = alias if alias and alias.startswith(f"{section}.") else _closest_workspace_key(name, accepted)
-            details.append(f"{name!r}; use {suggestion.split('.')[-1]!r}" if suggestion else repr(name))
-        raise ValueError(
-            f"{source} {section} contains unsupported key(s): " + ", ".join(details)
-            + ". Run `kura doctor workspace` for the accepted settings."
-        )
+    _validate_workspace_value(config, WORKSPACE_SCHEMA, source=source, path="")
 
 
 def workspace_config() -> dict[str, Any]:

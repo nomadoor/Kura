@@ -12,9 +12,9 @@ anything else is refused when the workspace is loaded — a misspelled
 while the file recorded the intended one. Settings an older Kura wrote but no
 longer reads are reported as obsolete and should be deleted rather than
 corrected. Run `kura doctor workspace` to print the accepted settings instead of
-reading the source; its `settings` field lists every section and key, and
-`uninterpreted_subtrees` lists the places whose inner names are your data rather
-than Kura vocabulary (`docker.images`, `comfyui.model_registry`, and the like).
+reading the source; its recursive `settings` field lists fixed names and marks
+dynamic names as `<name>`. A dynamic name such as `docker.images.<name>` is your
+vocabulary, but the fields beneath it are still checked because Kura reads them.
 
 ## Storage
 

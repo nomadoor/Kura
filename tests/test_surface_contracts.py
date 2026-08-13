@@ -9,7 +9,11 @@ added without a policy, because the registry below is what it walks.
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -23,9 +27,9 @@ from kura.render import promptset, reconcile_promptset  # noqa: E402
 from kura.run_envelope import common_recipe  # noqa: E402
 from kura.workspace import (  # noqa: E402
     WORKSPACE_OBSOLETE_KEYS,
-    WORKSPACE_OPEN_SUBTREES,
-    WORKSPACE_SURFACE,
+    WORKSPACE_SCHEMA,
     validate_workspace_config,
+    workspace_schema_description,
 )
 
 SENTINEL = "kura_unknown_sentinel"
@@ -35,8 +39,8 @@ class SurfaceContractTests(unittest.TestCase):
     """Each entry drives one authoring surface with an undeclared key."""
 
     def test_workspace_sections_reject_an_undeclared_key(self) -> None:
-        for section, accepted in WORKSPACE_SURFACE.items():
-            if not accepted:
+        for section, schema in WORKSPACE_SCHEMA["fields"].items():
+            if schema["kind"] != "mapping":
                 continue
             with self.subTest(section=section):
                 with self.assertRaises(ValueError) as caught:
@@ -53,6 +57,9 @@ class SurfaceContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             validate_workspace_config({"comfyui": {"input_stage_mod": "copy"}})
         self.assertIn("input_stage_mode", str(caught.exception))
+        with self.assertRaises(ValueError) as caught:
+            validate_workspace_config({"comfyui_endpoint": "http://127.0.0.1:8188"})
+        self.assertIn("comfyui.endpoint", str(caught.exception))
 
     def test_workspace_reports_an_obsolete_key_as_stale_not_as_a_typo(self) -> None:
         for dotted in WORKSPACE_OBSOLETE_KEYS:
@@ -64,13 +71,72 @@ class SurfaceContractTests(unittest.TestCase):
                 self.assertIn("obsolete", message)
                 self.assertIn("Delete these lines", message)
 
-    def test_uninterpreted_subtrees_are_named_and_accept_user_vocabulary(self) -> None:
-        """A subtree Kura does not read must be declared, not silently tolerated."""
-        for dotted in WORKSPACE_OPEN_SUBTREES:
-            section, key = dotted.split(".", 1)
-            self.assertIn(section, WORKSPACE_SURFACE, dotted)
-            self.assertIn(key, WORKSPACE_SURFACE[section], dotted)
-        validate_workspace_config({"comfyui": {"model_registry": {"anything": {"repo": "x"}}}})
+    def test_dynamic_names_are_allowed_but_their_values_stay_closed(self) -> None:
+        validate_workspace_config({
+            "docker": {"images": {"my-backend": {"local": "example/image:tag"}}},
+            "runpod": {"default_image": {"my-backend": "example/image@sha256:abc"}},
+            "comfyui": {"model_registry": {"checkpoints": {"my-model.safetensors": {"repo": "owner/model"}}}},
+        })
+        malformed = (
+            ({"docker": {"images": {"my-backend": {"dockerfil": "Dockerfile"}}}}, "dockerfile"),
+            ({"comfyui": {"model_registry": {"checkpoints": {"model.safetensors": {"reop": "owner/model"}}}}}, "repo"),
+            ({"runpod": {"backend_ports": {"my-backend": {"port": "22/tcp"}}}}, "must be a list"),
+        )
+        for config, expected in malformed:
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    validate_workspace_config(config)
+                self.assertIn(expected, str(caught.exception))
+
+    def test_nested_fixed_maps_and_list_items_reject_unknown_keys(self) -> None:
+        malformed = (
+            ({"runpod": {"object_store": {"buckett": "models"}}}, "bucket"),
+            ({"comfyui": {"runpod": {"container_disk_g": 80}}}, "container_disk_gb"),
+            ({"docker": {"mounts": [{"source": ".", "target": "/workspace", "writable": True}]}}, "writable"),
+        )
+        for config, expected in malformed:
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    validate_workspace_config(config)
+                self.assertIn(expected, str(caught.exception))
+
+    def test_workspace_does_not_advertise_run_only_or_unused_render_overrides(self) -> None:
+        for config, rejected in (
+            ({"safety": {"allow_many_checkpoints": True}}, "safety"),
+            ({"comfyui": {"runpod": {"template_id": "ignored"}}}, "template_id"),
+            ({"comfyui": {"runpod": {"storage_mode": "object_staging"}}}, "storage_mode"),
+        ):
+            with self.subTest(config=config):
+                with self.assertRaises(ValueError) as caught:
+                    validate_workspace_config(config)
+                self.assertIn(rejected, str(caught.exception))
+
+    def test_consumed_docker_build_cache_limit_is_declared(self) -> None:
+        validate_workspace_config({"docker": {"build_cache_limit_gb": 20}})
+
+    def test_workspace_schema_description_exposes_nested_contract(self) -> None:
+        settings = workspace_schema_description()
+        self.assertEqual(settings["docker"]["images"]["<name>"]["dockerfile"], "value")
+        self.assertEqual(settings["runpod"]["object_store"]["bucket"], "value")
+        self.assertEqual(settings["comfyui"]["runpod"]["container_disk_gb"], "value")
+
+    def test_doctor_workspace_reports_nested_contract_error_without_source_reading(self) -> None:
+        from kura.doctor import cmd_doctor_workspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "workspace.yaml").write_text("runpod:\n  object_store:\n    buckett: models\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output):
+                    code = cmd_doctor_workspace(argparse.Namespace())
+            finally:
+                os.chdir(previous)
+            payload = json.loads(output.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIn("use 'bucket'", payload["configuration_error"])
 
     def test_recipe_rejects_an_undeclared_key(self) -> None:
         with self.assertRaises(ValueError) as caught:
