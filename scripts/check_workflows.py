@@ -9,6 +9,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from kura.render import is_safe_component  # noqa: E402
+
+
 WORKFLOWS = ROOT / "workflows"
 PROMPTSETS = ROOT / "promptsets"
 
@@ -36,7 +41,15 @@ def main() -> int:
                 continue
             api_required = path.parent == WORKFLOWS or path.stem.endswith("_api")
             if api_required and "nodes" in data and "links" in data:
-                errors.append(f"{path.relative_to(ROOT)} looks like a UI workflow export; Kura needs API-format workflow JSON")
+                # A UI export kept beside its `_api.json` twin is deliberate: the API
+                # format drops Note nodes, so the UI file is where model links and
+                # authoring notes survive. Kura renders from the `_api.json`.
+                if path.with_name(f"{path.stem}_api.json").is_file():
+                    continue
+                errors.append(
+                    f"{path.relative_to(ROOT)} looks like a UI workflow export; Kura needs API-format workflow JSON. "
+                    f"To keep this file for its Note nodes, save the API export beside it as {path.stem}_api.json"
+                )
                 continue
             if not data:
                 errors.append(f"{path.relative_to(ROOT)} is empty")
@@ -56,14 +69,28 @@ def main() -> int:
                 continue
             if not lines:
                 errors.append(f"{path.relative_to(ROOT)} is empty")
+            seen_ids: dict[str, int] = {}
             for index, line in enumerate(lines, 1):
                 try:
                     item = json.loads(line)
                 except json.JSONDecodeError as exc:
                     errors.append(f"{path.relative_to(ROOT)}:{index} invalid JSONL: {exc}")
                     continue
-                if not isinstance(item, dict) or "id" not in item or "prompt" not in item:
-                    errors.append(f"{path.relative_to(ROOT)}:{index} must contain at least id and prompt")
+                # Whether prompt is required depends on the consuming render run:
+                # a workflow-fixed prompt is deliberately absent. Compile owns that
+                # agreement; this repository-wide check only validates standalone
+                # promptset structure that can be judged without guessing a run.
+                if not isinstance(item, dict) or "id" not in item:
+                    errors.append(f"{path.relative_to(ROOT)}:{index} must contain at least id")
+                elif not is_safe_component(item["id"]):
+                    errors.append(f"{path.relative_to(ROOT)}:{index} id must be a single safe file name, not a path")
+                elif item["id"] in seen_ids:
+                    errors.append(
+                        f"{path.relative_to(ROOT)}:{index} duplicate id {item['id']!r} "
+                        f"(already used on line {seen_ids[item['id']]})"
+                    )
+                else:
+                    seen_ids[item["id"]] = index
     if errors:
         print("Workflow validation failed:", file=sys.stderr)
         for error in errors:

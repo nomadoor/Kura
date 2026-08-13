@@ -13,14 +13,35 @@ training LoRAs, rendering images, preparing datasets. Assume that by default.
   as `docker ps`, `docker inspect`, and reading user-approved ComfyUI config is
   allowed. Any exceptional external mutation requires separate, explicit user
   approval naming that action.
-- **Do not run git commands.** Do not modify Kura's source code, tests, or
-  checks. The workspace being a git repository is an implementation detail;
-  if the user explicitly asks to update Kura itself, treat that as a
-  maintenance action and confirm the update target before using git for that
-  update.
+- Reading Kura is always allowed, including source, tests, docs, skills, and
+  read-only Git inspection such as `git status`, `git log`, `git diff`, and
+  `git show`. Do not run Git commands that change the worktree, index, history,
+  remotes, or external state. Do not modify Kura's source code, tests, or checks.
+  If the user explicitly asks to update Kura itself, treat that as a maintenance
+  action and confirm the update target before making those changes. Reviewing or
+  diagnosing Kura is not permission to modify it.
 - Skills may direct you to update knowledge files (training knowledge cards,
-  run `notes.md`). Edit those files; leave git entirely alone.
+  run `notes.md`). Edit those files, but do not stage, commit, or otherwise
+  mutate Git state unless the user separately authorizes Kura maintenance.
 - Read: Core Model and Using Kura below. Skip the Developing Kura section.
+
+In supported Claude Code sessions, repository permissions ask before direct
+Edit/Write operations in `src/`, `tests/`, `scripts/`, and `docker/`. This is
+defense in depth, not the source of authority. It does not cover every agent or
+every shell-based write path; all agents must still follow the authorization
+rules in this file. In a usage session, the need to edit Kura is a finding to
+report, not a step to take.
+
+**When Kura cannot express the task.** Every rule here says do X or do not do Y;
+this says what to do when the task needs something Kura has no way to do. Stop
+and tell the user which capability is missing and what you would need. Then wait.
+Do not build the missing capability outside Kura — a second execution path, a
+generated file per case, a direct API call, a run per parameter value — and do
+not silently produce a result that is missing the thing you could not do. An
+inability to proceed is a report, not a problem to route around. Kura's compile
+steps are written to fail loudly for this reason; a refusal from `kura ... compile`
+is the contract speaking, and the fix is either a corrected input file or a
+conversation with the user.
 
 **Developing Kura (only when the user explicitly asks to change Kura
 itself):** code, tests, docs, skills, or release work. Follow the Developing

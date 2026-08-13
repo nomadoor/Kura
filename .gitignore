@@ -9,7 +9,6 @@ dist/
 .env.local
 .env.*.local
 AGENT_STATE.md
-.claude/settings.json
 .claude/settings.local.json
 
 # Local workspace configuration and generated workspace data.

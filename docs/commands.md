@@ -154,6 +154,70 @@ that flag carries the approval through the launch gate and does not ask the
 user a second time. A human running the launch in an interactive terminal may
 omit `--yes` and answer the one launch prompt.
 
+### Promptsets and workflow patches
+
+A promptset is JSONL, one case per line. Kura owns five keys directly:
+
+| Key | Meaning |
+| --- | --- |
+| `id` | Case identifier; required, and used to name output files |
+| `prompt` | Positive prompt; required unless `render.workflow_fixed` declares `prompt` |
+| `negative_prompt` | Negative prompt; optional |
+| `seeds` | Seeds to render for this case; falls back to `render.default_seed` |
+| `meta` | Provenance that is not a render input, ignored by rendering |
+
+Any other key must be bound in the run's `workflow_patches`, which maps a name
+to a node and field of the API workflow:
+
+```yaml
+workflow_patches:
+  prompt:        {node: "5",  field: inputs.text}
+  seed:          {node: "8",  field: inputs.seed}
+  control_image: {node: "15", field: inputs.image, type: image}
+  strength:      {node: "17", field: inputs.strength}
+```
+
+`lora`, `checkpoint`, and `model_patch` take their value from the run's
+checkpoint. Every other binding reads the promptset key of the same name.
+`type: image` is supported only by the local executor. It marks a value as a
+path relative to the promptset's own directory; `kura render compile` copies it
+into `resolved/images/` and `kura render launch` stages it into
+`comfyui.input_dir`, then removes it afterwards. RunPod compile rejects image
+bindings before creating frozen image artifacts.
+
+`id` becomes a file name under `resolved/` and `samples/`, so it must be a single
+safe name — no path separators, no `.`/`..`, no leading dot — and must be unique
+within the promptset.
+
+`kura render compile` refuses to guess when the two disagree. It fails when a
+promptset key has no binding, when a bound key is missing from an item, when a
+binding names a node or field the workflow does not have, and when an item sets a
+run-sourced name (`seed`, `lora`, `checkpoint`, `model_patch`) that would be
+ignored. A key with no home in the workflow — a `width` for a workflow that takes
+its resolution from the loaded image — is a signal to fix the promptset or the
+run, not to build around Kura.
+
+`prompt`, `negative_prompt`, and `seed` are checked the same way. Rendering with
+prompts or seeds but no matching binding fails compile, because the workflow would
+render its own hardcoded value while `samples/images.jsonl` recorded yours. When a
+workflow genuinely fixes one of these, declare it instead of binding it:
+
+```yaml
+render:
+  workflow_fixed: [negative_prompt]
+```
+
+A fixed parameter is one Kura does not control and cannot read back, so Kura
+claims nothing about it: `samples/images.jsonl` records it as `null` alongside
+the `workflow_fixed` list, and the images.jsonl/realization pair says plainly
+which parameters the run did not own. Fixing `seed` also stops case expansion —
+`render.default_seed` must be null, no item may carry `seeds`, each case renders
+once, and the file name drops its `_seed` segment. Otherwise Kura would queue one
+image per seed, name them apart, and record seeds that never reached the workflow.
+When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
+placeholder that is never rendered would make the file claim an input Kura does
+not own.
+
 ## Images
 
 Image names are set in `workspace.yaml`. Build only when needed.

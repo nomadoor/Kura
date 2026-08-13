@@ -24,6 +24,27 @@ from kura.fsio import atomic_write_json
 from kura.workspace import dump_yaml
 
 
+# Promptset keys Kura owns directly. Every other key in a promptset item must be
+# bound to a workflow node/field through run.yaml `workflow_patches`, so that a
+# promptset and a workflow can never silently disagree about which parameters exist.
+PROMPTSET_CORE_KEYS = frozenset({"id", "prompt", "negative_prompt", "seeds", "meta"})
+
+# Patch names whose value comes from the run, not from each promptset item.
+# `seed` is item-sourced but read from `seeds` / render.default_seed, and
+# `negative_prompt` stays optional for promptsets that do not set one.
+PATCHES_WITHOUT_ITEM_KEY = frozenset({"lora", "checkpoint", "model_patch", "seed", "negative_prompt"})
+
+# Patch names an item must never carry: writing them there looks like it sets a
+# per-case value, but the value would come from the run and the item would be
+# ignored. `seeds` is the per-item spelling; `seed` is the binding name.
+ITEM_FORBIDDEN_KEYS = frozenset({"lora", "checkpoint", "model_patch", "seed"})
+
+# Core keys that must be bound when the promptset supplies them. Without a
+# binding the value is carried into filenames and images.jsonl while the
+# workflow renders its own hardcoded one.
+CORE_KEYS_REQUIRING_BINDINGS = ("prompt", "negative_prompt", "seed")
+
+
 def now() -> str:
     return datetime.now().astimezone().isoformat()
 
@@ -105,16 +126,164 @@ def _set_path(document: dict[str, Any], node: str, field: str, value: Any) -> No
     target[pieces[-1]] = value
 
 
-def patch_workflow(workflow: dict[str, Any], patches: dict[str, Any], *, prompt: str, negative_prompt: str, seed: int, checkpoint: str, model_patch: str | None = None) -> dict[str, Any]:
-    patched = deepcopy(workflow)
-    values = {"prompt": prompt, "negative_prompt": negative_prompt, "seed": seed, "lora": checkpoint, "checkpoint": checkpoint, "model_patch": model_patch if model_patch is not None else checkpoint}
-    for name, value in values.items():
-        patch = patches.get(name)
-        if patch is None:
+def is_safe_component(value: Any) -> bool:
+    """True when a value can be joined into a path without escaping or colliding."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return False
+    if set(value) & set("/\\") or value in (".", "..") or value.startswith("."):
+        return False
+    return value == Path(value).name
+
+
+def normalized_workflow_fixed(value: Any) -> list[str]:
+    """Return the declared fixed core inputs, rejecting YAML shape mistakes."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("render.workflow_fixed must be a list of names, for example: [prompt, seed]")
+    return value
+
+
+def _binding_target(name: Any, patch: Any) -> tuple[str, str, str]:
+    # A binding name reaches the filesystem as `resolved/images/<name>/` and as a
+    # staged file name, so it is constrained the same way a promptset id is.
+    if not is_safe_component(name):
+        raise ValueError(f"workflow_patches keys must be plain names, not paths: {name!r}")
+    if not isinstance(patch, dict) or not isinstance(patch.get("node"), str) or not isinstance(patch.get("field"), str):
+        raise ValueError(f"workflow_patches.{name} requires node and field")
+    kind = patch.get("type", "value")
+    if kind not in ("value", "image"):
+        raise ValueError(f"workflow_patches.{name}.type must be value or image")
+    return patch["node"], patch["field"], kind
+
+
+def image_patch_names(patches: Any) -> list[str]:
+    if not isinstance(patches, dict):
+        return []
+    return [name for name, patch in patches.items() if _binding_target(name, patch)[2] == "image"]
+
+
+def validate_patch_bindings(workflow: dict[str, Any], patches: Any) -> None:
+    """Every declared binding must name a node and field that exist in this workflow."""
+    if patches in (None, {}):
+        return
+    if not isinstance(patches, dict):
+        raise ValueError("workflow_patches must be a mapping of name to {node, field}")
+    probe = deepcopy(workflow)
+    for name, patch in patches.items():
+        node, field, _ = _binding_target(name, patch)
+        try:
+            _set_path(probe, node, field, None)
+        except ValueError as exc:
+            raise ValueError(f"workflow_patches.{name} does not match this workflow: {exc}") from exc
+
+
+def _core_binding_required(name: str, items: list[dict[str, Any]], default_seed: Any) -> bool:
+    if name == "prompt":
+        return True
+    if name == "negative_prompt":
+        return any(str(item.get("negative_prompt", "")).strip() for item in items)
+    return default_seed is not None or any(item.get("seeds") for item in items)
+
+
+def reconcile_promptset(items: list[dict[str, Any]], patches: Any, *, default_seed: Any = None, workflow_fixed: Any = None) -> None:
+    """Fail when a promptset and the declared bindings disagree about which parameters exist.
+
+    Kura cannot know whether an unbound key is an input the user expects to take
+    effect or provenance from whatever generated the promptset, so it refuses to
+    guess in either direction. Core keys are checked too: an unbound `prompt` or
+    `seed` still reaches file names and `samples/images.jsonl` while the workflow
+    renders its own hardcoded value, which is the silently-wrong result this
+    whole contract exists to prevent.
+    """
+    bound = set(patches) if isinstance(patches, dict) else set()
+    fixed = set(normalized_workflow_fixed(workflow_fixed))
+    unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
+    if unknown_fixed:
+        raise ValueError(
+            f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}"
+        )
+    conflicting = sorted(fixed & bound)
+    if conflicting:
+        raise ValueError(
+            f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}; a parameter is either bound or fixed by the workflow"
+        )
+    if "seed" in fixed:
+        # Kura must not expand cases along a parameter the workflow controls; every
+        # image would be identical while file names and images.jsonl claimed a seed.
+        if default_seed is not None:
+            raise ValueError("render.workflow_fixed includes seed, so render.default_seed must be null")
+        seeded = [item["id"] for item in items if item.get("seeds")]
+        if seeded:
+            raise ValueError(
+                f"render.workflow_fixed includes seed, but these promptset items set seeds: {', '.join(seeded)}. "
+                "The workflow would render its own seed for every one of them. Remove the seeds, or bind seed to a workflow node/field."
+            )
+    for name in ("prompt", "negative_prompt"):
+        if name in fixed and any(str(item.get(name, "")).strip() for item in items):
+            print(
+                f"warning: render.workflow_fixed includes {name}, so promptset {name} values are not rendered and are recorded as null.",
+                flush=True,
+            )
+    for name in CORE_KEYS_REQUIRING_BINDINGS:
+        if name in bound or name in fixed:
             continue
-        if not isinstance(patch, dict) or not isinstance(patch.get("node"), str) or not isinstance(patch.get("field"), str):
-            raise ValueError(f"workflow_patches.{name} requires node and field")
-        _set_path(patched, patch["node"], patch["field"], value)
+        if not _core_binding_required(name, items, default_seed):
+            continue
+        source = "render.default_seed or promptset seeds" if name == "seed" else f"promptset {name}"
+        raise ValueError(
+            f"this render uses {source} but run.yaml workflow_patches has no {name} binding, so the workflow would render its own "
+            f"value while Kura recorded yours. Bind {name} to a workflow node/field, or list it under render.workflow_fixed to "
+            "declare that this workflow deliberately fixes it."
+        )
+    required = {name for name in bound if name not in PATCHES_WITHOUT_ITEM_KEY}
+    for item in items:
+        forbidden = sorted(set(item) & ITEM_FORBIDDEN_KEYS)
+        if forbidden:
+            raise ValueError(
+                f"promptset item {item['id']!r} sets {', '.join(forbidden)}, which comes from the run rather than the item and would be "
+                "ignored. Use `seeds` for per-case seeds; the checkpoint is set by inputs.checkpoint."
+            )
+        unbound = sorted(set(item) - PROMPTSET_CORE_KEYS - bound)
+        if unbound:
+            raise ValueError(
+                f"promptset item {item['id']!r} declares {', '.join(unbound)} but run.yaml workflow_patches has no binding for "
+                f"{'them' if len(unbound) > 1 else 'it'}. Either bind each one to a workflow node/field, move it under `meta` if it is "
+                "provenance rather than an input, or remove it because this workflow derives that value another way."
+            )
+        missing = sorted(name for name in required if name not in item)
+        if missing:
+            raise ValueError(
+                f"promptset item {item['id']!r} has no value for bound workflow_patches: {', '.join(missing)}"
+            )
+
+
+def patch_workflow(
+    workflow: dict[str, Any],
+    patches: dict[str, Any],
+    *,
+    prompt: str,
+    negative_prompt: str,
+    seed: int,
+    checkpoint: str,
+    model_patch: str | None = None,
+    item: dict[str, Any] | None = None,
+    image_values: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    patched = deepcopy(workflow)
+    values: dict[str, Any] = {"prompt": prompt, "negative_prompt": negative_prompt, "seed": seed, "lora": checkpoint, "checkpoint": checkpoint, "model_patch": model_patch if model_patch is not None else checkpoint}
+    values.update(image_values or {})
+    for name, patch in patches.items():
+        node, field, _ = _binding_target(name, patch)
+        if name in values:
+            value = values[name]
+        elif item is not None and name in item:
+            value = item[name]
+        elif item is not None:
+            raise ValueError(f"promptset item {item.get('id')!r} has no value for workflow_patches.{name}")
+        else:
+            continue
+        _set_path(patched, node, field, value)
     return patched
 
 
@@ -268,6 +437,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     stage_dir = (lora_dir / stage_subdir).resolve()
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {
+        "kind": "LoRA",
         "source": str(source),
         "target": str(target),
         "lora_name": f"{stage_subdir}/{target.name}",
@@ -299,7 +469,114 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
     target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
-    return {"source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
+    return {"kind": "model patch", "source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
+
+
+def _freeze_promptset_images(run_dir: Path, promptset_path: Path, items: list[dict[str, Any]], patches: Any) -> list[dict[str, Any]]:
+    """Copy every image referenced by an image binding into `resolved/` and repoint the items at it.
+
+    Item paths resolve against the promptset's own directory so a promptset stays
+    self-contained, and the frozen copy makes the render reproducible after the
+    original file moves or changes.
+    """
+    names = image_patch_names(patches)
+    if not names:
+        return []
+    base = promptset_path.parent.resolve()
+    frozen_root = run_dir / "resolved" / "images"
+    records: list[dict[str, Any]] = []
+    for name in names:
+        for item in items:
+            raw = item.get(name)
+            if not isinstance(raw, str) or not raw.strip():
+                raise ValueError(f"promptset item {item['id']!r} must set {name} to an image path relative to the promptset directory")
+            candidate = Path(raw)
+            if candidate.is_absolute() or ".." in candidate.parts:
+                raise ValueError(f"promptset item {item['id']!r} {name} must be a relative path inside the promptset directory: {raw}")
+            source = (base / candidate).resolve()
+            if base != source and base not in source.parents:
+                raise ValueError(f"promptset item {item['id']!r} {name} escapes the promptset directory: {raw}")
+            if not source.is_file():
+                raise ValueError(f"promptset item {item['id']!r} {name} does not exist: {source}")
+            frozen_root.mkdir(parents=True, exist_ok=True)
+            resolved_root = frozen_root.resolve()
+            target_dir = (resolved_root / name).resolve()
+            if target_dir.parent != resolved_root:
+                raise ValueError(f"workflow_patches.{name} does not resolve to a frozen image directory inside the run")
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = (target_dir / f"{item['id']}{source.suffix}").resolve()
+            if target.parent != target_dir:
+                raise ValueError(f"promptset item {item['id']!r} does not resolve to a frozen image inside the run")
+            shutil.copyfile(source, target)
+            relative = target.relative_to(run_dir.resolve()).as_posix()
+            item[name] = relative
+            records.append({"patch": name, "prompt_id": item["id"], "source": str(source), "resolved": relative, "digest": digest(target)})
+    return records
+
+
+def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -> list[dict[str, Any]]:
+    """Stage frozen promptset images into the ComfyUI input directory Kura was told about.
+
+    Images reach ComfyUI the same way LoRAs and model patches do: through a
+    configured directory the user owns. Kura never uploads through the ComfyUI API.
+    """
+    patches = frozen.get("workflow_patches", {})
+    names = image_patch_names(patches)
+    if not names:
+        return []
+    comfyui = frozen.get("comfyui", {})
+    if not isinstance(comfyui, dict):
+        comfyui = {}
+    directory = _workspace_path(workspace, comfyui.get("input_dir"))
+    if directory is None:
+        raise ValueError("workspace.yaml comfyui.input_dir is required to render a promptset with image bindings")
+    stage_subdir = str(comfyui.get("input_stage_subdir") or "Kura_tmp").strip("/\\")
+    if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
+        raise ValueError("comfyui.input_stage_subdir must be a safe relative directory name")
+    # Copy, not symlink: ComfyUI resolves LoadImage paths and rejects one that
+    # leaves its input directory, so a symlinked input fails validation at queue
+    # time even though a symlinked model loads fine.
+    mode = str(comfyui.get("input_stage_mode") or "copy").strip().lower()
+    if mode not in ("symlink", "copy"):
+        raise ValueError("comfyui.input_stage_mode must be symlink or copy")
+    if mode == "symlink":
+        print(
+            "warning: comfyui.input_stage_mode=symlink is set, but ComfyUI rejects symlinked LoadImage inputs "
+            "(\"Invalid image file\"). Use copy unless this endpoint is known to accept them.",
+            flush=True,
+        )
+    cleanup = str(comfyui.get("input_stage_cleanup") or "remove_after_render").strip().lower()
+    if cleanup not in ("remove_after_render", "keep"):
+        raise ValueError("comfyui.input_stage_cleanup must be remove_after_render or keep")
+    plans: dict[str, dict[str, Any]] = {}
+    for name in names:
+        for source in sorted((run_dir / "resolved" / "images" / name).glob("*")):
+            if not source.is_file():
+                continue
+            key = source.relative_to(run_dir).as_posix()
+            target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
+            plans[key] = {"kind": "image", "patch": name, "frozen": key, "source": str(source), "target": str(target), "image_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
+    return list(plans.values())
+
+
+def _image_values_for_item(item: dict[str, Any], patches: Any, plans: list[dict[str, Any]]) -> dict[str, str]:
+    by_frozen = {plan["frozen"]: plan["image_name"] for plan in plans}
+    values: dict[str, str] = {}
+    for name in image_patch_names(patches):
+        frozen_path = item.get(name)
+        if not isinstance(frozen_path, str) or frozen_path not in by_frozen:
+            raise ValueError(f"promptset item {item.get('id')!r} has no staged image for workflow_patches.{name}")
+        values[name] = by_frozen[frozen_path]
+    return values
+
+
+# There is deliberately no staged-image visibility pre-check. ComfyUI's
+# `/object_info/LoadImage` listing does not enumerate files inside input
+# subdirectories, so a correctly staged image never appears there and the check
+# only ever produced a false warning. Unlike a LoRA — where a name ComfyUI
+# cannot see is silently ignored and the wrong weights render — an unusable
+# image name is rejected outright when the prompt is queued, and that rejection
+# names the file. The server-side validation is the gate.
 
 
 def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, str]]:
@@ -319,7 +596,7 @@ def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, 
 def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
-    allowed = ["lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup"]
+    allowed = ["lora_dir", "lora_stage_subdir", "lora_stage_mode", "lora_stage_cleanup", "model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_mode", "model_patch_stage_cleanup", "input_dir", "input_stage_subdir", "input_stage_mode", "input_stage_cleanup"]
     if include_remote:
         allowed.extend(("model_registry", "runpod"))
     return {key: deepcopy(comfyui[key]) for key in allowed if key in comfyui}
@@ -333,7 +610,7 @@ def _fetch_endpoint_object_info(endpoint: str, *, timeout: float = 15) -> dict[s
     return payload
 
 
-def _materialize_lora_stage(plan: dict[str, Any]) -> None:
+def _materialize_stage(plan: dict[str, Any]) -> None:
     source = Path(plan["source"])
     target = Path(plan["target"])
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -344,7 +621,7 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
         if target.is_file() and not target.is_symlink() and digest(target) == digest(source):
             plan["created"] = False
             return
-        raise ValueError(f"ComfyUI LoRA stage target already exists with different content: {target}")
+        raise ValueError(f"ComfyUI {plan.get('kind', 'file')} stage target already exists with different content: {target}")
     if plan["mode"] == "copy":
         shutil.copy2(source, target)
         plan["created"] = True
@@ -358,7 +635,7 @@ def _materialize_lora_stage(plan: dict[str, Any]) -> None:
         plan["created"] = True
 
 
-def _cleanup_lora_stage(plan: dict[str, Any] | None) -> None:
+def _cleanup_stage(plan: dict[str, Any] | None) -> None:
     if not plan or plan.get("cleanup") != "remove_after_render" or not plan.get("created"):
         return
     target = Path(str(plan.get("target", "")))
@@ -423,8 +700,22 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
     )
 
 
-def promptset(path: Path) -> list[dict[str, Any]]:
+def _validate_prompt_id(value: Any, line_number: int) -> str:
+    """Ids become file names under `resolved/` and `samples/`, so they must be inert.
+
+    An id is joined into output paths; anything that can traverse or collide would
+    let a promptset write outside its run or silently overwrite another case.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"promptset:{line_number}: id and prompt are required")
+    if not is_safe_component(value):
+        raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
+    return value
+
+
+def promptset(path: Path, *, require_prompt: bool = True) -> list[dict[str, Any]]:
     prompts: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
@@ -432,8 +723,12 @@ def promptset(path: Path) -> list[dict[str, Any]]:
             item = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ValueError(f"promptset:{line_number}: invalid JSON ({exc.msg})") from exc
-        if not isinstance(item, dict) or not item.get("id") or not item.get("prompt"):
+        if not isinstance(item, dict) or (require_prompt and not item.get("prompt")):
             raise ValueError(f"promptset:{line_number}: id and prompt are required")
+        item_id = _validate_prompt_id(item.get("id"), line_number)
+        if item_id in seen:
+            raise ValueError(f"promptset:{line_number}: duplicate id {item_id!r} (already used on line {seen[item_id]})")
+        seen[item_id] = line_number
         prompts.append(item)
     return prompts
 
@@ -446,8 +741,19 @@ class ComfyUIClient:
     def _json(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         request = urllib.request.Request(f"{self.endpoint}{path}", data=data, headers={"Content-Type": "application/json"} if data else {})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.loads(response.read())
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            # ComfyUI reports which node and input it rejected in the response body.
+            # Without it a caller only sees "HTTP Error 400: Bad Request".
+            try:
+                detail = exc.read().decode("utf-8", "replace").strip()
+            except OSError:
+                detail = ""
+            raise urllib.error.HTTPError(
+                exc.url, exc.code, f"{exc.reason}: {detail[:1000]}" if detail else exc.reason, exc.headers, None
+            ) from None
 
     def lora_names(self) -> set[str]:
         names: set[str] = set()
@@ -529,13 +835,17 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         raise ValueError(f"workflow is not valid JSON: {exc}") from exc
     sidecar = _workflow_sidecar(workflow_path)
     lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
-    promptset(promptset_path)
-    patch_workflow(
-        workflow, run.get("workflow_patches", {}), prompt="", negative_prompt="", seed=0,
-        checkpoint=inputs.get("checkpoint", {}).get("path", ""),
-    )
-    resolved = run_dir / "resolved"
-    resolved.mkdir(exist_ok=True)
+    render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
+    workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
+    fixed = set(workflow_fixed)
+    patches = run.get("workflow_patches", {})
+    items = promptset(promptset_path, require_prompt="prompt" not in fixed)
+    validate_patch_bindings(workflow, patches)
+    reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
+    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
+    is_runpod = executor.get("name") == "runpod"
+    if is_runpod and image_patch_names(patches):
+        raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
     frozen = deepcopy(run)
     frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
@@ -543,8 +853,6 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
     frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
-    executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
-    is_runpod = executor.get("name") == "runpod"
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
@@ -578,6 +886,14 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             frozen["inputs"].setdefault("checkpoint", {})["hash"] = digest(candidate)
         elif not inputs.get("checkpoint", {}).get("hash"):
             print("warning: checkpoint hash is unavailable", flush=True)
+    # Image freezing mutates resolved/ and the in-memory promptset. Keep it
+    # after every validation and digest step so a rejected compile leaves no
+    # unreferenced image copies behind.
+    resolved = run_dir / "resolved"
+    resolved.mkdir(exist_ok=True)
+    frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)
+    if frozen_images:
+        frozen["promptset_images"] = frozen_images
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
     dump_yaml(resolved / "manifest.lock.yaml", frozen)
     atomic_write_json(resolved / "workflow_used.json", workflow)
@@ -585,7 +901,10 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         atomic_write_json(resolved / "comfyui_models.json", frozen["comfyui_models"])
     if "comfyui_model_registry" in frozen:
         atomic_write_json(resolved / "comfyui_model_registry.json", frozen["comfyui_model_registry"])
-    shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
+    if frozen_images:
+        (resolved / "promptset_used.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in items), encoding="utf-8")
+    else:
+        shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
     dump_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled")
 
@@ -610,6 +929,8 @@ def launch_render(
         raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
     if resolved_executor == "runpod" and "model_patch" in frozen.get("workflow_patches", {}):
         raise ValueError("ComfyUI model patch staging is not supported for the runpod executor")
+    if resolved_executor == "runpod" and image_patch_names(frozen.get("workflow_patches", {})):
+        raise ValueError("promptset image bindings are not supported for the runpod executor")
     current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     allowed_states = {"compiled"} if resolved_executor == "local" else {"compiled", "running"}
     if current_status.get("state") not in allowed_states:
@@ -621,18 +942,25 @@ def launch_render(
     promptset_used_path = run_dir / "resolved" / "promptset_used.jsonl"
     if not promptset_used_path.is_file():
         raise ValueError("render promptset is not frozen; run kura render compile first")
-    prompts = promptset(promptset_used_path)
+    workflow_fixed = normalized_workflow_fixed(frozen.get("render", {}).get("workflow_fixed"))
+    prompts = promptset(promptset_used_path, require_prompt="prompt" not in workflow_fixed)
     checkpoint = inputs.get("checkpoint", {})
     default_seed = frozen.get("render", {}).get("default_seed")
-    pairs = [(item, seed) for item in prompts for seed in item.get("seeds", [default_seed]) if seed is not None]
-    if not pairs:
-        raise ValueError("promptset has no seeds and render.default_seed is not set")
+    if "seed" in workflow_fixed:
+        # The workflow owns the seed, so there is nothing to vary and nothing Kura
+        # may claim about it. One image per case, and the record says seed=None.
+        pairs = [(item, None) for item in prompts]
+    else:
+        pairs = [(item, seed) for item in prompts for seed in (item.get("seeds") or [default_seed]) if seed is not None]
+        if not pairs:
+            raise ValueError("promptset has no seeds and render.default_seed is not set")
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
     lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
     model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+    image_stages = _image_stage_plans(workspace, run_dir, frozen)
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
     model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
-    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if resolved_executor == "local":
         expected_identity = frozen.get("comfyui_endpoint_identity")
         identity_verified = isinstance(expected_identity, dict) and bool(expected_identity.get("sha256"))
@@ -679,26 +1007,33 @@ def launch_render(
                     "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
                 )
         if lora_stage:
-            _materialize_lora_stage(lora_stage)
+            _materialize_stage(lora_stage)
             _ensure_lora_stage_visible(client, endpoint, lora_stage)
         if model_patch_stage:
-            _materialize_lora_stage(model_patch_stage)
+            _materialize_stage(model_patch_stage)
             _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage})
+        for plan in image_stages:
+            _materialize_stage(plan)
+        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages})
         generated = 0
         for item, seed in pairs:
-            patched = patch_workflow(workflow, frozen.get("workflow_patches", {}), prompt=item["prompt"], negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name)
+            patches = frozen.get("workflow_patches", {})
+            patched = patch_workflow(workflow, patches, prompt=item.get("prompt", ""), negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name, item=item, image_values=_image_values_for_item(item, patches, image_stages))
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
                 handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
             for index, image in enumerate(client.wait(prompt_id)):
                 suffix = Path(image.get("filename", "image.png")).suffix or ".png"
-                relative = f"samples/images/{item['id']}_seed{seed}_{index}{suffix}"
+                seed_segment = "" if seed is None else f"_seed{seed}"
+                relative = f"samples/images/{item['id']}{seed_segment}_{index}{suffix}"
                 image_path = run_dir / relative
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 image_path.write_bytes(client.download(image))
-                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": item["prompt"], "negative_prompt": item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "created": now()}
+                # A parameter the workflow fixes was never Kura's to set, and Kura
+                # cannot read it back without a binding. Record it as unknown
+                # rather than repeating a promptset value that did not reach the render.
+                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item.get("prompt", ""), "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
@@ -706,7 +1041,7 @@ def launch_render(
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
         status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, image_count=generated)
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
@@ -715,9 +1050,11 @@ def launch_render(
         with stdout_log.open("a", encoding="utf-8") as handle:
             handle.write(f"{type(exc).__name__}: {exc}\n")
         status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, error=str(exc))
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, error=str(exc))
         event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
         return 1
     finally:
-        _cleanup_lora_stage(lora_stage)
-        _cleanup_lora_stage(model_patch_stage)
+        _cleanup_stage(lora_stage)
+        _cleanup_stage(model_patch_stage)
+        for plan in image_stages:
+            _cleanup_stage(plan)

@@ -11,7 +11,7 @@ import yaml
 
 from kura.comfyui_models import DEFAULT_MODEL_REGISTRY, endpoint_fingerprint, required_model_refs, resolve_model_specs, visible_model_refs
 from kura.init_templates import COMFYUI_DOCKERFILE_TEMPLATE
-from kura.render import _cleanup_lora_stage, _fetch_endpoint_object_info, _lora_insert_from_sidecar, _materialize_lora_stage, _model_patch_stage_plan, insert_lora_loader, launch_render, patch_workflow
+from kura.render import _cleanup_stage, _fetch_endpoint_object_info, _lora_insert_from_sidecar, _materialize_stage, _model_patch_stage_plan, insert_lora_loader, launch_render, patch_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,10 +175,10 @@ class ComfyUIModelPatchTests(unittest.TestCase):
             }
             plan = _model_patch_stage_plan(workspace, run_dir, frozen, {"path": "runs/train/outputs/lllite.safetensors"})
             assert plan is not None
-            _materialize_lora_stage(plan)
+            _materialize_stage(plan)
             target = Path(plan["target"])
             exists_during_render = target.is_symlink()
-            _cleanup_lora_stage(plan)
+            _cleanup_stage(plan)
             exists_after_cleanup = target.exists() or target.is_symlink()
         self.assertTrue(exists_during_render)
         self.assertFalse(exists_after_cleanup)
