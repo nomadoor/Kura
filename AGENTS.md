@@ -67,6 +67,15 @@ Training uses Docker locally and RunPod remotely. Never run AI-Toolkit or Musubi
 
 Treat training configuration and compute selection as one plan. Dataset size, resolution, batch, accumulation, precision, rank, optimizer, and backend low-memory options all affect quality, runtime, memory, and cost. Do not silently change these trade-offs.
 
+Ask Kura what a surface accepts instead of reading adapter source or guessing a
+name. `uv run kura run capabilities <backend>` lists the `backend.config` fields
+that backend takes, which of them apply only to some architectures or modes, its
+unverified escape hatches, and concepts it does not support; `uv run kura doctor
+workspace` does the same for `workspace.yaml`. These surfaces are closed, so a
+value with no consumer is refused rather than accepted and ignored, and the
+rejection names the correction. Treat that message as the answer, not as a
+reason to go looking through `src/`.
+
 When a run does not fit the available hardware, diagnose from concrete evidence such as CUDA OOM logs, stalled startup, or doctor output. Propose the least meaning-changing adjustment first, explain the trade-off, then record the accepted change in `run.yaml` / backend overrides before recompiling and launching a new realization. Do not silently retry with changed batch, resolution, precision, or low-memory modes.
 
 Before launching a training run, run `uv run kura run plan <run-id>` and show the output to the user. Do not reconstruct launch settings from memory. Launch only after explicit approval; if anything changes afterward, record it in `run.yaml`, recompile, and show the plan again.
