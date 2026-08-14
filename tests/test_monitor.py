@@ -302,11 +302,19 @@ class MonitorProjectionTests(unittest.TestCase):
             (run_dir / "realizations").mkdir(parents=True)
             (root / "index.jsonl").write_text(json.dumps({"id": "docker-timeout"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: docker-timeout\ntype: train\ncompute: {executor: docker}\n", encoding="utf-8")
-            (run_dir / "status.json").write_text(json.dumps({"state": "running", "container_id": "container-1"}), encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "r1.json").write_text(
+                json.dumps({"id": "r1", "executor": "docker", "state": "running", "container": {"id": "container-1"}}),
+                encoding="utf-8",
+            )
 
-            with patch("kura.executors.docker.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 2)):
+            with patch("kura.executors.docker.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 2)) as run:
                 summary = collect_run_summaries(root)[0]
 
+            run.assert_called_once_with(["docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2.0)
             self.assertEqual(summary.state, "running")
 
     def test_collect_run_summaries_uses_materialized_ai_toolkit_progress_and_stdout_losses(self) -> None:

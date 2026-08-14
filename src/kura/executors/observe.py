@@ -45,6 +45,8 @@ def observe_run(
         if not isinstance(realization_ref, str):
             return snapshot
         realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+        if not isinstance(realization, dict):
+            return snapshot
         if realization.get("executor") == "runpod":
             return reconcile_runpod(
                 run_dir,

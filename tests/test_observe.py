@@ -133,6 +133,15 @@ class ObserveRunTests(unittest.TestCase):
             with self.assertRaises(json.JSONDecodeError):
                 observe_run(run_dir)
 
+    def test_non_object_realization_returns_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._docker_run(Path(directory))
+            (run_dir / "realizations" / "r1.json").write_text("[]", encoding="utf-8")
+            snapshot = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            with patch("kura.executors.observe.reconcile_docker") as reconcile:
+                self.assertEqual(observe_run(run_dir), snapshot)
+            reconcile.assert_not_called()
+
     def test_non_observable_states_do_not_call_executor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._docker_run(Path(directory))
