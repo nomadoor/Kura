@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kura"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent-first training workspace for reproducible model runs"
 requires-python = ">=3.11"
 license = "MIT"

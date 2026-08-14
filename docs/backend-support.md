@@ -1,6 +1,14 @@
 # Backend support
 
-Kura 0.2.0 support snapshot: 2026-08-04.
+Support snapshot taken for Kura 0.2.0 on 2026-08-04, and still current for
+0.3.0. No new smokes were run for 0.3.0; the snapshot carries forward because
+adapter behaviour did not change. The 0.3.0 adapter source identity moved from
+`selected-adapter-v1` to `selected-adapter-v2` when the backend configuration
+surfaces were declared, and each backend records that transition as
+`behavior_changed: false` in
+[adapter-source-identity-migrations.yaml](adapter-source-identity-migrations.yaml).
+`scripts/check_smoke_evidence.py` fails if evidence is ever carried across a
+transition that is not recorded that way.
 
 This page answers three questions: which upstream version Kura uses, whether
 Kura has an adapter, and how far that path has been tested. It intentionally
