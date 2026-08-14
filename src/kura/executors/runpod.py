@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 from kura import __version__
 from kura.provenance import image_reference_identity
-from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
 class RunPodAPIError(ValueError):
@@ -30,11 +30,11 @@ class RunPodAPIError(ValueError):
         self.status_code = status_code
 
 
-def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None) -> Any:
+def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None, *, timeout: float = 30.0) -> Any:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     request = Request(f"{RUNPOD_API_ROOT}{path}", data=body, method=method, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         detail = _redact_secret_text(exc.read().decode("utf-8", errors="replace"))
@@ -49,8 +49,8 @@ def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str
         raise ValueError("RunPod API returned invalid JSON") from exc
 
 
-def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    value = _runpod_request_json(method, path, api_key, payload)
+def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None, *, timeout: float = 30.0) -> dict[str, Any]:
+    value = _runpod_request_json(method, path, api_key, payload, timeout=timeout)
     if not isinstance(value, dict):
         raise ValueError("RunPod API returned an unexpected response")
     return value
@@ -895,36 +895,63 @@ sleep infinity
     return realization_id
 
 
-def reconcile_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
-    settings = _runpod_settings(config)
-    api_key = os.environ.get(settings["api_key_env"])
-    if not api_key:
-        raise ValueError(f"{settings['api_key_env']} must be exported to reconcile a RunPod run")
-    status = _load_status(run_dir)
-    realization_ref = status.get("last_realization")
-    if not isinstance(realization_ref, str):
-        raise ValueError("run has no launched realization")
-    realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-    pod_id = realization.get("pod", {}).get("id")
-    if not isinstance(pod_id, str):
-        raise ValueError("latest realization has no RunPod pod ID")
-    pod = _runpod_request("GET", f"/pods/{pod_id}", api_key)
-    state, exit_code = _runpod_state(pod)
-    observation = {"realization_id": realization["id"], "observed_at": _now(), "state": state, "exit_code": exit_code, "pod_id": pod_id, **_runpod_pod_snapshot(pod)}
-    observation_path = _write_observation(run_dir, realization["id"], observation)
+def reconcile_runpod(
+    run_dir: Path,
+    config: dict[str, Any],
+    *,
+    timeout: float = 30.0,
+    blocking: bool = True,
+    source: str = "explicit",
+) -> dict[str, Any]:
+    with _run_operation_lock(run_dir, "observe", blocking=blocking):
+        settings = _runpod_settings(config)
+        api_key = os.environ.get(settings["api_key_env"])
+        if not api_key:
+            raise ValueError(f"{settings['api_key_env']} must be exported to reconcile a RunPod run")
+        status = _load_status(run_dir)
+        realization_ref = status.get("last_realization")
+        if not isinstance(realization_ref, str):
+            raise ValueError("run has no launched realization")
+        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+        pod_id = realization.get("pod", {}).get("id")
+        if not isinstance(pod_id, str):
+            raise ValueError("latest realization has no RunPod pod ID")
+        pod = _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
+        state, exit_code = _runpod_state(pod)
+        observed_at = _now()
+        ended = None if state == "running" else observed_at
+        ended_source = None if state == "running" else "observed_at"
+        observation = {
+            "realization_id": realization["id"],
+            "observed_at": observed_at,
+            "source": source,
+            "state": state,
+            "exit_code": exit_code,
+            "ended": ended,
+            "ended_source": ended_source,
+            "pod_id": pod_id,
+            **_runpod_pod_snapshot(pod),
+        }
+        recorded = False
 
-    def mutate(latest: dict[str, Any]) -> None:
-        if latest.get("last_realization") != realization_ref:
-            return
-        latest["last_observation"] = str(observation_path.relative_to(run_dir))
-        if latest.get("state") not in ("completed", "failed"):
-            latest.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observation["observed_at"]})
-        effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
-        _materialize_stdout_progress(run_dir, latest, state=effective_state)
+        def mutate(latest: dict[str, Any]) -> None:
+            nonlocal recorded
+            if latest.get("last_realization") != realization_ref:
+                return
+            lifecycle_changed = latest.get("state") != state or latest.get("exit_code") != exit_code
+            if source == "explicit" or lifecycle_changed:
+                observation_path = _write_observation(run_dir, realization["id"], observation)
+                latest["last_observation"] = str(observation_path.relative_to(run_dir))
+                recorded = True
+            if latest.get("state") not in TERMINAL_STATES:
+                latest.update({"state": state, "exit_code": exit_code, "ended": ended})
+            effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
+            _materialize_stdout_progress(run_dir, latest, state=effective_state)
 
-    status = _mutate_run_status(run_dir, mutate)
-    append_run_event(run_dir, {"event": "run_reconciled", **observation})
-    return status
+        status = _mutate_run_status(run_dir, mutate, blocking=blocking)
+        if recorded:
+            append_run_event(run_dir, {"event": "run_reconciled", **observation})
+        return status
 
 
 def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -955,7 +982,7 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     def mutate(latest: dict[str, Any]) -> None:
         if latest.get("pod_id") != pod_id:
             return
-        if latest.get("state") not in ("completed", "failed"):
+        if latest.get("state") not in TERMINAL_STATES:
             latest.update({"state": "interrupted", "exit_code": None, "ended": ended_at})
         latest["pod_stopped_at"] = ended_at
 

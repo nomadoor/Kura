@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors import _redact_secret_text, launch_docker, launch_runpod, reconcile_docker
+from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -278,7 +278,7 @@ def launch_run(
         )
         return 1
     try:
-        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run already has a running realization; reconcile or stop it first")
         allowed_states = ("compiled", "failed", "interrupted", "unknown", "launch_failed")

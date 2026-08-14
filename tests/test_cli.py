@@ -28,7 +28,7 @@ from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.run_commands.runpod_ssh import _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file
 from kura.container_scripts import script_source
-from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
+from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
 from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error
 from kura.fsio import FileLockBusy, file_lock
@@ -121,6 +121,8 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(run["compute"]["executor"], "runpod")
             self.assertEqual(run["compute"]["gpu"], "NVIDIA RTX A5000")
             self.assertEqual(run["compute"]["capacity"], {"mode": "immediate"})
+            status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
+            self.assertIsNone(status["last_step"])
             self.assertEqual(
                 sorted(path.name for path in (Path(directory) / "runs" / run_id).iterdir()),
                 ["notes.md", "plan.md", "run.yaml", "status.json"],
@@ -139,6 +141,8 @@ class InitCommandTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 0)
             run_id = stdout.getvalue().strip()
+            status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
+            self.assertIsNone(status["last_step"])
             self.assertEqual(
                 sorted(path.name for path in (Path(directory) / "runs" / run_id).iterdir()),
                 ["notes.md", "plan.md", "run.yaml", "status.json"],
@@ -4921,7 +4925,7 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertTrue(list((run_dir / "realizations").glob("r1.observed-*.json")))
 
     def test_reconcile_docker_preserves_confirmed_terminal_outcome(self) -> None:
-        for terminal_state, exit_code in (("completed", 0), ("failed", 7)):
+        for terminal_state, exit_code in (("completed", 0), ("failed", 7), ("stopped", None), ("interrupted", None), ("unknown", None), ("launch_failed", None)):
             with self.subTest(state=terminal_state), tempfile.TemporaryDirectory() as directory:
                 run_dir = self._run_dir(Path(directory))
                 (run_dir / "status.json").write_text(
@@ -4972,6 +4976,7 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["last_step"], 100)
             self.assertEqual(status["total_steps"], 100)
+            self.assertEqual(status["seconds_per_iter"], 2.49)
 
     def test_reconcile_materializes_musubi_stdout_progress_and_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4988,16 +4993,18 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["last_step"], 5)
             self.assertEqual(status["total_steps"], 5)
+            self.assertEqual(status["seconds_per_iter"], 2.10)
             self.assertEqual(status["outputs"], ["outputs/example.safetensors"])
 
-    def test_reconcile_missing_container_is_interrupted_not_failed(self) -> None:
+    def test_reconcile_missing_container_is_unknown_not_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             result = __import__("subprocess").CompletedProcess([], 1, "", "Error: No such container")
             with patch("kura.executors.docker.subprocess.run", return_value=result):
                 status = reconcile_docker(run_dir)
-            self.assertEqual(status["state"], "interrupted")
+            self.assertEqual(status["state"], "unknown")
             self.assertIsNone(status["exit_code"])
+            self.assertIsNone(status["ended"])
 
     def test_launch_wait_blocks_for_local_docker_and_reconciles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6453,13 +6460,14 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
-                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "EXITED"}):
+                with patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "EXITED"}) as request:
                     status = reconcile_runpod(run_dir, self._config())
             self.assertEqual(status["state"], "unknown")
             self.assertIsNone(status["exit_code"])
+            request.assert_called_once_with("GET", "/pods/pod-1", "api-secret", timeout=30.0)
 
     def test_reconcile_runpod_preserves_confirmed_terminal_outcome(self) -> None:
-        for terminal_state, exit_code in (("completed", 0), ("failed", 7)):
+        for terminal_state, exit_code in (("completed", 0), ("failed", 7), ("stopped", None), ("interrupted", None), ("unknown", None), ("launch_failed", None)):
             with self.subTest(state=terminal_state), tempfile.TemporaryDirectory() as directory:
                 run_dir = self._run_dir(Path(directory))
                 realization_ref = "realizations/r1.json"
@@ -6491,7 +6499,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             release_request = threading.Event()
             result: list[dict[str, Any]] = []
 
-            def observe(*_args: object) -> dict[str, object]:
+            def observe(*_args: object, **_kwargs: object) -> dict[str, object]:
                 request_started.set()
                 self.assertTrue(release_request.wait(2))
                 return {"id": "pod-1", "desiredStatus": "RUNNING"}
@@ -6525,7 +6533,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             release_request = threading.Event()
             result: list[dict[str, Any]] = []
 
-            def observe(*_args: object) -> dict[str, object]:
+            def observe(*_args: object, **_kwargs: object) -> dict[str, object]:
                 request_started.set()
                 self.assertTrue(release_request.wait(2))
                 return {"id": "pod-1", "desiredStatus": "TERMINATED"}
@@ -6546,7 +6554,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(result[0]["last_realization"], "realizations/r2.json")
             self.assertEqual(result[0]["pod_id"], "pod-2")
             self.assertNotIn("last_observation", result[0])
-            self.assertTrue(list((run_dir / "realizations").glob("r1.observed-*.json")))
+            self.assertFalse(list((run_dir / "realizations").glob("r1.observed-*.json")))
 
     def test_cli_reconcile_runpod_syncs_remote_log_without_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import re
@@ -26,10 +27,22 @@ LOW_AVAILABLE_MEMORY_BYTES = 4 * 1024**3
 RUNPOD_API_ROOT = "https://rest.runpod.io/v1"
 
 
+ACTIVE_STATES = frozenset({"queued", "staged", "launching", "running"})
+
+
+OBSERVABLE_STATES = frozenset({"running"})
+
+
+TERMINAL_STATES = frozenset({"completed", "failed", "stopped", "interrupted", "unknown", "launch_failed"})
+
+
 AI_TOOLKIT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?loss:\s*(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
 
 
 MUSUBI_PROGRESS_RE = re.compile(r"steps:\s+\d+%\|.*?\|\s*(?P<step>\d+)\s*/\s*(?P<total>\d+).*?avr_loss=", re.IGNORECASE)
+
+
+ITERATION_SPEED_RE = re.compile(r"(?P<value>[+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?P<unit>s/it|it/s)\b", re.IGNORECASE)
 
 
 class _OperationBusy(FileLockBusy):
@@ -133,14 +146,16 @@ def _write_status(run_dir: Path, status: dict[str, Any]) -> None:
     _write_json(_status_path(run_dir), status)
 
 
-def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], *, blocking: bool = True) -> dict[str, Any]:
     """Apply a status change to the latest snapshot under an advisory lock."""
 
-    with _run_operation_lock(run_dir, "status"):
+    with _run_operation_lock(run_dir, "status", blocking=blocking):
         status = _load_status(run_dir)
+        original = copy.deepcopy(status)
         mutate(status)
         redacted = _redact_secrets(status)
-        atomic_write_json(_status_path(run_dir), redacted)
+        if redacted != original:
+            atomic_write_json(_status_path(run_dir), redacted)
         return redacted
 
 
@@ -151,26 +166,50 @@ def _write_observation(run_dir: Path, realization_id: str, observation: dict[str
     return path
 
 
-def _stdout_progress(run_dir: Path) -> tuple[int | None, int | None]:
+def _read_text_tail(path: Path, *, max_bytes: int = 256 * 1024) -> str:
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - max_bytes))
+        return handle.read().decode("utf-8", errors="replace")
+
+
+def _stdout_progress(run_dir: Path) -> tuple[int | None, int | None, float | None]:
     try:
-        text = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8", errors="replace")
+        text = _read_text_tail(run_dir / "logs" / "stdout.log")
     except OSError:
-        return None, None
+        return None, None, None
     step: int | None = None
     total: int | None = None
-    for pattern in (AI_TOOLKIT_PROGRESS_RE, MUSUBI_PROGRESS_RE):
-        for match in pattern.finditer(text):
-            step = int(match.group("step"))
-            total = int(match.group("total"))
-    return step, total
+    seconds_per_iter: float | None = None
+    # Progress bars commonly rewrite one terminal line with carriage returns.
+    # Scan those records independently so a large tail cannot turn the
+    # non-greedy progress patterns into a quadratic search.
+    for line in re.split(r"[\r\n]+", text):
+        for pattern in (AI_TOOLKIT_PROGRESS_RE, MUSUBI_PROGRESS_RE):
+            match = pattern.search(line)
+            if match:
+                step = int(match.group("step"))
+                total = int(match.group("total"))
+        for match in ITERATION_SPEED_RE.finditer(line):
+            value = float(match.group("value"))
+            if value <= 0:
+                continue
+            seconds_per_iter = value if match.group("unit").lower() == "s/it" else 1 / value
+    return step, total, seconds_per_iter
 
 
 def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
-    step, total = _stdout_progress(run_dir)
+    step, total, seconds_per_iter = _stdout_progress(run_dir)
     if total is not None:
-        status["total_steps"] = total
+        existing_total = status.get("total_steps")
+        status["total_steps"] = max(existing_total, total) if isinstance(existing_total, int) else total
     if step is not None:
-        status["last_step"] = total if state == "completed" and total is not None else step
+        candidate = total if state == "completed" and total is not None else step
+        existing_step = status.get("last_step")
+        status["last_step"] = max(existing_step, candidate) if isinstance(existing_step, int) else candidate
+    if seconds_per_iter is not None:
+        status["seconds_per_iter"] = seconds_per_iter
     if state == "completed":
         outputs_dir = run_dir / "outputs"
         if outputs_dir.is_dir():
