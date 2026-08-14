@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 
 from kura.backends import get_backend, validate_backend_config
-from kura.executors import runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
+from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
@@ -1329,7 +1329,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
     run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run is running; stop or reconcile it before staging")
         if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):

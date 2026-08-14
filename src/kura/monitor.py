@@ -1,4 +1,4 @@
-"""Read-only monitoring projections for Kura runs."""
+"""Monitoring projections backed by materialized Kura run state."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import os
 import re
 import shlex
 import shutil
-import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,10 +17,10 @@ from typing import Any, Iterable
 import yaml
 
 from kura.backends import get_backend
+from kura.executors import ACTIVE_STATES, observe_run
 from kura.run_envelope import common_recipe
 
 
-ACTIVE_STATES = {"queued", "staged", "launching", "running"}
 DRAFT_STATE = "draft"
 AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
@@ -123,7 +122,7 @@ def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: 
         run_dir = workspace / "runs" / run_id
         try:
             summaries.append(_collect_one_run(workspace, run_dir, run_id, loss_tail=loss_tail, stale_after=stale_after))
-        except ValueError as exc:
+        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
             summaries.append(
                 RunSummary(
                     id=run_id,
@@ -302,24 +301,20 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     run = _read_mapping(run_dir / "run.yaml")
     manifest = _read_mapping(run_dir / "resolved" / "manifest.lock.yaml")
     config = manifest or run
-    status = _read_mapping(run_dir / "status.json")
+    status_path = run_dir / "status.json"
+    status = observe_run(run_dir) if status_path.is_file() else {}
     realization = _latest_realization(run_dir, status)
     metrics_paths = _artifact_candidates(run_dir, status, "metrics/metrics.jsonl")
     stdout_paths = _artifact_candidates(run_dir, status, "logs/stdout.log")
     losses = tuple(_read_losses_from_candidates(metrics_paths, limit=loss_tail))
     run_type = _string(config.get("type") or run.get("type"))
-    stdout_progress, stdout_losses = _read_training_stdout_from_candidates(stdout_paths, loss_tail=loss_tail)
+    stdout_losses = _read_training_stdout_from_candidates(stdout_paths, loss_tail=loss_tail)
     stdout_activity = _read_activity_from_stdout_candidates(stdout_paths, run_dir=run_dir)
     if not losses and stdout_losses:
         losses = tuple(stdout_losses)
-    progress = _progress(status, config, stdout_progress=stdout_progress)
+    progress = _progress(status, config)
     executor = _executor(run_type, config, status, realization)
     state = _string(status.get("state") or realization.get("state"))
-    observed = _read_docker_state_overlay(status, realization) if state == "running" and executor == "docker" else {}
-    if observed:
-        state = _string(observed.get("state")) or state
-    if state == "completed" and progress.total and (progress.step is None or progress.step < progress.total):
-        progress = RunProgress(step=progress.total, total=progress.total)
     last_updated = _latest_mtime(
         run_dir / "run.yaml",
         run_dir / "resolved" / "manifest.lock.yaml",
@@ -329,7 +324,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         *_artifact_candidates(run_dir, status, "logs/events.jsonl"),
         *sorted((run_dir / "realizations").glob("*.json")),
     )
-    ended = _parse_datetime(_first_present(status.get("ended"), observed.get("ended"), realization.get("ended"), realization.get("timestamp")))
+    ended = _parse_datetime(_first_present(status.get("ended"), realization.get("ended"), realization.get("timestamp")))
     if state in ACTIVE_STATES:
         ended = None
     outputs_path = _outputs_path(run_dir, status)
@@ -357,7 +352,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         started=_parse_datetime(_first_present(status.get("started"), realization.get("launched_at"))),
         ended=ended,
         finished=ended,
-        exit_code=_int_or_none(_first_present(status.get("exit_code"), observed.get("exit_code"), realization.get("exit_code"))),
+        exit_code=_int_or_none(_first_present(status.get("exit_code"), realization.get("exit_code"))),
         run_dir=run_dir,
         outputs_path=outputs_path,
         checkpoint_count=_checkpoint_count(outputs_path),
@@ -368,43 +363,6 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         is_stale=is_stale,
         activity=_capacity_wait_activity(capacity_wait, stale=is_stale) if capacity_wait else stdout_activity,
     )
-
-
-def _read_docker_state_overlay(status: dict[str, Any], realization: dict[str, Any]) -> dict[str, Any]:
-    """Read Docker state for stale local runs without mutating Kura artifacts."""
-    identity = _string(status.get("container_id") or status.get("container_name"))
-    if not identity:
-        container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
-        identity = _string(container.get("id") or container.get("name"))
-    if not identity:
-        return {}
-    docker = shutil.which("docker")
-    if not docker:
-        return {}
-    try:
-        result = subprocess.run([docker, "inspect", "--format", "{{json .State}}", identity], text=True, capture_output=True, check=False, timeout=2)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {}
-    if result.returncode:
-        text = (result.stderr + result.stdout).lower()
-        if "no such object" in text or "no such container" in text:
-            return {"state": "interrupted", "exit_code": None}
-        return {}
-    try:
-        docker_state = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(docker_state, dict):
-        return {}
-    if docker_state.get("Running"):
-        return {"state": "running", "exit_code": None}
-    exit_code = docker_state.get("ExitCode")
-    if not isinstance(exit_code, int):
-        return {}
-    ended = _string(docker_state.get("FinishedAt"))
-    if ended and ended.startswith("0001-"):
-        ended = None
-    return {"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": ended}
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:
@@ -529,37 +487,26 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
     }
 
 
-def _progress(status: dict[str, Any], config: dict[str, Any], *, stdout_progress: RunProgress | None = None) -> RunProgress:
+def _progress(status: dict[str, Any], config: dict[str, Any]) -> RunProgress:
     recipe = common_recipe(config)
     step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
     total = _int_or_none(_first_present(status.get("total_steps"), recipe.get("steps")))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))
-    if stdout_progress:
-        if stdout_progress.step is not None and (step is None or stdout_progress.step > step):
-            step = stdout_progress.step
-        if total is None and stdout_progress.total is not None:
-            total = stdout_progress.total
-        if stdout_progress.seconds_per_iter is not None:
-            seconds_per_iter = stdout_progress.seconds_per_iter
     return RunProgress(step=step, total=total, seconds_per_iter=seconds_per_iter)
 
 
-def _read_training_stdout(path: Path, *, loss_tail: int) -> tuple[RunProgress | None, list[float]]:
-    """Read progress/loss fallback lines emitted by supported trainers.
+def _read_training_stdout(path: Path, *, loss_tail: int) -> list[float]:
+    """Read loss fallback lines emitted by supported trainers.
 
     Metrics JSONL remains the preferred source of truth.  This parser only
-    projects lossy stdout progress bars for backends that do not materialize a
-    structured metrics stream yet, e.g. AI-Toolkit's ``loss:`` lines and
-    Musubi Tuner's ``avr_loss=`` tqdm lines.
+    extracts loss values for backends that do not materialize a structured
+    metrics stream yet. Progress remains owned by materialized run status.
     """
 
     try:
         text = _read_text_tail(path, max_bytes=max(64 * 1024, loss_tail * 2048))
     except OSError:
-        return None, []
-    step: int | None = None
-    total: int | None = None
-    seconds_per_iter: float | None = None
+        return []
     losses: list[float] = []
     seen: set[tuple[int, int, float]] = set()
     for record in re.split(r"[\r\n]+", text):
@@ -580,20 +527,14 @@ def _read_training_stdout(path: Path, *, loss_tail: int) -> tuple[RunProgress | 
             current_total = int(progress_match.group("total"))
             if current > current_total:
                 continue
-            current_seconds = _parse_seconds_per_iter(record)
             key = (current, current_total, loss)
             if key in seen:
                 continue
             seen.add(key)
-            step = current
-            total = current_total
-            if current_seconds is not None:
-                seconds_per_iter = current_seconds
             losses.append(loss)
     if loss_tail > 0:
         losses = losses[-loss_tail:]
-    progress = RunProgress(step=step, total=total, seconds_per_iter=seconds_per_iter) if step is not None or total is not None or seconds_per_iter is not None else None
-    return progress, losses
+    return losses
 
 
 def _read_text_tail(path: Path, *, max_bytes: int) -> str:
@@ -606,25 +547,12 @@ def _read_text_tail(path: Path, *, max_bytes: int) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _parse_seconds_per_iter(text: str) -> float | None:
-    matches = list(re.finditer(r"(?P<value>[+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*s/it\b", text, re.IGNORECASE))
-    if not matches:
-        return None
-    try:
-        value = float(matches[-1].group("value"))
-    except ValueError:
-        return None
-    if not math.isfinite(value) or value <= 0:
-        return None
-    return value
-
-
-def _read_training_stdout_from_candidates(paths: Iterable[Path], *, loss_tail: int) -> tuple[RunProgress | None, list[float]]:
+def _read_training_stdout_from_candidates(paths: Iterable[Path], *, loss_tail: int) -> list[float]:
     for path in paths:
-        progress, losses = _read_training_stdout(path, loss_tail=loss_tail)
-        if progress or losses:
-            return progress, losses
-    return None, []
+        losses = _read_training_stdout(path, loss_tail=loss_tail)
+        if losses:
+            return losses
+    return []
 
 
 def _read_activity_from_stdout_candidates(paths: Iterable[Path], *, run_dir: Path | None = None) -> str | None:
@@ -1061,10 +989,11 @@ def _basename_label(label: str, value: Any) -> str:
 
 def _format_progress(progress: RunProgress) -> str:
     if progress.step is None and progress.total is None:
-        return "-"
+        return "unknown"
     if progress.total is None:
-        return str(progress.step or 0)
-    return f"{progress.step or 0}/{progress.total}"
+        return "unknown" if progress.step is None else str(progress.step)
+    step = "unknown" if progress.step is None else str(progress.step)
+    return f"{step}/{progress.total}"
 
 
 def _format_seconds_per_iter(progress: RunProgress) -> str:
@@ -1084,13 +1013,13 @@ def _format_progress_cell(summary: RunSummary, *, active: bool) -> Any:
     if active and summary.capacity_wait and summary.activity:
         return Text(summary.activity, style="dim")
     text = _format_progress(summary.progress)
-    if text == "-" and active and summary.activity:
+    if text == "unknown" and active and summary.activity:
         return Text(summary.activity, style="dim")
     if not active or summary.progress.total in (None, 0):
         if active and summary.activity and summary.progress.step in (None, 0):
             return Text(summary.activity, style="dim")
         return Text(text)
-    step = summary.progress.step or 0
+    step = 0 if summary.progress.step is None else summary.progress.step
     total = max(summary.progress.total or 0, 1)
     filled = max(0, min(14, round(step / total * 14)))
     bar = "█" * filled + "░" * (14 - filled)

@@ -13,7 +13,26 @@ from typing import Any
 
 from kura import __version__
 from kura.provenance import image_reference_identity
-from kura.executors.common import CONTAINER_WORKSPACE, LOW_AVAILABLE_MEMORY_BYTES, MIN_FREE_SPACE_GIB, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _safe_command, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import (
+    CONTAINER_WORKSPACE,
+    LOW_AVAILABLE_MEMORY_BYTES,
+    MIN_FREE_SPACE_GIB,
+    TERMINAL_STATES,
+    append_run_event,
+    _is_secret,
+    _load_status,
+    _materialize_stdout_progress,
+    _mutate_run_status,
+    _now,
+    _realization_id,
+    _redact_secret_text,
+    _run_operation_lock,
+    _safe_command,
+    _safe_env,
+    _write_json,
+    _write_observation,
+    _write_status,
+)
 from kura.paths import workspace_mount_mappings
 
 
@@ -219,55 +238,99 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
     return command, realization_id
 
 
-def reconcile_docker(run_dir: Path) -> dict[str, Any]:
+def reconcile_docker(
+    run_dir: Path,
+    *,
+    timeout: float = 2.0,
+    blocking: bool = True,
+    source: str = "explicit",
+) -> dict[str, Any]:
     """Pull one realization's Docker state into status.json; never guesses missing state."""
-    status = _load_status(run_dir)
-    realization_ref = status.get("last_realization")
-    if not isinstance(realization_ref, str):
-        raise ValueError("run has no launched realization")
-    realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-    container = realization.get("container", {})
-    identity = container.get("id") or container.get("name")
-    if not isinstance(identity, str):
-        raise ValueError("latest realization has no container identity")
-    try:
-        result = subprocess.run(["docker", "inspect", "--format", "{{json .State}}", identity], text=True, capture_output=True, check=False)
-    except FileNotFoundError as exc:
-        raise ValueError("docker executable was not found on PATH") from exc
-    observed_at = _now()
-    if result.returncode:
-        missing = "no such object" in (result.stderr + result.stdout).lower() or "no such container" in (result.stderr + result.stdout).lower()
-        state, exit_code = ("interrupted" if missing else "unknown"), None
-        detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container state unavailable")
-    else:
+    with _run_operation_lock(run_dir, "observe", blocking=blocking):
+        status = _load_status(run_dir)
+        realization_ref = status.get("last_realization")
+        if not isinstance(realization_ref, str):
+            raise ValueError("run has no launched realization")
+        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+        container = realization.get("container", {})
+        identity = container.get("id") or container.get("name")
+        if not isinstance(identity, str):
+            raise ValueError("latest realization has no container identity")
         try:
-            docker_state = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError("docker inspect returned invalid state") from exc
-        running = bool(docker_state.get("Running"))
-        exit_code = docker_state.get("ExitCode")
-        if running:
-            state, exit_code = "running", None
-        elif isinstance(exit_code, int):
-            state = "completed" if exit_code == 0 else "failed"
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{json .State}}", identity],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            raise ValueError("docker executable was not found on PATH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("docker inspect timed out") from exc
+        observed_at = _now()
+        ended: str | None = None
+        ended_source: str | None = None
+        if result.returncode:
+            missing = "no such object" in (result.stderr + result.stdout).lower() or "no such container" in (result.stderr + result.stdout).lower()
+            if not missing:
+                raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container state unavailable"))
+            state, exit_code = "unknown", None
+            detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container no longer exists")
         else:
-            state = "unknown"
-        detail = _redact_secret_text(str(docker_state.get("Error"))) if docker_state.get("Error") else None
-    observation = {"realization_id": realization["id"], "observed_at": observed_at, "state": state, "exit_code": exit_code, "container_id": identity, "detail": detail}
-    observation_path = _write_observation(run_dir, realization["id"], observation)
+            try:
+                docker_state = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                raise ValueError("docker inspect returned invalid state") from exc
+            if not isinstance(docker_state, dict):
+                raise ValueError("docker inspect returned invalid state")
+            running = bool(docker_state.get("Running"))
+            exit_code = docker_state.get("ExitCode")
+            if running:
+                state, exit_code = "running", None
+            elif isinstance(exit_code, int):
+                state = "completed" if exit_code == 0 else "failed"
+                finished_at = docker_state.get("FinishedAt")
+                if isinstance(finished_at, str) and finished_at and not finished_at.startswith("0001-"):
+                    ended = finished_at
+                    ended_source = "docker_finished_at"
+                else:
+                    ended = observed_at
+                    ended_source = "observed_at"
+            else:
+                state = "unknown"
+            detail = _redact_secret_text(str(docker_state.get("Error"))) if docker_state.get("Error") else None
+        observation = {
+            "realization_id": realization["id"],
+            "observed_at": observed_at,
+            "source": source,
+            "state": state,
+            "exit_code": exit_code,
+            "container_id": identity,
+            "ended": ended,
+            "ended_source": ended_source,
+            "detail": detail,
+        }
+        recorded = False
 
-    def mutate(latest: dict[str, Any]) -> None:
-        if latest.get("last_realization") != realization_ref:
-            return
-        latest["last_observation"] = str(observation_path.relative_to(run_dir))
-        if latest.get("state") not in ("completed", "failed"):
-            latest.update({"state": state, "exit_code": exit_code, "ended": None if state == "running" else observed_at})
-        effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
-        _materialize_stdout_progress(run_dir, latest, state=effective_state)
+        def mutate(latest: dict[str, Any]) -> None:
+            nonlocal recorded
+            if latest.get("last_realization") != realization_ref:
+                return
+            lifecycle_changed = latest.get("state") != state or latest.get("exit_code") != exit_code
+            if source == "explicit" or lifecycle_changed:
+                observation_path = _write_observation(run_dir, realization["id"], observation)
+                latest["last_observation"] = str(observation_path.relative_to(run_dir))
+                recorded = True
+            if latest.get("state") not in TERMINAL_STATES:
+                latest.update({"state": state, "exit_code": exit_code, "ended": ended})
+            effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
+            _materialize_stdout_progress(run_dir, latest, state=effective_state)
 
-    status = _mutate_run_status(run_dir, mutate)
-    append_run_event(run_dir, {"event": "run_reconciled", **observation})
-    return status
+        status = _mutate_run_status(run_dir, mutate, blocking=blocking)
+        if recorded:
+            append_run_event(run_dir, {"event": "run_reconciled", **observation})
+        return status
 
 
 def stop_docker(run_dir: Path) -> dict[str, Any]:

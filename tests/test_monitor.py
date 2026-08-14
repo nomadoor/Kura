@@ -1,4 +1,4 @@
-"""Tests for read-only run monitoring projections."""
+"""Tests for run monitoring projections."""
 
 from __future__ import annotations
 
@@ -257,7 +257,7 @@ class MonitorProjectionTests(unittest.TestCase):
 
             self.assertEqual(summaries[0].outputs_path, run_dir / "samples" / "images")
 
-    def test_collect_run_summaries_overlays_finished_local_docker_state_read_only(self) -> None:
+    def test_collect_run_summaries_observes_and_persists_finished_local_docker_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "docker-finished"
@@ -284,14 +284,16 @@ class MonitorProjectionTests(unittest.TestCase):
             )
             result = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0, "FinishedAt": "2026-06-29T01:02:03Z"}', "")
 
-            with patch("kura.monitor.shutil.which", return_value="/usr/bin/docker"), patch("kura.monitor.subprocess.run", return_value=result) as run:
+            with patch("kura.executors.docker.subprocess.run", return_value=result) as run:
                 summary = collect_run_summaries(root)[0]
 
-            run.assert_called_once_with(["/usr/bin/docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2)
+            run.assert_called_once_with(["docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2.0)
             self.assertEqual(summary.state, "completed")
             self.assertEqual(summary.exit_code, 0)
             self.assertIsNotNone(summary.ended)
-            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+            persisted = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted["state"], "completed")
+            self.assertEqual(persisted["ended"], "2026-06-29T01:02:03Z")
 
     def test_collect_run_summaries_ignores_timed_out_docker_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -300,14 +302,22 @@ class MonitorProjectionTests(unittest.TestCase):
             (run_dir / "realizations").mkdir(parents=True)
             (root / "index.jsonl").write_text(json.dumps({"id": "docker-timeout"}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: docker-timeout\ntype: train\ncompute: {executor: docker}\n", encoding="utf-8")
-            (run_dir / "status.json").write_text(json.dumps({"state": "running", "container_id": "container-1"}), encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}),
+                encoding="utf-8",
+            )
+            (run_dir / "realizations" / "r1.json").write_text(
+                json.dumps({"id": "r1", "executor": "docker", "state": "running", "container": {"id": "container-1"}}),
+                encoding="utf-8",
+            )
 
-            with patch("kura.monitor.shutil.which", return_value="/usr/bin/docker"), patch("kura.monitor.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 2)):
+            with patch("kura.executors.docker.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 2)) as run:
                 summary = collect_run_summaries(root)[0]
 
+            run.assert_called_once_with(["docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2.0)
             self.assertEqual(summary.state, "running")
 
-    def test_collect_run_summaries_falls_back_to_ai_toolkit_stdout(self) -> None:
+    def test_collect_run_summaries_uses_materialized_ai_toolkit_progress_and_stdout_losses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "stdout-train"
@@ -324,7 +334,7 @@ class MonitorProjectionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 0, "exit_code": 0}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 30, "total_steps": 30, "exit_code": 0}), encoding="utf-8")
             (run_dir / "metrics" / "metrics.jsonl").write_text("", encoding="utf-8")
             (run_dir / "logs" / "stdout.log").write_text(
                 "\rstdout-train:  3%|▎| 1/30 [00:11<05:36, lr: 1.0e-04 loss: 3.825e-01]"
@@ -339,7 +349,7 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.losses, (0.3825, 0.8186))
             self.assertEqual(summary.best_loss, 0.3825)
 
-    def test_collect_run_summaries_falls_back_to_musubi_stdout(self) -> None:
+    def test_collect_run_summaries_uses_materialized_musubi_progress_and_stdout_losses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "musubi-train"
@@ -357,7 +367,7 @@ class MonitorProjectionTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_step": 100, "total_steps": 100, "seconds_per_iter": 2.56, "exit_code": 0}), encoding="utf-8")
             (run_dir / "metrics" / "metrics.jsonl").write_text("", encoding="utf-8")
             (run_dir / "logs" / "stdout.log").write_text(
                 "\rsteps:  99%|█████████▉| 99/100 [04:13<00:02,  2.56s/it, avr_loss=0.316]\n"
@@ -380,7 +390,7 @@ class MonitorProjectionTests(unittest.TestCase):
             run_dir = root / "runs" / "train"
             (run_dir / "logs").mkdir(parents=True)
             (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 100}\n", encoding="utf-8")
-            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 10, "total_steps": 100}), encoding="utf-8")
             (run_dir / "logs" / "stdout.log").write_text(
                 "steps: 10/100 [00:10<01:30, 1.0s/it, avr_loss=0.5]\n"
                 "2026/07/13 12:00:00 INFO epoch loss: 0.999\n",
@@ -480,6 +490,8 @@ class MonitorProjectionTests(unittest.TestCase):
                     {
                         "state": "completed",
                         "exit_code": 0,
+                        "last_step": 1,
+                        "total_steps": 1,
                         "downloaded_run": "downloads/remote-train",
                         "outputs": ["downloads/remote-train/outputs/result.safetensors"],
                     }

@@ -24,7 +24,7 @@ from kura.backends import backend_capabilities, backend_names, get_backend, vali
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
-from kura.executors import _redact_secret_text, reconcile_docker, reconcile_runpod
+from kura.executors import _redact_secret_text, observe_run, reconcile_docker, reconcile_runpod
 from kura.fsio import atomic_write_json, atomic_write_text
 from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
@@ -242,7 +242,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
-    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
+    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
     atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
@@ -283,7 +283,7 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "promptset": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
-    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": 0, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
+    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
     atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id); return 0
@@ -395,9 +395,8 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
 
 def cmd_run_status(args: argparse.Namespace) -> int:
     try:
-        path = _run_path(args.run_id) / "status.json"
-        status = json.loads(path.read_text(encoding="utf-8"))
-        run_dir = path.parent
+        run_dir = _run_path(args.run_id)
+        status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         realization_ref = status.get("last_realization")
         if isinstance(realization_ref, str) and (run_dir / realization_ref).is_file():
             status["latest_realization"] = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
@@ -1014,7 +1013,7 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
     for run_file in sorted((_workspace() / "runs").glob("*/run.yaml")):
         try:
             run = _load_yaml(run_file)
-            status = json.loads((run_file.parent / "status.json").read_text(encoding="utf-8"))
+            status = observe_run(run_file.parent, config=_workspace_config().get("runpod", {}))
             entry = {"id": run.get("id"), "type": run.get("type", "train"), "experiment": run.get("experiment"), "created": run.get("created"), "state": status.get("state")}
             if run.get("type") == "render": entry["inputs"] = {"train_run": run.get("inputs", {}).get("train_run")}
             entries.append(entry)
