@@ -7,6 +7,9 @@ description: AI-Toolkit backend and image workflow for Kura. Use when changing A
 
 Use this skill for AI-Toolkit-specific backend and image work.
 
+Author and validate backend input under the
+[declared surface contract](../../../docs/adr/backend-config-surface-contract.md).
+
 ## Rules
 
 - Do not run AI-Toolkit directly on the host.

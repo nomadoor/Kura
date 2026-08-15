@@ -16,6 +16,9 @@ Use this skill before changing production code in `src/kura/`, tests, executor/b
 
 ## Architectural invariants
 
+The durable path rules are in
+[Path namespace policy](../../../docs/adr/path-namespace-policy.md).
+
 - Kura is file-first. Do not introduce a hidden database, queue, daemon, or second truth store.
 - Every surface a user or agent authors is closed. A value with no declared
   consumer is refused where the file is loaded; it is never accepted and ignored.
