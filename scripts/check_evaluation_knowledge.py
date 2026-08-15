@@ -36,6 +36,8 @@ def card_errors(path: Path) -> list[str]:
     # inline with `source:` lines instead is complete without it; requiring the
     # block everywhere would only invite invented URLs and dates.
     if not re.search(r"(?m)^source_url:", text):
+        if not re.search(r"(?m)^\s*source:\s*\S+", text):
+            errors.append(f"{label} must include at least one inline source: entry")
         return errors
     values: dict[str, str] = {}
     for field in REQUIRED_FIELDS:

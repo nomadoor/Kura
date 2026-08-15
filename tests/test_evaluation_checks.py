@@ -3,8 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.check_evaluation_blocks import evaluation_errors
+from scripts.check_evaluation_blocks import _is_immutable_run_artifact, evaluation_errors
 from scripts.check_evaluation_knowledge import card_errors
 
 
@@ -68,15 +69,65 @@ class EvaluationCheckTests(unittest.TestCase):
             "limits": "Example.",
         }
 
-    def test_frozen_citation_follows_the_card_move(self) -> None:
+    def test_frozen_citation_follows_both_card_moves(self) -> None:
+        for card in (
+            ".claude/skills/lora-evaluation/knowledge/anima.md",
+            ".claude/skills/training-parameter-planning/knowledge/anima.md",
+        ):
+            with self.subTest(card=card):
+                self.assertFalse((Path(__file__).resolve().parents[1] / card).is_file())
+                evaluation = self._card_evaluation(card)
+                errors, _ = evaluation_errors(
+                    evaluation,
+                    label="immutable manifest",
+                    allow_legacy_card_move=True,
+                )
+                self.assertFalse([item for item in errors if "does not exist" in item])
+
+    def test_editable_run_does_not_follow_the_card_move(self) -> None:
         evaluation = self._card_evaluation(".claude/skills/lora-evaluation/knowledge/anima.md")
-        errors, _ = evaluation_errors(evaluation, label="example")
-        self.assertFalse([item for item in errors if "does not exist" in item])
+        errors, _ = evaluation_errors(evaluation, label="editable run.yaml")
+        self.assertTrue(any("does not exist" in item for item in errors))
+
+    def test_only_compiled_run_artifacts_are_immutable_move_contexts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            draft = root / "runs" / "draft" / "run.yaml"
+            draft.parent.mkdir(parents=True)
+            draft.write_text("type: render\n", encoding="utf-8")
+            example_manifest = root / "examples" / "resolved" / "manifest.lock.yaml"
+            example_manifest.parent.mkdir(parents=True)
+            example_manifest.write_text("type: render\n", encoding="utf-8")
+            with patch("scripts.check_evaluation_blocks.ROOT", root):
+                self.assertFalse(_is_immutable_run_artifact(draft))
+                self.assertFalse(_is_immutable_run_artifact(example_manifest))
+                manifest = draft.parent / "resolved" / "manifest.lock.yaml"
+                manifest.parent.mkdir()
+                manifest.write_text("type: render\n", encoding="utf-8")
+                self.assertTrue(_is_immutable_run_artifact(draft))
+                self.assertTrue(_is_immutable_run_artifact(manifest))
 
     def test_card_move_is_not_followed_from_an_arbitrary_directory(self) -> None:
         evaluation = self._card_evaluation("docs/anima.md")
-        errors, _ = evaluation_errors(evaluation, label="example")
+        errors, _ = evaluation_errors(
+            evaluation,
+            label="example",
+            allow_legacy_card_move=True,
+        )
         self.assertTrue(any("does not exist" in item for item in errors))
+
+    def test_headerless_family_card_accepts_inline_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "card.md"
+            path.write_text("# family\n\n- observed behavior\n  source: run example\n", encoding="utf-8")
+            self.assertEqual(card_errors(path), [])
+
+    def test_headerless_family_card_rejects_missing_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "card.md"
+            path.write_text("# family\n\n- unsupported assertion\n", encoding="utf-8")
+            errors = card_errors(path)
+        self.assertTrue(any("inline source:" in item for item in errors))
 
     def test_family_card_requires_confidence_vocabulary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

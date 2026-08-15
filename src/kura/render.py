@@ -367,11 +367,18 @@ def insert_lora_loader(workflow: dict[str, Any], spec: dict[str, Any] | None, lo
     return patched
 
 
-def checkpoint_application(frozen: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
+def checkpoint_application(
+    frozen: dict[str, Any],
+    workflow: dict[str, Any],
+    *,
+    lora_name: str = "",
+) -> dict[str, Any]:
     """Describe how the frozen checkpoint participates in the workflow."""
 
     inserted = frozen.get("lora_insert")
     if isinstance(inserted, dict):
+        if not lora_name:
+            return {"kind": "none"}
         application: dict[str, Any] = {
             "kind": "lora_insert",
             "class_type": inserted.get("class_type"),
@@ -1004,7 +1011,7 @@ def launch_render(
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
     model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
     workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
-    application = checkpoint_application(frozen, workflow)
+    application = checkpoint_application(frozen, workflow, lora_name=lora_name)
     details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "checkpoint_application": application, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if resolved_executor == "local":
         expected_identity = frozen.get("comfyui_endpoint_identity")
@@ -1063,8 +1070,8 @@ def launch_render(
         for item, seed in pairs:
             patches = frozen.get("workflow_patches", {})
             patched = patch_workflow(workflow, patches, prompt=item.get("prompt", ""), negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name, item=item, image_values=_image_values_for_item(item, patches, image_stages))
-            case_application = checkpoint_application(frozen, patched)
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
+            case_application = checkpoint_application(frozen, patched, lora_name=lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
                 handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")

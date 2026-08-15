@@ -34,7 +34,7 @@ from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error
 from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
-from kura.render import _cleanup_stage, _ensure_lora_stage_visible, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
+from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _runpod_image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
@@ -2221,7 +2221,83 @@ class RenderNotificationTests(unittest.TestCase):
 
     def test_insert_lora_loader_skips_empty_lora_name(self) -> None:
         workflow = {"1": {"inputs": {"model": ["2", 0]}}, "2": {"inputs": {}}}
-        self.assertEqual(insert_lora_loader(workflow, {"class_type": "LoraLoaderModelOnly", "model_node": "2", "model_output": 0}, ""), workflow)
+        insertion = {"class_type": "LoraLoaderModelOnly", "model_node": "2", "model_output": 0}
+        self.assertEqual(insert_lora_loader(workflow, insertion, ""), workflow)
+        self.assertEqual(
+            checkpoint_application({"lora_insert": insertion}, workflow, lora_name=""),
+            {"kind": "none"},
+        )
+
+    def test_empty_checkpoint_dry_run_and_image_record_report_no_lora_application(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            workflow = {
+                "3": {"class_type": "KSampler", "inputs": {"seed": 0, "model": ["4", 0]}},
+                "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
+                "6": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+                "7": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+            }
+            insertion = {
+                "class_type": "LoraLoaderModelOnly",
+                "model_node": "4",
+                "model_output": 0,
+                "strength_model": 0.8,
+            }
+            manifest = {
+                "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
+                "executor": {"name": "local"},
+                "inputs": {
+                    "checkpoint": {"path": "", "hash": None},
+                    "workflow": {"path": "workflows/wf.json", "digest": "sha256:workflow"},
+                    "promptset": {"path": "promptsets/prompts.jsonl", "digest": "sha256:prompts"},
+                },
+                "workflow_patches": {
+                    "prompt": {"node": "6", "field": "inputs.text"},
+                    "negative_prompt": {"node": "7", "field": "inputs.text"},
+                    "seed": {"node": "3", "field": "inputs.seed"},
+                },
+                "lora_insert": insertion,
+                "render": {"output_dir": "samples/images", "timeout_sec": 5},
+            }
+            (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (resolved / "workflow_used.json").write_text(json.dumps(workflow), encoding="utf-8")
+            (resolved / "promptset_used.jsonl").write_text(
+                json.dumps({"id": "p1", "prompt": "hello", "negative_prompt": "", "seeds": [123]}) + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                self.assertEqual(launch_render(root, run_dir, dry_run=True), 0)
+            self.assertEqual(json.loads(stdout.getvalue())["checkpoint_application"], {"kind": "none"})
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, queued: dict[str, Any]) -> str:
+                    self.assert_no_lora_loader(queued)
+                    return "prompt-1"
+
+                @staticmethod
+                def assert_no_lora_loader(queued: dict[str, Any]) -> None:
+                    self_types = {node.get("class_type") for node in queued.values() if isinstance(node, dict)}
+                    if "LoraLoaderModelOnly" in self_types:
+                        raise AssertionError("empty checkpoint inserted a LoRA loader")
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "image.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"png"
+
+            with patch("kura.render.ComfyUIClient", FakeClient):
+                self.assertEqual(launch_render(root, run_dir), 0)
+            record = json.loads((run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(record["checkpoint_application"], {"kind": "none"})
 
     def test_lora_insert_kind_error_lists_accepted_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

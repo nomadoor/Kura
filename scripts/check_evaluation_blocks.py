@@ -37,7 +37,12 @@ REQUIRED = {
 }
 
 
-def evaluation_errors(evaluation: Any, *, label: str) -> tuple[list[str], list[str]]:
+def evaluation_errors(
+    evaluation: Any,
+    *,
+    label: str,
+    allow_legacy_card_move: bool = False,
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     if not isinstance(evaluation, dict):
@@ -80,7 +85,7 @@ def evaluation_errors(evaluation: Any, *, label: str) -> tuple[list[str], list[s
                 # in a new path is still an error.
                 moved = None
                 parent = card_path.parent.as_posix()
-                if parent in LEGACY_CARD_DIRS:
+                if allow_legacy_card_move and parent in LEGACY_CARD_DIRS:
                     moved = ROOT / "knowledge" / "model-families" / card_path.name
                 if not resolved.is_file() and not (moved and moved.is_file()):
                     errors.append(f"{label}.evaluation.knowledge.card does not exist: {card}")
@@ -110,6 +115,16 @@ def candidate_paths() -> list[Path]:
     return sorted(set(paths))
 
 
+def _is_immutable_run_artifact(path: Path) -> bool:
+    try:
+        path.resolve().relative_to((ROOT / "runs").resolve())
+    except ValueError:
+        return False
+    if path.name == "manifest.lock.yaml" and path.parent.name == "resolved":
+        return True
+    return path.name.startswith("run") and (path.parent / "resolved" / "manifest.lock.yaml").is_file()
+
+
 def main() -> int:
     errors: list[str] = []
     warnings: list[str] = []
@@ -121,7 +136,11 @@ def main() -> int:
             continue
         if not isinstance(payload, dict) or "evaluation" not in payload:
             continue
-        item_errors, item_warnings = evaluation_errors(payload["evaluation"], label=str(path.relative_to(ROOT)))
+        item_errors, item_warnings = evaluation_errors(
+            payload["evaluation"],
+            label=str(path.relative_to(ROOT)),
+            allow_legacy_card_move=_is_immutable_run_artifact(path),
+        )
         errors.extend(item_errors)
         warnings.extend(item_warnings)
     for warning in warnings:
