@@ -1,6 +1,5 @@
 # flux_kontext
 
-Prompt and evaluation knowledge belongs in `lora-evaluation/knowledge/flux_kontext.md` when created.
 
 - Artifacts: owner baseline is fp8 DiT + fp8 T5 (`t5xxl_fp8_e4m3fn` with
   `fp8_t5: true`) for local/consumer-GPU LoRA training. Full-precision T5 is

@@ -24,6 +24,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _backend_image_name, _image_config, _load_frozen_command, _safe_error
 from kura.run_commands.experiment import format_run_completion
+from kura.run_commands.render_completion import format_render_completion
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
@@ -261,7 +262,7 @@ def launch_run(
     if run_type == "render":
         if executor == "runpod":
             render_max_lease_sec = 12 * 3600 if max_lease is None else _parse_duration_seconds(max_lease)
-            return launch_render_runpod(
+            code = launch_render_runpod(
                 run_id,
                 dry_run=dry_run,
                 image=image,
@@ -269,9 +270,13 @@ def launch_run(
                 yes=yes,
                 max_lease_sec=render_max_lease_sec,
             )
+            if not dry_run:
+                print(format_render_completion(_workspace(), run_dir, exit_code=code))
+            return code
         try:
             code = launch_render(_workspace(), run_dir, dry_run=dry_run, executor_name="local")
             if not dry_run:
+                print(format_render_completion(_workspace(), run_dir, exit_code=code))
                 state_word = "completed" if code == 0 else "failed"
                 _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"Render {run_id} {state_word} with exit code {code}.", priority="3")
             return code

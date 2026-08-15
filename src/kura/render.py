@@ -367,6 +367,56 @@ def insert_lora_loader(workflow: dict[str, Any], spec: dict[str, Any] | None, lo
     return patched
 
 
+def checkpoint_application(
+    frozen: dict[str, Any],
+    workflow: dict[str, Any],
+    *,
+    lora_name: str = "",
+) -> dict[str, Any]:
+    """Describe how the frozen checkpoint participates in the workflow."""
+
+    inserted = frozen.get("lora_insert")
+    if isinstance(inserted, dict):
+        if not lora_name:
+            return {"kind": "none"}
+        application: dict[str, Any] = {
+            "kind": "lora_insert",
+            "class_type": inserted.get("class_type"),
+            "strength_model": inserted.get("strength_model"),
+        }
+        if inserted.get("class_type") == "LoraLoader":
+            application["strength_clip"] = inserted.get("strength_clip")
+        return application
+
+    patches = frozen.get("workflow_patches")
+    patches = patches if isinstance(patches, dict) else {}
+    for name in ("lora", "model_patch", "checkpoint"):
+        binding = patches.get(name)
+        if not isinstance(binding, dict):
+            continue
+        node_id = str(binding.get("node") or "")
+        node = workflow.get(node_id)
+        node = node if isinstance(node, dict) else {}
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        application = {
+            "kind": f"{name}_binding",
+            "node": node_id or None,
+            "field": binding.get("field"),
+            "class_type": node.get("class_type"),
+        }
+        if name == "lora":
+            if isinstance(inputs.get("strength_model"), (int, float)):
+                application["strength_model"] = inputs["strength_model"]
+            if isinstance(inputs.get("strength_clip"), (int, float)):
+                application["strength_clip"] = inputs["strength_clip"]
+        return application
+
+    checkpoint = frozen.get("inputs", {}).get("checkpoint")
+    if isinstance(checkpoint, dict) and checkpoint.get("path"):
+        return {"kind": "checkpoint_reference"}
+    return {"kind": "none"}
+
+
 def _next_workflow_node_id(workflow: dict[str, Any]) -> str:
     numeric = [int(node_id) for node_id in workflow if isinstance(node_id, str) and node_id.isdigit()]
     return str(max(numeric, default=0) + 1)
@@ -960,7 +1010,9 @@ def launch_render(
     image_stages = _image_stage_plans(workspace, run_dir, frozen)
     lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
     model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
-    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
+    application = checkpoint_application(frozen, workflow, lora_name=lora_name)
+    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "checkpoint_application": application, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
     if resolved_executor == "local":
         expected_identity = frozen.get("comfyui_endpoint_identity")
         identity_verified = isinstance(expected_identity, dict) and bool(expected_identity.get("sha256"))
@@ -973,7 +1025,6 @@ def launch_render(
     if dry_run:
         print(json.dumps(details, ensure_ascii=False, indent=2))
         return 0
-    workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
     output_dir = run_dir / frozen.get("render", {}).get("output_dir", "samples/images")
     output_dir.mkdir(parents=True, exist_ok=True)
     images_log = run_dir / "samples" / "images.jsonl"
@@ -1020,6 +1071,7 @@ def launch_render(
             patches = frozen.get("workflow_patches", {})
             patched = patch_workflow(workflow, patches, prompt=item.get("prompt", ""), negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name, item=item, image_values=_image_values_for_item(item, patches, image_stages))
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
+            case_application = checkpoint_application(frozen, patched, lora_name=lora_name)
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
                 handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
@@ -1033,7 +1085,7 @@ def launch_render(
                 # A parameter the workflow fixes was never Kura's to set, and Kura
                 # cannot read it back without a binding. Record it as unknown
                 # rather than repeating a promptset value that did not reach the render.
-                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item.get("prompt", ""), "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
+                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item.get("prompt", ""), "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "checkpoint_application": case_application, "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})

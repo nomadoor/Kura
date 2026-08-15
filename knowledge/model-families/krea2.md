@@ -1,6 +1,12 @@
 # krea2
 
-Prompt and evaluation knowledge belongs in `lora-evaluation/knowledge/krea2.md` when created.
+## Which variant to train on, which to generate with
+
+Train on Raw and generate with Turbo. A LoRA trained on Raw works with Turbo
+without trouble.
+source: owner (2026-08-15)
+
+## Training
 
 - VRAM class: ~24 GB is practical with `fp8_base` + `fp8_scaled` +
   `gradient_checkpointing` for 768/rank16/batch2 character LoRA. A5000-class

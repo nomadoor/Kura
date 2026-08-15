@@ -29,7 +29,8 @@ Before writing prompts, inspect only the material relevant to the run:
 3. trainer backend and training settings;
 4. target workflow, its default positive/negative prompts, model references,
    sidecar, pinned model revision, and LoRA insertion/strength;
-5. `knowledge/<model-family>.md` and its cited upstream primary sources;
+5. `knowledge/model-families/<family>.md` at the repository root and its
+   cited upstream primary sources;
 6. prior evaluated runs and their `notes.md`.
 
 If no family card exists, inspect upstream primary documentation and record

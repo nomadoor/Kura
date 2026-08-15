@@ -2,12 +2,15 @@
 
 ## Family cards
 
-Store prompt/inference knowledge in `knowledge/<family>.md`, separate from
-training-parameter cards. Use the backend architecture identifier when it is a
+Store prompt/inference knowledge in `knowledge/model-families/<family>.md` at
+the repository root, in the same card as that family's training knowledge. Use the backend architecture identifier when it is a
 stable family name. Put materially different prompt cultures under variant
 headings; do not duplicate a family merely because several trainers support it.
 
-Every family card must contain these machine-checkable metadata lines:
+A card that carries upstream-sourced prompt guidance must contain these
+machine-checkable metadata lines, because that guidance goes stale when the
+upstream model card changes. A card whose facts are cited inline with `source:`
+lines does not carry them; do not invent a URL or a date to satisfy the shape.
 
 ```text
 source_url: <upstream primary URL>
@@ -34,7 +37,7 @@ evaluation:
   model_family: anima
   model_variant: aesthetic
   knowledge:
-    card: .claude/skills/lora-evaluation/knowledge/anima.md
+    card: knowledge/model-families/anima.md
     card_verified_at: '2026-08-03'
     source_url: https://huggingface.co/circlestone-labs/Anima
     source_revision: main

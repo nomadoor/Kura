@@ -10,7 +10,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_DIR = ROOT / ".claude" / "skills" / "lora-evaluation"
-KNOWLEDGE_DIR = SKILL_DIR / "knowledge"
+# Model-family knowledge is shared by the training and evaluation skills and is
+# not specific to one agent, so it lives at the repository root.
+KNOWLEDGE_DIR = ROOT / "knowledge" / "model-families"
 ORDER = "dataset-prep -> training-parameter-planning -> backend skill -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
 REQUIRED_FIELDS = (
     "source_url",
@@ -29,6 +31,14 @@ def card_errors(path: Path) -> list[str]:
         label = path.relative_to(ROOT)
     except ValueError:
         label = path
+    # The header block is provenance for upstream-sourced prompt guidance, which
+    # goes stale when a model card changes. A family card that cites its facts
+    # inline with `source:` lines instead is complete without it; requiring the
+    # block everywhere would only invite invented URLs and dates.
+    if not re.search(r"(?m)^source_url:", text):
+        if not re.search(r"(?m)^\s*source:\s*\S+", text):
+            errors.append(f"{label} must include at least one inline source: entry")
+        return errors
     values: dict[str, str] = {}
     for field in REQUIRED_FIELDS:
         match = re.search(rf"(?m)^{re.escape(field)}:\s*(.+?)\s*$", text)
