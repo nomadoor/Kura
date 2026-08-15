@@ -43,6 +43,18 @@ steps are written to fail loudly for this reason; a refusal from `kura ... compi
 is the contract speaking, and the fix is either a corrected input file or a
 conversation with the user.
 
+**Presentation-only exception.** Arranging existing local result images into a
+comparison sheet, contact sheet, reordered sequence, or joined image is an
+intentional agent-owned presentation task, not a missing Kura execution path.
+It may be done without stopping, but only from existing local images, using
+already-installed tools and without downloading assets or models. Save a new
+artifact under a related run, never overwrite an existing image, and record the
+input image paths in that run's `notes.md`. When all compared checkpoints belong
+to one training run, save under that training run; otherwise save under the
+lexicographically latest compared render run. This exception does not authorize
+new image generation, dependency installation, external acquisition, or any
+run-state change.
+
 **Developing Kura (only when the user explicitly asks to change Kura
 itself):** code, tests, docs, skills, or release work. Follow the Developing
 Kura section at the bottom, starting with the `kura-core` skill.
