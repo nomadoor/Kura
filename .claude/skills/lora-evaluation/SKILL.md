@@ -9,6 +9,17 @@ Use this skill before any render intended to judge a trained LoRA. Trainer
 backends provide training facts; model-family knowledge owns prompt semantics;
 this skill designs the evaluation; the available render skill executes it.
 
+## Responsibility boundary
+
+- Trainer backends expose training facts; they do not own prompt semantics.
+- Model-family knowledge owns sourced prompt and inference guidance.
+- This skill judges the evaluation design; the user approves it.
+- `run.yaml` and its frozen manifest record the approved intent and inputs.
+
+Do not add a core prompt parser or trigger-word gate. Effective prompts may be
+weighted, aliased, split across workflow nodes, or transformed by the consumer;
+their meaning requires family knowledge and the complete workflow context.
+
 ## Required inputs
 
 Before writing prompts, inspect only the material relevant to the run:
@@ -34,6 +45,10 @@ image categories are `reconstruction`, `identity_retention`,
 `style_transfer`, `prompt_adherence`, `checkpoint_comparison`,
 `strength_sweep`, and `variant_comparison`. These are vocabulary, not a closed
 core enum; use a clearer new category when the task requires one.
+
+Categories name the question being tested, not a verdict. Reconstruction is
+not evidence of generalization. Keep confounded or superseded evaluations and
+state their limits in `notes.md` rather than replacing their records.
 
 Video categories additionally include `motion_retention`,
 `temporal_consistency`, `camera_motion_transfer`, `action_transfer`,
