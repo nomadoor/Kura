@@ -1,6 +1,13 @@
 # flux2 (klein 4b/9b, base)
 
-Prompt and evaluation knowledge belongs in `lora-evaluation/knowledge/flux2.md` when created.
+## Which variant to train on, which to generate with
+
+Train on Klein Base, and generate with Klein Base as well. Plain FLUX.2 is the
+distilled model; generating with it may be attempted, but it fails to work
+properly roughly nine times out of ten.
+source: owner (2026-08-15)
+
+## Training
 
 - Artifacts: do not infer from FLUX.1/Kontext. FLUX.2 has different model
   structure and text encoder handling; confirm the exact Musubi adapter recipe

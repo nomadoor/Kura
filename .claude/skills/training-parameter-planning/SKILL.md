@@ -70,8 +70,9 @@ Gather these before proposing parameters:
    and the `dataset-prep` skill. Never propose parameters without this
    material.
 4. Knowledge cards: read **only** the cards that match this run —
-   `knowledge/<architecture>.md` (the architecture string from the plan's
-   Resources section) and `knowledge/user-preferences.md`. Do not bulk-read
+   `../../../knowledge/model-families/<family>.md` (matched from the
+   architecture string in the plan's Resources section) and
+   `knowledge/user-preferences.md`. Do not bulk-read
    the whole knowledge directory. If no exact card exists and the architecture
    is a video adapter (`wan`, `hunyuan_video`, `hunyuan_video_1_5`,
    `framepack`, `kandinsky5`), read `knowledge/video-architectures.md` as a
@@ -181,12 +182,11 @@ already looking.
 
 ## Knowledge cards
 
-Layout under this skill directory:
+Model-family cards live outside this skill, in `knowledge/model-families/`
+at the repository root. They are shared with `lora-evaluation` and are not
+Claude-specific. Read only the card matching this run.
 
-- `knowledge/<architecture>.md` — one card per architecture id as it appears
-  in the plan Resources section (e.g. `krea2.md`, `sdxl.md`,
-  `flux_kontext.md`). Task-type sections inside. Cards are self-contained;
-  do not create family-wide cards that quietly cover several architectures.
+Layout under this skill directory:
 - `knowledge/user-preferences.md` — this user's own tested preferences and
   tendencies. Outranks baselines. Personal by nature: entries move to a
   baseline card only when the owner says they should apply generally.

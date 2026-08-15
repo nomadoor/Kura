@@ -92,6 +92,14 @@ When a run does not fit the available hardware, diagnose from concrete evidence 
 
 Before launching a training run, run `uv run kura run plan <run-id>` and show the output to the user. Do not reconstruct launch settings from memory. Launch only after explicit approval; if anything changes afterward, record it in `run.yaml`, recompile, and show the plan again.
 
+A training approval covers that training run only. Do not attach a render,
+evaluation, or sample generation to it; deciding how to look at a result before
+the result exists puts two tasks under one approval. After the run reaches
+terminal state, you may offer a confirmation render in one line, naming the
+workflow, prompt, and seed you would use. If the user declines, do not offer it
+again for that run. If ComfyUI is unreachable, say there is no confirmation path
+and continue — a training conversation never waits on a render endpoint.
+
 Before any local run or real smoke that may download multi-GB models, run `uv run kura doctor disk`. If disk, Docker storage, or root-owned file warnings appear, address them before launching. Do not ignore checkpoint/sampling disk warnings; add a prune/keep policy or get explicit approval via `safety.allow_many_checkpoints: true`.
 
 Cleanup is intentionally guarded. Show `kura cleanup ...` dry-runs before deletion. Never delete datasets, outputs, downloads, or final artifacts unless the user explicitly asks; use `kura fix-permissions` before cleanup when root-owned Kura files block removal.
@@ -119,6 +127,18 @@ Trainer backends provide training facts; model-family knowledge owns prompt
 semantics; `lora-evaluation` judges the plan. Do not bypass Kura to execute a
 video evaluation: Kura currently defines video evaluation categories but has
 no video render result path.
+
+Model-family knowledge lives in `knowledge/model-families/<family>.md` at the
+repository root. It is shared by the training and evaluation skills and is not
+specific to any one agent.
+
+A model family often trains on one variant and generates with another, and the
+relationship is not visible in the names. Never infer compatibility from a name
+matching or not matching. A card that says nothing about a pair means there is
+no information, not that the pair is unusable; name both identities and ask in
+one line. Record the user's answer in that run's `notes.md`; only the repository
+owner or a verified run promotes a fact into a family card, always with a
+`source:` line.
 
 ## Secrets and Artifacts
 
@@ -151,6 +171,7 @@ Layout:
 - Docker skeletons: `docker/`
 - Authored examples: `examples/`
 - Authored docs: `docs/`
+- Model-family knowledge: `knowledge/model-families/`
 - Project skills: `.claude/skills/`
 - Mechanical checks: `scripts/check_*.py`
 

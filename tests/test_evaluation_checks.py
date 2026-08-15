@@ -49,6 +49,35 @@ class EvaluationCheckTests(unittest.TestCase):
         errors, _ = evaluation_errors(evaluation, label="example")
         self.assertTrue(any("does not exist" in item for item in errors))
 
+    def _card_evaluation(self, card: str) -> dict:
+        return {
+            "category": "outfit_transfer",
+            "fixed": ["seed"],
+            "varied": ["outfit"],
+            "model_family": "anima",
+            "model_variant": "base",
+            "knowledge": {
+                "card": card,
+                "card_verified_at": "2026-08-03",
+                "source_url": "https://example.invalid/model",
+                "source_revision": "main",
+                "applies_to_model_revision": "unknown",
+                "revision_match": "unverified",
+            },
+            "prompt_policy": {"prefix_origin": "knowledge_card", "transformations": []},
+            "limits": "Example.",
+        }
+
+    def test_frozen_citation_follows_the_card_move(self) -> None:
+        evaluation = self._card_evaluation(".claude/skills/lora-evaluation/knowledge/anima.md")
+        errors, _ = evaluation_errors(evaluation, label="example")
+        self.assertFalse([item for item in errors if "does not exist" in item])
+
+    def test_card_move_is_not_followed_from_an_arbitrary_directory(self) -> None:
+        evaluation = self._card_evaluation("docs/anima.md")
+        errors, _ = evaluation_errors(evaluation, label="example")
+        self.assertTrue(any("does not exist" in item for item in errors))
+
     def test_family_card_requires_confidence_vocabulary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "card.md"

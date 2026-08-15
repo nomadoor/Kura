@@ -11,6 +11,12 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Directories model-family cards moved out of. Only citations frozen in an
+# immutable run manifest are followed from here; editable files are updated.
+LEGACY_CARD_DIRS = {
+    ".claude/skills/lora-evaluation/knowledge",
+    ".claude/skills/training-parameter-planning/knowledge",
+}
 CANONICAL_CATEGORIES = {
     "reconstruction", "identity_retention", "outfit_transfer",
     "pose_composition_transfer", "background_transfer", "style_transfer",
@@ -67,7 +73,16 @@ def evaluation_errors(evaluation: Any, *, label: str) -> tuple[list[str], list[s
             except ValueError:
                 errors.append(f"{label}.evaluation.knowledge.card must stay inside the repository")
             else:
-                if not resolved.is_file():
+                # A completed run's manifest is immutable, so a citation keeps
+                # the path the card had at the time. Model-family cards later
+                # moved to knowledge/model-families/. Follow that one move, and
+                # only from the exact directories they moved out of, so a typo
+                # in a new path is still an error.
+                moved = None
+                parent = card_path.parent.as_posix()
+                if parent in LEGACY_CARD_DIRS:
+                    moved = ROOT / "knowledge" / "model-families" / card_path.name
+                if not resolved.is_file() and not (moved and moved.is_file()):
                     errors.append(f"{label}.evaluation.knowledge.card does not exist: {card}")
             for key in ("card_verified_at", "source_url", "source_revision", "applies_to_model_revision", "revision_match"):
                 if not isinstance(knowledge.get(key), str) or not knowledge[key]:
