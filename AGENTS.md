@@ -140,6 +140,7 @@ git log --oneline -5
 Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
 
 If `/ops` exists, treat it as the single source of truth for information architecture, writing rules, design tokens, and contribution rules. New owner decisions that change behavior, IA, naming, writing rules, or design rules must be reflected in `/ops` or an ADR before implementation.
+Before writing an ADR, apply the criteria in `docs/adr/README.md`.
 
 Keep backend adapters and executors separate. Backends compile native configuration and container-native command specifications; they do not launch runs. Executors launch, reconcile, and stop runs.
 
