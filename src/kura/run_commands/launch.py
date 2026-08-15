@@ -23,6 +23,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _backend_image_name, _image_config, _load_frozen_command, _safe_error
+from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
@@ -85,6 +86,18 @@ def run_remote(
         if download_code:
             raise ValueError("download did not complete before timeout")
         safe_to_stop = True
+        try:
+            completion_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # Remote completion and download are already confirmed here. A
+            # missing local projection must not turn successful cleanup into a
+            # controller failure; format the facts already held by this path.
+            completion_status = {}
+        completion_status.update({
+            "state": "completed" if exit_code == 0 else "failed",
+            "exit_code": exit_code,
+        })
+        print(format_run_completion(_workspace(), run_dir, completion_status))
         state_word = "completed" if exit_code == 0 else "failed"
         stop_note = f" Pod is held for review and will be stopped after {hold_for_sec} seconds." if hold_for_sec else " Pod will be stopped now."
         notify_subject = f"Kura run {state_word}: {run_id}"
@@ -221,7 +234,7 @@ def _wait_for_docker_run(run_dir: Path) -> int:
     if result.returncode:
         raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker wait failed"))
     final = reconcile_docker(run_dir)
-    print(json.dumps(final, ensure_ascii=False, indent=2))
+    print(format_run_completion(_workspace(), run_dir, final))
     return 0 if final.get("state") == "completed" else 1
 
 
