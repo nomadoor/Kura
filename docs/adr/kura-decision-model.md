@@ -157,11 +157,9 @@ error-prone in exactly the way quality gates fail.
 | 12 | Run; OOM → adjust within the recorded envelope or return to plan | agent + user |
 | 13 | User evaluation → `notes.md` → cards (successes) / regrets | knowledge loop |
 
-## Relationship to prior ADRs
+## Relationship to other contracts
 
-This document supersedes the general design-direction sections of
-`training-resource-efficiency-report.md` where they overlap; the efficiency
-report remains the record of the incident, the blocker scoping, and the
-plan/gate implementation history. The path-namespace rules discussed
-separately (canonical workspace-relative persistence, mount-table-driven
-normalization) are unaffected by this document.
+Path namespace remains a separate mechanical contract: persisted host facts use
+workspace-relative or mount-table-resolved paths. This decision model owns who
+measures, judges, and approves resource trade-offs; implementation history and
+individual incidents do not extend that contract.

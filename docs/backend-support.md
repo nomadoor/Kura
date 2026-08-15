@@ -13,11 +13,18 @@ transition that is not recorded that way.
 This page answers three questions: which upstream version Kura uses, whether
 Kura has an adapter, and how far that path has been tested. It intentionally
 does not record personal run IDs, hardware inventories, or experiment history.
-See [upstream-model-support-audit.md](upstream-model-support-audit.md) for the
-detailed audit and [musubi-adapters.md](musubi-adapters.md) for Musubi mechanics.
+See [musubi-adapters.md](musubi-adapters.md) for Musubi mechanics.
 Machine-readable historical observations live in
 [backend-smoke-evidence.yaml](backend-smoke-evidence.yaml); they are
 identity-bound evidence, not a second capability registry.
+
+Support is measured per execution contract: entrypoint, required model roles,
+dataset shape, cache behavior, and output/recovery behavior. A change to one of
+those requires new evidence; substituting weights within the same contract does
+not require an exhaustive matrix. “Upstream listed”, expressible configuration,
+image smoke, real optimizer-step smoke, and operational recovery are distinct
+claims. Only real smoke plus the stated recovery scope supports an unqualified
+claim that a path works. None of these establishes output quality.
 
 ## Versions
 

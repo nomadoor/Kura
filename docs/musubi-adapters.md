@@ -28,8 +28,9 @@ one-step training proof.
 Real one-step smoke is tracked separately. It must use actual model files and
 finish one optimizer step through Kura's normal Docker or RunPod executor. The
 developer runner is `uv run python scripts/musubi_real_smoke.py <architecture>`.
-Use `docs/musubi-real-smoke-plan.md` to choose the first executor/GPU before
-running expensive smoke tests.
+Choose the first executor/GPU from the concrete model, dataset, precision,
+memory, and disk facts before running an expensive smoke; do not probe GPU
+classes blindly.
 
 If an architecture is not listed as built-in below, do not say that Musubi Tuner
 does not support it. Say that Kura does not yet have a built-in Musubi command
@@ -67,8 +68,8 @@ The v0.3.4 audit identified and compile-tested distinct paths for Wan 2.2
 dual-noise training, Wan Single Frame, FramePack Single Frame, Qwen-Image
 Edit/Layered model versions, HunyuanVideo 1.5 I2V, HiDream-O1 I2I, and
 Kandinsky 5 I2V. These are not marked real-smoke verified until an actual model
-finishes one optimizer step through Kura. See
-`docs/upstream-model-support-audit.md` for the evidence boundary.
+finishes one optimizer step through Kura. The evidence boundary is defined in
+the support-status vocabulary in [backend-support.md](backend-support.md).
 
 ## Escape hatch
 
