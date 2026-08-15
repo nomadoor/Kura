@@ -43,6 +43,18 @@ steps are written to fail loudly for this reason; a refusal from `kura ... compi
 is the contract speaking, and the fix is either a corrected input file or a
 conversation with the user.
 
+**Presentation-only exception.** Arranging existing local result images into a
+comparison sheet, contact sheet, reordered sequence, or joined image is an
+intentional agent-owned presentation task, not a missing Kura execution path.
+It may be done without stopping, but only from existing local images, using
+already-installed tools and without downloading assets or models. Save a new
+artifact under a related run, never overwrite an existing image, and record the
+input image paths in that run's `notes.md`. When all compared checkpoints belong
+to one training run, save under that training run; otherwise save under the
+lexicographically latest compared render run. This exception does not authorize
+new image generation, dependency installation, external acquisition, or any
+run-state change.
+
 **Developing Kura (only when the user explicitly asks to change Kura
 itself):** code, tests, docs, skills, or release work. Follow the Developing
 Kura section at the bottom, starting with the `kura-core` skill.
@@ -128,6 +140,7 @@ git log --oneline -5
 Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
 
 If `/ops` exists, treat it as the single source of truth for information architecture, writing rules, design tokens, and contribution rules. New owner decisions that change behavior, IA, naming, writing rules, or design rules must be reflected in `/ops` or an ADR before implementation.
+Before writing an ADR, apply the criteria in `docs/adr/README.md`.
 
 Keep backend adapters and executors separate. Backends compile native configuration and container-native command specifications; they do not launch runs. Executors launch, reconcile, and stop runs.
 

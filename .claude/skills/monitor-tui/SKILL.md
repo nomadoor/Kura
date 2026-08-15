@@ -1,6 +1,6 @@
 ---
 name: monitor-tui
-description: Kura Textual monitor/watch TUI guidance. Use when changing kura monitor, kura run watch, src/kura/tui.py, src/kura/monitor.py, run summary loading, Textual widgets, path open/copy behavior, or read-only monitoring projections.
+description: Kura Textual monitor/watch TUI guidance. Use when changing kura monitor, kura run watch, src/kura/tui.py, src/kura/monitor.py, run summary loading, state-observing monitoring projections, Textual widgets, or path open/copy behavior.
 ---
 
 # Monitor TUI
@@ -9,14 +9,20 @@ Use this skill for the monitoring TUI.
 
 ## Non-negotiables
 
-- TUI is read-only projection.
-- Do not call launch/compile/stop/reconcile/docker/provider mutation paths from monitor/watch.
+- Monitor/TUI does not derive lifecycle state or step progress.
+- Monitor/watch triggers the state layer's `observe_run()`, then displays its
+  materialized status. External inspect/API observation and status persistence
+  remain owned by that state layer.
+- Monitor/TUI must not directly call Docker or provider APIs, and must not call
+  launch, compile, or stop paths.
 - Do not create daemon/background services.
-- Only allowed side effects: open file manager/browser for links, copy to clipboard.
+- UI-owned side effects are limited to opening file manager/browser links and
+  copying to the clipboard. Run-state side effects belong only to
+  `observe_run()`.
 
 ## Data sources
 
-Read existing files only:
+Project from the status returned by `observe_run()` plus existing files:
 
 - `index.jsonl`
 - run `run.yaml`

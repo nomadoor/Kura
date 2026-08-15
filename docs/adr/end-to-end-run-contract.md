@@ -4,389 +4,160 @@ Status: accepted owner decision.
 
 Date: 2026-07-11
 
-## Context
-
-Kura has working pieces for dataset inspection, compilation, local Docker,
-RunPod, AI-Toolkit, Musubi Tuner, monitoring, ComfyUI rendering, recovery, and
-cleanup. The pieces do not yet present one consistent experiment lifecycle.
-
-The main source of complexity is not the number of supported operations. It is
-that model resolution, resource measurement, execution, recovery, and
-evaluation use different contracts depending on the backend or executor:
-
-- AI-Toolkit normally resolves a Hugging Face model repository itself.
-- Musubi Tuner normally needs explicit files for roles such as DiT, VAE, and
-  text encoder, so Kura resolves and downloads them before trainer startup.
-- A user's local ComfyUI owns its installed checkpoints and models; Kura calls
-  it over HTTP and must not silently install or retarget those models.
-- A disposable RunPod ComfyUI needs Kura to provision explicitly registered
-  model files.
-- Controller-side network facts do not necessarily describe a RunPod Pod.
-- Backend-specific execution accommodations are mixed with quality-bearing
-  training parameters in user-visible configuration and guidance.
-
-Adding a universal downloader, a hidden runtime state store, or a new remote
-preflight subsystem would flatten important differences and make Kura less
-reliable. Kura instead needs one common contract that preserves who owns each
-model artifact and where each fact was measured.
-
-This ADR extends the decision model in `kura-decision-model.md`. Its short form
-still applies: the CLI measures, files remember, the skill judges, and the user
-decides.
-
-## Decision 1: the user sees one experiment lifecycle
-
-The normal user-facing lifecycle is:
-
-1. Provide or select a dataset.
-2. State the training goal and constraints.
-3. Review one run plan and approve once.
-4. Observe training and recovery.
-5. Review generated comparisons.
-6. Record a human evaluation and decide whether to stop or run another
-   experiment.
-
-Backend, executor, transfer, cache, and recovery mechanics remain visible as
-facts when useful, but are not separate user decisions by default.
-
-Low-level commands may remain available for diagnosis and recovery. Their
-existence does not make them part of the normal workflow.
-
-## Decision 2: responsibility boundaries
-
-### User decisions
-
-The user decides matters that change intent, quality, material cost, or
-material elapsed time:
-
-- training goal and dataset
-- model family when it is part of the intended experiment
-- quality-bearing parameters such as resolution, learning rate, rank, total
-  steps, and effective batch
-- GPU or budget changes
-- execution accommodations expected to change elapsed time by roughly 2x or
-  more
-- final visual evaluation
-
-The plan is the single normal approval gate. Kura and the agent must not ask for
-approval for each backend flag separately.
-
-### Agent and skill decisions
-
-The agent selects and records recipe-preserving execution accommodations:
-
-- backend selection when the user did not require one
-- gradient checkpointing
-- compatible quantization or FP8 modes
-- low-memory modes, block swap, and offload placement
-- worker counts, caching strategy, and similar trainer mechanics
-- recovery adjustments that remain inside a contingency envelope shown in the
-  approved plan
-
-These choices must be explained in the plan as execution accommodations. They
-do not become user-tuned hyperparameters merely because reproducibility
-requires recording their final values.
-
-An accommodation that materially changes quality, budget, GPU class, or
-elapsed time beyond the approved envelope returns to user approval.
-
-### CLI and executor responsibilities
-
-Code performs deterministic work and reports facts:
-
-- structural validation and dataset measurement
-- compilation and freezing of inputs
-- path and model-requirement resolution
-- disk, network, cache, GPU, memory, and provider measurements
-- download, launch, transfer, reconciliation, stop, and artifact validation
-- append-only recording of runtime facts
-
-Code blocks clear irreversible accidents and invalid contracts. It does not
-judge training or image quality.
-
-## Decision 3: common model requirements, different acquisition owners
-
-Kura will represent model needs through a backend-independent model
-requirement projection. A requirement contains, when applicable:
-
-- logical role
-- stable identity such as repository, revision, filename, local path, or
-  external application name
-- acquisition owner
-- runtime reference
-- expected format or validation contract
-- measurement scope and observed facts
-
-The acquisition owner is one of:
-
-### `backend`
-
-The trainer resolves and downloads its native model representation. This is
-the default for AI-Toolkit.
-
-Kura freezes the declared repository and revision, provides a correctly scoped
-Hugging Face cache and credentials, and records the resolved revision or
-snapshot when observable. Kura does not reimplement a trainer's repository,
-tokenizer, config, and companion-model resolution merely to force a path-based
-interface.
-
-Explicit local snapshots or paths remain supported for offline, mirrored, or
-pinned workflows.
-
-### `kura`
-
-Kura resolves explicit artifacts, downloads them before trainer startup,
-validates their roles, and passes paths to the consumer. This is the normal
-mode for Musubi Tuner and disposable RunPod ComfyUI.
-
-### `external`
-
-An external application or the user owns the model installation. This is the
-normal mode for local ComfyUI.
-
-Kura checks that the exact connected ComfyUI endpoint can see the required
-model name. It does not silently download models, inspect unrelated local
-configuration at runtime, or mutate the user's normal ComfyUI installation.
-Temporary staging of a Kura-produced LoRA remains an explicit execution-time
-convenience and does not transfer ownership of the user's model library.
-
-### `local-path`
-
-The run explicitly uses an existing local artifact or snapshot. Kura validates
-and maps the path without inventing a remote source.
-
-Acquisition modes are not forced into one downloader. The common contract makes
-their differences visible and lets plan, executor, monitor, and records use the
-same vocabulary.
-
-## Decision 4: cache reuse follows artifact identity
-
-Kura reuses bytes when the actual artifact identity is shared.
-
-- The same Hugging Face repository, revision, and filename should reuse the
-  shared Hugging Face cache.
-- A Musubi convenience path should normally link to the cached artifact rather
-  than copy it.
-- Different representations of the same conceptual model, such as a Diffusers
-  repository and a repackaged single-file checkpoint, remain different
-  artifacts unless content identity proves otherwise.
-- A future content-addressed optimization may deduplicate identical bytes, but
-  conceptual model names alone are never sufficient evidence for deduplication.
-
-RunPod container disks are disposable and are not assumed to share model cache
-between Pods.
-
-## Decision 5: measurements are scoped to where they occurred
-
-Every network, disk, GPU, memory, and model observation must identify its
-measurement scope when ambiguity matters:
-
-- controller
-- local Docker host/container
-- RunPod API
-- RunPod Pod/container
-- connected ComfyUI endpoint
-
-A controller-side Hugging Face DNS or timeout failure does not prove that a
-RunPod Pod cannot download the same artifact. It is a warning and an incomplete
-controller estimate, not a RunPod launch blocker.
-
-Authentication failure or a missing artifact may remain blocking when the Pod
-will receive the same credentials and immutable artifact intent.
-
-For Kura-managed downloads, the environment that will perform the download
-must, immediately before downloading:
-
-1. resolve metadata when available
-2. report authentication and missing-artifact failures distinctly
-3. measure destination free space
-4. compare known required bytes with available bytes
-5. stop before the heavy download when the known requirement cannot fit
-
-This check belongs in the existing download path. It is not a separate queue,
-daemon, or preflight subsystem.
-
-Backend-managed downloads remain the backend's operation. Kura provides cache
-and environment contracts and records observable facts without pretending to
-own the backend's internal resolver.
-
-## Decision 6: preflight has one report but several measurement moments
-
-`kura run plan` consolidates facts known before launch. Launch rechecks facts
-that can change, such as disk and external state. Containers validate facts
-that are only knowable in the execution environment.
-
-These are not independent approval gates:
-
-- plan presents the proposed recipe, execution accommodations, known resource
-  facts, unknowns, and bounded contingencies
-- launch rejects changed or invalid immutable input
-- executor/download checks stop clear execution-environment failures
-- in-container validation stops cryptic or expensive-late trainer failures
-
-The same fact should have one owner. Code should not duplicate a clear,
-immediate trainer check unless failure would be expensive-late or cryptic.
-
-RunPod capacity is measured during planning, before launch approval. The plan
-shows current stock and price for each ordered GPU/cloud candidate. The user may
-select an available alternative or record a bounded wait policy under
-`compute.capacity` before compile; `run execute` follows the frozen choice.
-Foreground waiting is not a Kura-owned queue or daemon. It retries only provider
-stock probes until capacity is reported, then uses Pod creation as the
-authoritative check. A create race returns to the read-only probe instead of
-using repeated create requests as a polling mechanism. It keeps the latest wait
-state in `status.json` and records wait boundaries in the activity feed.
-Authentication, balance, and invalid-request failures fail immediately. Rate
-limits, transient network failures, and provider 5xx errors use bounded backoff
-within the already-approved wait window.
-
-RunPod also offers a provider-side Deploy When Available subscription. Kura
-does not submit one while its default remote path depends on controller-side
-upload and SSH startup: RunPod could otherwise create a billing Pod after the
-controller exits without delivering the dataset, starting training, or
-installing Kura's lease guard. Native subscription support requires autonomous,
-durable staging and recovery first.
-
-## Decision 7: file roles remain distinct
-
-- `run.yaml` records human and agent intent, including the approved recipe and
-  execution contingency envelope.
-- `resolved/` freezes compile-time inputs, native backend configuration, model
-  requirements, workflow inputs, and environment intent.
-- `realizations/` records append-only launch attempts, provider/container
-  identity, actual image identity when obtainable, runtime measurements,
-  resolved model observations, exits, and recovery facts.
-- `status.json` is only the latest materialized state.
-- `logs/events.jsonl` is an append-only, human-readable activity feed for the
-  monitor. It is not a complete event-sourced lifecycle record and must not
-  become a second source of truth beside `realizations/`. Event names describe
-  their actual scope: for example, `remote_exit_observed` is a remote job exit
-  observation, while `runpod_pod_stopped` is disposal of its compute Pod.
-- `samples/images.jsonl` records generated-image facts.
-- `notes.md` records human evaluation and reflection. It is not the primary
-  store for runtime measurements or machine events.
-
-Mutable image tags alone are insufficient reproducibility evidence. Executors
-should record the actual image digest or provider image identity when it is
-obtainable.
-
-## Decision 8: failure taxonomy and ownership
-
-Kura uses the following general categories across backends and executors:
-
-| Category | Primary owner | Expected handling |
-| --- | --- | --- |
-| invalid dataset or run structure | CLI/compiler | stop before launch |
-| model authentication or missing artifact | resolver/executor | stop before heavy download |
-| insufficient destination disk | executor/download path | stop before heavy write |
-| GPU or CPU/cgroup OOM | agent using runtime facts | adjust execution accommodation automatically within the approved envelope |
-| material time, cost, or quality change | user | return to plan approval |
-| trainer/backend incompatibility | backend adapter and agent | diagnose; update adapter or image |
-| controller interruption | executor/recovery flow | reconcile, recover outputs, then stop safely |
-| corrupt or incompatible output | post-validation | mark failed with artifact evidence |
-| suspicious loss or progress | agent | warn and decide; core does not judge quality |
-| visually poor output | user with agent support | compare renders and create a new experiment |
-
-A signal-only termination such as SIGKILL must be accompanied by available
-cgroup, host-memory, GPU, and provider observations so it can be classified
-instead of guessed.
-
-## Decision 9: training and evaluation are linked runs
-
-Training and render runs remain separate immutable records, but evaluation
-render runs explicitly reference their parent training run and checkpoint.
-
-The normal evaluation flow freezes:
-
-- baseline and trained checkpoints being compared
-- workflow
-- promptset
-- seeds
-- strength variants
-
-Generated files and image metadata are machine facts. The user's judgment is
-recorded separately in evaluation notes and may then feed knowledge cards or
-regrets.
-
-Kura does not automatically declare a model good or bad from loss or images.
-
-## Decision 10: command surface has normal, recovery, and low-level layers
-
-The implementation may keep low-level commands, but documentation and agent
-guidance distinguish three layers.
-
-### Normal workflow
-
-- inspect dataset
-- plan
-- execute using the executor frozen in the run
-- watch
-- render/evaluate
-
-### Diagnosis and recovery
-
-- doctor
-- recover/reconcile
-- safe cleanup
-
-### Low-level and development operations
-
-- compile
-- stage
-- launch
-- upload/download/pull
-- image build/inspect/publish
-
-Local Docker and RunPod should share one high-level execute contract. Transfer
-and provider-specific commands remain available as recovery primitives rather
-than separate normal workflows.
-
-Command consolidation must not create hidden state or remove direct recovery
-access.
-
-## Implementation sequence
-
-Each item is a separate, reviewed change with focused tests followed by the
-release gate.
-
-1. Add a read-only backend-independent model requirement projection to plans.
-   Preserve current backend behavior.
-2. Freeze model requirements under `resolved/` and record acquisition owner and
-   measurement scope.
-3. Move Kura-managed remote metadata and disk checks into the existing remote
-   download path before heavy writes.
-4. Record actual image identity and structured runtime resource observations
-   when available.
-5. Align agent skills with automatic execution accommodations and the material
-   time/cost/quality approval boundary.
-6. Add one high-level execute path that honors the executor frozen in the run;
-   retain low-level commands for recovery.
-7. Consolidate recovery guidance and, if justified by repeated use, add a
-   high-level recover command built from existing primitives.
-8. Link render evaluation runs to training runs and make comparison artifacts
-   the normal post-training handoff.
-9. Reassess redundant commands only after the high-level path is proven. Do not
-   remove recovery primitives merely to reduce help output.
+This extends `kura-decision-model.md`: the CLI measures, files remember, the
+skill judges, and the user decides. It preserves backend and consumer ownership
+instead of flattening every model into one downloader or hidden runtime system.
+
+## One experiment lifecycle
+
+The normal lifecycle is dataset and intent, one reviewed run plan, execution and
+recovery, generated comparison, then human evaluation. Backend, executor,
+transfer, cache, and recovery mechanics are visible facts when relevant, not
+separate user decisions by default. Low-level commands remain available for
+diagnosis and recovery.
+
+## Responsibility boundaries
+
+The user decides changes to intent, quality, material cost, GPU class, or
+material elapsed time. This includes dataset, model family when intentional,
+resolution, learning rate, rank, steps, effective batch, budget, and final
+visual evaluation. The plan is the single normal approval gate.
+
+The agent selects and records recipe-preserving execution accommodations such
+as compatible quantization, gradient checkpointing, low-memory modes, block
+swap, offload, workers, and caching. These remain visible in the plan. Any
+accommodation that changes quality, budget, GPU class, or elapsed time outside
+the approved envelope returns to user approval.
+
+Code validates structure, freezes inputs, resolves paths and requirements,
+measures resources, downloads, launches, transfers, reconciles, stops, validates
+artifacts, and appends runtime facts. Code blocks invalid contracts and clear
+irreversible accidents; it does not judge training or image quality.
+
+## Model requirements and acquisition ownership
+
+Backends project model needs into a common factual shape containing the logical
+role, strongest stable identity observed, acquisition owner, runtime reference,
+format/validation contract, measurement scope, and observed facts when known.
+
+Acquisition owners are distinct:
+
+- `backend`: the trainer owns repository and companion-model resolution. Kura
+  freezes declared identity, provides cache/credentials, and records observable
+  revisions. This is the AI-Toolkit default.
+- `kura`: Kura downloads explicit artifacts before trainer startup, validates
+  their roles, and passes paths. This is normal for Musubi and disposable
+  RunPod ComfyUI.
+- `external`: a connected application or user owns installation. Local ComfyUI
+  uses this mode; Kura verifies endpoint-visible names and does not silently
+  install or retarget models.
+- `local-path`: the run explicitly selects an existing artifact. Kura validates
+  and maps it without inventing a remote source.
+
+Temporary staging of a Kura-produced LoRA does not transfer ownership of a
+user's ComfyUI library. Acquisition modes must not be forced through a universal
+downloader.
+
+## Cache identity
+
+Reuse follows artifact identity. The same Hugging Face repository, revision,
+and filename may share cached bytes, and convenience paths should link rather
+than copy. Diffusers repositories, repackaged single-file checkpoints, and other
+representations remain different until content identity proves otherwise.
+Conceptual model names alone never prove deduplication. RunPod container disks
+are disposable and are not assumed to share caches.
+
+## Measurement scope and preflight
+
+Network, disk, GPU, memory, and model observations identify their scope when it
+matters: controller, local Docker host/container, RunPod API, RunPod Pod, or the
+connected ComfyUI endpoint.
+
+A controller DNS, timeout, or transient HTTP failure does not prove a RunPod Pod
+cannot download an artifact; it yields a warning and incomplete estimate.
+Authentication failure or a missing immutable artifact remains blocking when
+the Pod receives the same intent and credentials.
+
+Immediately before a Kura-managed download, the downloading environment must:
+
+1. resolve metadata when available;
+2. distinguish authentication and missing-artifact failures;
+3. measure destination free space;
+4. compare known required bytes with available bytes;
+5. stop before a heavy download that cannot fit.
+
+Backend-managed downloads remain backend operations. Kura provides environment
+and cache contracts and records what it can observe.
+
+`kura run plan` consolidates facts known before launch. Launch rechecks mutable
+facts and immutable inputs. Containers validate facts knowable only in their
+environment. These are measurement moments, not additional approval gates. A
+fact has one owner; Kura duplicates a trainer check only when its native failure
+would be expensive-late or cryptic.
+
+RunPod capacity is measured before approval. The plan shows stock and price for
+ordered GPU/cloud candidates and may freeze a bounded foreground wait policy.
+Waiting probes stock with bounded backoff, then treats Pod creation as
+authoritative. Authentication, balance, and invalid requests fail immediately.
+Kura must not submit provider-side Deploy When Available while controller-side
+upload, SSH startup, and lease installation are required; that could create a
+billing Pod after the controller exits.
+
+## File roles
+
+- `run.yaml`: human and agent intent, recipe, and approved contingency envelope.
+- `resolved/`: immutable backend input, requirements, workflow input, and
+  environment intent.
+- `realizations/`: append-only launch, provider/container/image identity,
+  runtime measurements, model observations, exit, and recovery facts.
+- `status.json`: latest materialized state only.
+- `logs/events.jsonl`: append-only human activity feed, not a second lifecycle
+  truth. Event names state their actual observation scope.
+- `samples/images.jsonl`: generated-image facts.
+- `notes.md`: human evaluation and reflection, not machine runtime facts.
+
+Mutable image tags are insufficient reproducibility evidence. Executors record
+an actual digest or provider image identity when obtainable.
+
+## Failure ownership
+
+| Failure | Owner and response |
+| --- | --- |
+| invalid dataset/run | compiler stops before launch |
+| authentication or missing model | resolver stops before heavy download |
+| insufficient destination disk | download/executor stops before heavy write |
+| GPU or cgroup OOM | agent adjusts within the approved envelope |
+| material time, cost, GPU, or quality change | user reviews a new plan |
+| trainer incompatibility | adapter and agent diagnose |
+| controller interruption | executor reconciles, recovers, then stops safely |
+| corrupt output | post-validation fails with artifact evidence |
+| suspicious loss/progress | agent judges; core does not infer quality |
+| visually poor output | user and agent compare and plan another experiment |
+
+A signal-only exit such as SIGKILL is not classified by guesswork. Record
+available cgroup, host-memory, GPU, and provider observations.
+
+## Training and evaluation
+
+Training and render runs are separate immutable records. Evaluation runs
+reference the training run and checkpoint and freeze the compared baseline,
+workflow, promptset, seeds, and strength variants. Generated files and metadata
+are machine facts; judgment belongs in evaluation notes and may inform knowledge
+cards or regrets. Kura never declares quality from loss or images.
+
+## Command layers
+
+The normal layer is inspect, plan, execute, watch, and render/evaluate. Doctor,
+reconcile/recover, and safe cleanup form the diagnosis layer. Compile, stage,
+launch, transfer, and image operations remain low-level/development primitives.
+Local Docker and RunPod share the high-level execute contract, but consolidation
+must not create hidden state or remove direct recovery access.
 
 ## Non-goals
 
-- one universal model downloader
-- a global database or hidden registry of runtime state
-- automatic quality judgment
-- automatic mutation of a user's local ComfyUI model installation
-- hand-maintained size entries for one incident model
-- silently changing quality, budget, GPU class, or materially slower execution
-  after plan approval
-
-## Consequences
-
-Kura accepts that backends and consumers acquire models differently. The common
-contract provides consistency without pretending the tools are identical.
-
-Plans become clearer because model ownership, measurement scope, and execution
-accommodations are explicit. Executors gain responsibility only for facts that
-exist in their environment. Skills can automate backend mechanics without
-turning them into user-facing hyperparameters.
-
-The transition is incremental. Existing run files and low-level commands remain
-valid while projections and high-level workflows are added around them.
+- a universal model downloader or global model registry;
+- a database, queue, daemon, or hidden lifecycle state;
+- automatic quality judgment;
+- automatic mutation of a user's ComfyUI installation;
+- silent quality, budget, GPU, or materially slower execution changes after
+  approval.

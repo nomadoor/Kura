@@ -7,6 +7,9 @@ description: Musubi Tuner backend guidance for Kura. Use when compiling or chang
 
 Use this skill for `backend.name: musubi-tuner` work.
 
+Author and validate backend input under the
+[declared surface contract](../../../docs/adr/backend-config-surface-contract.md).
+
 ## Rules
 
 - Do not run Musubi directly on the host.

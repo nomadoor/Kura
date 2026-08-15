@@ -7,6 +7,9 @@ description: sd-scripts backend guidance for Kura. Use for sd-scripts model role
 
 Use this skill for `backend.name: sd-scripts` work.
 
+Author and validate backend input under the
+[declared surface contract](../../../docs/adr/backend-config-surface-contract.md).
+
 This backend owns training mechanics, not prompt semantics. For evaluation,
 use `lora-evaluation` and its model-family knowledge; do not duplicate Anima,
 SDXL, SD 1.5, or FLUX prompt policy here.

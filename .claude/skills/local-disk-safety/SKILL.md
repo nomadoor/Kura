@@ -109,7 +109,8 @@ or WSL/VHDX/Windows-side operations.
 
 - `kura doctor disk` reports workspace sizes, storage backing/effective free
   space, Docker storage, root-owned Kura files, and cache-related environment
-  variables.
+  variables. Warnings are blocking-risk findings; advisories are cleanup
+  hygiene that does not by itself make the operation unsafe.
 - Local Docker launch, Docker build cache, and RunPod download/pull checks use
   configurable disk gates. See `docs/workspace-config.md` for current defaults.
 - Local Docker launch adds known write estimates to the configured free-space
@@ -120,6 +121,14 @@ or WSL/VHDX/Windows-side operations.
   unknown, local Docker launch fails safe unless the run explicitly sets
   `safety.allow_storage_risk: true`.
 - Lower those gates only when the user understands the trade-off.
+- `safety.allow_large_model_downloads` accepts only the measured download-size
+  risk. It does not waive DNS, timeout, HTTP, authentication, or missing-file
+  failures.
+- Treat Hugging Face metadata outcomes distinctly. Local Docker blocks when a
+  required write cannot be measured. RunPod may proceed with an incomplete
+  estimate after controller-only DNS, timeout, or transient HTTP failure, but
+  shared authentication failure and a missing immutable artifact remain
+  errors.
 - Frequent unpruned checkpoints are blocked before launch unless:
   - `backend.config.prune_checkpoints_before_step` is set, or
   - the backend has an explicit keep-last checkpoint policy, or
