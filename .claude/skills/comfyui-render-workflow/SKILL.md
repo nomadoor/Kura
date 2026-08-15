@@ -41,6 +41,11 @@ a missing Kura capability.
 - Default endpoint should remain `http://127.0.0.1:8188` unless the run explicitly says otherwise.
 - Freeze workflow and promptset at compile time under `resolved/`.
 - Record generated images in `samples/images.jsonl`.
+- On completion, state the provenance in ordinary language: which train run and
+  checkpoint produced the image, which workflow consumed it, how it was applied
+  (including LoRA model/CLIP strengths when present), and which prompt, negative
+  prompt, seed, and case count were used. Also state the generated image count
+  and output directory. Do not show hashes or digests unless the user asks.
 - Never add `--yes` to a RunPod render launch without the user's explicit
   instruction to perform that billed launch.
 - Before requesting approval for a RunPod render, show

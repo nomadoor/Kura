@@ -828,6 +828,7 @@ class DoctorDockerTests(unittest.TestCase):
                     patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}),
                     patch("kura.storage._auto_wsl_host_drive", return_value="F:"),
                     patch("kura.storage._windows_drive_free_bytes", return_value=290 * 1024**3),
+                    patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * 1024**3, used=100 * 1024**3, free=900 * 1024**3)),
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                 ):
                     code = cmd_doctor_disk(argparse.Namespace())
@@ -1926,11 +1927,12 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch:
+                with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="runpod", dry_run=False, yes=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
+            self.assertIn("completed  exit 0", stdout.getvalue())
             self.assertTrue(launch.call_args.kwargs["yes"])
             self.assertEqual(launch.call_args.kwargs["max_lease_sec"], 12 * 3600)
 
@@ -1944,11 +1946,13 @@ class RenderNotificationTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch.launch_render", return_value=0) as launch, patch("kura.run_commands.launch._notify") as notify:
+                with patch("kura.run_commands.launch.launch_render", return_value=0) as launch, patch("kura.run_commands.launch._notify") as notify, patch("sys.stdout", new_callable=io.StringIO) as stdout:
                     code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="local", dry_run=False, notify="ntfy"))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
+            self.assertIn("completed  exit 0", stdout.getvalue())
+            self.assertIn("rendered", stdout.getvalue())
             launch.assert_called_once()
             notify.assert_called_once()
             self.assertIn("completed", notify.call_args.kwargs["subject"])
@@ -2204,6 +2208,16 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(queued["3"]["inputs"]["model"], ["8", 0])
             self.assertEqual(queued["6"]["inputs"]["clip"], ["8", 1])
             self.assertEqual(queued["7"]["inputs"]["clip"], ["8", 1])
+            image_record = json.loads((run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(
+                image_record["checkpoint_application"],
+                {
+                    "kind": "lora_insert",
+                    "class_type": "LoraLoader",
+                    "strength_model": 0.8,
+                    "strength_clip": 0.8,
+                },
+            )
 
     def test_insert_lora_loader_skips_empty_lora_name(self) -> None:
         workflow = {"1": {"inputs": {"model": ["2", 0]}}, "2": {"inputs": {}}}
