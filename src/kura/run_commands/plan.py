@@ -29,6 +29,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
+from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, common_recipe
 
 
@@ -971,6 +972,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "model_downloads": download_estimate,
         "disk_cache": _sd_scripts_disk_cache_estimate(run),
         "preflight": preflight,
+        "experiment": experiment_context(workspace, run_id, run=run),
     }
 
 
@@ -1026,9 +1028,15 @@ def format_run_plan(payload: dict[str, Any]) -> str:
     if payload.get("resolved_manifest") and payload.get("resolved_manifest") != payload.get("source"):
         _append_kv(lines, "resolved", payload.get("resolved_manifest"))
 
+    experiment = format_experiment_context(payload.get("experiment"))
+    if experiment:
+        lines.extend(["", experiment])
+
     lines.append("")
     lines.append("Backend")
     for key, value in payload.get("backend", {}).items():
+        if key == "config":
+            continue
         _append_kv(lines, key, value)
 
     lines.append("")
@@ -1122,14 +1130,6 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         for key, value in sampling.items():
             _append_kv(lines, key, value)
 
-    selected_backend = payload.get("backend") if isinstance(payload.get("backend"), dict) else {}
-    native = backend_config(payload, selected_backend.get("name")) if isinstance(selected_backend.get("name"), str) else {}
-    if native:
-        lines.append("")
-        lines.append("Backend config")
-        for key, value in native.items():
-            _append_kv(lines, key, value)
-
     resources = payload.get("resources") if isinstance(payload.get("resources"), dict) else {}
     if resources:
         lines.append("")
@@ -1183,7 +1183,6 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             if isinstance(values, dict) and values:
                 lines.append(f"  {section}")
                 _append_mapping(lines, values, indent=4)
-
     downloads = payload.get("model_downloads") if isinstance(payload.get("model_downloads"), dict) else {}
     download_items = downloads.get("items") if isinstance(downloads.get("items"), list) else []
     unknown_downloads = downloads.get("unknown") if isinstance(downloads.get("unknown"), list) else []

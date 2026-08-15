@@ -37,6 +37,21 @@ uv run kura run execute <run-id>
 uv run kura run watch <run-id>
 ```
 
+For training runs, `kura run plan` places the run in its authored
+`experiment` before showing the execution facts. The series is formed by exact
+`experiment` matches and shows the parameters that actually vary between its
+runs, each run's first meaningful `notes.md` entry, and the number of completed
+render runs linked to the current training run. Kura does not split a broad
+experiment name or interpret the notes as a quality judgment.
+
+When a waited training execution finishes, `kura run execute` reports the
+terminal state, elapsed time, intent, a compressed checkpoint summary, and the
+same experiment series. Full artifact paths remain in `status.json`; the
+terminal summary is evidence for the agent to interpret, not a prescribed next
+step. The complete `run plan` output is likewise agent evidence. An agent
+selects the few facts relevant to a user's approval instead of pasting the raw
+plan into the conversation.
+
 For a RunPod draft, run `kura run plan` before compile as a live capacity check.
 Choose the selected GPU or a bounded `compute.capacity.mode=wait` policy from
 the reported stock and price, then compile and show the final plan for the one
