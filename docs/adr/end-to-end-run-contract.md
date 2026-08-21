@@ -4,6 +4,8 @@ Status: accepted owner decision.
 
 Date: 2026-07-11
 
+Updated: 2026-08-21 — explicit render case queues and presentation boundary.
+
 This extends `kura-decision-model.md`: the CLI measures, files remember, the
 skill judges, and the user decides. It preserves backend and consumer ownership
 instead of flattening every model into one downloader or hidden runtime system.
@@ -113,7 +115,9 @@ billing Pod after the controller exits.
 - `status.json`: latest materialized state only.
 - `logs/events.jsonl`: append-only human activity feed, not a second lifecycle
   truth. Event names state their actual observation scope.
-- `samples/images.jsonl`: generated-image facts.
+- `samples/images.jsonl`: generated-image facts with the frozen logical case
+  values, actually applied values, checkpoint provenance, and complete authored
+  metadata.
 - `notes.md`: human evaluation and reflection, not machine runtime facts.
 
 Mutable image tags are insufficient reproducibility evidence. Executors record
@@ -140,10 +144,25 @@ available cgroup, host-memory, GPU, and provider observations.
 ## Training and evaluation
 
 Training and render runs are separate immutable records. Evaluation runs
-reference the training run and checkpoint and freeze the compared baseline,
-workflow, promptset, seeds, and strength variants. Generated files and metadata
-are machine facts; judgment belongs in evaluation notes and may inform knowledge
-cards or regrets. Kura never declares quality from loss or images.
+freeze an explicit, finite render case queue: each authored row names its
+workflow values, optional checkpoint, and provenance metadata. Kura has no
+Cartesian-product language and does not invent combinations. Compile validates
+and freezes the ordered queue; execution generates the raw case images, reports
+finite `n/N` progress, and records complete per-result facts. Legacy promptset
+plus singular-checkpoint intent is normalized to the same resolved case
+contract. An explicit queue may instead use one singular run checkpoint as a
+shared default, but a non-empty shared checkpoint and case-level checkpoints
+never mix.
+
+Kura does not choose comparison rows, columns, labels, crops, or layout.
+Contact sheets and XY plots assembled by an agent from existing result images
+remain presentation artifacts rather than a second generation path. Separate
+render runs represent separately intended evaluations; silently creating
+ad-hoc per-value runs to bypass one run's compile contract does not.
+
+Generated files and metadata are machine facts; judgment belongs in evaluation
+notes and may inform knowledge cards or regrets. Kura never declares quality
+from loss or images.
 
 ## Command layers
 

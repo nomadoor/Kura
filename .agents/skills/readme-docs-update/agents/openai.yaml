@@ -1,0 +1,4 @@
+interface:
+  display_name: "README and Docs Update"
+  short_description: "Keep Kura documentation synchronized with behavior"
+  default_prompt: "Use $readme-docs-update to synchronize the documentation for this change."

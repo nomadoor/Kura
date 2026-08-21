@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Toolkit Backend"
+  short_description: "Compile and verify AI Toolkit training runs"
+  default_prompt: "Use $ai-toolkit-backend to review this AI Toolkit run configuration."

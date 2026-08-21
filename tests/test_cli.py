@@ -35,7 +35,7 @@ from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _render_runpod_lora, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _runpod_image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
@@ -141,6 +141,9 @@ class InitCommandTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 0)
             run_id = stdout.getvalue().strip()
+            run = yaml.safe_load((Path(directory) / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
+            self.assertIn("cases", run["inputs"])
+            self.assertNotIn("promptset", run["inputs"])
             status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
             self.assertIsNone(status["last_step"])
             self.assertEqual(
@@ -2325,27 +2328,6 @@ class RenderNotificationTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "model_only, model_clip, full, LoraLoaderModelOnly, LoraLoader"):
                 compile_render(root, run_dir)
-
-    def test_runpod_lora_upload_plan_uses_sidecar_insert(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "render-1"
-            output_dir = root / "runs" / "train-1" / "outputs"
-            output_dir.mkdir(parents=True)
-            source = output_dir / "example.safetensors"
-            source.write_bytes(b"fake-lora")
-            lora_source, lora_name = _render_runpod_lora(
-                root,
-                run_dir,
-                {
-                    "inputs": {"checkpoint": {"path": "runs/train-1/outputs/example.safetensors"}},
-                    "workflow_patches": {},
-                    "lora_insert": {"class_type": "LoraLoader", "model_node": "4", "model_output": 0},
-                },
-            )
-            self.assertEqual(lora_source, source.resolve())
-            self.assertIsNotNone(lora_name)
-            self.assertTrue(lora_name.startswith("Kura_tmp/render-1-example-"))
 
     def test_comfyui_prepare_model_ready_logs_json_paths(self) -> None:
         spec = importlib.util.spec_from_file_location("kura_comfy_prepare", Path("docker/comfyui/kura_comfy_prepare.py"))

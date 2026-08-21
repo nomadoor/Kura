@@ -143,7 +143,7 @@ Useful low-level `run remote` flags:
 | Command | Purpose |
 | --- | --- |
 | `uv run kura render new --slug <slug>` | Create a ComfyUI render run |
-| `uv run kura render compile <run-id>` | Freeze workflow and promptset inputs |
+| `uv run kura render compile <run-id>` | Freeze workflow and the explicit or legacy-normalized render case queue |
 | `uv run kura render launch <run-id>` | Generate images through ComfyUI |
 | `uv run kura render launch <run-id> --executor runpod` | Generate images through a disposable RunPod ComfyUI Pod |
 
@@ -155,20 +155,57 @@ that flag carries the approval through the launch gate and does not ask the
 user a second time. A human running the launch in an interactive terminal may
 omit `--yes` and answer the one launch prompt.
 
-### Promptsets and workflow patches
+### Render case queues and matrices
 
-A promptset is JSONL, one case per line. Kura owns five keys directly:
+New render runs describe their finite ordered work queue with an explicit JSONL
+file:
+
+```yaml
+inputs:
+  train_run: example-train
+  cases: {path: cases/checkpoint-review.jsonl, digest: null}
+  workflow: {path: workflows/example-api.json, digest: null}
+```
+
+Each JSONL row has this shape:
+
+```json
+{"id":"step-0200-reconstruction","values":{"prompt":"portrait...","negative_prompt":"","seed":42,"steps":28},"checkpoint":{"id":"step-0200","path":"runs/example-train/outputs/model-step00000200.safetensors","hash":null},"meta":{"checkpoint_step":200,"prompt_axis":"reconstruction"}}
+```
 
 | Key | Meaning |
 | --- | --- |
-| `id` | Case identifier; required, and used to name output files |
-| `prompt` | Positive prompt; required unless `render.workflow_fixed` declares `prompt` |
-| `negative_prompt` | Negative prompt; optional |
-| `seeds` | Seeds to render for this case; falls back to `render.default_seed` |
-| `meta` | Provenance that is not a render input, ignored by rendering |
+| `id` | Required safe, unique case identifier |
+| `values` | Required mapping of frozen logical workflow inputs for this case |
+| `checkpoint` | Optional `{id, path, hash}` artifact selected by `lora`, `checkpoint`, or `model_patch` bindings |
+| `meta` | Optional provenance and presentation coordinates that do not alter rendering; the complete authored mapping is preserved |
 
-Any other key must be bound in the run's `workflow_patches`, which maps a name
-to a node and field of the API workflow:
+The agent explicitly lists every desired combination in order. Kura has no
+Cartesian-product DSL and never invents combinations. A nine-checkpoint by
+three-prompt comparison therefore contains 27 authored rows when each row has
+one fixed seed. Repeated values make fixed dimensions explicit.
+
+An explicit queue may use singular `inputs.checkpoint` as one shared default
+when no row declares `checkpoint`. Mixing a non-empty shared default with any
+case-level checkpoint is rejected because checkpoint provenance would be
+ambiguous.
+
+`kura render compile` validates every row and workflow binding, hashes its
+artifacts, and freezes the normalized queue as `resolved/cases.jsonl`. Launch
+processes that finite queue with `n/N` progress. Kura generates the raw images
+and records each case's frozen logical `values`, actual `applied_values`,
+checkpoint provenance, and complete authored `meta` in
+`samples/images.jsonl`. `applied_values` captures execution substitutions such
+as staged ComfyUI file names without rewriting the authored logical values.
+
+A contact sheet or XY plot is not a Kura render output. After generation, an AI
+agent may arrange the existing source images under the presentation-only rule in
+`AGENTS.md`, without overwriting them, and record the source paths in the related
+run's `notes.md`.
+
+### Workflow patches
+
+`workflow_patches` maps a value name to a node and field in the API workflow:
 
 ```yaml
 workflow_patches:
@@ -178,25 +215,49 @@ workflow_patches:
   strength:      {node: "17", field: inputs.strength}
 ```
 
-`lora`, `checkpoint`, and `model_patch` take their value from the run's
-checkpoint. Every other binding reads the promptset key of the same name.
+`lora`, `checkpoint`, and `model_patch` take their value from the case's
+`checkpoint`. Every other binding reads the key of the same name under the
+case's `values` mapping.
+A no-LoRA baseline and LoRA cases may share one queue when the workflow uses
+sidecar `lora_insert`: omit `checkpoint` from the baseline row and Kura leaves
+the base workflow unchanged for that case. Direct `lora`, `checkpoint`, and
+`model_patch` bindings require a checkpoint on every row because an empty model
+name is not a valid loader input.
 `type: image` is supported only by the local executor. It marks a value as a
-path relative to the promptset's own directory; `kura render compile` copies it
-into `resolved/images/` and `kura render launch` stages it into
+path relative to the explicit cases JSONL directory, or to the legacy
+promptset directory for a legacy run. `kura render compile` copies it into
+`resolved/images/` and `kura render launch` stages it into
 `comfyui.input_dir`, then removes it afterwards. RunPod compile rejects image
 bindings before creating frozen image artifacts.
 
-`id` becomes a file name under `resolved/` and `samples/`, so it must be a single
-safe name — no path separators, no `.`/`..`, no leading dot — and must be unique
-within the promptset.
+`id` becomes part of a file name under `resolved/` and `samples/`, so it must be
+a single safe name — no path separators, no `.`/`..`, no leading dot — and must
+be unique within the queue.
 
-`kura render compile` refuses to guess when the two disagree. It fails when a
-promptset key has no binding, when a bound key is missing from an item, when a
-binding names a node or field the workflow does not have, and when an item sets a
-run-sourced name (`seed`, `lora`, `checkpoint`, `model_patch`) that would be
-ignored. A key with no home in the workflow — a `width` for a workflow that takes
-its resolution from the loaded image — is a signal to fix the promptset or the
-run, not to build around Kura.
+`kura render compile` refuses to guess when the queue and bindings disagree. It
+fails when a value has no binding, when a bound value is missing, or when a
+binding names a node or field the workflow does not have. A value with no home
+in the workflow — a `width` for a workflow that takes its resolution from a
+loaded image — is a signal to correct the cases or run, not to build around
+Kura.
+
+Local ComfyUI supports case checkpoints through `lora`, `checkpoint`, and
+`model_patch`. Repeated local references to the same staging target are
+deduplicated; distinct required artifacts are staged before the queue starts
+and cleaned up afterwards. RunPod case queues support trained LoRAs through a `lora` binding
+or the workflow sidecar's `lora_insert`; Kura uploads every selected LoRA before
+starting the remote render. Dynamic full-checkpoint and model-patch staging
+remain local-executor features.
+
+### Legacy promptsets
+
+Legacy runs with `inputs.promptset` plus singular `inputs.checkpoint` remain
+supported. A promptset row owns `id`, `prompt`, `negative_prompt`, `seeds`, and
+`meta`; additional keys require matching `workflow_patches`. Compile expands
+the row seeds and normalizes the result to `resolved/cases.jsonl`, so launch and
+provenance use the same case contract as new runs. Do not combine
+`inputs.cases` with `inputs.promptset`. A singular `inputs.checkpoint` may be
+combined with `inputs.cases` only as the shared default described above.
 
 `prompt`, `negative_prompt`, and `seed` are checked the same way. Rendering with
 prompts or seeds but no matching binding fails compile, because the workflow would

@@ -35,13 +35,22 @@ report, not a step to take.
 **When Kura cannot express the task.** Every rule here says do X or do not do Y;
 this says what to do when the task needs something Kura has no way to do. Stop
 and tell the user which capability is missing and what you would need. Then wait.
-Do not build the missing capability outside Kura — a second execution path, a
-generated file per case, a direct API call, a run per parameter value — and do
-not silently produce a result that is missing the thing you could not do. An
+Do not build the missing capability outside Kura — a second execution path,
+generated execution files that bypass the run contract, or a direct API call —
+and do not silently fan one approved evaluation into ad-hoc runs merely to
+bypass a compile error or avoid declaring its cases. Separate runs remain valid
+when the user intends separate evaluations and each run records its own intent.
+Do not silently produce a result that is missing the thing you could not do. An
 inability to proceed is a report, not a problem to route around. Kura's compile
 steps are written to fail loudly for this reason; a refusal from `kura ... compile`
 is the contract speaking, and the fix is either a corrected input file or a
 conversation with the user.
+
+A render comparison is not a missing capability when its combinations can be
+listed as Kura render cases. Author one explicit `inputs.cases` JSONL queue;
+each row records its complete workflow values, optional checkpoint, and
+provenance metadata. Kura generates the raw case images and records their
+metadata. It does not choose a comparison layout.
 
 **Presentation-only exception.** Arranging existing local result images into a
 comparison sheet, contact sheet, reordered sequence, or joined image is an
@@ -172,8 +181,13 @@ Layout:
 - Authored examples: `examples/`
 - Authored docs: `docs/`
 - Model-family knowledge: `knowledge/model-families/`
-- Project skills: `.claude/skills/`
+- Project skills (canonical): `.agents/skills/`
+- Claude compatibility mirror: `.claude/skills/` (generated; do not edit directly)
 - Mechanical checks: `scripts/check_*.py`
+
+Edit project skills only under `.agents/skills/`, then run
+`uv run python scripts/sync_agent_skills.py --write`. The release check rejects
+missing skill metadata or any drift in the Claude compatibility mirror.
 
 For local workspace configuration keys, see `docs/workspace-config.md`.
 

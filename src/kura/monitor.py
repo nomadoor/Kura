@@ -37,6 +37,7 @@ class RunProgress:
     step: int | None = None
     total: int | None = None
     seconds_per_iter: float | None = None
+    current_case_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -458,8 +459,13 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
     if run_type == "render":
         inputs = config.get("inputs", {}) if isinstance(config.get("inputs"), dict) else {}
         checkpoint = inputs.get("checkpoint", {}) if isinstance(inputs.get("checkpoint"), dict) else {}
+        cases = inputs.get("cases", {}) if isinstance(inputs.get("cases"), dict) else {}
         workflow = inputs.get("workflow", {}) if isinstance(inputs.get("workflow"), dict) else {}
-        return {"checkpoint": checkpoint.get("path"), "workflow": workflow.get("path")}
+        return {
+            "checkpoint": checkpoint.get("path"),
+            "cases": cases.get("path"),
+            "workflow": workflow.get("path"),
+        }
     recipe = common_recipe(config)
     dataset_ids = [dataset.id for dataset in _datasets(Path("."), config) if dataset.id]
     backend = config.get("backend", {}) if isinstance(config.get("backend"), dict) else {}
@@ -492,7 +498,12 @@ def _progress(status: dict[str, Any], config: dict[str, Any]) -> RunProgress:
     step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
     total = _int_or_none(_first_present(status.get("total_steps"), recipe.get("steps")))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))
-    return RunProgress(step=step, total=total, seconds_per_iter=seconds_per_iter)
+    return RunProgress(
+        step=step,
+        total=total,
+        seconds_per_iter=seconds_per_iter,
+        current_case_id=_string(status.get("current_case_id")),
+    )
 
 
 def _read_training_stdout(path: Path, *, loss_tail: int) -> list[float]:
@@ -964,7 +975,15 @@ def _id_text(summary: RunSummary) -> str:
 def _format_key_config(summary: RunSummary) -> str:
     values = summary.key_config
     if summary.type == "render":
-        return " ".join(part for part in (_basename_label("ckpt", values.get("checkpoint")), _basename_label("wf", values.get("workflow"))) if part) or "-"
+        return " ".join(
+            part
+            for part in (
+                _basename_label("cases", values.get("cases")),
+                _basename_label("ckpt", values.get("checkpoint")),
+                _basename_label("wf", values.get("workflow")),
+            )
+            if part
+        ) or "-"
     parts = []
     for key in ("rank", "lr", "steps", "dataset"):
         value = values.get(key)
@@ -993,7 +1012,10 @@ def _format_progress(progress: RunProgress) -> str:
     if progress.total is None:
         return "unknown" if progress.step is None else str(progress.step)
     step = "unknown" if progress.step is None else str(progress.step)
-    return f"{step}/{progress.total}"
+    rendered = f"{step}/{progress.total}"
+    if progress.current_case_id:
+        rendered += f" · {progress.current_case_id}"
+    return rendered
 
 
 def _format_seconds_per_iter(progress: RunProgress) -> str:

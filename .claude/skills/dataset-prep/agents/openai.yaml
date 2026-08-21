@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dataset Preparation"
+  short_description: "Prepare and validate reproducible Kura datasets"
+  default_prompt: "Use $dataset-prep to inspect and prepare this training dataset."

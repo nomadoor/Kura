@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kura Monitor TUI"
+  short_description: "Change Kura monitoring and watch projections"
+  default_prompt: "Use $monitor-tui to update this Kura monitor behavior."

@@ -23,7 +23,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from kura.render import promptset, reconcile_promptset  # noqa: E402
+from kura.render import authored_cases, promptset, reconcile_promptset  # noqa: E402
 from kura.run_envelope import common_recipe  # noqa: E402
 from kura.workspace import (  # noqa: E402
     WORKSPACE_OBSOLETE_KEYS,
@@ -179,6 +179,17 @@ class SurfaceContractTests(unittest.TestCase):
             path.write_text(json.dumps({"id": "../escape", "prompt": "x"}) + "\n", encoding="utf-8")
             with self.assertRaises(ValueError):
                 promptset(path)
+
+    def test_render_case_rejects_an_undeclared_row_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cases.jsonl"
+            path.write_text(
+                json.dumps({"id": "a", "values": {"prompt": "x"}, SENTINEL: True}) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as caught:
+                authored_cases(path)
+        self.assertIn(SENTINEL, str(caught.exception))
 
     def test_every_workspace_key_kura_writes_is_declared(self) -> None:
         """`kura init` must not ship a setting the contract would reject."""

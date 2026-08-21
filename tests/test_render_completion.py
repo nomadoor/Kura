@@ -89,16 +89,17 @@ class RenderCompletionTests(unittest.TestCase):
             (render_dir / "resolved" / "manifest.lock.yaml").write_text(
                 yaml.safe_dump({
                     "inputs": {
+                        "train_run": "train-1",
                         "workflow": {"path": "workflows/sd15_api.json"},
-                        "promptset": {"path": "promptsets/evaluation.jsonl"},
+                        "cases": {"path": "cases/evaluation.jsonl"},
                     },
                     "render": {"output_dir": "samples/images"},
                 }),
                 encoding="utf-8",
             )
             records = [
-                {"file": "samples/images/a.png", "prompt_id": "a", "prompt": "first arbitrary prompt", "negative_prompt": "text", "seed": 1},
-                {"file": "samples/images/b.png", "prompt_id": "b", "prompt": "second arbitrary prompt", "negative_prompt": "text", "seed": 2},
+                {"file": "samples/images/a.png", "case_id": "a", "prompt": "first arbitrary prompt", "negative_prompt": "text", "seed": 1, "checkpoint_path": "runs/train-1/outputs/step-0200.safetensors"},
+                {"file": "samples/images/b.png", "case_id": "b", "prompt": "second arbitrary prompt", "negative_prompt": "text", "seed": 2, "checkpoint_path": "runs/train-1/outputs/step-0400.safetensors"},
             ]
             (render_dir / "samples" / "images.jsonl").write_text(
                 "".join(json.dumps(record) + "\n" for record in records),
@@ -107,6 +108,7 @@ class RenderCompletionTests(unittest.TestCase):
 
             output = format_render_completion(root, render_dir, exit_code=0)
 
+            self.assertIn("artifact   train-1 · 2 checkpoints vary by case", output)
             self.assertIn("inputs     2 cases", output)
             self.assertIn("prompts   vary by case · evaluation.jsonl", output)
             self.assertIn('negative  "text"', output)
@@ -114,7 +116,6 @@ class RenderCompletionTests(unittest.TestCase):
             self.assertIn("provenance samples/images.jsonl", output)
             self.assertNotIn("first arbitrary prompt", output)
             self.assertNotIn("second arbitrary prompt", output)
-
 
 if __name__ == "__main__":
     unittest.main()

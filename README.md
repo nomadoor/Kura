@@ -76,7 +76,7 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 5. 🤖 Run `kura run execute <run-id>` using the local Docker or RunPod executor frozen in the plan. Infrastructure smoke checks are used when the backend or environment needs them; they are not a second user workflow.
    For RunPod, `execute` stops the Pod immediately after outputs are downloaded. Use `kura run remote <run-id> --hold-for 30m` instead when you need a review window before shutdown.
 6. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
-7. 🤖 Generate ComfyUI comparison images in a render run linked to the training run and checkpoint.
+7. 🤖 Generate ComfyUI comparison images from an explicit render case queue linked to the training run.
 8. 🧑 Record your judgment in the render run's `notes.md` and decide whether to stop or run another experiment (🤖 carries out the instruction).
 
 > 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
@@ -92,7 +92,7 @@ uv run kura run watch <run-id> # one run in detail
 
 ## Image generation with ComfyUI (optional)
 
-Start ComfyUI and drop an **API-format** workflow into `workflows/`, and the agent can generate images with your trained LoRA — test renders, step/strength comparison grids, promptset batches, and so on, depending on the workflow you provide.
+Start ComfyUI and drop an **API-format** workflow into `workflows/`, and the agent can generate images with your trained LoRA — test renders and matrices comparing checkpoints, prompts, sampler steps, CFG, strengths, or other workflow inputs. The agent explicitly lists the required cases; Kura generates the raw images, preserves their complete metadata, and reports finite progress. Contact sheets and XY plots are presentation-only derivatives that the agent assembles afterwards from those existing images.
 
 No local GPU? `uv run kura render launch <run-id> --executor runpod` runs the same on a disposable RunPod ComfyUI Pod (models are pulled from Hugging Face, only the LoRA is uploaded, and the Pod stops automatically when done).
 
@@ -149,7 +149,7 @@ Trainer versions are managed as follows:
 - [docs/commands.md](docs/commands.md): full command reference
 - [docs/agent-first-cli.md](docs/agent-first-cli.md): what the agent authors, what the CLI guarantees, and how runs work without conversational state
 - [docs/backend-support.md](docs/backend-support.md): pinned backend versions and verified support paths
-- [AGENTS.md](AGENTS.md) and [.claude/skills/](.claude/skills/): always-loaded agent rules and task-specific instructions (have your agent read `AGENTS.md` first)
+- [AGENTS.md](AGENTS.md) and [.agents/skills/](.agents/skills/): always-loaded agent rules and agent-neutral, task-specific skills (have your agent read `AGENTS.md` first). `.claude/skills/` is a generated compatibility mirror.
 - [docs/smoke-test.md](docs/smoke-test.md): smoke test notes
 - [README.ja.md](README.ja.md): Japanese version
 

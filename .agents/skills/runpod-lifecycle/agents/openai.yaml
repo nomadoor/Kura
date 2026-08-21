@@ -1,0 +1,4 @@
+interface:
+  display_name: "RunPod Lifecycle"
+  short_description: "Operate Kura RunPod jobs with billing safety"
+  default_prompt: "Use $runpod-lifecycle to plan and operate this Kura RunPod job safely."

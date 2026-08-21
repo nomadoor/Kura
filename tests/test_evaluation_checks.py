@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from scripts.check_evaluation_blocks import _is_immutable_run_artifact, evaluation_errors
+from scripts.check_evaluation_blocks import _is_immutable_run_artifact, candidate_paths, evaluation_errors
 from scripts.check_evaluation_knowledge import card_errors
 
 
@@ -106,6 +106,19 @@ class EvaluationCheckTests(unittest.TestCase):
                 manifest.write_text("type: render\n", encoding="utf-8")
                 self.assertTrue(_is_immutable_run_artifact(draft))
                 self.assertTrue(_is_immutable_run_artifact(manifest))
+
+    def test_repository_candidates_exclude_ignored_workspace_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            example = root / "examples" / "run-example.yaml"
+            workspace_run = root / "runs" / "render-1" / "run.yaml"
+            example.parent.mkdir(parents=True)
+            workspace_run.parent.mkdir(parents=True)
+            example.write_text("type: render\n", encoding="utf-8")
+            workspace_run.write_text("type: render\n", encoding="utf-8")
+            with patch("scripts.check_evaluation_blocks.ROOT", root):
+                self.assertEqual(candidate_paths(include_workspace_runs=False), [example])
+                self.assertEqual(candidate_paths(include_workspace_runs=True), [example, workspace_run])
 
     def test_card_move_is_not_followed_from_an_arbitrary_directory(self) -> None:
         evaluation = self._card_evaluation("docs/anima.md")

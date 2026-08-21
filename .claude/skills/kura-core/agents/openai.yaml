@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kura Core Development"
+  short_description: "Change Kura core contracts safely and reproducibly"
+  default_prompt: "Use $kura-core to implement this Kura maintenance change safely."
