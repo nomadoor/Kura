@@ -130,7 +130,12 @@ def authored_cases(path: Path) -> list[dict[str, Any]]:
         unknown = sorted(str(key) for key in item if key not in CASE_KEYS)
         if unknown:
             raise ValueError(f"cases:{line_number}: unsupported keys: {', '.join(unknown)}")
-        case_id = _validate_prompt_id(item.get("id"), line_number)
+        case_id = _validate_prompt_id(
+            item.get("id"),
+            line_number,
+            surface="cases",
+            require_prompt_wording=False,
+        )
         if case_id in seen:
             raise ValueError(f"cases:{line_number}: duplicate id {case_id!r} (already used on line {seen[case_id]})")
         values = item.get("values")
@@ -842,16 +847,23 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
     )
 
 
-def _validate_prompt_id(value: Any, line_number: int) -> str:
+def _validate_prompt_id(
+    value: Any,
+    line_number: int,
+    *,
+    surface: str = "promptset",
+    require_prompt_wording: bool = True,
+) -> str:
     """Ids become file names under `resolved/` and `samples/`, so they must be inert.
 
     An id is joined into output paths; anything that can traverse or collide would
     let a promptset write outside its run or silently overwrite another case.
     """
     if not isinstance(value, str) or not value:
-        raise ValueError(f"promptset:{line_number}: id and prompt are required")
+        required = "id and prompt are required" if require_prompt_wording else "id is required"
+        raise ValueError(f"{surface}:{line_number}: {required}")
     if not is_safe_component(value):
-        raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
+        raise ValueError(f"{surface}:{line_number}: id must be a single safe file name, not a path: {value!r}")
     return value
 
 
@@ -878,6 +890,9 @@ def promptset(path: Path, *, require_prompt: bool = True) -> list[dict[str, Any]
 def _reconcile_case_values(cases: list[dict[str, Any]], patches: Any, *, default_seed: Any, workflow_fixed: Any, has_checkpoint_consumer: bool, requires_checkpoint: bool, strict_checkpoint: bool) -> None:
     bound = set(patches) if isinstance(patches, dict) else set()
     fixed = set(normalized_workflow_fixed(workflow_fixed))
+    unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
+    if unknown_fixed:
+        raise ValueError(f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}")
     conflicting = sorted(fixed & bound)
     if conflicting:
         raise ValueError(f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}")
@@ -1158,7 +1173,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
     workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
     fixed = set(workflow_fixed)
-    patches = run.get("workflow_patches", {})
+    patches = run.get("workflow_patches") or {}
+    if not isinstance(patches, dict):
+        raise ValueError("workflow_patches must be a mapping of name to {node, field}")
     validate_patch_bindings(workflow, patches)
     shared_checkpoint = _validated_checkpoint(inputs.get("checkpoint"), context="render inputs.checkpoint", require_id=False)
     if has_cases:
@@ -1186,6 +1203,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     if is_runpod and image_patch_names(patches):
         raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
     frozen = deepcopy(run)
+    frozen["workflow_patches"] = deepcopy(patches)
     frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")

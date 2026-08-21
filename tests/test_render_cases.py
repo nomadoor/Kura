@@ -14,7 +14,7 @@ from rich.console import Console
 
 import kura.render as render_module
 from kura.monitor import collect_run_summaries, render_monitor
-from kura.render import compile_render, launch_render
+from kura.render import authored_cases, compile_render, launch_render
 
 
 WORKFLOW = {
@@ -352,6 +352,17 @@ class RenderCasesCompileTests(unittest.TestCase):
                 self.assertIn(expected, str(caught.exception).lower())
                 self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
 
+    def test_authored_case_id_errors_name_the_cases_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cases.jsonl"
+            path.write_text(json.dumps({"values": {}}) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"cases:1: id is required"):
+                authored_cases(path)
+
+            path.write_text(json.dumps({"id": "../bad", "values": {}}) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"cases:1: id must be a single safe file name"):
+                authored_cases(path)
+
     def test_compile_rejects_duplicate_ids_and_unknown_values(self) -> None:
         scenarios = (
             ([
@@ -378,6 +389,41 @@ class RenderCasesCompileTests(unittest.TestCase):
                 compile_render(root, run_dir)
             self.assertIn("cfg", str(caught.exception))
             self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
+
+    def test_compile_rejects_unknown_workflow_fixed_names_first(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _workspace(
+                root,
+                cases=[_case("a", step=None, prompt="x", seed=1, strength=1.0, cfg=4.0)],
+            )
+            run_path = run_dir / "run.yaml"
+            run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+            run["render"]["workflow_fixed"] = ["width"]
+            run_path.write_text(yaml.safe_dump(run, sort_keys=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"workflow_fixed only accepts .*remove: width",
+            ):
+                compile_render(root, run_dir)
+
+    def test_compile_normalizes_null_workflow_patches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _workspace(root, cases=[{"id": "fixed", "values": {}}], patches={})
+            run_path = run_dir / "run.yaml"
+            run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+            run["workflow_patches"] = None
+            run["render"]["workflow_fixed"] = ["prompt", "negative_prompt", "seed"]
+            run_path.write_text(yaml.safe_dump(run, sort_keys=False), encoding="utf-8")
+
+            compile_render(root, run_dir)
+
+            manifest = yaml.safe_load(
+                (run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["workflow_patches"], {})
 
 
 class RenderCasesLaunchTests(unittest.TestCase):

@@ -31,8 +31,19 @@ def _files(root: Path) -> dict[Path, bytes]:
     return {
         path.relative_to(root): path.read_bytes()
         for path in sorted(root.rglob("*"))
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        if path.is_file()
+        and not path.is_symlink()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
     }
+
+
+def _symlinks(root: Path) -> list[Path]:
+    if root.is_symlink():
+        return [root]
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.rglob("*") if path.is_symlink())
 
 
 def _frontmatter(path: Path) -> dict[str, Any]:
@@ -48,13 +59,19 @@ def _frontmatter(path: Path) -> dict[str, Any]:
 
 def validate_skills(root: Path) -> list[str]:
     errors: list[str] = []
+    if root.is_symlink():
+        return [f"canonical skill directory must not be a symlink: {root}"]
     if not root.is_dir():
         return [f"canonical skill directory does not exist: {root}"]
-    skill_dirs = sorted(path for path in root.iterdir() if path.is_dir())
+    for path in _symlinks(root):
+        errors.append(f"{path}: skill trees must not contain symlinks")
+    skill_dirs = sorted(path for path in root.iterdir() if path.is_dir() and not path.is_symlink())
     if not skill_dirs:
         return [f"canonical skill directory contains no skills: {root}"]
     for skill_dir in skill_dirs:
         skill_path = skill_dir / "SKILL.md"
+        if skill_path.is_symlink():
+            continue
         if not skill_path.is_file():
             errors.append(f"{skill_dir}: missing SKILL.md")
             continue
@@ -77,6 +94,8 @@ def validate_skills(root: Path) -> list[str]:
             errors.append(f"{skill_path}: keep SKILL.md at or below 500 lines")
 
         metadata_path = skill_dir / "agents" / "openai.yaml"
+        if metadata_path.is_symlink():
+            continue
         if not metadata_path.is_file():
             errors.append(f"{skill_dir}: missing agents/openai.yaml")
             continue
@@ -107,7 +126,8 @@ def validate_skills(root: Path) -> list[str]:
 def compare_trees(canonical: Path, mirror: Path) -> list[str]:
     expected = _files(canonical)
     actual = _files(mirror)
-    errors: list[str] = []
+    errors = [f"canonical skill tree contains symlink {path}" for path in _symlinks(canonical)]
+    errors.extend(f"Claude skill mirror contains symlink {path}" for path in _symlinks(mirror))
     for path in sorted(expected.keys() - actual.keys()):
         errors.append(f"Claude skill mirror is missing {path}")
     for path in sorted(actual.keys() - expected.keys()):
@@ -120,7 +140,13 @@ def compare_trees(canonical: Path, mirror: Path) -> list[str]:
 
 def sync_mirror(canonical: Path, mirror: Path) -> None:
     """Update the physical mirror without ever deleting the live tree first."""
+    if canonical.is_symlink():
+        raise ValueError(f"canonical skill directory must not be a symlink: {canonical}")
+    if mirror.is_symlink():
+        raise ValueError(f"Claude skill mirror must not be a symlink: {mirror}")
     mirror.mkdir(parents=True, exist_ok=True)
+    for path in sorted(_symlinks(mirror), key=lambda item: len(item.parts), reverse=True):
+        path.unlink()
     expected = _files(canonical)
     for relative in sorted(expected):
         source = canonical / relative

@@ -157,7 +157,7 @@ def format_render_completion(workspace: Path, run_dir: Path, *, exit_code: int |
     lines.append(f"inputs     {len(cases)} case{'s' if len(cases) != 1 else ''}")
     if len(cases) == 1:
         record = cases[0]
-        case_id = record.get("prompt_id") or "case"
+        case_id = record.get("case_id") or record.get("prompt_id") or "case"
         lines.append(f"  {case_id}  seed {record.get('seed') if record.get('seed') is not None else '(workflow-owned)'}")
         lines.append(f"    prompt    {_quoted(record.get('prompt'))}")
         lines.append(f"    negative  {_quoted(record.get('negative_prompt'))}")

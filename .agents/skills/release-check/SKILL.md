@@ -35,8 +35,8 @@ experiments are not about to be committed.
 The release gate validates authored evaluation examples with
 `--repository-only`, so ignored, immutable workspace runs cannot make the same
 commit pass or fail differently on two machines. Run
-`scripts/check_evaluation_blocks.py` without that flag when auditing the local
-workspace itself.
+`uv run python scripts/check_evaluation_blocks.py` without that flag when
+auditing the local workspace itself.
 
 ## Before final handoff
 

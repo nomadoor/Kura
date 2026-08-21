@@ -22,7 +22,8 @@ Use this skill for the monitoring TUI.
 
 ## Data sources
 
-Project from the status returned by `observe_run()` plus existing files:
+Project status comes from the result of `observe_run()` plus these existing
+files:
 
 - `index.jsonl`
 - run `run.yaml`

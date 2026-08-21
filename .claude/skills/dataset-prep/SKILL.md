@@ -9,8 +9,9 @@ Use this skill for dataset operations.
 
 ## Rules
 
-- Dataset payloads are normally not committed.
-- Commit only small manifests/examples/fixtures.
+- Never commit dataset payloads.
+- Commit only small manifests or synthetic metadata fixtures that contain no
+  dataset payloads.
 - Preserve `datasets` as an array in run intent and locks.
 - Keep role/digest visible for paired/control datasets.
 - Do not add repeats/weights unless explicitly intended.

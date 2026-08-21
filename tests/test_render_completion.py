@@ -117,5 +117,38 @@ class RenderCompletionTests(unittest.TestCase):
             self.assertNotIn("first arbitrary prompt", output)
             self.assertNotIn("second arbitrary prompt", output)
 
+    def test_single_case_prefers_explicit_case_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            render_dir = root / "runs" / "render-1"
+            (render_dir / "resolved").mkdir(parents=True)
+            (render_dir / "samples").mkdir()
+            (render_dir / "status.json").write_text(
+                json.dumps({"state": "completed", "exit_code": 0}),
+                encoding="utf-8",
+            )
+            (render_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump({
+                    "inputs": {"workflow": {"path": "workflows/wf.json"}},
+                    "render": {"output_dir": "samples/images"},
+                }),
+                encoding="utf-8",
+            )
+            (render_dir / "samples" / "images.jsonl").write_text(
+                json.dumps({
+                    "file": "samples/images/explicit-case_seed42_0.png",
+                    "case_id": "explicit-case",
+                    "prompt": "test prompt",
+                    "negative_prompt": "",
+                    "seed": 42,
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            output = format_render_completion(root, render_dir, exit_code=0)
+
+            self.assertIn("  explicit-case  seed 42", output)
+            self.assertNotIn("  case  seed 42", output)
+
 if __name__ == "__main__":
     unittest.main()

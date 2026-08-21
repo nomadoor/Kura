@@ -25,6 +25,14 @@ OPENAI = """interface:
 """
 
 
+def _tree_bytes(root: Path) -> bytes:
+    return b"\n".join(
+        path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
 class SkillLayoutTests(unittest.TestCase):
     def _tree(self, root: Path) -> Path:
         skills = root / "skills"
@@ -71,6 +79,29 @@ class SkillLayoutTests(unittest.TestCase):
             ):
                 sync_mirror(canonical, mirror)
             self.assertEqual(existing.read_text(encoding="utf-8"), SKILL)
+
+    def test_symlinked_skill_content_is_rejected_and_never_materialized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical = self._tree(root / "canonical")
+            mirror = self._tree(root / "mirror")
+            secret = root / "credential.txt"
+            secret.write_text("private-token", encoding="utf-8")
+            canonical_link = canonical / "example-skill" / "references" / "credential.md"
+            canonical_link.parent.mkdir()
+            canonical_link.symlink_to(secret)
+            mirror_link = mirror / "example-skill" / "credential.md"
+            mirror_link.symlink_to(secret)
+
+            errors = validate_skills(canonical)
+            self.assertTrue(any("must not contain symlinks" in error for error in errors))
+            self.assertTrue(compare_trees(canonical, mirror))
+
+            sync_mirror(canonical, mirror)
+
+            self.assertFalse(mirror_link.exists())
+            self.assertFalse((mirror / "example-skill" / "references" / "credential.md").exists())
+            self.assertNotIn(b"private-token", _tree_bytes(mirror))
 
 
 if __name__ == "__main__":
