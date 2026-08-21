@@ -288,6 +288,10 @@ class RenderCasesCompileTests(unittest.TestCase):
         malformed = (
             (None, "exactly one"),
             ("cases/render.jsonl", "mapping"),
+            ({"path": None, "digest": None}, "path"),
+            ({"path": 7, "digest": None}, "path"),
+            ({"path": "", "digest": None}, "path"),
+            ({"path": "   ", "digest": None}, "path"),
             ({"path": "cases/render.jsonl", "digest": None, "ignored": True}, "ignored"),
             ({"path": "cases/render.jsonl", "digest": 7}, "digest"),
         )
@@ -424,6 +428,24 @@ class RenderCasesCompileTests(unittest.TestCase):
                 (run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")
             )
             self.assertEqual(manifest["workflow_patches"], {})
+
+    def test_compile_rejects_non_mapping_falsy_workflow_patches(self) -> None:
+        for patches in ([], False, 0, ""):
+            with self.subTest(patches=patches), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = _workspace(root, cases=[{"id": "fixed", "values": {}}], patches={})
+                run_path = run_dir / "run.yaml"
+                run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
+                run["workflow_patches"] = patches
+                run["render"]["workflow_fixed"] = ["prompt", "negative_prompt", "seed"]
+                run_path.write_text(yaml.safe_dump(run, sort_keys=False), encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    r"workflow_patches must be a mapping",
+                ):
+                    compile_render(root, run_dir)
+                self.assertFalse((run_dir / "resolved" / "cases.jsonl").exists())
 
 
 class RenderCasesLaunchTests(unittest.TestCase):

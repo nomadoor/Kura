@@ -1155,6 +1155,8 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         unknown_descriptor = sorted(str(key) for key in descriptor if key not in {"path", "digest"})
         if unknown_descriptor:
             raise ValueError(f"render inputs.cases has unsupported keys: {', '.join(unknown_descriptor)}")
+        if not isinstance(descriptor.get("path"), str) or not descriptor["path"].strip():
+            raise ValueError("render inputs.cases.path must be a non-empty path")
         if descriptor.get("digest") is not None and not isinstance(descriptor.get("digest"), str):
             raise ValueError("render inputs.cases.digest must be a string or null")
     train_run = _validate_train_run_reference(workspace, inputs.get("train_run"))
@@ -1173,7 +1175,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
     workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
     fixed = set(workflow_fixed)
-    patches = run.get("workflow_patches") or {}
+    patches = run.get("workflow_patches")
+    if patches is None:
+        patches = {}
     if not isinstance(patches, dict):
         raise ValueError("workflow_patches must be a mapping of name to {node, field}")
     validate_patch_bindings(workflow, patches)
