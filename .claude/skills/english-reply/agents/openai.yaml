@@ -1,0 +1,4 @@
+interface:
+  display_name: "English Technical Reply"
+  short_description: "Draft careful English replies about Kura"
+  default_prompt: "Use $english-reply to turn these findings into a concise English reply."

@@ -1,0 +1,27 @@
+schema_version: 1
+id: example-lora-checkpoint-comparison
+type: render
+intent: Compare saved training steps with the same prompts, seed, workflow, and LoRA strength.
+inputs:
+  train_run: example-train-run
+  cases: {path: examples/lora-evaluation/cases-checkpoint-comparison.jsonl, digest: null}
+  workflow: {path: workflows/example-api.json, digest: null}
+generator: {name: comfyui, endpoint: 'http://127.0.0.1:8188'}
+executor: {name: local}
+workflow_patches: {}
+render: {output_dir: samples/images, timeout_sec: 600, default_seed: null}
+evaluation:
+  category: checkpoint_comparison
+  fixed: [workflow, lora_strength, seed, prompt_set, prompt_policy]
+  varied: [checkpoint]
+  model_family: anima
+  model_variant: aesthetic
+  knowledge:
+    card: knowledge/model-families/anima.md
+    card_verified_at: '2026-08-03'
+    source_url: https://huggingface.co/circlestone-labs/Anima
+    source_revision: main
+    applies_to_model_revision: 594c27fea35648b87c86a9b4d5436a6024c820b5
+    revision_match: unverified
+  prompt_policy: {prefix_origin: agent, transformations: []}
+  limits: Saved-step differences are visible, but the comparison does not identify their cause.

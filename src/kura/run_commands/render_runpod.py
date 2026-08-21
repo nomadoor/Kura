@@ -13,7 +13,7 @@ import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
 from kura.notifications import notify as _notify
-from kura.render import _safe_stage_name, launch_render
+from kura.render import _safe_stage_name, launch_render, load_resolved_cases
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
@@ -64,25 +64,43 @@ def _render_runpod_billing_plan(runpod_config: dict[str, Any], *, max_lease_sec:
     }
 
 
-def _render_runpod_lora(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -> tuple[Path | None, str | None]:
+def _render_runpod_loras(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -> list[dict[str, Any]]:
     if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
-        return None, None
-    checkpoint = frozen.get("inputs", {}).get("checkpoint")
-    if not isinstance(checkpoint, dict):
-        return None, None
-    path_value = checkpoint.get("path")
-    if not isinstance(path_value, str) or not path_value:
-        return None, None
-    source = Path(path_value).expanduser()
-    if not source.is_absolute():
-        source = workspace / source
-    source = source.resolve()
-    if not source.is_file() or source.suffix != ".safetensors":
-        raise ValueError("runpod ComfyUI render with LoRA requires checkpoint.path to point to a local .safetensors file")
-    return source, "Kura_tmp/" + _safe_stage_name(run_dir.name, source)
+        return []
+    cases_path = run_dir / "resolved" / "cases.jsonl"
+    if cases_path.is_file():
+        cases = load_resolved_cases(cases_path)
+    else:
+        checkpoint = frozen.get("inputs", {}).get("checkpoint")
+        cases = [{"id": "legacy", "checkpoint": checkpoint}] if isinstance(checkpoint, dict) else []
+    items: list[dict[str, Any]] = []
+    seen: set[tuple[Any, str]] = set()
+    for case in cases:
+        checkpoint = case.get("checkpoint")
+        if not isinstance(checkpoint, dict):
+            continue
+        path_value = checkpoint.get("path")
+        if not isinstance(path_value, str) or not path_value:
+            continue
+        source = Path(path_value).expanduser()
+        if not source.is_absolute():
+            source = workspace / source
+        source = source.resolve()
+        if not source.is_file() or source.suffix != ".safetensors":
+            raise ValueError(f"runpod ComfyUI render case {case['id']!r} requires checkpoint.path to point to a local .safetensors file")
+        identity = (checkpoint.get("id"), str(source))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        items.append({
+            "id": checkpoint.get("id"),
+            "source": source,
+            "name": "Kura_tmp/" + _safe_stage_name(run_dir.name, source),
+        })
+    return items
 
 
-def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, registry_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, max_lease_sec: int = 12 * 3600) -> None:
+def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, registry_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, lora_remote_files: list[dict[str, str]] | None = None, max_lease_sec: int = 12 * 3600) -> None:
     secret_payload = _runpod_secret_env_payload(remote_notify=False)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
     if secret_payload is not None:
@@ -113,9 +131,14 @@ chmod 600 {shlex.quote(remote_secret_path)}
   fi
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
-    lora_line = ""
-    if lora_remote_name and lora_remote_path:
-        lora_line = f"printf '%s\\n' {shlex.quote('Kura LoRA staged: ' + lora_remote_name + ' -> ' + lora_remote_path)} >> \"$KURA_LOG_PATH\""
+    staged_loras = lora_remote_files or (
+        [{"name": lora_remote_name, "path": lora_remote_path}]
+        if lora_remote_name and lora_remote_path else []
+    )
+    lora_line = "\n".join(
+        f"printf '%s\\n' {shlex.quote('Kura LoRA staged: ' + item['name'] + ' -> ' + item['path'])} >> \"$KURA_LOG_PATH\""
+        for item in staged_loras
+    )
     script = f"""
 set -euo pipefail
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
@@ -185,7 +208,9 @@ def launch_render_runpod(
         model_registry = frozen.get("comfyui_model_registry")
         if not isinstance(model_specs, list) or not isinstance(model_registry, dict):
             raise ValueError("runpod render requires a manifest compiled for executor.name=runpod; set executor.name=runpod in run.yaml and recompile before launching on RunPod")
-        lora_source, lora_name = _render_runpod_lora(workspace, run_dir, frozen)
+        loras = _render_runpod_loras(workspace, run_dir, frozen)
+        multiple_loras = len(loras) > 1
+        lora_name = loras[0]["name"] if len(loras) == 1 else None
         plan = {
             "executor": "runpod",
             "image": remote_image,
@@ -194,6 +219,8 @@ def launch_render_runpod(
             "ports": runpod_config.get("ports"),
             "gpu_type_ids": runpod_config.get("gpu_type_ids"),
         }
+        if multiple_loras:
+            plan["loras"] = [{"id": item["id"], "name": item["name"]} for item in loras]
         if dry_run:
             plan["billing"] = _render_runpod_billing_plan(runpod_config, max_lease_sec=max_lease_sec)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
@@ -222,11 +249,13 @@ def launch_render_runpod(
         registry_path = run_dir / "resolved" / "comfyui_model_registry.json"
         remote_registry = f"{remote_run_dir}/resolved/comfyui_model_registry.json"
         _scp_to_runpod(details, registry_path, remote_registry)
-        lora_remote_path = None
-        if lora_source and lora_name:
-            lora_remote_path = "/opt/ComfyUI/models/loras/" + lora_name
-            _scp_to_runpod(details, lora_source, lora_remote_path)
-        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path, max_lease_sec=0)
+        remote_loras: list[dict[str, str]] = []
+        for item in loras:
+            remote_path = "/opt/ComfyUI/models/loras/" + item["name"]
+            _scp_to_runpod(details, item["source"], remote_path)
+            remote_loras.append({"name": item["name"], "path": remote_path})
+        lora_remote_path = remote_loras[0]["path"] if len(remote_loras) == 1 else None
+        _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path, lora_remote_files=remote_loras, max_lease_sec=0)
         local_port = _free_local_port()
         tunnel = subprocess.Popen([
             "ssh",
@@ -243,7 +272,20 @@ def launch_render_runpod(
             endpoint = f"http://127.0.0.1:{local_port}"
             ready_timeout = int(frozen.get("render", {}).get("timeout_sec", 600) or 600)
             _wait_http_ready(endpoint, timeout_sec=max(ready_timeout, 180))
-            code = launch_render(workspace, run_dir, endpoint_override=endpoint, lora_name_override=lora_name, executor_name="runpod", manage_lora_stage=False)
+            lora_name_overrides = {
+                str(item["id"]): str(item["name"])
+                for item in loras
+                if isinstance(item.get("id"), str)
+            }
+            code = launch_render(
+                workspace,
+                run_dir,
+                endpoint_override=endpoint,
+                lora_name_override=lora_name,
+                lora_name_overrides=lora_name_overrides,
+                executor_name="runpod",
+                manage_lora_stage=False,
+            )
             state_word = "completed" if code == 0 else "failed"
             _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"RunPod render {run_id} {state_word} with exit code {code}.", priority="3")
             return code

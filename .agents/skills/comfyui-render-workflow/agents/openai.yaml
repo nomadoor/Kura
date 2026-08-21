@@ -1,0 +1,4 @@
+interface:
+  display_name: "ComfyUI Render Workflow"
+  short_description: "Build and execute reproducible Kura render queues"
+  default_prompt: "Use $comfyui-render-workflow to plan and run this ComfyUI comparison."

@@ -76,7 +76,7 @@ cp .env.example .env.local
 5. 🤖 planに固定されたローカルDockerまたはRunPod executorで`kura run execute <run-id>`を実行する
 6. 🤖 backendや新しい実行経路にsmoke確認が必要な場合は、通常のユーザー操作ではなく開発・診断責務として扱う
 7. 🧑 `uv run kura monitor` で様子を見る（🤖 に進捗を報告させてもOK）
-8. 🤖 （任意）途中の checkpoint を取り出し、ComfyUI で比較画像を作る
+8. 🤖 （任意）明示的なrender case queueを作り、途中のcheckpointや各種生成条件をComfyUIで比較する
 9. 🧑 結果を見て、終了するか追加学習するかを判断（指示すれば 🤖 が実行）
 
 > 💡 データセットの基本的な作り方は、[AI Toolkit で SDXL（Illustrious）LoRA を学習する](https://comfyui.nomadoor.net/ja/notes/ai-toolkit-sdxl-lora-training/) が参考になるかもしれません（SDXL向けですが、考え方は同じです）。
@@ -92,7 +92,7 @@ uv run kura run watch <run-id> # 1本を詳しく
 
 ## ComfyUI で画像生成（任意）
 
-ComfyUI を起動し、`workflows/` に **API形式**の workflow を置いておけば、学習した LoRA を使った画像生成を AI にやってもらえます。テスト生成、step別・strength別の比較画像づくり、promptset を使ったまとめ生成など、用意した workflow 次第で自由に使えます。
+ComfyUI を起動し、`workflows/` に **API形式**の workflow を置いておけば、学習した LoRA を使った画像生成を AI にやってもらえます。テスト生成に加え、checkpoint、prompt、sampler steps、CFG、strengthなどを比較するmatrixも扱えます。必要な組み合わせはAIがcaseとして明示的に列挙し、Kuraはraw画像の生成、完全なmetadataの保存、有限の進捗表示を担当します。contact sheetやXY plotは、その生成済み画像からAIが後で組み立てるpresentation-onlyの成果物です。
 
 ローカルにGPUが無ければ、`uv run kura render launch <run-id> --executor runpod` で使い捨ての RunPod ComfyUI Pod 上でも生成できます（モデルは自動で Hugging Face から取得、LoRA だけアップロード、完了後に Pod は自動停止）。
 
@@ -149,7 +149,7 @@ trainer のバージョンは次のように管理されます：
 - [docs/commands.md](docs/commands.md)：コマンド早見表
 - [docs/agent-first-cli.md](docs/agent-first-cli.md)：AIが書くもの、CLIが保証するもの、会話状態なしでrunが動く仕組み
 - [docs/backend-support.md](docs/backend-support.md)：使用backendの固定バージョンと検証済み経路
-- [AGENTS.md](AGENTS.md) と [.claude/skills/](.claude/skills/)：AI向けの常時ルールと作業手順（AIに作業させるときは、まず `AGENTS.md` を読ませる）
+- [AGENTS.md](AGENTS.md) と [.agents/skills/](.agents/skills/)：AI向けの常時ルールと、特定製品に依存しない作業スキル（AIに作業させるときは、まず `AGENTS.md` を読ませる）。`.claude/skills/` は互換用の生成ミラーです。
 - [docs/smoke-test.md](docs/smoke-test.md)：smoke test メモ
 - [README.md](README.md)：英語版
 

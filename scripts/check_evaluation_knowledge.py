@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL_DIR = ROOT / ".claude" / "skills" / "lora-evaluation"
+SKILL_DIR = ROOT / ".agents" / "skills" / "lora-evaluation"
 # Model-family knowledge is shared by the training and evaluation skills and is
 # not specific to one agent, so it lives at the repository root.
 KNOWLEDGE_DIR = ROOT / "knowledge" / "model-families"

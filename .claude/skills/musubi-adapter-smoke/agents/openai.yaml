@@ -1,0 +1,4 @@
+interface:
+  display_name: "Musubi Adapter Smoke"
+  short_description: "Verify built-in Musubi architecture adapters"
+  default_prompt: "Use $musubi-adapter-smoke to verify this Musubi adapter change."

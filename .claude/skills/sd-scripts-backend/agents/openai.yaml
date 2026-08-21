@@ -1,0 +1,4 @@
+interface:
+  display_name: "sd-scripts Backend"
+  short_description: "Compile and verify Kura sd-scripts runs"
+  default_prompt: "Use $sd-scripts-backend to review this sd-scripts run configuration."

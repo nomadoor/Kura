@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Trained Models"
+  short_description: "Prepare Kura artifacts for model hub publishing"
+  default_prompt: "Use $publishing-huggingface-modelscope to prepare this trained artifact for publishing."

@@ -9,3 +9,7 @@ plan to the user, then compile.
   it explicitly does not claim generalization.
 - `run-outfit-transfer.yaml` changes only outfit content while keeping the
   checkpoint, seed, workflow, strength, and prompt policy fixed.
+- `run-checkpoint-comparison.yaml` and
+  `cases-checkpoint-comparison.jsonl` keep the workflow, prompt set, seed,
+  strength, and prompt policy fixed across an explicitly authored one-axis
+  checkpoint matrix.

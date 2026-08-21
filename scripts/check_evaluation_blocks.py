@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Any
@@ -105,9 +106,12 @@ def evaluation_errors(
     return errors, warnings
 
 
-def candidate_paths() -> list[Path]:
+def candidate_paths(*, include_workspace_runs: bool = True) -> list[Path]:
     paths: list[Path] = []
-    for base in (ROOT / "examples", ROOT / "runs"):
+    bases = [ROOT / "examples"]
+    if include_workspace_runs:
+        bases.append(ROOT / "runs")
+    for base in bases:
         if not base.exists():
             continue
         paths.extend(base.rglob("run*.yaml"))
@@ -126,9 +130,16 @@ def _is_immutable_run_artifact(path: Path) -> bool:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repository-only",
+        action="store_true",
+        help="validate authored repository examples without inspecting ignored workspace runs",
+    )
+    args = parser.parse_args()
     errors: list[str] = []
     warnings: list[str] = []
-    for path in candidate_paths():
+    for path in candidate_paths(include_workspace_runs=not args.repository_only):
         try:
             payload = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError) as exc:

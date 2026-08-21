@@ -1,0 +1,4 @@
+interface:
+  display_name: "Musubi Tuner Backend"
+  short_description: "Compile and verify Musubi Tuner runs"
+  default_prompt: "Use $musubi-tuner-backend to review this Musubi Tuner configuration."

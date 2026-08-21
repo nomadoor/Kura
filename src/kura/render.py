@@ -85,6 +85,95 @@ def _validate_train_run_reference(workspace: Path, value: Any) -> str | None:
     return train_run
 
 
+CASE_KEYS = frozenset({"id", "values", "checkpoint", "meta"})
+CHECKPOINT_KEYS = frozenset({"id", "path", "hash"})
+ASSET_PATCH_NAMES = frozenset({"lora", "checkpoint", "model_patch"})
+
+
+def _validated_checkpoint(value: Any, *, context: str, require_id: bool) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be a mapping")
+    unknown = sorted(str(key) for key in value if key not in CHECKPOINT_KEYS)
+    if unknown:
+        raise ValueError(f"{context} has unsupported keys: {', '.join(unknown)}")
+    # `kura render new` historically authors this empty placeholder. It means
+    # that the workflow supplies its own model, not that a path was omitted.
+    if not value or (value.get("path") in (None, "") and value.get("id") in (None, "") and value.get("hash") is None):
+        return None
+    checkpoint_id = value.get("id")
+    if (require_id or checkpoint_id is not None) and not is_safe_component(checkpoint_id):
+        raise ValueError(f"{context}.id must be a single safe file name, not a path: {checkpoint_id!r}")
+    path = value.get("path")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError(f"{context}.path must be a non-empty path")
+    checkpoint_hash = value.get("hash")
+    if checkpoint_hash is not None and not isinstance(checkpoint_hash, str):
+        raise ValueError(f"{context}.hash must be a string or null")
+    return deepcopy(value)
+
+
+def authored_cases(path: Path) -> list[dict[str, Any]]:
+    """Load the canonical one-row-per-logical-render-case surface."""
+    cases: list[dict[str, Any]] = []
+    seen: dict[str, int] = {}
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"cases:{line_number}: invalid JSON ({exc.msg})") from exc
+        if not isinstance(item, dict):
+            raise ValueError(f"cases:{line_number}: each row must be a mapping")
+        unknown = sorted(str(key) for key in item if key not in CASE_KEYS)
+        if unknown:
+            raise ValueError(f"cases:{line_number}: unsupported keys: {', '.join(unknown)}")
+        case_id = _validate_prompt_id(
+            item.get("id"),
+            line_number,
+            surface="cases",
+            require_prompt_wording=False,
+        )
+        if case_id in seen:
+            raise ValueError(f"cases:{line_number}: duplicate id {case_id!r} (already used on line {seen[case_id]})")
+        values = item.get("values")
+        if not isinstance(values, dict):
+            raise ValueError(f"cases:{line_number}: values must be a mapping")
+        if not all(isinstance(name, str) and is_safe_component(name) for name in values):
+            raise ValueError(f"cases:{line_number}: values keys must be plain names")
+        meta = item.get("meta", {})
+        if not isinstance(meta, dict):
+            raise ValueError(f"cases:{line_number}: meta must be a mapping")
+        checkpoint = _validated_checkpoint(item.get("checkpoint"), context=f"cases:{line_number}: checkpoint", require_id=True)
+        normalized = {"id": case_id, "values": deepcopy(values)}
+        if checkpoint is not None:
+            normalized["checkpoint"] = checkpoint
+        if meta:
+            normalized["meta"] = deepcopy(meta)
+        cases.append(normalized)
+        seen[case_id] = line_number
+    if not cases:
+        raise ValueError("inputs.cases must contain at least one case")
+    return cases
+
+
+def load_resolved_cases(path: Path) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"resolved/cases.jsonl:{line_number}: invalid JSON ({exc.msg})") from exc
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("index"), int) or not isinstance(item.get("values"), dict):
+            raise ValueError(f"resolved/cases.jsonl:{line_number}: invalid resolved case")
+        cases.append(item)
+    if not cases:
+        raise ValueError("resolved/cases.jsonl contains no cases")
+    return cases
+
+
 def _workflow_sidecar(path: Path) -> dict[str, Any]:
     sidecar = path.with_suffix(".kura.yaml")
     if not sidecar.is_file():
@@ -95,6 +184,15 @@ def _workflow_sidecar(path: Path) -> dict[str, Any]:
 def event(run_dir: Path, payload: dict[str, Any]) -> None:
     with (run_dir / "logs" / "events.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _append_runtime_warning(stdout_log: Path, message: str) -> None:
+    """Leave best-effort diagnostics when a failure-record fallback also breaks."""
+    try:
+        with stdout_log.open("a", encoding="utf-8") as handle:
+            handle.write(f"warning: {message}\n")
+    except OSError:
+        pass
 
 
 def status(run_dir: Path, **changes: Any) -> None:
@@ -200,9 +298,7 @@ def reconcile_promptset(items: list[dict[str, Any]], patches: Any, *, default_se
     fixed = set(normalized_workflow_fixed(workflow_fixed))
     unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
     if unknown_fixed:
-        raise ValueError(
-            f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}"
-        )
+        raise ValueError(f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}")
     conflicting = sorted(fixed & bound)
     if conflicting:
         raise ValueError(
@@ -372,6 +468,7 @@ def checkpoint_application(
     workflow: dict[str, Any],
     *,
     lora_name: str = "",
+    checkpoint_record: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe how the frozen checkpoint participates in the workflow."""
 
@@ -411,7 +508,7 @@ def checkpoint_application(
                 application["strength_clip"] = inputs["strength_clip"]
         return application
 
-    checkpoint = frozen.get("inputs", {}).get("checkpoint")
+    checkpoint = checkpoint_record if checkpoint_record is not None else frozen.get("inputs", {}).get("checkpoint")
     if isinstance(checkpoint, dict) and checkpoint.get("path"):
         return {"kind": "checkpoint_reference"}
     return {"kind": "none"}
@@ -750,16 +847,23 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
     )
 
 
-def _validate_prompt_id(value: Any, line_number: int) -> str:
+def _validate_prompt_id(
+    value: Any,
+    line_number: int,
+    *,
+    surface: str = "promptset",
+    require_prompt_wording: bool = True,
+) -> str:
     """Ids become file names under `resolved/` and `samples/`, so they must be inert.
 
     An id is joined into output paths; anything that can traverse or collide would
     let a promptset write outside its run or silently overwrite another case.
     """
     if not isinstance(value, str) or not value:
-        raise ValueError(f"promptset:{line_number}: id and prompt are required")
+        required = "id and prompt are required" if require_prompt_wording else "id is required"
+        raise ValueError(f"{surface}:{line_number}: {required}")
     if not is_safe_component(value):
-        raise ValueError(f"promptset:{line_number}: id must be a single safe file name, not a path: {value!r}")
+        raise ValueError(f"{surface}:{line_number}: id must be a single safe file name, not a path: {value!r}")
     return value
 
 
@@ -781,6 +885,168 @@ def promptset(path: Path, *, require_prompt: bool = True) -> list[dict[str, Any]
         seen[item_id] = line_number
         prompts.append(item)
     return prompts
+
+
+def _reconcile_case_values(cases: list[dict[str, Any]], patches: Any, *, default_seed: Any, workflow_fixed: Any, has_checkpoint_consumer: bool, requires_checkpoint: bool, strict_checkpoint: bool) -> None:
+    bound = set(patches) if isinstance(patches, dict) else set()
+    fixed = set(normalized_workflow_fixed(workflow_fixed))
+    unknown_fixed = sorted(fixed - set(CORE_KEYS_REQUIRING_BINDINGS))
+    if unknown_fixed:
+        raise ValueError(f"render.workflow_fixed only accepts {', '.join(CORE_KEYS_REQUIRING_BINDINGS)}; remove: {', '.join(unknown_fixed)}")
+    conflicting = sorted(fixed & bound)
+    if conflicting:
+        raise ValueError(f"render.workflow_fixed and workflow_patches both claim {', '.join(conflicting)}")
+    if "seed" in fixed and default_seed is not None:
+        raise ValueError("render.workflow_fixed includes seed, so render.default_seed must be null")
+    required = bound - ASSET_PATCH_NAMES - {"negative_prompt"}
+    for case in cases:
+        values = case["values"]
+        forbidden_assets = sorted(set(values) & ASSET_PATCH_NAMES)
+        if forbidden_assets:
+            raise ValueError(f"case {case['id']!r} sets asset values directly: {', '.join(forbidden_assets)}; use case.checkpoint")
+        forbidden_fixed = sorted(set(values) & fixed)
+        if forbidden_fixed:
+            raise ValueError(f"case {case['id']!r} sets workflow-owned values: {', '.join(forbidden_fixed)}")
+        if "negative_prompt" in bound and "negative_prompt" not in values:
+            values["negative_prompt"] = ""
+        if "seed" in bound and "seed" not in values and default_seed is not None:
+            values["seed"] = default_seed
+        unbound = sorted(set(values) - bound)
+        if unbound:
+            raise ValueError(f"case {case['id']!r} declares values with no workflow_patches binding: {', '.join(unbound)}")
+        missing = sorted(required - set(values))
+        if missing:
+            raise ValueError(f"case {case['id']!r} has no value for workflow_patches: {', '.join(missing)}")
+        if strict_checkpoint and case.get("checkpoint") and not has_checkpoint_consumer:
+            raise ValueError(f"case {case['id']!r} has a checkpoint but this workflow has no lora, checkpoint, or model_patch binding and no lora_insert")
+        if strict_checkpoint and requires_checkpoint and not case.get("checkpoint"):
+            raise ValueError(f"case {case['id']!r} requires a checkpoint because this workflow applies a lora, checkpoint, or model_patch")
+
+
+def _legacy_render_cases(items: list[dict[str, Any]], checkpoint: dict[str, Any] | None, *, patches: Any, default_seed: Any, workflow_fixed: list[str]) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    bound = set(patches) if isinstance(patches, dict) else set()
+    for item in items:
+        seeds = [None] if "seed" in workflow_fixed else (item.get("seeds") or [default_seed])
+        for seed in seeds:
+            if seed is None and "seed" not in workflow_fixed:
+                continue
+            case_id = item["id"] if seed is None else f"{item['id']}_seed{seed}"
+            if not is_safe_component(case_id) or case_id in seen:
+                raise ValueError(f"legacy promptset expands to an unsafe or duplicate case id: {case_id!r}")
+            values = {name: deepcopy(value) for name, value in item.items() if name not in PROMPTSET_CORE_KEYS}
+            if "prompt" in bound and "prompt" not in workflow_fixed:
+                values["prompt"] = item.get("prompt", "")
+            if "negative_prompt" in bound and "negative_prompt" not in workflow_fixed:
+                values["negative_prompt"] = item.get("negative_prompt", "")
+            if "seed" in bound and "seed" not in workflow_fixed:
+                values["seed"] = seed
+            case = {"id": case_id, "source_id": item["id"], "values": values}
+            if checkpoint is not None:
+                case["checkpoint"] = deepcopy(checkpoint)
+            if isinstance(item.get("meta"), dict) and item["meta"]:
+                case["meta"] = deepcopy(item["meta"])
+            cases.append(case)
+            seen.add(case_id)
+    if not cases:
+        raise ValueError("promptset has no seeds and render.default_seed is not set")
+    return cases
+
+
+def _freeze_case_images(run_dir: Path, source_path: Path, cases: list[dict[str, Any]], patches: Any, *, legacy: bool) -> list[dict[str, Any]]:
+    if legacy:
+        source_cases: dict[str, dict[str, Any]] = {}
+        for case in cases:
+            source_id = case["source_id"]
+            source_cases.setdefault(source_id, {"id": source_id, **deepcopy(case["values"])})
+        flattened = list(source_cases.values())
+    else:
+        flattened = [{"id": case["id"], **deepcopy(case["values"])} for case in cases]
+    records = _freeze_promptset_images(run_dir, source_path, flattened, patches)
+    frozen_by_id = {item["id"]: item for item in flattened}
+    image_names = image_patch_names(patches)
+    for case in cases:
+        item = frozen_by_id[case["source_id"] if legacy else case["id"]]
+        for name in image_names:
+            case["values"][name] = item[name]
+    return records
+
+
+def _freeze_case_checkpoints(workspace: Path, cases: list[dict[str, Any]]) -> None:
+    identities: dict[str, tuple[str, Any]] = {}
+    for case in cases:
+        checkpoint = case.get("checkpoint")
+        if not isinstance(checkpoint, dict):
+            continue
+        candidate = _workspace_path(workspace, checkpoint.get("path"))
+        if candidate is not None and candidate.is_file():
+            checkpoint["hash"] = digest(candidate)
+        elif not checkpoint.get("hash"):
+            print(f"warning: checkpoint hash is unavailable for case {case['id']}", flush=True)
+        checkpoint_id = checkpoint.get("id")
+        if not isinstance(checkpoint_id, str):
+            continue
+        identity = (os.path.normpath(str(Path(str(checkpoint.get("path"))).expanduser())), checkpoint.get("hash"))
+        previous = identities.get(checkpoint_id)
+        if previous is not None and previous != identity:
+            raise ValueError(
+                f"case checkpoint id {checkpoint_id!r} refers to different artifacts; "
+                "one checkpoint id must map to one path and hash across the case queue"
+            )
+        identities[checkpoint_id] = identity
+
+
+def _indexed_cases(cases: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": case["id"],
+            "index": index,
+            **({"source_id": case["source_id"]} if "source_id" in case else {}),
+            "values": case["values"],
+            **({"checkpoint": case["checkpoint"]} if "checkpoint" in case else {}),
+            **({"meta": case["meta"]} if "meta" in case else {}),
+        }
+        for index, case in enumerate(cases, 1)
+    ]
+
+
+def _runtime_checkpoint_provenance(runtime_cases: list[dict[str, Any]]) -> dict[str, Any]:
+    checkpoints: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for runtime_case in runtime_cases:
+        checkpoint = runtime_case["checkpoint"]
+        identity = (
+            checkpoint.get("id"),
+            checkpoint.get("path"),
+            checkpoint.get("hash"),
+            runtime_case["lora_name"],
+            runtime_case["model_patch_name"],
+        )
+        if identity in seen or not any(identity):
+            continue
+        seen.add(identity)
+        checkpoints.append({
+            "id": checkpoint.get("id"),
+            "path": checkpoint.get("path"),
+            "hash": checkpoint.get("hash"),
+            "checkpoint_application": runtime_case["checkpoint_application"],
+            "comfyui_lora_name": runtime_case["lora_name"],
+            "comfyui_model_patch_name": runtime_case["model_patch_name"],
+            "lora_stage": runtime_case["lora_stage"],
+            "model_patch_stage": runtime_case["model_patch_stage"],
+        })
+    details: dict[str, Any] = {"checkpoints": checkpoints} if checkpoints else {}
+    if len(checkpoints) == 1:
+        checkpoint = checkpoints[0]
+        details.update({
+            "checkpoint_hash": checkpoint["hash"],
+            "comfyui_lora_name": checkpoint["comfyui_lora_name"],
+            "comfyui_model_patch_name": checkpoint["comfyui_model_patch_name"],
+            "lora_stage": checkpoint["lora_stage"],
+            "model_patch_stage": checkpoint["model_patch_stage"],
+        })
+    return details
 
 
 class ComfyUIClient:
@@ -874,11 +1140,32 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     run = load_yaml(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
     inputs = run.get("inputs", {})
+    if not isinstance(inputs, dict):
+        raise ValueError("render inputs must be a mapping")
+    if "checkpoints" in inputs:
+        raise ValueError("render inputs.checkpoints is obsolete; author one row per logical case under inputs.cases")
+    has_cases = "cases" in inputs
+    has_promptset = "promptset" in inputs
+    if has_cases == has_promptset:
+        raise ValueError("render requires exactly one of inputs.cases or legacy inputs.promptset")
+    if has_cases:
+        descriptor = inputs.get("cases")
+        if not isinstance(descriptor, dict):
+            raise ValueError("render inputs.cases must be a mapping with path and digest")
+        unknown_descriptor = sorted(str(key) for key in descriptor if key not in {"path", "digest"})
+        if unknown_descriptor:
+            raise ValueError(f"render inputs.cases has unsupported keys: {', '.join(unknown_descriptor)}")
+        if not isinstance(descriptor.get("path"), str) or not descriptor["path"].strip():
+            raise ValueError("render inputs.cases.path must be a non-empty path")
+        if descriptor.get("digest") is not None and not isinstance(descriptor.get("digest"), str):
+            raise ValueError("render inputs.cases.digest must be a string or null")
     train_run = _validate_train_run_reference(workspace, inputs.get("train_run"))
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
-    promptset_path = workspace / inputs.get("promptset", {}).get("path", "")
-    if not workflow_path.is_file() or not promptset_path.is_file():
-        raise ValueError("render inputs.workflow.path and inputs.promptset.path must exist")
+    source_input = inputs.get("cases") if has_cases else inputs.get("promptset")
+    source_path = workspace / (source_input.get("path", "") if isinstance(source_input, dict) else "")
+    if not workflow_path.is_file() or not source_path.is_file():
+        source_name = "cases" if has_cases else "promptset"
+        raise ValueError(f"render inputs.workflow.path and inputs.{source_name}.path must exist")
     try:
         workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -888,21 +1175,45 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
     workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
     fixed = set(workflow_fixed)
-    patches = run.get("workflow_patches", {})
-    items = promptset(promptset_path, require_prompt="prompt" not in fixed)
+    patches = run.get("workflow_patches")
+    if patches is None:
+        patches = {}
+    if not isinstance(patches, dict):
+        raise ValueError("workflow_patches must be a mapping of name to {node, field}")
     validate_patch_bindings(workflow, patches)
-    reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
+    shared_checkpoint = _validated_checkpoint(inputs.get("checkpoint"), context="render inputs.checkpoint", require_id=False)
+    if has_cases:
+        cases = authored_cases(source_path)
+        if shared_checkpoint is not None and any(case.get("checkpoint") for case in cases):
+            raise ValueError("render inputs.checkpoint cannot be combined with an explicit case checkpoint")
+        if shared_checkpoint is not None:
+            for case in cases:
+                case["checkpoint"] = deepcopy(shared_checkpoint)
+    else:
+        items = promptset(source_path, require_prompt="prompt" not in fixed)
+        reconcile_promptset(items, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
+        cases = _legacy_render_cases(items, shared_checkpoint, patches=patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed)
+    has_checkpoint_consumer = bool(lora_insert) or any(name in patches for name in ASSET_PATCH_NAMES)
+    requires_checkpoint = any(name in patches for name in ASSET_PATCH_NAMES)
+    _reconcile_case_values(cases, patches, default_seed=render_settings.get("default_seed"), workflow_fixed=workflow_fixed, has_checkpoint_consumer=has_checkpoint_consumer, requires_checkpoint=requires_checkpoint, strict_checkpoint=has_cases)
+    _freeze_case_checkpoints(workspace, cases)
     executor = run.get("executor") if isinstance(run.get("executor"), dict) else {}
     is_runpod = executor.get("name") == "runpod"
+    if is_runpod and any(case.get("checkpoint") for case in cases) and not lora_insert and "lora" not in patches:
+        raise ValueError(
+            "RunPod case checkpoints currently require a lora workflow binding or sidecar lora_insert; "
+            "dynamic checkpoint and model_patch staging are local-executor features"
+        )
     if is_runpod and image_patch_names(patches):
         raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
     frozen = deepcopy(run)
+    frozen["workflow_patches"] = deepcopy(patches)
     frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
         frozen["lora_insert"] = lora_insert
     frozen.setdefault("inputs", {}).setdefault("workflow", {})["digest"] = digest(workflow_path)
-    frozen["inputs"].setdefault("promptset", {})["digest"] = digest(promptset_path)
+    frozen["inputs"].setdefault("cases" if has_cases else "promptset", {})["digest"] = digest(source_path)
     comfyui = _freeze_comfyui_config(workspace_config.get("comfyui"), include_remote=is_runpod)
     if comfyui:
         frozen["comfyui"] = comfyui
@@ -917,8 +1228,11 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         frozen["comfyui_model_registry"] = registry
         frozen["comfyui_models"] = specs
     else:
-        if "model_patch" in frozen.get("workflow_patches", {}) and _model_patch_stage_plan(workspace, run_dir, frozen, inputs.get("checkpoint", {})) is None:
-            raise ValueError("local model_patch render requires a readable .safetensors checkpoint and configured comfyui.model_patches_dir")
+        if "model_patch" in frozen.get("workflow_patches", {}):
+            for case in cases:
+                checkpoint = case.get("checkpoint")
+                if checkpoint and _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) is None:
+                    raise ValueError("local model_patch render requires every checkpoint to be a readable .safetensors file and configured comfyui.model_patches_dir")
         endpoint = run.get("generator", {}).get("endpoint")
         if isinstance(endpoint, str) and endpoint:
             try:
@@ -929,34 +1243,35 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
                 visible, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
                 frozen["comfyui_endpoint_identity"] = endpoint_fingerprint(object_info)
                 frozen["comfyui_required_models"] = {"visible": visible, "missing": missing}
-    checkpoint_path = inputs.get("checkpoint", {}).get("path")
-    if checkpoint_path:
-        candidate = workspace / checkpoint_path
-        if candidate.is_file():
-            frozen["inputs"].setdefault("checkpoint", {})["hash"] = digest(candidate)
-        elif not inputs.get("checkpoint", {}).get("hash"):
-            print("warning: checkpoint hash is unavailable", flush=True)
-    # Image freezing mutates resolved/ and the in-memory promptset. Keep it
+    # Image freezing mutates resolved/ and the in-memory cases. Keep it
     # after every validation and digest step so a rejected compile leaves no
     # unreferenced image copies behind.
     resolved = run_dir / "resolved"
     resolved.mkdir(exist_ok=True)
-    frozen_images = _freeze_promptset_images(run_dir, promptset_path, items, patches)
+    frozen_images = _freeze_case_images(run_dir, source_path, cases, patches, legacy=not has_cases)
     if frozen_images:
         frozen["promptset_images"] = frozen_images
     frozen["_kura"] = {"frozen_at": now(), "artifact": "manifest.lock"}
+    indexed_cases = _indexed_cases(cases)
     dump_yaml(resolved / "manifest.lock.yaml", frozen)
     atomic_write_json(resolved / "workflow_used.json", workflow)
     if "comfyui_models" in frozen:
         atomic_write_json(resolved / "comfyui_models.json", frozen["comfyui_models"])
     if "comfyui_model_registry" in frozen:
         atomic_write_json(resolved / "comfyui_model_registry.json", frozen["comfyui_model_registry"])
-    if frozen_images:
-        (resolved / "promptset_used.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in items), encoding="utf-8")
-    else:
-        shutil.copyfile(promptset_path, resolved / "promptset_used.jsonl")
+    (resolved / "cases.jsonl").write_text("".join(json.dumps(case, ensure_ascii=False) + "\n" for case in indexed_cases), encoding="utf-8")
+    if not has_cases:
+        used_items = deepcopy(items)
+        cases_by_source = {case["source_id"]: case for case in cases}
+        for item in used_items:
+            matching = cases_by_source.get(item["id"])
+            if matching is not None:
+                for name in image_patch_names(patches):
+                    if name in matching["values"]:
+                        item[name] = matching["values"][name]
+        (resolved / "promptset_used.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in used_items), encoding="utf-8")
     dump_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
-    status(run_dir, state="compiled")
+    status(run_dir, state="compiled", last_step=0, total_steps=len(indexed_cases), current_case_id=None)
 
 
 def launch_render(
@@ -966,6 +1281,7 @@ def launch_render(
     *,
     endpoint_override: str | None = None,
     lora_name_override: str | None = None,
+    lora_name_overrides: dict[str, str] | None = None,
     executor_name: str | None = None,
     manage_lora_stage: bool = True,
 ) -> int:
@@ -988,31 +1304,78 @@ def launch_render(
     inputs = frozen.get("inputs", {})
     train_run = inputs.get("train_run")
     workflow_path = workspace / inputs.get("workflow", {}).get("path", "")
-    promptset_path = workspace / inputs.get("promptset", {}).get("path", "")
-    promptset_used_path = run_dir / "resolved" / "promptset_used.jsonl"
-    if not promptset_used_path.is_file():
-        raise ValueError("render promptset is not frozen; run kura render compile first")
+    cases_path = run_dir / "resolved" / "cases.jsonl"
     workflow_fixed = normalized_workflow_fixed(frozen.get("render", {}).get("workflow_fixed"))
-    prompts = promptset(promptset_used_path, require_prompt="prompt" not in workflow_fixed)
-    checkpoint = inputs.get("checkpoint", {})
-    default_seed = frozen.get("render", {}).get("default_seed")
-    if "seed" in workflow_fixed:
-        # The workflow owns the seed, so there is nothing to vary and nothing Kura
-        # may claim about it. One image per case, and the record says seed=None.
-        pairs = [(item, None) for item in prompts]
+    if cases_path.is_file():
+        cases = load_resolved_cases(cases_path)
     else:
-        pairs = [(item, seed) for item in prompts for seed in (item.get("seeds") or [default_seed]) if seed is not None]
-        if not pairs:
-            raise ValueError("promptset has no seeds and render.default_seed is not set")
+        # Released compiled renders predate resolved/cases.jsonl. Adapt only their
+        # already-frozen promptset; never return to the mutable authored source.
+        promptset_used = run_dir / "resolved" / "promptset_used.jsonl"
+        if not promptset_used.is_file():
+            raise ValueError("render cases are not frozen; run kura render compile first")
+        legacy_items = promptset(promptset_used, require_prompt="prompt" not in workflow_fixed)
+        raw_checkpoint = inputs.get("checkpoint")
+        legacy_checkpoint = raw_checkpoint if isinstance(raw_checkpoint, dict) and raw_checkpoint.get("path") else None
+        legacy_cases = _legacy_render_cases(legacy_items, legacy_checkpoint, patches=frozen.get("workflow_patches", {}), default_seed=frozen.get("render", {}).get("default_seed"), workflow_fixed=workflow_fixed)
+        cases = _indexed_cases(legacy_cases)
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
-    lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
-    model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
     image_stages = _image_stage_plans(workspace, run_dir, frozen)
-    lora_name = lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
-    model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
     workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
-    application = checkpoint_application(frozen, workflow, lora_name=lora_name)
-    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_path": str(promptset_path), "promptset_digest": inputs.get("promptset", {}).get("digest"), "prompt_count": len(prompts), "total_image_count": len(pairs), "checkpoint": checkpoint, "checkpoint_application": application, "comfyui_lora_name": lora_name, "comfyui_model_patch_name": model_patch_name, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/promptset_used.jsonl", "resolved/env.lock"]}
+    runtime_cases: list[dict[str, Any]] = []
+    lora_stages: dict[str, dict[str, Any]] = {}
+    model_patch_stages: dict[str, dict[str, Any]] = {}
+    for case in cases:
+        checkpoint = case.get("checkpoint") if isinstance(case.get("checkpoint"), dict) else {}
+        lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+        model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+        if lora_stage:
+            lora_stage = lora_stages.setdefault(str(lora_stage["target"]), lora_stage)
+        if model_patch_stage:
+            model_patch_stage = model_patch_stages.setdefault(str(model_patch_stage["target"]), model_patch_stage)
+        checkpoint_id = checkpoint.get("id")
+        case_override = lora_name_overrides.get(checkpoint_id) if lora_name_overrides and isinstance(checkpoint_id, str) else None
+        lora_name = case_override or lora_name_override or (lora_stage["lora_name"] if lora_stage else checkpoint.get("path", ""))
+        model_patch_name = model_patch_stage["model_patch_name"] if model_patch_stage else checkpoint.get("path", "")
+        runtime_cases.append({
+            "case": case,
+            "checkpoint": checkpoint,
+            "lora_stage": lora_stage,
+            "model_patch_stage": model_patch_stage,
+            "lora_name": lora_name,
+            "model_patch_name": model_patch_name,
+            "checkpoint_application": checkpoint_application(
+                frozen, workflow, lora_name=lora_name, checkpoint_record=checkpoint,
+            ),
+        })
+    case_queue = [
+        {
+            "id": item["case"]["id"],
+            "index": item["case"]["index"],
+            "values": item["case"]["values"],
+            "checkpoint": item["case"].get("checkpoint"),
+            "meta": item["case"].get("meta"),
+            "checkpoint_application": item["checkpoint_application"],
+            "comfyui_lora_name": item["lora_name"],
+            "comfyui_model_patch_name": item["model_patch_name"],
+        }
+        for item in runtime_cases
+    ]
+    source = inputs.get("cases") if isinstance(inputs.get("cases"), dict) else inputs.get("promptset", {})
+    source_digest = source.get("digest") if isinstance(source, dict) else None
+    legacy_digest_details = {"promptset_digest": source_digest} if isinstance(inputs.get("promptset"), dict) else {}
+    details = {"train_run": train_run, "endpoint": endpoint, "workflow_path": str(workflow_path), "workflow_digest": inputs.get("workflow", {}).get("digest"), "cases_digest": source_digest, "case_count": len(cases), "case_queue": case_queue, "image_stages": image_stages, "executor": resolved_executor, "output_dir": frozen.get("render", {}).get("output_dir"), "patch_mapping": frozen.get("workflow_patches", {}), "resolved_paths": ["resolved/manifest.lock.yaml", "resolved/workflow_used.json", "resolved/cases.jsonl", "resolved/env.lock"]}
+    details.update(_runtime_checkpoint_provenance(runtime_cases))
+    if isinstance(inputs.get("promptset"), dict):
+        details["promptset_digest"] = source_digest
+    if len(runtime_cases) == 1:
+        only = runtime_cases[0]
+        details.update({
+            "checkpoint": only["checkpoint"],
+            "checkpoint_application": only["checkpoint_application"],
+            "comfyui_lora_name": only["lora_name"],
+            "comfyui_model_patch_name": only["model_patch_name"],
+        })
     if resolved_executor == "local":
         expected_identity = frozen.get("comfyui_endpoint_identity")
         identity_verified = isinstance(expected_identity, dict) and bool(expected_identity.get("sha256"))
@@ -1035,7 +1398,10 @@ def launch_render(
     stdout_log = run_dir / "logs" / "stdout.log"
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
-    status(run_dir, state="running", started=now(), ended=None, exit_code=None)
+    status(run_dir, state="running", started=now(), ended=None, exit_code=None, last_step=0, total_steps=len(cases), current_case_id=None)
+    active_runtime_case: dict[str, Any] | None = None
+    generated = 0
+    completed_cases = 0
     try:
         if resolved_executor == "local" and hasattr(client, "object_info"):
             object_info = client.object_info()
@@ -1057,56 +1423,106 @@ def launch_render(
                     "ComfyUI endpoint cannot see workflow-required models: " + labels + ". "
                     "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
                 )
-        if lora_stage:
+        for lora_stage in lora_stages.values():
             _materialize_stage(lora_stage)
             _ensure_lora_stage_visible(client, endpoint, lora_stage)
-        if model_patch_stage:
+        for model_patch_stage in model_patch_stages.values():
             _materialize_stage(model_patch_stage)
             _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
         for plan in image_stages:
             _materialize_stage(plan)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "lora_stage": lora_stage, "model_patch_stage": model_patch_stage, "image_stages": image_stages})
-        generated = 0
-        for item, seed in pairs:
+        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "case_count": len(cases), "image_stages": image_stages})
+        for runtime_case in runtime_cases:
+            active_runtime_case = runtime_case
+            case = runtime_case["case"]
+            checkpoint = runtime_case["checkpoint"]
+            lora_name = runtime_case["lora_name"]
+            model_patch_name = runtime_case["model_patch_name"]
+            values = case["values"]
             patches = frozen.get("workflow_patches", {})
-            patched = patch_workflow(workflow, patches, prompt=item.get("prompt", ""), negative_prompt=item.get("negative_prompt", ""), seed=seed, checkpoint=lora_name, model_patch=model_patch_name, item=item, image_values=_image_values_for_item(item, patches, image_stages))
+            image_values = _image_values_for_item({"id": case["id"], **values}, patches, image_stages)
+            patched = patch_workflow(workflow, patches, prompt=values.get("prompt", ""), negative_prompt=values.get("negative_prompt", ""), seed=values.get("seed"), checkpoint=lora_name, model_patch=model_patch_name, item={"id": case["id"], **values}, image_values=image_values)
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
-            case_application = checkpoint_application(frozen, patched, lora_name=lora_name)
+            case_application = checkpoint_application(frozen, patched, lora_name=lora_name, checkpoint_record=checkpoint)
+            applied_values = {name: image_values.get(name, values.get(name)) for name in patches if name not in ASSET_PATCH_NAMES}
+            for name in patches:
+                if name in ("lora", "checkpoint"):
+                    applied_values[name] = lora_name
+                elif name == "model_patch":
+                    applied_values[name] = model_patch_name
+            status(run_dir, current_case_id=case["id"])
+            event(run_dir, {"event": "render_case_started", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases)})
             prompt_id = client.queue(patched)
             with stdout_log.open("a", encoding="utf-8") as handle:
-                handle.write(f"queued {item['id']} seed={seed} prompt_id={prompt_id}\n")
-            for index, image in enumerate(client.wait(prompt_id)):
+                if isinstance(inputs.get("promptset"), dict):
+                    handle.write(f"queued {case.get('source_id', case['id'])} seed={values.get('seed')} prompt_id={prompt_id}\n")
+                else:
+                    handle.write(f"queued case={case['id']} index={case['index']}/{len(cases)} prompt_id={prompt_id}\n")
+            images = client.wait(prompt_id)
+            if not images:
+                raise RuntimeError(f"ComfyUI completed without returning any images (case {case['id']!r})")
+            for image_index, image in enumerate(images):
                 suffix = Path(image.get("filename", "image.png")).suffix or ".png"
-                seed_segment = "" if seed is None else f"_seed{seed}"
-                relative = f"samples/images/{item['id']}{seed_segment}_{index}{suffix}"
+                relative = f"samples/images/{case['id']}_{image_index}{suffix}"
                 image_path = run_dir / relative
                 image_path.parent.mkdir(parents=True, exist_ok=True)
                 image_path.write_bytes(client.download(image))
-                # A parameter the workflow fixes was never Kura's to set, and Kura
-                # cannot read it back without a binding. Record it as unknown
-                # rather than repeating a promptset value that did not reach the render.
-                record = {"file": relative, "train_run": train_run, "prompt_id": item["id"], "prompt": None if "prompt" in workflow_fixed else item.get("prompt", ""), "negative_prompt": None if "negative_prompt" in workflow_fixed else item.get("negative_prompt", ""), "seed": seed, "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "checkpoint_application": case_application, "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "promptset_digest": inputs.get("promptset", {}).get("digest"), "comfyui_prompt_id": prompt_id, "patch_inputs": {name: item[name] for name in patches if name in item and name not in ("prompt", "negative_prompt")}, "workflow_fixed": list(workflow_fixed), "created": now()}
+                legacy_prompt_id = case.get("source_id", case["id"])
+                record = {"file": relative, "train_run": train_run, "case_id": case["id"], "case_index": case["index"], "case": case, "applied_values": applied_values, "prompt_id": legacy_prompt_id, "prompt": values.get("prompt") if "prompt" not in workflow_fixed else None, "negative_prompt": values.get("negative_prompt") if "negative_prompt" not in workflow_fixed else None, "seed": values.get("seed") if "seed" not in workflow_fixed else None, "checkpoint_id": checkpoint.get("id"), "checkpoint_path": checkpoint.get("path"), "checkpoint_hash": checkpoint.get("hash"), "checkpoint_application": case_application, "comfyui_lora_name": lora_name, "workflow_digest": inputs.get("workflow", {}).get("digest"), "cases_digest": source_digest, "comfyui_prompt_id": prompt_id, "patch_inputs": {name: values[name] for name in patches if name in values and name not in ("prompt", "negative_prompt", "seed")}, "workflow_fixed": list(workflow_fixed), "created": now()}
                 with images_log.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-                event(run_dir, {"event": "image_generated", "timestamp": now(), "prompt_id": item["id"], "seed": seed, "file": relative})
+                event(run_dir, {"event": "image_generated", "timestamp": now(), "case_id": case["id"], "case_index": case["index"], "file": relative})
                 generated += 1
+            completed_cases += 1
+            status(run_dir, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
+            event(run_dir, {"event": "render_case_completed", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases), "image_count": len(images)})
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
-        status(run_dir, state="completed", ended=now(), exit_code=0)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, image_count=generated)
+        status(run_dir, state="completed", ended=now(), exit_code=0, last_step=len(cases), total_steps=len(cases), current_case_id=None)
+        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except Exception as exc:
-        stdout_log = run_dir / "logs" / "stdout.log"
-        stdout_log.parent.mkdir(parents=True, exist_ok=True)
-        with stdout_log.open("a", encoding="utf-8") as handle:
-            handle.write(f"{type(exc).__name__}: {exc}\n")
-        status(run_dir, state="failed", ended=now(), exit_code=1)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), promptset_digest=inputs.get("promptset", {}).get("digest"), checkpoint_hash=checkpoint.get("hash"), comfyui_lora_name=lora_name, comfyui_model_patch_name=model_patch_name, lora_stage=lora_stage, model_patch_stage=model_patch_stage, error=str(exc))
-        event(run_dir, {"event": "render_failed", "timestamp": now(), "error": str(exc)})
+        failed_case_id = active_runtime_case["case"]["id"] if active_runtime_case is not None else None
+        failed_at = now()
+        try:
+            with stdout_log.open("a", encoding="utf-8") as handle:
+                handle.write(f"{type(exc).__name__}: {exc}\n")
+        except OSError:
+            pass
+        try:
+            status(run_dir, state="failed", ended=failed_at, exit_code=1, last_step=completed_cases, total_steps=len(cases), current_case_id=failed_case_id)
+        except Exception as status_exc:
+            try:
+                atomic_write_json(run_dir / "status.json", {"state": "failed", "ended": failed_at, "exit_code": 1, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": failed_case_id})
+            except Exception as fallback_exc:
+                _append_runtime_warning(
+                    stdout_log,
+                    "failed to persist render failure status: "
+                    f"{type(status_exc).__name__}: {status_exc}; fallback "
+                    f"{type(fallback_exc).__name__}: {fallback_exc}",
+                )
+        try:
+            write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
+        except Exception as realization_exc:
+            _append_runtime_warning(
+                stdout_log,
+                "failed to persist render failure realization: "
+                f"{type(realization_exc).__name__}: {realization_exc}",
+            )
+        try:
+            event(run_dir, {"event": "render_failed", "timestamp": failed_at, "error": str(exc)})
+        except OSError as event_exc:
+            _append_runtime_warning(
+                stdout_log,
+                "failed to persist render failure event: "
+                f"{type(event_exc).__name__}: {event_exc}",
+            )
         return 1
     finally:
-        _cleanup_stage(lora_stage)
-        _cleanup_stage(model_patch_stage)
+        for plan in lora_stages.values():
+            _cleanup_stage(plan)
+        for plan in model_patch_stages.values():
+            _cleanup_stage(plan)
         for plan in image_stages:
             _cleanup_stage(plan)

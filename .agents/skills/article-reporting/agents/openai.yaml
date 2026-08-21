@@ -1,0 +1,4 @@
+interface:
+  display_name: "Experiment Reporting"
+  short_description: "Summarize Kura experiments for publication"
+  default_prompt: "Use $article-reporting to turn this Kura run into a reproducible summary."

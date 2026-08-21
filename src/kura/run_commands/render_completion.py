@@ -48,11 +48,20 @@ def _image_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _checkpoint_label(workspace: Path, frozen: dict[str, Any]) -> str:
+def _checkpoint_label(workspace: Path, frozen: dict[str, Any], records: list[dict[str, Any]]) -> str:
     inputs = frozen.get("inputs") if isinstance(frozen.get("inputs"), dict) else {}
-    checkpoint = inputs.get("checkpoint") if isinstance(inputs.get("checkpoint"), dict) else {}
-    path_value = checkpoint.get("path")
     train_run = inputs.get("train_run")
+    record_paths = list(dict.fromkeys(
+        str(record["checkpoint_path"])
+        for record in records
+        if isinstance(record.get("checkpoint_path"), str) and record["checkpoint_path"]
+    ))
+    if len(record_paths) > 1:
+        pieces = [str(train_run)] if isinstance(train_run, str) and train_run else []
+        pieces.append(f"{len(record_paths)} checkpoints vary by case")
+        return " · ".join(pieces)
+    checkpoint = inputs.get("checkpoint") if isinstance(inputs.get("checkpoint"), dict) else {}
+    path_value = record_paths[0] if record_paths else checkpoint.get("path")
     pieces = [str(train_run)] if isinstance(train_run, str) and train_run else []
     if isinstance(path_value, str) and path_value:
         name = Path(path_value).name
@@ -121,7 +130,7 @@ def format_render_completion(workspace: Path, run_dir: Path, *, exit_code: int |
     lines = [
         headline,
         f"rendered   {len(records)} {image_word}  {output_dir}",
-        f"artifact   {_checkpoint_label(workspace, frozen)}",
+        f"artifact   {_checkpoint_label(workspace, frozen, records)}",
         f"workflow   {workflow_name}",
     ]
     applications = [
@@ -141,26 +150,27 @@ def format_render_completion(workspace: Path, run_dir: Path, *, exit_code: int |
     cases: list[dict[str, Any]] = []
     seen: set[tuple[Any, Any, Any, Any]] = set()
     for record in records:
-        identity = (record.get("prompt_id"), record.get("prompt"), record.get("negative_prompt"), record.get("seed"))
+        identity = (record.get("case_id") or record.get("prompt_id"), record.get("prompt"), record.get("negative_prompt"), record.get("seed"))
         if identity not in seen:
             seen.add(identity)
             cases.append(record)
     lines.append(f"inputs     {len(cases)} case{'s' if len(cases) != 1 else ''}")
     if len(cases) == 1:
         record = cases[0]
-        case_id = record.get("prompt_id") or "case"
+        case_id = record.get("case_id") or record.get("prompt_id") or "case"
         lines.append(f"  {case_id}  seed {record.get('seed') if record.get('seed') is not None else '(workflow-owned)'}")
         lines.append(f"    prompt    {_quoted(record.get('prompt'))}")
         lines.append(f"    negative  {_quoted(record.get('negative_prompt'))}")
     elif cases:
-        promptset = inputs.get("promptset") if isinstance(inputs.get("promptset"), dict) else {}
-        promptset_name = Path(str(promptset.get("path") or "")).name or "resolved promptset"
+        source = inputs.get("cases") if isinstance(inputs.get("cases"), dict) else inputs.get("promptset")
+        source = source if isinstance(source, dict) else {}
+        source_name = Path(str(source.get("path") or "")).name or "resolved cases"
         for label, key in (("prompts", "prompt"), ("negative", "negative_prompt")):
             values = {json.dumps(record.get(key), ensure_ascii=False, sort_keys=True) for record in cases}
             if len(values) == 1:
                 lines.append(f"  {label:<10}{_quoted(cases[0].get(key))}")
             else:
-                lines.append(f"  {label:<10}vary by case · {promptset_name}")
+                lines.append(f"  {label:<10}vary by case · {source_name}")
         seeds = {record.get("seed") for record in cases}
         if len(seeds) == 1:
             seed = cases[0].get("seed")

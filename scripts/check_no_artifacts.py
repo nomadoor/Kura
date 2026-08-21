@@ -16,6 +16,7 @@ FORBIDDEN_PARTS = {
     "datasets",
     "workflows",
     "promptsets",
+    "cases",
     "outputs",
     "downloads",
     "pulled",
