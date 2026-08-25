@@ -37,6 +37,14 @@ uv run kura run execute <run-id>
 uv run kura run watch <run-id>
 ```
 
+When an agent launches training for a user, starting the run does not normally
+finish the agent task. Unless the user explicitly asks to start and detach, the
+agent keeps the task active around the waited `kura run execute`, verifies its
+mechanical terminal result and expected artifact, and then reports completion.
+The CLI remains the runtime; the agent is responsible for following the user
+request through that runtime boundary, not for replacing it with a polling
+loop.
+
 For training runs, `kura run plan` places the run in its authored
 `experiment` before showing the execution facts. The series is formed by exact
 `experiment` matches and shows the parameters that actually vary between its

@@ -32,6 +32,51 @@ plan review; that destroys the light-user experience. The items listed under
 "ask first" below are the only ones that need their own conversation *before*
 they appear in a proposed plan.
 
+## Own the run through completion
+
+Launching an approved training run starts the waiting phase; it does not
+complete the training request. Unless the user explicitly asks to start and
+detach:
+
+1. Run `kura run execute <run-id>` with the current agent host's tracked
+   long-running execution mechanism. It must keep the agent task active across
+   ordinary turns and return control when the command exits. Do not replace it
+   with an untracked detached command such as `nohup ... &`.
+   Examples are Claude Code's tracked background Bash execution and Codex Goal
+   mode for long-running work; use them only when the current host exposes the
+   corresponding mechanism, and treat the capability requirements above as
+   authoritative.
+2. While execution is active, wait for the host's completion event. Do not wake
+   the model on a timer merely to pass time. Perform periodic log or metric
+   review only when the user requests it or concrete evidence requires
+   diagnosis.
+3. When execution returns, verify the mechanical result before reporting it:
+   reconcile when needed; read `status.json`; confirm the terminal state and
+   exit code; check the latest realization and logs for a conflicting failure;
+   and confirm the expected training artifact exists. This establishes that
+   training completed mechanically, not that the result has good quality.
+4. Send the final training report only after that verification. Quality claims
+   require the separate evaluation flow and user judgment; training approval
+   does not authorize an automatic render.
+
+For multiple training runs explicitly approved in the conversation, repeat
+this contract one run at a time. Start the next run only after the previous run
+is mechanically complete. Stop on failure, unknown or inconsistent state, or
+when a new decision is required. Agent recovery notes may identify the active
+and next run, but they never carry approval; if conversation context no longer
+establishes approval for the next launch, ask the user again.
+
+If the tracked execution session is lost, inspect or reconcile the run. Never
+infer completion, silently relaunch it, or advance to the next run. If the run
+is still active and the host cannot reattach a tracked wait, report that limit
+and keep the existing run intact.
+
+For RunPod, also follow the `runpod-lifecycle` recovery flow immediately:
+session loss is a billing exposure, but the Pod must not be stopped until
+remote exit and local output download are confirmed. If either is uncertain,
+report the live billing exposure and exact recovery/stop commands. Treat the
+Pod-side maximum lease as a best-effort fuse, not confirmed cleanup.
+
 ## Question budget
 
 Questions are the second way to destroy the light-user experience (the first

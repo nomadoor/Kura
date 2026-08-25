@@ -101,6 +101,31 @@ When a run does not fit the available hardware, diagnose from concrete evidence 
 
 Before launching a training run, run `uv run kura run plan <run-id>` and show the output to the user. Do not reconstruct launch settings from memory. Launch only after explicit approval; if anything changes afterward, record it in `run.yaml`, recompile, and show the plan again.
 
+Starting a training run is not completion of a training request. Unless the
+user explicitly asks to start and detach, keep the agent task active until
+the run reaches a terminal state and `kura run execute <run-id>` returns, then
+verify and report the mechanical result from Kura's status, exit code,
+realization, logs, and expected output artifacts. Run `kura run execute`
+through the current agent host's tracked long-running execution mechanism: it
+must preserve the command across ordinary agent turns and return control when
+the command exits without requiring model polling merely to pass time. Do not
+substitute an untracked detached shell command such as `nohup ... &`.
+
+When the user has explicitly approved multiple training runs, apply the same
+contract sequentially: start the next run only after the previous run is
+mechanically complete. Stop on failure, uncertain state, or any point that
+needs a new user decision. A local cursor or recovery note may record which run
+was active, but it is never evidence of approval; if approval for a later run
+cannot be established from the conversation, ask again before launching it.
+If the tracked execution session is lost, observe or reconcile the run and do
+not assume completion, relaunch it, or advance to another run.
+
+For a RunPod run, session loss is also an active billing exposure: immediately
+follow the `runpod-lifecycle` recovery flow, confirm remote exit and local
+output download before stopping the Pod, and report exact recovery/stop steps
+if either remains uncertain. The Pod-side maximum lease is a best-effort fuse,
+not a substitute for confirmed recovery and stop.
+
 A training approval covers that training run only. Do not attach a render,
 evaluation, or sample generation to it; deciding how to look at a result before
 the result exists puts two tasks under one approval. After the run reaches

@@ -73,10 +73,10 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 2. 🧑 Tell the agent the goal — e.g. `Train a Krea 2 character LoRA with this dataset.` (You can also spell out exact parameters like `rank 16, lr 5e-5, ...` if you want.)
 3. 🤖 Inspect the dataset and write `run.yaml`. For RunPod, use a draft `kura run plan` to check GPU stock and record the immediate/wait choice; then compile and show the final plan with assumptions, resource facts, and trade-offs.
 4. 🧑 Approve that plan once, or tell the agent what to change.
-5. 🤖 Run `kura run execute <run-id>` using the local Docker or RunPod executor frozen in the plan. Infrastructure smoke checks are used when the backend or environment needs them; they are not a second user workflow.
+5. 🤖 Run `kura run execute <run-id>` using the local Docker or RunPod executor frozen in the plan, keep the agent task active through the wait, and report only after checking the terminal state and expected training artifact. Starting the container is not completion. Infrastructure smoke checks are used when the backend or environment needs them; they are not a second user workflow.
    For RunPod, `execute` stops the Pod immediately after outputs are downloaded. Use `kura run remote <run-id> --hold-for 30m` instead when you need a review window before shutdown.
-6. 🧑 Watch progress with `uv run kura monitor` (or have 🤖 report progress).
-7. 🤖 Generate ComfyUI comparison images from an explicit render case queue linked to the training run.
+6. 🧑 Optionally watch progress with `uv run kura monitor`. The agent remains responsible for the completion report unless you explicitly asked it to start and detach.
+7. 🤖 After the training report, generate ComfyUI comparison images from an explicit render case queue only after the user separately approves that evaluation.
 8. 🧑 Record your judgment in the render run's `notes.md` and decide whether to stop or run another experiment (🤖 carries out the instruction).
 
 > 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
