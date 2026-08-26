@@ -3,6 +3,24 @@ description: >-
   Historical execution observations. Records are evidence for the stated
   identity tuple, not declarations of backend capability.
 records:
+  - id: sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 77b5423ddbda6ce10e8ef7c1c34fa9c986347a473c2ad2a43197af6228e04f7f
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+    native_path:
+      architecture: anima
+      mode: controlnet_lllite
+      executor: docker
+      caption_dropout_rate: 0.15
+      text_encoder_disk_cache: true
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-26
+    artifact: smoke-evidence/2026-08-26-sd-scripts-anima-lllite-caption-dropout-docker.yaml
   - id: sd-scripts-anima-checkpoint-publication-docker-2026-08-03
     backend: sd-scripts
     adapter_source:

@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 
 import yaml
@@ -52,14 +53,14 @@ class BackendSurfaceContractTests(unittest.TestCase):
         cases = (
             ("deepspeed", True, "reviewed backend.config.command"),
             ("fused_backward_pass", True, "reviewed backend.config.command"),
-            ("batch", 2, "dataset_config.general.batch_size"),
+            ("batch", 2, "dataset_config.datasets[].batch_size"),
         )
         capabilities = backend_capabilities("sd-scripts")
         for field, value, expected in cases:
             with self.subTest(field=field):
                 self.assertIn(expected, capabilities["unsupported_fields"][field])
                 run = {"backend": {"name": "sd-scripts", "config": {field: value}}}
-                with self.assertRaisesRegex(ValueError, expected.replace(".", r"\.")):
+                with self.assertRaisesRegex(ValueError, re.escape(expected)):
                     validate_backend_config(run)
 
     def test_epoch_vocabulary_points_to_the_common_recipe(self) -> None:
@@ -214,6 +215,14 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "musubi-tuner", "json": True})()), 0)
         self.assertIn('"optimizer_type"', output.getvalue())
         self.assertIn('"validation": "unverified"', output.getvalue())
+
+    def test_capabilities_cli_prints_sd_scripts_nested_dataset_fields(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "sd-scripts", "json": False})()), 0)
+        rendered = output.getvalue()
+        self.assertIn("dataset_config.datasets[].subsets[]", rendered)
+        self.assertIn("caption_dropout_rate (number", rendered)
 
     def test_replacing_behavior_does_not_remove_the_contract(self) -> None:
         adapter = BACKENDS["musubi-tuner"]

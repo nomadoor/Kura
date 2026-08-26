@@ -1,11 +1,11 @@
 # Backend support
 
-Support snapshot taken for Kura 0.2.0 on 2026-08-04, and still current for
-0.3.0. No new smokes were run for 0.3.0; the snapshot carries forward because
-adapter behaviour did not change. The 0.3.0 adapter source identity moved from
-`selected-adapter-v1` to `selected-adapter-v2` when the backend configuration
-surfaces were declared, and each backend records that transition as
-`behavior_changed: false` in
+The baseline support snapshot was taken for Kura 0.2.0 on 2026-08-04. Kura
+0.3.0 carried that evidence forward through reviewed, evidence-scoped identity
+migrations, and a 2026-08-26 Anima LLLite smoke additionally verified caption
+dropout with text-encoder disk caching. Identity transitions are recorded as
+`behavior_changed: false` only for the evidence IDs whose execution contracts
+remain unchanged in
 [adapter-source-identity-migrations.yaml](adapter-source-identity-migrations.yaml).
 `scripts/check_smoke_evidence.py` fails if evidence is ever carried across a
 transition that is not recorded that way.
@@ -79,7 +79,7 @@ Mutable `latest` is not a supported default.
 | sd-scripts | SDXL LoRA | Built-in | 🧪 | Local one-step LoRA passed through `sdxl_train_network.py`; its adapter identity is connected to the current tree by reviewed behavior-preserving migrations. Evidence: `sd-scripts-sdxl-docker-2026-08-01` |
 | sd-scripts | FLUX.1 LoRA | Built-in | 🧪 | Local one-step LoRA passed through `flux_train_network.py` on a 12 GiB-class GPU with fp8 base and 16-block swapping; its adapter identity is connected to the current tree by reviewed behavior-preserving migrations. Evidence: `sd-scripts-flux1-docker-2026-08-01` |
 | sd-scripts | Anima LoRA | Built-in | 🧪 | Local training published every retained step checkpoint plus the final alias as validated ComfyUI LoRAs; the prior compatibility smoke also completed a managed-ComfyUI render. Evidence: `sd-scripts-anima-checkpoint-publication-docker-2026-08-03` |
-| sd-scripts | Anima ControlNet-LLLite | Built-in | 🧪 | Local one-step training produced a v2 model patch and managed ComfyUI loaded it through `ModelPatchLoader` and `AnimaLLLiteApply`. Evidence: `sd-scripts-anima-lllite-docker-2026-08-03` |
+| sd-scripts | Anima ControlNet-LLLite | Built-in | 🧪 | Local one-step training produced a v2 model patch and managed ComfyUI loaded it through `ModelPatchLoader` and `AnimaLLLiteApply`; a later optimizer-step smoke preserved `caption_dropout_rate=0.15` in the text-encoder disk cache. Evidence: `sd-scripts-anima-lllite-docker-2026-08-03`, `sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26` |
 | sd-scripts | Other upstream families and modes | Explicit command only | ⚠️ | No built-in selector or support claim in the initial milestone |
 
 Musubi `v0.3.4` has no missing top-level Kura adapter. All 36 expected cache

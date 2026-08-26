@@ -79,11 +79,14 @@ reading adapter source or guessing a trainer's spelling:
 ```bash
 uv run kura run capabilities musubi-tuner
 uv run kura run capabilities ai-toolkit --json
+uv run kura run capabilities sd-scripts --json
 ```
 
 Unknown top-level keys are rejected with a correction when Kura knows the
-likely spelling. Only optimizer-step count and seed currently have proven
-common recipe semantics:
+likely spelling. Reviewed nested fields, such as sd-scripts dataset controls,
+are listed with their accepted levels and type/range constraints; nested
+unknowns are rejected during compile. Only optimizer-step count and seed
+currently have proven common recipe semantics:
 
 ```yaml
 schema_version: 2

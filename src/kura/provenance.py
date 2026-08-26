@@ -141,6 +141,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
                     for item in surface.conditions
                 ],
                 "selector_defaults": dict(surface.selector_defaults),
+                "nested_config_fields": surface.nested_config_fields or {},
                 "aliases": {
                     key: value for key, value in _GENERAL_ML_ALIASES.items()
                     if value in surface.fields | surface.escape_hatches

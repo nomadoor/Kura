@@ -1,0 +1,66 @@
+schema_version: 1
+backend: sd-scripts
+executor: docker
+observed_at: 2026-08-26
+run_id: 20260826-0909_anima-lllite-caption-dropout-log_d5fb
+realization:
+  id: 20260826-091028-297347
+  observation: 20260826-091028-297347.observed-20260826-091151-406055.json
+  container_id: a6efd70d63cca20c35f406bd216773cb3bc033a99f176d129de4a8d57fd644a7
+native_path:
+  architecture: anima
+  mode: controlnet_lllite
+  entrypoint: anima_train_control_net_lllite.py
+upstream:
+  version: v0.11.1
+  commit: 6721028c79ee85a78b3a06dfd8954dae310a1cce
+adapter_source:
+  kind: source-tree-sha256
+  value: 77b5423ddbda6ce10e8ef7c1c34fa9c986347a473c2ad2a43197af6228e04f7f
+runtime:
+  image: nomadoor/kura-sd-scripts:dev
+  image_digest: sha256:7ef2fad2ede19e518e198e3567f441ecf8f174dfd5564300d7a434c844d7bfe9
+  gpu: NVIDIA GeForce RTX 4070 Ti
+training:
+  resolution: [512, 512]
+  batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.00005
+  mixed_precision: bf16
+  optimizer: AdamW8bit
+  timestep_sampling: shift
+  discrete_flow_shift: 3.0
+  attn_mode: sdpa
+  cond_emb_dim: 32
+  lllite_cond_dim: 64
+  lllite_cond_resblocks: 1
+  lllite_mlp_dim: 64
+  lllite_target_layers: self_attn_q
+  caption_dropout_rate: 0.15
+  cache_text_encoder_outputs_to_disk: true
+  requested_steps: 1
+  observed_steps: 1
+text_encoder_cache:
+  path: cache/sd-scripts/datasets/000-000/images/0001_anima_te.npz
+  sha256: 8d2f2a8e7cf5d5748f1d82dc338fce5dc4f1526b42f7396c977c55fd625378d5
+  caption_dropout_rate_dtype: float32
+  caption_dropout_rate_value: 0.15000000596046448
+output:
+  path: outputs/20260826-0909_anima-lllite-caption-dropout-log_d5fb.safetensors
+  size_bytes: 31282000
+  sha256: 908f6c866606c1c134f6e78d110f8ea6970c5dedf2f15d7b7de373ef51a1539d
+  tensor_count: 276
+  lllite_version: '2'
+  modelspec_architecture: anima-preview/control-net-lllite
+checks:
+  exit_code_zero: true
+  real_optimizer_step: true
+  finite_loss: true
+  observed_loss: 0.012
+  caption_dropout_runtime_logged: true
+  caption_dropout_preserved_in_text_encoder_cache: true
+  safetensors_valid: true
+  lllite_version_two: true
+  dataset_unchanged: true
+  docker_terminal_observed: true
+  outcome: passed

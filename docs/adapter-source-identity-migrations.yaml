@@ -7,6 +7,53 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-nested-dataset-surface-existing-evidence-2026-08-26
+    backend: sd-scripts
+    reason: >-
+      Declare and validate the reviewed nested dataset surface, expose its
+      effective controls in capabilities, plans, and runtime logs, and reject
+      dynamic caption operations that a text-encoder cache cannot preserve.
+      This changes behavior for authored configurations such as
+      shuffle_caption=true combined with text-encoder caching. None of the
+      listed historical smoke configurations uses that combination or any new
+      nested key, so their native TOML, training argv, optimizer step, and
+      output contract remain unchanged; added logging is observational only.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-docker-v2-2026-08-01
+      - sd-scripts-sdxl-docker-2026-08-01
+      - sd-scripts-flux1-docker-2026-08-01
+      - sd-scripts-anima-checkpoint-publication-docker-2026-08-03
+      - sd-scripts-anima-lllite-docker-2026-08-03
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c1451dc93ccda483da9ed7d470d3382f12d1074271928bbbbdea2826400c92ea
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f82600e3f1bb049e0b8e4f00e069e802b4cb3c436f98f1fabcb3a5719965ad07
+  - id: sd-scripts-caption-dropout-smoke-followup-2026-08-26
+    backend: sd-scripts
+    reason: >-
+      After the recorded caption-dropout optimizer-step smoke, accept zero as
+      the upstream disabled value for caption_dropout_every_n_epochs, derive
+      plan visibility from the nested schema, and avoid a misleading aggregate
+      batch or resolution when datasets disagree. The recorded smoke uses
+      caption_dropout_rate=0.15 with one dataset; its native TOML, runtime log,
+      text-encoder cache value, training argv, optimizer step, and output are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 77b5423ddbda6ce10e8ef7c1c34fa9c986347a473c2ad2a43197af6228e04f7f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f82600e3f1bb049e0b8e4f00e069e802b4cb3c436f98f1fabcb3a5719965ad07
   - id: backend-surface-contract-ai-toolkit-2026-08-13
     backend: ai-toolkit
     reason: >-

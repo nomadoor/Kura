@@ -40,7 +40,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | Command | Purpose |
 | --- | --- |
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner\|sd-scripts] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
-| `uv run kura run capabilities <backend> [--json]` | Show the `backend.config` fields that backend accepts, which of them apply only to some architectures or modes, its unverified escape hatches, and concepts it does not support |
+| `uv run kura run capabilities <backend> [--json]` | Show the `backend.config` fields that backend accepts, including reviewed nested fields and their types/ranges, selector applicability, unverified escape hatches, and unsupported concepts |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
@@ -303,7 +303,7 @@ is silently changed.
 | --- | --- |
 | `workspace.yaml contains obsolete setting(s) ... Delete these lines.` | Delete them. `kura init` wrote `runpod.container_cwd` in older versions and nothing has read it since the container working directory started coming from the backend adapter. |
 | `workspace.yaml <section> contains unsupported key(s): 'x'; use 'y'` | Correct the key. `uv run kura doctor workspace` prints every accepted section and key. |
-| `<backend> backend.config contains unsupported key(s): 'optimizer'; use 'optimizer_type'` | Correct the key. `uv run kura run capabilities <backend>` prints the accepted fields, including which ones apply only to some architectures or modes. |
+| `<backend> backend.config contains unsupported key(s): 'optimizer'; use 'optimizer_type'` | Correct the key. `uv run kura run capabilities <backend>` prints accepted top-level and reviewed nested fields, including selector applicability and nested types/ranges. |
 | `promptset item '<id>' declares <key> but run.yaml workflow_patches has no binding for it` | Bind the key to a workflow node/field, move it under `meta` if it is provenance rather than a render input, or remove it. |
 | AI-Toolkit `backend.config.config` is rejected | Use the ordinary fields (`learning_rate`, `optimizer_type`, `lr_scheduler`, …). Raw nested process overrides move to `backend.config.native_config`, which is reported as an unverified escape hatch. |
 
