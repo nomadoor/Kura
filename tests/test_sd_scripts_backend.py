@@ -164,6 +164,28 @@ class SdScriptsBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "caption_dropout_rate must be a number"):
             validate_backend_config(run)
 
+    def test_preapproval_rejects_unknown_dataset_config_root_keys(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        run["backend"]["config"]["dataset_config"]["typo_root_key"] = True
+
+        with self.assertRaisesRegex(ValueError, "dataset_config contains unsupported key.*typo_root_key"):
+            validate_backend_config(run)
+
+    def test_preapproval_rejects_caption_extensions_without_a_leading_dot(self) -> None:
+        for level in ("general", "dataset", "subset"):
+            with self.subTest(level=level):
+                run = base_run("anima", "controlnet_lllite")
+                config = run["backend"]["config"]["dataset_config"]
+                target = {
+                    "general": config["general"],
+                    "dataset": config["datasets"][0],
+                    "subset": config["datasets"][0]["subsets"][0],
+                }[level]
+                target["caption_extension"] = "txt"
+
+                with self.assertRaisesRegex(ValueError, "caption_extension must start with a dot"):
+                    validate_backend_config(run)
+
     def test_anima_lllite_caption_rate_can_be_combined_with_text_encoder_disk_cache(self) -> None:
         run = base_run("anima", "controlnet_lllite")
         native = run["backend"]["config"]
@@ -183,6 +205,17 @@ class SdScriptsBackendTests(unittest.TestCase):
             destination = Path(directory) / "dataset.toml"
             lock = write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
         self.assertEqual(lock["effective_controls"][0]["caption_dropout_rate"], 0.15)
+
+    def test_default_num_repeats_is_frozen_for_runtime_dataset_logging(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0].pop("num_repeats")
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "dataset.toml"
+            lock = write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
+            parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+
+        self.assertEqual(parsed["datasets"][0]["subsets"][0]["num_repeats"], 1)
+        self.assertEqual(lock["effective_controls"][0]["num_repeats"], 1)
 
     def test_dynamic_caption_controls_rejected_when_text_encoder_cache_cannot_preserve_them(self) -> None:
         for key, value in (("caption_dropout_every_n_epochs", 2), ("caption_tag_dropout_rate", 0.1)):

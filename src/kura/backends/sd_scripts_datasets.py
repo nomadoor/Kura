@@ -18,6 +18,7 @@ IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 # commit.  The same descriptors drive validation and public capabilities.
 _BOOLEAN = {"type": "boolean"}
 _STRING = {"type": "string"}
+_CAPTION_EXTENSION = {"type": "string", "starts_with": "."}
 _POSITIVE_INTEGER = {"type": "integer", "minimum": 1}
 _NON_NEGATIVE_INTEGER = {"type": "integer", "minimum": 0}
 _RATE = {"type": "number", "minimum": 0.0, "maximum": 1.0}
@@ -33,7 +34,7 @@ def _visible(
 
 _SUBSET_NATIVE_FIELDS: dict[str, dict[str, Any]] = {
     "num_repeats": _visible(_POSITIVE_INTEGER, plan_group="subset"),
-    "caption_extension": _STRING,
+    "caption_extension": _CAPTION_EXTENSION,
     "shuffle_caption": _visible(_BOOLEAN, plan_group="caption"),
     "keep_tokens": _visible(_NON_NEGATIVE_INTEGER, plan_group="caption"),
     "color_aug": _visible(_BOOLEAN, plan_group="augmentation"),
@@ -107,6 +108,11 @@ def _validate_field(value: Any, spec: dict[str, Any], *, field: str) -> None:
     if kind == "string":
         if not isinstance(value, str):
             raise ValueError(f"sd-scripts {field} must be a string")
+        starts_with = spec.get("starts_with")
+        if starts_with is not None and not value.startswith(starts_with):
+            if starts_with == ".":
+                raise ValueError(f"sd-scripts {field} must start with a dot")
+            raise ValueError(f"sd-scripts {field} must start with {starts_with!r}")
         return
     if kind == "integer":
         if isinstance(value, bool) or not isinstance(value, int):
@@ -258,6 +264,9 @@ def _validated_dataset_config(
     config = native.get("dataset_config")
     if not isinstance(config, dict):
         raise ValueError("sd-scripts backend.config.dataset_config must be a mapping")
+    unknown = sorted(set(config) - {"general", "datasets"})
+    if unknown:
+        raise ValueError("sd-scripts dataset_config contains unsupported key(s): " + ", ".join(unknown))
     dataset_items = config.get("datasets")
     if not isinstance(dataset_items, list) or not dataset_items:
         raise ValueError("sd-scripts dataset_config.datasets must be a non-empty list")
@@ -310,6 +319,7 @@ def write_sd_scripts_dataset_config(run: dict[str, Any], destination: Path, *, w
         lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in native_dataset.items())
         for subset_index, source_clean in enumerate(cleaned_subsets):
             effective = {**general, **native_dataset, **source_clean}
+            effective.setdefault("num_repeats", 1)
             effective_controls.append({
                 "dataset_index": dataset_index,
                 "subset_index": subset_index,

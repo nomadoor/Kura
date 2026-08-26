@@ -16,8 +16,11 @@ records:
       This changes behavior for authored configurations such as
       shuffle_caption=true combined with text-encoder caching. None of the
       listed historical smoke configurations uses that combination or any new
-      nested key, so their native TOML, training argv, optimizer step, and
-      output contract remain unchanged; added logging is observational only.
+      nested key. They also use only the supported dataset_config root keys,
+      dot-prefixed caption extensions, and explicit num_repeats=1, so stricter
+      preapproval validation and complete effective-control logging leave
+      their native TOML, training argv, optimizer step, and output contract
+      unchanged; added logging is observational only.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-docker-v2-2026-08-01
@@ -32,7 +35,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: f82600e3f1bb049e0b8e4f00e069e802b4cb3c436f98f1fabcb3a5719965ad07
+      value: ac6333952e8027c6f8019c36b36dfb64e21c8d68699ebf33743278ff722c027c
   - id: sd-scripts-caption-dropout-smoke-followup-2026-08-26
     backend: sd-scripts
     reason: >-
@@ -40,9 +43,11 @@ records:
       the upstream disabled value for caption_dropout_every_n_epochs, derive
       plan visibility from the nested schema, and avoid a misleading aggregate
       batch or resolution when datasets disagree. The recorded smoke uses
-      caption_dropout_rate=0.15 with one dataset; its native TOML, runtime log,
-      text-encoder cache value, training argv, optimizer step, and output are
-      unchanged.
+      caption_dropout_rate=0.15 with one dataset, only supported root keys, a
+      dot-prefixed caption extension, and explicit num_repeats=1. Its native
+      TOML, runtime log, text-encoder cache value, training argv, optimizer
+      step, and output are unchanged by the stricter preapproval checks and
+      complete default logging.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26
@@ -53,7 +58,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: f82600e3f1bb049e0b8e4f00e069e802b4cb3c436f98f1fabcb3a5719965ad07
+      value: ac6333952e8027c6f8019c36b36dfb64e21c8d68699ebf33743278ff722c027c
   - id: backend-surface-contract-ai-toolkit-2026-08-13
     backend: ai-toolkit
     reason: >-
