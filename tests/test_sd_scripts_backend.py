@@ -1,15 +1,25 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import struct
 import tempfile
+import tomllib
 import unittest
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from kura.backends import backend_capabilities, validate_backend_config
 from kura.backends.sd_scripts import OWNED_FLAGS, command_sd_scripts, compile_sd_scripts, display_sd_scripts
-from kura.backends.sd_scripts_datasets import write_sd_scripts_dataset_config
+from kura.backends.sd_scripts_datasets import (
+    DATASET_KEYS,
+    GENERAL_KEYS,
+    SUBSET_KEYS,
+    _validate_field,
+    write_sd_scripts_dataset_config,
+)
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.container_scripts import script_source
 from kura.run_commands.plan import _sd_scripts_cache_preflight_report, _sd_scripts_disk_cache_estimate
@@ -61,6 +71,217 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
 
 
 class SdScriptsBackendTests(unittest.TestCase):
+    def test_caption_dropout_is_supported_at_every_upstream_inheritance_level(self) -> None:
+        for level in ("general", "dataset", "subset"):
+            with self.subTest(level=level), tempfile.TemporaryDirectory() as directory:
+                run = base_run("anima", "controlnet_lllite")
+                config = run["backend"]["config"]["dataset_config"]
+                target = {
+                    "general": config["general"],
+                    "dataset": config["datasets"][0],
+                    "subset": config["datasets"][0]["subsets"][0],
+                }[level]
+                target.update(
+                    {
+                        "caption_dropout_rate": 0.15,
+                        "caption_dropout_every_n_epochs": 2,
+                        "caption_tag_dropout_rate": 0.1,
+                    }
+                )
+
+                destination = Path(directory) / "dataset.toml"
+                write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
+                parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+                emitted = {
+                    "general": parsed["general"],
+                    "dataset": parsed["datasets"][0],
+                    "subset": parsed["datasets"][0]["subsets"][0],
+                }[level]
+                self.assertEqual(emitted["caption_dropout_rate"], 0.15)
+                self.assertEqual(emitted["caption_dropout_every_n_epochs"], 2)
+                self.assertEqual(emitted["caption_tag_dropout_rate"], 0.1)
+
+    def test_reviewed_nested_dataset_scope_is_explicit_at_each_level(self) -> None:
+        subset_native = {
+            "num_repeats", "caption_extension", "shuffle_caption", "keep_tokens",
+            "color_aug", "flip_aug", "random_crop", "caption_dropout_rate",
+            "caption_dropout_every_n_epochs", "caption_tag_dropout_rate",
+            "caption_prefix", "caption_suffix", "caption_separator",
+            "keep_tokens_separator", "secondary_separator", "enable_wildcard",
+            "token_warmup_min", "token_warmup_step", "resize_interpolation", "cache_info",
+        }
+        dataset_native = {
+            "batch_size", "resolution", "enable_bucket", "bucket_no_upscale",
+            "min_bucket_reso", "max_bucket_reso", "bucket_reso_steps",
+            "network_multiplier", "skip_image_resolution",
+        }
+        staging_only = {"dataset_id", "image_subdir", "caption_subdir", "conditioning_subdir"}
+
+        self.assertEqual(GENERAL_KEYS, subset_native | dataset_native)
+        self.assertEqual(DATASET_KEYS, subset_native | dataset_native)
+        self.assertEqual(SUBSET_KEYS, subset_native | staging_only)
+        for deliberately_unsupported in ("validation_seed", "validation_split", "custom_attributes"):
+            self.assertNotIn(deliberately_unsupported, GENERAL_KEYS | DATASET_KEYS | SUBSET_KEYS)
+
+    def test_nested_dataset_surface_rejects_unknown_invalid_types_and_ranges(self) -> None:
+        cases = (
+            ("kura_unknown", True, "unsupported key"),
+            ("caption_dropout_rate", "0.15", "caption_dropout_rate must be a number"),
+            ("caption_dropout_rate", 1.1, "caption_dropout_rate must be between 0 and 1"),
+            ("enable_bucket", 1, "enable_bucket must be true or false"),
+        )
+        for key, value, message in cases:
+            with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as directory:
+                run = base_run("anima", "controlnet_lllite")
+                config = run["backend"]["config"]["dataset_config"]
+                target = config["general"] if key == "enable_bucket" else config["datasets"][0]["subsets"][0]
+                target[key] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    write_sd_scripts_dataset_config(
+                        run, Path(directory) / "dataset.toml", workspace=None, strict=False
+                    )
+
+    def test_caption_dropout_every_n_epochs_zero_is_an_accepted_disabled_value(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        native = run["backend"]["config"]
+        native["cache_text_encoder_outputs_to_disk"] = True
+        native["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_every_n_epochs"] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "dataset.toml"
+            write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
+            parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(parsed["datasets"][0]["subsets"][0]["caption_dropout_every_n_epochs"], 0)
+
+    def test_field_validator_enforces_arbitrary_declared_bounds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            _validate_field(1, {"type": "integer", "minimum": 2}, field="x")
+        with self.assertRaisesRegex(ValueError, "between 0.25 and 0.75"):
+            _validate_field(0.8, {"type": "number", "minimum": 0.25, "maximum": 0.75}, field="x")
+
+    def test_preapproval_backend_validation_uses_the_nested_dataset_contract(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_rate"] = "0.15"
+        with self.assertRaisesRegex(ValueError, "caption_dropout_rate must be a number"):
+            validate_backend_config(run)
+
+    def test_preapproval_rejects_unknown_dataset_config_root_keys(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        run["backend"]["config"]["dataset_config"]["typo_root_key"] = True
+
+        with self.assertRaisesRegex(ValueError, "dataset_config contains unsupported key.*typo_root_key"):
+            validate_backend_config(run)
+
+    def test_preapproval_rejects_caption_extensions_without_a_leading_dot(self) -> None:
+        for level in ("general", "dataset", "subset"):
+            with self.subTest(level=level):
+                run = base_run("anima", "controlnet_lllite")
+                config = run["backend"]["config"]["dataset_config"]
+                target = {
+                    "general": config["general"],
+                    "dataset": config["datasets"][0],
+                    "subset": config["datasets"][0]["subsets"][0],
+                }[level]
+                target["caption_extension"] = "txt"
+
+                with self.assertRaisesRegex(ValueError, "caption_extension must start with a dot"):
+                    validate_backend_config(run)
+
+    def test_anima_lllite_caption_rate_can_be_combined_with_text_encoder_disk_cache(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        native = run["backend"]["config"]
+        native["cache_text_encoder_outputs_to_disk"] = True
+        native["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_rate"] = 0.15
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "resolved"
+            compile_sd_scripts(run, destination, workspace=None, strict=False)
+            parsed = tomllib.loads((destination / "dataset.toml").read_text(encoding="utf-8"))
+        self.assertEqual(parsed["datasets"][0]["subsets"][0]["caption_dropout_rate"], 0.15)
+        self.assertIn("--cache_text_encoder_outputs_to_disk", command_sd_scripts(run)["argv"][2])
+
+    def test_caption_dropout_is_frozen_for_runtime_dataset_logging(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_rate"] = 0.15
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "dataset.toml"
+            lock = write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
+        self.assertEqual(lock["effective_controls"][0]["caption_dropout_rate"], 0.15)
+
+    def test_default_num_repeats_is_frozen_for_runtime_dataset_logging(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0].pop("num_repeats")
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "dataset.toml"
+            lock = write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
+            parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+
+        self.assertEqual(parsed["datasets"][0]["subsets"][0]["num_repeats"], 1)
+        self.assertEqual(lock["effective_controls"][0]["num_repeats"], 1)
+
+    def test_dynamic_caption_controls_rejected_when_text_encoder_cache_cannot_preserve_them(self) -> None:
+        for key, value in (("caption_dropout_every_n_epochs", 2), ("caption_tag_dropout_rate", 0.1)):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
+                run = base_run("anima", "controlnet_lllite")
+                native = run["backend"]["config"]
+                native["cache_text_encoder_outputs_to_disk"] = True
+                native["dataset_config"]["datasets"][0]["subsets"][0][key] = value
+                with self.assertRaisesRegex(ValueError, rf"{key}.*text-encoder cache"):
+                    compile_sd_scripts(run, Path(directory) / "resolved", workspace=None, strict=False)
+
+    def test_sd_scripts_capabilities_expose_nested_dataset_contract(self) -> None:
+        nested = backend_capabilities("sd-scripts")["nested_config_fields"]
+        for path in (
+            "dataset_config.general",
+            "dataset_config.datasets[]",
+            "dataset_config.datasets[].subsets[]",
+        ):
+            self.assertIn("caption_dropout_rate", nested[path])
+            self.assertEqual(nested[path]["caption_dropout_rate"]["type"], "number")
+        self.assertIn("network_multiplier", nested["dataset_config.datasets[]"])
+        self.assertIn("caption_prefix", nested["dataset_config.datasets[].subsets[]"])
+        self.assertNotIn("validation_split", nested["dataset_config.datasets[]"])
+
+    def test_plan_display_exposes_effective_bucket_and_caption_settings(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        config = run["backend"]["config"]["dataset_config"]
+        config["general"].update({"enable_bucket": True, "bucket_no_upscale": True})
+        config["datasets"][0]["subsets"][0].update(
+            {
+                "caption_dropout_rate": 0.15,
+                "flip_aug": True,
+                "color_aug": False,
+                "random_crop": True,
+                "resize_interpolation": "lanczos",
+                "cache_info": True,
+            }
+        )
+
+        dataset = display_sd_scripts(run)["dataset_config"]["datasets"][0]
+
+        self.assertEqual(dataset["batch_size"], 1)
+        self.assertTrue(dataset["bucket"]["enable_bucket"])
+        self.assertTrue(dataset["bucket"]["bucket_no_upscale"])
+        self.assertEqual(dataset["subsets"][0]["caption"]["caption_dropout_rate"], 0.15)
+        self.assertNotIn("caption_extension", dataset["subsets"][0]["caption"])
+        self.assertEqual(
+            dataset["subsets"][0]["augmentation"],
+            {"color_aug": False, "flip_aug": True, "random_crop": True, "resize_interpolation": "lanczos"},
+        )
+        self.assertEqual(dataset["subsets"][0]["cache"], {"cache_info": True})
+
+    def test_top_level_dataset_summary_does_not_choose_one_of_conflicting_datasets(self) -> None:
+        run = base_run("anima", "controlnet_lllite")
+        datasets = run["backend"]["config"]["dataset_config"]["datasets"]
+        second = deepcopy(datasets[0])
+        second["batch_size"] = 2
+        second["resolution"] = [768, 768]
+        datasets.append(second)
+
+        display = display_sd_scripts(run)
+
+        self.assertIsNone(display["batch_size"])
+        self.assertIsNone(display["resolution"])
+        self.assertEqual([item["batch_size"] for item in display["dataset_config"]["datasets"]], [1, 2])
+
     def test_model_downloads_always_include_selected_primary_filename(self) -> None:
         run = base_run()
         run["backend"]["config"].pop("model_paths")
@@ -141,6 +362,25 @@ class SdScriptsBackendTests(unittest.TestCase):
         self.assertEqual(len(lock["files"]), 2)
         self.assertTrue(all(item["identity"]["sha256"] for item in lock["files"]))
 
+    def test_dataset_level_caption_extension_controls_staged_caption_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            images = workspace / "datasets" / "sample" / "images"
+            images.mkdir(parents=True)
+            (images / "one.png").write_bytes(b"png")
+            (images / "one.caption").write_text("caption", encoding="utf-8")
+            run = base_run()
+            config = run["backend"]["config"]["dataset_config"]
+            config["general"].pop("caption_extension")
+            config["datasets"][0]["caption_extension"] = ".caption"
+            destination = workspace / "resolved"
+
+            compile_sd_scripts(run, destination, workspace=workspace, strict=True)
+
+            lock = json.loads((destination / "dataset-stage.lock.json").read_text(encoding="utf-8"))
+            staged_sources = {item["source"] for item in lock["files"]}
+        self.assertIn("datasets/sample/images/one.caption", staged_sources)
+
     def test_staging_keeps_shared_dataset_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -164,6 +404,29 @@ class SdScriptsBackendTests(unittest.TestCase):
             after = sorted(path.relative_to(workspace / "datasets").as_posix() for path in (workspace / "datasets").rglob("*") if path.is_file())
         self.assertTrue(staged_is_symlink)
         self.assertEqual(before, after)
+
+    def test_staging_logs_frozen_effective_dataset_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            lock_path = workspace / "lock.json"
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "stage_root": "runs/x/cache/sd-scripts/datasets",
+                        "files": [],
+                        "effective_controls": [
+                            {"dataset_index": 0, "subset_index": 0, "caption_dropout_rate": 0.15}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            namespace = {"__name__": "__test__"}
+            exec(script_source("sd_scripts_dataset_stage.py"), namespace)
+            output = io.StringIO()
+            with patch("sys.argv", ["stage", str(lock_path), str(workspace)]), contextlib.redirect_stdout(output):
+                namespace["main"]()
+        self.assertIn("dataset 0 subset 0 caption_dropout_rate: 0.15", output.getvalue())
 
     def test_staging_rejects_a_changed_frozen_dataset_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

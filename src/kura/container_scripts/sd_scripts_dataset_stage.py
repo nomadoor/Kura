@@ -59,6 +59,15 @@ def main():
         destination.parent.mkdir(parents=True, exist_ok=True)
         relative = os.path.relpath(source, destination.parent)
         destination.symlink_to(relative)
+    for controls in payload.get("effective_controls", []):
+        dataset_index = controls.get("dataset_index")
+        subset_index = controls.get("subset_index")
+        for key in sorted(set(controls) - {"dataset_index", "subset_index"}):
+            value = json.dumps(controls[key], ensure_ascii=False, separators=(",", ":"))
+            print(
+                f"[kura] sd-scripts dataset {dataset_index} subset {subset_index} {key}: {value}",
+                flush=True,
+            )
     print(f"[kura] sd-scripts dataset staged: {len(payload.get('files', []))} files", flush=True)
 
 

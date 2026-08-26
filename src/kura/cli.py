@@ -267,6 +267,19 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
                     for selector, allowed in clause.items()
                 ))
             print(f"  {field}: " + " or ".join(clauses))
+    if payload["nested_config_fields"]:
+        print("nested backend.config fields:")
+        for path, fields in payload["nested_config_fields"].items():
+            print(f"  {path}:")
+            for field, contract in fields.items():
+                constraints = [contract["type"]]
+                if "minimum" in contract:
+                    constraints.append(f"min={contract['minimum']}")
+                if "exclusive_minimum" in contract:
+                    constraints.append(f">{contract['exclusive_minimum']}")
+                if "maximum" in contract:
+                    constraints.append(f"max={contract['maximum']}")
+                print(f"    {field} (" + ", ".join(constraints) + ")")
     if payload["unsupported_fields"]:
         print("unsupported fields:")
         for field, reason in payload["unsupported_fields"].items():

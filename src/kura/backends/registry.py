@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -12,6 +13,7 @@ from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
 from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts
+from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
 
@@ -44,6 +46,7 @@ class BackendSurface:
     conditions: tuple[FieldCondition, ...] = ()
     selector_defaults: tuple[tuple[str, Any], ...] = ()
     unavailable: tuple[tuple[str, str], ...] = ()
+    nested_config_fields: dict[str, dict[str, dict[str, Any]]] | None = None
 
     def __post_init__(self) -> None:
         overlap = self.fields & self.escape_hatches
@@ -66,6 +69,7 @@ class BackendAdapter:
     display: Callable[[dict[str, Any]], dict[str, Any]]
     requirements: Callable[..., list[dict[str, Any]]]
     surface: BackendSurface
+    validate_authored: Callable[[dict[str, Any]], None] | None = None
     download_specs: Callable[..., tuple[list[dict[str, Any]], dict[str, str]]] | None = None
     validate_dataset: Callable[[dict[str, Any], Path], None] | None = None
     runpod_template_compatible: bool = False
@@ -157,7 +161,7 @@ SD_SCRIPTS_SURFACE = BackendSurface(
     escape_hatches=frozenset({"command", "extra_args"}),
     selector_defaults=(("mode", "lora"),),
     unavailable=(
-        ("batch", "sd-scripts batch size is configured at backend.config.dataset_config.general.batch_size"),
+        ("batch", "sd-scripts batch size is configured at backend.config.dataset_config.general.batch_size or backend.config.dataset_config.datasets[].batch_size"),
         ("deepspeed", "Kura's sd-scripts built-in selectors do not own deepspeed; use a reviewed backend.config.command"),
         ("fused_backward_pass", "Kura's sd-scripts built-in selectors do not own fused_backward_pass; use a reviewed backend.config.command"),
     ),
@@ -190,6 +194,7 @@ SD_SCRIPTS_SURFACE = BackendSurface(
         _when("unsloth_offload_checkpointing", mode=("lora",)),
         _when("vae_chunk_size", architecture=("anima",)),
     ),
+    nested_config_fields=SD_SCRIPTS_DATASET_CAPABILITIES,
 )
 
 
@@ -207,6 +212,7 @@ BACKENDS: dict[str, BackendAdapter] = {
     "sd-scripts": BackendAdapter(
         name="sd-scripts", image_name="sd-scripts", compile=_compile_sd_scripts, command=command_sd_scripts,
         display=display_sd_scripts, requirements=requirements_sd_scripts, surface=SD_SCRIPTS_SURFACE,
+        validate_authored=validate_sd_scripts_dataset_config,
         download_specs=sd_scripts_model_download_specs,
     ),
 }
@@ -290,6 +296,8 @@ def validate_backend_config(run: dict[str, Any]) -> None:
                 f"it requires " + " or ".join(resolved_clauses)
                 + f". Run `kura run capabilities {adapter.name}` for field applicability."
             )
+    if adapter.validate_authored is not None:
+        adapter.validate_authored(run)
 
 
 def backend_capabilities(name: Any) -> dict[str, Any]:
@@ -313,4 +321,5 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
             key: {"validation": "unverified", "recorded": True}
             for key in sorted(adapter.surface.escape_hatches)
         },
+        "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
     }

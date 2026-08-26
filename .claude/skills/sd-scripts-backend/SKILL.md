@@ -26,6 +26,23 @@ SDXL, SD 1.5, or FLUX prompt policy here.
 - Use the upstream two-level `[[datasets]]` / `[[datasets.subsets]]` TOML.
   Kura stages files below `runs/<id>/cache/sd-scripts/datasets`; never point a
   native disk cache at the shared `datasets/` tree.
+- Before authoring `dataset_config`, run
+  `uv run kura run capabilities sd-scripts`. Its nested field sections are the
+  reviewed schema for `[general]`, `[[datasets]]`, and
+  `[[datasets.subsets]]`; upstream keys absent there remain unsupported. Kura
+  validates nested types and ranges during compile.
+- The pinned schema supports `caption_dropout_rate`,
+  `caption_dropout_every_n_epochs`, and `caption_tag_dropout_rate` at all three
+  inheritance levels. Anima may preserve `caption_dropout_rate` in its
+  text-encoder cache. Do not combine a text-encoder cache with enabled
+  epoch-based or tag dropout, caption shuffling, or token warmup; those controls
+  are dynamic and are rejected instead of being silently lost. The upstream
+  disabled value `caption_dropout_every_n_epochs: 0` remains valid.
+- Upstream acceptance alone is not Kura support. In particular,
+  `validation_seed`, `validation_split`, and arbitrary `custom_attributes` are
+  intentionally absent from the reviewed surface: the pinned Anima LLLite
+  entrypoint does not consume its constructed validation dataset, and Kura does
+  not accept unvalidated nested mappings as if they changed training.
 - If a disk cache is enabled, record a measured
   `backend.config.disk_cache_estimate_gb`. Treat
   `safety.allow_unknown_disk_cache` as an explicit reviewed exception.
@@ -57,6 +74,10 @@ SDXL, SD 1.5, or FLUX prompt policy here.
   `flux_shift`, guidance `1.0`, and raw prediction; Anima LoRA starts from
   sigmoid; Anima LLLite starts from shift with discrete flow shift `3.0`.
   Unknown built-in config keys are errors, not pass-through options.
+- Review the plan's `dataset_config` section for effective batch, resolution,
+  bucket/no-upscale, network multiplier, skipped resolution, and per-subset
+  caption controls. Dataset and subset differences must not be inferred from a
+  single top-level batch or resolution summary.
 - Anima LoRA rejects `fp8_base`, conflicting text-encoder training/cache, and
   incompatible offload combinations. LLLite rejects block swap and the
   unsupported offload/DeepSpeed/fused-backward paths.

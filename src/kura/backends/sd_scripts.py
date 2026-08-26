@@ -8,7 +8,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from kura.backends.sd_scripts_datasets import write_sd_scripts_dataset_config
+from kura.backends.sd_scripts_datasets import (
+    display_sd_scripts_dataset_config,
+    write_sd_scripts_dataset_config,
+)
 from kura.backends.sd_scripts_models import explicit_model_paths, sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
 from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _script_command, _truthy
 from kura.container_scripts import script_source
@@ -388,7 +391,14 @@ def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
     general = config.get("general") if isinstance(config.get("general"), dict) else {}
     datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
-    first = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
+    dataset_display = display_sd_scripts_dataset_config(native)
+    displayed_datasets = dataset_display["datasets"]
+
+    def uniform_dataset_value(key: str, fallback: Any = None) -> Any:
+        values = [item.get(key) for item in displayed_datasets]
+        if not values:
+            return fallback
+        return values[0] if all(value == values[0] for value in values[1:]) else None
     flow: dict[str, Any] = {}
     if architecture == "flux1":
         flow = {
@@ -408,7 +418,7 @@ def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
         "architecture": architecture, "mode": mode,
         "rank": native.get("network_dim") if mode == "lora" else None, "alpha": native.get("network_alpha") if mode == "lora" else None,
         "learning_rate": native.get("learning_rate"), "scheduler": native.get("lr_scheduler"),
-        "batch_size": first.get("batch_size"), "gradient_accumulation_steps": native.get("gradient_accumulation_steps", 1), "resolution": first.get("resolution") or general.get("resolution"),
+        "batch_size": uniform_dataset_value("batch_size", general.get("batch_size")), "gradient_accumulation_steps": native.get("gradient_accumulation_steps", 1), "resolution": uniform_dataset_value("resolution", general.get("resolution")),
         "optimizer": native.get("optimizer_type"), "precision": native.get("mixed_precision"),
         "flow_matching": flow,
         "component_learning_rates": {key: native.get(key) for key in ("unet_lr", "text_encoder_lr1", "text_encoder_lr2")},
@@ -417,4 +427,5 @@ def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
             "attn_mode": native.get("attn_mode", "sdpa") if architecture == "anima" and mode == "controlnet_lllite" else native.get("attn_mode"),
         },
         "checkpoint": {"save_every_n_steps": native.get("save_every_n_steps"), "retention_window_steps": native.get("save_last_n_steps")},
+        "dataset_config": dataset_display,
     }
