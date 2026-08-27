@@ -2,18 +2,18 @@ schema_version: 1
 kind: training-resume-equivalence
 observed_at: 2026-08-27
 executor: docker
-kura_commit: 46fff2a
+kura_commit: a8cbdb3
 hardware:
   gpu: NVIDIA GeForce RTX 4070 Ti
   vram_mb: 12282
 method:
-  control: 100 uninterrupted optimizer updates
+  controls: two independent runs of 100 uninterrupted optimizer updates
   resumed: 50 optimizer updates, publish durable state, create a new run and process, Resume for 50 updates
   comparison:
     weights: semantic tensor comparison with safetensors metadata excluded
     optimizer_scheduler_rng: recursive semantic state comparison
   dataset_scope: one training item per backend
-  warning: Results establish only the recorded revision, architecture, parameters, and dataset cardinality. They do not prove exact Resume for multi-item or shuffled datasets.
+  warning: One uninterrupted control pair distinguishes an observed baseline from Resume divergence, but is not a statistical bound. Results establish only the recorded revision, architecture, parameters, and dataset cardinality. They do not prove exact Resume for multi-item or shuffled datasets.
 backends:
   ai-toolkit:
     upstream:
@@ -24,10 +24,26 @@ backends:
     architecture: sd15
     seed: 1
     control_run: 20260827-1649_ai-main-direct100_dd63
+    repeat_control_run: 20260827-1725_ai-control100-a2_5f59
     source_run: 20260827-1649_ai-main-split50_847a
     resumed_run: 20260827-1653_ai-main-resume50-to100_483c
     control_artifact: state-step-00000100-3332b50070d7
+    repeat_control_artifact: state-step-00000100-71ded583ba6f
     resumed_artifact: state-step-00000100-40e8c5599578
+    uninterrupted_baseline:
+      exact: true
+      weight_tensors_total: 216
+      weight_tensors_different: 0
+      weight_max_abs: 0.0
+      weight_mean_abs: 0.0
+      weight_relative_l2: 0.0
+      optimizer_semantic_leaves_different: 0
+    repeat_control_vs_resumed:
+      weight_tensors_different: 111
+      weight_max_abs: 0.0001220703125
+      weight_mean_abs: 0.0000027131806060494077
+      weight_relative_l2: 0.00006883769159586734
+      optimizer_semantic_leaves_different: 272
     result:
       exact: false
       weight_tensors_total: 216
@@ -38,7 +54,7 @@ backends:
       optimizer_semantic_leaves_different: 272
       missing_state: [scheduler, rng, exact_dataloader_position]
     warning_level: high
-    interpretation: Learned weights and optimizer state diverged. The measured relative error is small, but this is not exact continuation.
+    interpretation: The two uninterrupted controls matched exactly, while Resume changed learned weights and optimizer state. Resume therefore introduced the measured divergence in this recorded case. The relative error is small, but this is not exact continuation.
   musubi-tuner:
     upstream:
       commit: e0cbd8f3dfe38365b10f8bc790b980f8894e8ba1
@@ -48,10 +64,35 @@ backends:
     task: t2v-1.3B
     seed: 1
     control_run: 20260827-1649_musubi-main-direct100_9fd7
+    repeat_control_run: 20260827-1725_musubi-control100-a2_c0c6
     source_run: 20260827-1649_musubi-main-split50_a5cf
     resumed_run: 20260827-1658_musubi-main-resume50-to100_57d7
     control_artifact: state-step-00000100-d5463da67df9
+    repeat_control_artifact: state-step-00000100-e29850ad7bed
     resumed_artifact: state-step-00000100-0b9eaa2171a8
+    uninterrupted_baseline:
+      exact: false
+      weight_tensors_total: 900
+      weight_tensors_different: 600
+      weight_max_abs: 0.00002520912494219374
+      weight_mean_abs: 0.0000004653358998907697
+      weight_relative_l2: 0.00004485477239198404
+      optimizer_semantic_leaves_different: 1320
+      scheduler_exact: true
+      rng_semantic_exact: true
+    repeat_control_vs_resumed:
+      weight_tensors_different: 600
+      weight_max_abs: 0.00002970235436805524
+      weight_mean_abs: 0.0000004373820475381369
+      weight_relative_l2: 0.000043101383276882135
+      optimizer_semantic_leaves_different: 1320
+      scheduler_exact: true
+      rng_semantic_exact: false
+    resume_to_baseline_ratios:
+      control_vs_resumed_weight_relative_l2: 1.0423111386118407
+      repeat_control_vs_resumed_weight_relative_l2: 0.9609096419043417
+      control_vs_resumed_weight_max_abs: 1.129822699019393
+      repeat_control_vs_resumed_weight_max_abs: 1.178238214779957
     result:
       exact: false
       weight_tensors_total: 900
@@ -63,8 +104,8 @@ backends:
       scheduler_exact: true
       rng_semantic_leaves_different: 1
       missing_state: [application_global_step, epoch, exact_dataloader_position]
-    warning_level: high
-    interpretation: Learned weights and optimizer state diverged even though the scheduler state matched exactly.
+    warning_level: caution
+    interpretation: The uninterrupted controls already differed in learned weights and optimizer state. Resume divergence was the same order and stayed within the three observed pairwise relative-L2 and maximum-error values. This single control pair does not show Resume-specific added divergence or establish a statistical bound.
   sd-scripts:
     upstream:
       commit: 37a1cbbc5725ed2a3575506e7bd2001c9908ac92
@@ -73,10 +114,32 @@ backends:
     architecture: sd15
     seed: 42
     control_run: 20260827-1649_sd15-main-direct100_f73f
+    repeat_control_run: 20260827-1725_sd15-control100-a2_1f2f
     source_run: 20260827-1649_sd15-main-split50_7fa8
     resumed_run: 20260827-1704_sd15-main-resume50-to100_5dd8
     control_artifact: state-step-00000100-b42508a7b5c3
+    repeat_control_artifact: state-step-00000100-8d40b77084e6
     resumed_artifact: state-step-00000100-e59e1d981890
+    uninterrupted_baseline:
+      exact: true
+      weight_tensors_total: 792
+      weight_tensors_different: 0
+      weight_max_abs: 0.0
+      weight_mean_abs: 0.0
+      weight_relative_l2: 0.0
+      optimizer_semantic_leaves_different: 0
+      scheduler_exact: true
+      normalized_train_state_exact: true
+      rng_file_exact: true
+    repeat_control_vs_resumed:
+      weight_tensors_different: 0
+      weight_max_abs: 0.0
+      weight_mean_abs: 0.0
+      weight_relative_l2: 0.0
+      optimizer_semantic_leaves_different: 0
+      scheduler_exact: true
+      normalized_train_state_exact: true
+      rng_semantic_exact: false
     result:
       exact: false
       learned_state_exact_in_recorded_case: true
@@ -91,4 +154,4 @@ backends:
       rng_semantic_leaves_different: 625
       missing_state: [application_global_step, application_epoch_counter, exact_dataloader_position]
     warning_level: caution
-    interpretation: Learned state matched in this one-item constant-scheduler case, but RNG and exact data position did not. Do not generalize this result to shuffled or multi-item datasets.
+    interpretation: Both uninterrupted controls and Resume produced identical learned weights, optimizer, scheduler, and normalized train state in this recorded case. Resume RNG differed while the uninterrupted-control RNG files matched exactly. Do not generalize this one-item constant-scheduler result to shuffled or multi-item datasets.

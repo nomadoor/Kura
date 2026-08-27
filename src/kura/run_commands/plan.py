@@ -1133,14 +1133,8 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         _append_kv(lines, "not_restored", resume.get("not_restored"))
         if resume.get("restoration_level") != "exact_resume":
             missing = resume.get("not_restored") or []
-            divergence_sensitive = {
-                "model", "optimizer", "scheduler", "rng", "dataloader_position",
-                "exact_dataloader_position", "sampler_state", "supported_sampler_state",
-            }
-            severity = "HIGH" if divergence_sensitive.intersection(str(item) for item in missing) else "CAUTION"
-            consequence = "; learned state may diverge" if severity == "HIGH" else ""
             detail = f"; missing: {', '.join(str(item) for item in missing)}" if missing else ""
-            _append_kv(lines, "continuity", f"{severity}: exact equivalence is not guaranteed{consequence}{detail}")
+            _append_kv(lines, "continuity", "exact equivalence is not guaranteed" + detail)
         if resume.get("limitations"):
             _append_kv(lines, "limitations", resume.get("limitations"))
         _append_kv(lines, "scheduler", resume.get("scheduler_behavior"))

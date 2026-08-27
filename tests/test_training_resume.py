@@ -1241,7 +1241,9 @@ class ResumeRunTests(unittest.TestCase):
         self.assertIn("target_step  3000", output)
         self.assertIn("native_steps 0 -> 1000", output)
         self.assertIn("exact_dataloader_position", output)
-        self.assertIn("continuity   HIGH: exact equivalence is not guaranteed; learned state may diverge", output)
+        self.assertIn("continuity   exact equivalence is not guaranteed; missing: exact_dataloader_position", output)
+        self.assertNotIn("HIGH", output)
+        self.assertNotIn("CAUTION", output)
         self.assertIn("Training state", output)
         self.assertIn("keep         2", output)
 

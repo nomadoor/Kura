@@ -140,17 +140,25 @@ local 100-step versus 50+50 evidence is recorded in
 `../../../docs/smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml`.
 Do not transfer a one-item result to a shuffled or multi-item dataset.
 
-Classify the user warning as follows:
+Do not infer warning severity from the restoration contract's missing-state
+list. That list is a fact about what the backend restores, not a measurement of
+the resulting divergence. When matching evidence contains two uninterrupted
+controls, use their difference as the observed nondeterminism baseline and
+classify the user warning as follows:
 
-- **HIGH** — learned weights or optimizer state differed. State the measured
-  tensor count, maximum absolute error, and relative L2 error. A small numeric
-  error describes magnitude; it does not make the Resume exact.
-- **CAUTION** — learned weights, optimizer, and scheduler were semantically
-  equal in a matching test, but RNG, application counters, sampler, or exact
-  dataloader position differed. Name the narrow conditions that matched and
-  keep the general non-exact warning.
+- **HIGH** — Resume introduced learned-weight or optimizer divergence materially
+  beyond the uninterrupted-control baseline, including any difference when the
+  two controls matched exactly. State both baseline and Resume tensor counts,
+  maximum absolute error, and relative L2 error. A small numeric error describes
+  magnitude; it does not make the Resume exact.
+- **CAUTION** — Resume learned-state divergence stayed within the same measured
+  scale as the uninterrupted-control baseline, or learned weights, optimizer, and scheduler
+  matched while RNG, application counters, sampler, or exact dataloader position
+  differed. Name the narrow tested conditions and the baseline comparison; one
+  control pair is evidence, not a statistical bound.
 - **UNVERIFIED** — no evidence matches the selected revision and conditions.
-  Report the restoration contract without inventing an expected error size.
+  This includes evidence without an uninterrupted repeat control. Report the
+  restoration contract without inventing an expected error size or severity.
 
 Never label Resume exact from weight equality alone. Exactness requires all
 declared training-state components and the data position to match. File SHA
