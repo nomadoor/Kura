@@ -79,23 +79,10 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 7. 🤖 After the training report, generate ComfyUI comparison images from an explicit render case queue only after the user separately approves that evaluation.
 8. 🧑 Record your judgment in the render run's `notes.md` and decide whether to stop or run another experiment (🤖 carries out the instruction).
 
-To continue the same training session, create a derived Resume run with `uv run
-kura run resume <source-run> --additional-steps <N>`. Recovery after a lost
-container or Pod is possible only from a training-state artifact that Kura
-finished publishing locally before the environment disappeared. Kura selects
-the latest validated artifact by default, freezes its ID and hashes in the new
-run, and shows each backend's restored and missing state in `kura run plan`
-before launch. This is distinct from starting a new training session from a
-LoRA weight.
-
-Resume is a recovery and extension safety net, not a universal promise that the
-result will be bit-for-bit identical to uninterrupted training. AI-Toolkit is
-currently Partial Resume; Musubi and the supported sd-scripts LoRA paths are
-Best-effort Resume. Always review the plan's restored and missing state before
-launch. See [Commands](docs/commands.md#training-runs-normal-workflow) for
-backend limits and the
-[RunPod portability evidence](docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml)
-for the tested disposable-Pod path.
+Continue a previous training session with `uv run kura run resume <source-run>
+--additional-steps <N>`. Resume can recover from locally saved training state
+after a process or Pod is lost; guarantees vary by backend. See
+[Commands](docs/commands.md#training-runs-normal-workflow) for details.
 
 > 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
 

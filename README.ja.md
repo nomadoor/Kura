@@ -79,18 +79,10 @@ cp .env.example .env.local
 8. 🤖 （任意）明示的なrender case queueを作り、途中のcheckpointや各種生成条件をComfyUIで比較する
 9. 🧑 結果を見て、終了するか追加学習するかを判断（指示すれば 🤖 が実行）
 
-同じ学習セッションを続けるには、`uv run kura run resume
-<source-run> --additional-steps <N>` で派生runを作ります。元のコンテナや
-Podが失われた場合に復旧できるのは、消失前にKuraがローカルへ正常に
-公開し終えたtraining-state artifactからだけです。作成後は通常のrunと同じく
-`compile` → `plan` → 承認 → `execute` の順で実行します。
-
-Resumeは、やり直しを避けるための復旧・追加学習用セーフティネットであり、
-無中断学習とビット単位で完全一致することを全バックエンドで保証するものでは
-ありません。AI-Toolkitは現在Partial Resume、Musubiと対応済みsd-scripts LoRA経路は
-Best-effort Resumeです。実行前にplanの復元対象と未復元stateを必ず確認して
-ください。詳細は[commands](docs/commands.md#training-runs-normal-workflow)と
-[RunPod可搬性の実測記録](docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml)を参照してください。
+過去の学習を続けるには、`uv run kura run resume <source-run>
+--additional-steps <N>` を使います。ローカルに保存済みのtraining stateがあれば、
+プロセスやPodの消失後でも復旧できます。保証範囲はbackendごとに異なります。
+詳細は[commands](docs/commands.md#training-runs-normal-workflow)を参照してください。
 
 > 💡 データセットの基本的な作り方は、[AI Toolkit で SDXL（Illustrious）LoRA を学習する](https://comfyui.nomadoor.net/ja/notes/ai-toolkit-sdxl-lora-training/) が参考になるかもしれません（SDXL向けですが、考え方は同じです）。
 
