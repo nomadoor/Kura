@@ -3501,7 +3501,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(command["argv"][:2], ["python", "-c"])
         self.assertIn("hook_before_train_loop", command["argv"][2])
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
-        self.assertEqual(command["env"], {})
+        self.assertEqual(command["env"], {"SEED": "42"})
 
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()

@@ -237,8 +237,9 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     """Return a container-native command spec, without executing it."""
     override = _ai_toolkit_backend_override(run)
     command = override.get("command")
-    validated_recipe(run, required=command is None)
+    recipe = validated_recipe(run, required=command is None)
     if command is None:
+        runner_env = {"SEED": str(recipe["seed"])}
         compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
         cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
         config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"
@@ -250,7 +251,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
                 limitations = state_contract.get("restoration_contract", {}).get("limitations") or []
                 detail = "; ".join(limitations) if limitations else "training-state capture is disabled"
                 raise ValueError(f"AI-Toolkit Resume is unavailable: {detail}")
-            return {"cwd": cwd, "argv": ["python", "run.py", config_path], "env": {}}
+            return {"cwd": cwd, "argv": ["python", "run.py", config_path], "env": runner_env}
         spec: dict[str, Any] = {
             "config_path": config_path,
             "run_id": run["id"],
@@ -259,7 +260,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         }
         runner = ["python", "-c", script_source("ai_toolkit_state.py"), json.dumps(spec, ensure_ascii=False, separators=(",", ":"))]
         if continuation is None:
-            return {"cwd": cwd, "argv": runner, "env": {}}
+            return {"cwd": cwd, "argv": runner, "env": runner_env}
         artifact_id = continuation["source"]["artifact_id"]
         spec["resume"] = {
             "payload": f"/workspace/artifacts/training-state/{artifact_id}/payload",
@@ -270,7 +271,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "python", "-c", script_source("training_state_verify.py"),
             f"/workspace/runs/{run['id']}/resolved/training-state-source.lock.json", "/workspace",
         ]
-        return {"cwd": cwd, "argv": _script_command([verifier, runner], step_name="ai-toolkit"), "env": {}}
+        return {"cwd": cwd, "argv": _script_command([verifier, runner], step_name="ai-toolkit"), "env": runner_env}
     combined = sorted(set(override) - {"command"})
     if combined:
         raise ValueError("AI-Toolkit explicit command cannot be combined with: " + ", ".join(combined))

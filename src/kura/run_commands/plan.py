@@ -1131,6 +1131,10 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             _append_kv(lines, key, resume.get(key))
         _append_kv(lines, "restored", resume.get("restored"))
         _append_kv(lines, "not_restored", resume.get("not_restored"))
+        if resume.get("restoration_level") != "exact_resume":
+            missing = resume.get("not_restored") or []
+            detail = f"; missing: {', '.join(str(item) for item in missing)}" if missing else ""
+            _append_kv(lines, "continuity", "exact equivalence is not guaranteed" + detail)
         if resume.get("limitations"):
             _append_kv(lines, "limitations", resume.get("limitations"))
         _append_kv(lines, "scheduler", resume.get("scheduler_behavior"))

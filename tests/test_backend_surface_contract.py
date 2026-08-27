@@ -334,7 +334,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertEqual(command["cwd"], expected_cwd)
                 self.assertEqual(command["argv"][:2], ["python", "-c"])
                 self.assertIn(f"/workspace/runs/{run_id}/resolved/ai-toolkit.yaml", command["argv"][3])
-                self.assertEqual(command["env"], {})
+                self.assertEqual(command["env"], {"SEED": "1"})
 
     def test_musubi_escape_hatches_cannot_shadow_declared_fields(self) -> None:
         base = {

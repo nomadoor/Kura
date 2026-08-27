@@ -79,6 +79,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
         }
         command = command_ai_toolkit(run)
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
+        self.assertEqual(command["env"], {"SEED": "1"})
 
     def test_ai_toolkit_accumulated_training_does_not_capture_mislabeled_optimizer_updates(self) -> None:
         run = {
@@ -1240,6 +1241,7 @@ class ResumeRunTests(unittest.TestCase):
         self.assertIn("target_step  3000", output)
         self.assertIn("native_steps 0 -> 1000", output)
         self.assertIn("exact_dataloader_position", output)
+        self.assertIn("continuity   exact equivalence is not guaranteed", output)
         self.assertIn("Training state", output)
         self.assertIn("keep         2", output)
 
