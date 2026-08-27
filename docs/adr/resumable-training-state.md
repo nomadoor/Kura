@@ -1,16 +1,17 @@
 # ADR: Resumable training state across disposable environments
 
-Status: accepted owner direction.
+Status: accepted and implemented for the qualified backend envelopes below.
 
 Date: 2026-08-27
 
 ## Context
 
-Kura currently freezes a training run before launch and preserves final or
-periodic weights in the workspace, but it does not own a portable training-state
-artifact contract. Relaunching an existing run repeats its frozen command. A
-new local container or RunPod Pod cannot receive a prior optimizer, scheduler,
-RNG, counter, or dataloader state through a declared Kura dependency.
+Before this decision, Kura froze a training run before launch and preserved
+final or periodic weights in the workspace, but did not own a portable
+training-state artifact contract. Relaunching an existing run repeated its
+frozen command. A new local container or RunPod Pod could not receive prior
+optimizer, scheduler, RNG, counter, or dataloader state through a declared Kura
+dependency.
 
 The primary recovery case is continuing the same training session after the
 original process, container, or Pod no longer exists. Loading a LoRA weight into
@@ -135,9 +136,10 @@ replacement between compile and launch cannot change its runtime.
 ### User surfaces
 
 Resume planning and run creation are CLI responsibilities. Plans show the
-source artifact, logical start/target, restoration level, restored and missing
-components, scheduler behavior, transfer/storage cost, and compatibility
-decision.
+source artifact and size, logical start/target, restoration level, restored and
+missing components, scheduler behavior, and compatibility limitations. Exact
+transfer pricing and a universal compatibility verdict are not promised by
+this decision.
 
 The existing TUI remains an observing viewer. It may display lineage,
 restoration level, recoverable step, transfer health, and Resume progress, but

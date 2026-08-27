@@ -493,7 +493,7 @@ Kura captures, verifies, protects, and restages these bundles for the supported
 rows below. Runtime acceptance has exercised each supported backend once; the
 step-normalization fixes recorded here require a repeat acceptance run.
 
-| Kura built-in path | Backend state restored | Known missing or unreliable state | Proposed Resume level |
+| Kura built-in path | Backend state restored | Known missing or unreliable state | Implemented Resume level |
 | --- | --- | --- | --- |
 | AI-Toolkit generic native-config training | full-precision weight, compatible optimizer, metadata step/epoch, Kura RNG snapshot at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position, data cursor, accumulation, scaler, EMA state missing | Best-effort Partial Resume |
 | Musubi: all built-in architectures | network, optimizer, scheduler, Accelerate RNG/scaler and supported sampler state | application global step/epoch and deterministic data position restart; finite scheduler extension is unsafe in some cases | Best-effort State Resume when a safe stop/scheduler contract exists |
@@ -506,9 +506,12 @@ step-normalization fixes recorded here require a repeat acceptance run.
 No row may be labeled Exact Resume until the narrower claimed envelope passes
 the cross-environment equivalence tests defined below.
 
-## Proposed Kura design
+## Implemented Kura design and remaining proposals
 
-Everything in this section is a proposal, not an upstream fact.
+Sections explicitly marked as future work remain proposals. The State Resume
+artifact, lineage, planning, staging, retention, and qualified backend
+contracts described here are implemented; Fork from Weight and any future
+Exact Resume envelope are not.
 
 ### 1. Every Resume or Fork creates a derived run
 
@@ -530,7 +533,7 @@ one logical training session. A Fork lineage starts a new session from a weight.
 
 ### 2. Record user intent independently of native total-step mechanics
 
-Proposed authored shape:
+Implemented authored shape:
 
 ```yaml
 parent_run: 20260801-0932_previous_run_abcd
@@ -697,7 +700,7 @@ checkpoint cadence, Kura lowers the derived native save cadence to the requested
 additional-step count. This guarantees a numbered state generation at the new
 endpoint instead of relying on an unmarked final-state directory.
 
-Proposed authored override surface:
+Implemented authored override surface:
 
 ```yaml
 recovery:
@@ -824,10 +827,10 @@ The adapter should return one of:
 `exact` is a claim established only by a narrow, repeatable cross-environment
 test envelope. It is not inferred because a `--resume` flag exists.
 
-### 9. Proposed initial product boundary
+### 9. Implemented initial product boundary
 
-The first releasable capability is State Resume across disposable environments,
-not Fork from Weight. It includes:
+The implemented initial capability is State Resume across disposable
+environments, not Fork from Weight. It includes:
 
 - periodic capture of completed backend training-state saves while the source
   process or Pod is alive;
@@ -1023,21 +1026,28 @@ For Best-effort or Partial Resume, expected mismatches must correspond exactly
 to the published restoration contract. Passing a parser smoke or successfully
 calling `load_state` is insufficient.
 
-## Delivery sequence
+## Delivery status
 
-1. Define immutable artifact manifests and publication/validation.
-2. Generalize local and RunPod mirroring from weight globs to backend-declared
-   training-state artifacts, including continuous capture before Pod loss.
-3. Add derived-run lineage and source dependency staging.
-4. Establish backend-specific restoration contracts and compatibility
-   fingerprints.
-5. Implement and test the qualified Resume envelopes for sd-scripts,
-   AI-Toolkit, Musubi, and Anima LLLite; reject unsafe concrete combinations.
-6. Add plan/monitor projections and cleanup dependency protection.
-7. Establish and refine narrow Exact Resume envelopes through real
-   cross-environment tests.
-8. Add Fork from Weight later as a separately named secondary operation if
-   desired.
+Implemented in this change:
+
+1. Immutable artifact manifests, validation, atomic publication, and protected
+   references.
+2. Local and RunPod mirroring of backend-declared training state before the
+   source environment is lost.
+3. Derived-run lineage, selected-artifact staging, retention, and cleanup
+   protection.
+4. Concrete backend restoration contracts, compatibility fingerprints, and
+   refusal outside the qualified envelopes.
+5. Partial Resume for AI-Toolkit, Best-effort Resume for supported Musubi and
+   sd-scripts paths, and explicit rejection for unsupported Anima paths.
+6. Plan/monitor projections plus local numerical and disposable-Pod portability
+   validation.
+
+Future work, not part of the implemented contract:
+
+1. Establish a narrow Exact Resume label only if repeatable cross-environment
+   evidence supports it.
+2. Add Fork from Weight as a separately named secondary operation if desired.
 
 ## Owner decisions fixed by this revision
 

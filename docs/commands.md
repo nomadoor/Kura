@@ -57,6 +57,23 @@ in an interactive terminal may omit `--yes` and answer the one launch prompt.
 The agent normally performs compile for the user; it is listed below as a
 low-level command for inspection and development.
 
+Resume follows the same compile, plan, approval, and execute boundary as a new
+run. For example:
+
+```sh
+uv run kura run resume <source-run> --additional-steps 1000
+uv run kura run compile <derived-run>
+uv run kura run plan <derived-run>
+# After explicit approval of this plan:
+uv run kura run execute <derived-run> --yes
+```
+
+Use `--executor runpod --gpu "NVIDIA A40"` on `run resume` when recovery must
+move to a new execution environment. An executor or GPU change is a new compute
+and cost decision: create the derived draft with that choice, compile it, and
+obtain approval for the resulting plan before launch. The source artifact and
+training recipe remain frozen.
+
 For RunPod runs, `run plan` measures current stock and hourly price for every
 ordered GPU/cloud candidate before approval. Choose an available alternative or
 record a bounded foreground wait in `run.yaml` before compiling:

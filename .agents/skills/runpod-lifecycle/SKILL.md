@@ -99,6 +99,34 @@ uv run kura run pull <run-id> --since-step 1000
 uv run kura run stop <run-id>
 ```
 
+## Resume on a replacement Pod
+
+Resume is available only from a training-state artifact that completed local
+publication before the source Pod disappeared. Use this sequence:
+
+1. Confirm the source run's recoverable artifact and that the old Pod is no
+   longer an active billing resource with `kura run plan <source-run>` and
+   `kura doctor runpod` as applicable.
+2. Create the derived draft with `kura run resume <source-run>
+   --additional-steps <N> --executor runpod --gpu <gpu>`. Kura selects the
+   latest valid state unless the user explicitly names an older artifact.
+3. Compile and show `kura run plan <derived-run>`. State the restoration level,
+   restored and missing components, source/target logical steps, selected
+   artifact size, GPU, price, and capacity policy. A GPU or executor change is
+   a new cost decision and requires approval of this plan.
+4. After approval, use `kura run execute <derived-run> --yes`. The new Pod must
+   receive and verify only the selected protected artifact; it must not depend
+   on the old Pod or a Network Volume.
+5. Confirm the requested additional optimizer updates, new logical state
+   publication, remote exit, and local download before the replacement Pod is
+   stopped. Finish with `kura doctor runpod` when lifecycle state is uncertain.
+
+The disposable-Pod smoke in
+`../../../docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml` validates
+this transport and cleanup path for the three supported backend families. It
+does not establish bit-for-bit numerical equivalence; use the backend's
+restoration contract and matching numerical evidence for that judgment.
+
 After a long unattended capacity wait, run `uv run kura doctor runpod` to
 confirm that no unrecorded Pod remains before retrying or leaving RunPod.
 

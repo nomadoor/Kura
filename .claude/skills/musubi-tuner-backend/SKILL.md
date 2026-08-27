@@ -90,6 +90,23 @@ fits one FLUX.2/Krea-class model can be invalid for another.
 - Before launch, follow AGENTS.md: show `uv run kura run plan <run-id>` and get
   explicit approval.
 
+## Resume boundary
+
+- Use `kura run resume` and the protected training-state artifact. Do not load a
+  standalone LoRA into a new optimizer and describe that as Resume.
+- Musubi built-ins currently provide Best-effort Resume for the verified
+  constant-scheduler envelope. Accelerate restores model, optimizer, scheduler,
+  RNG, scaler when present, and supported sampler state; application global
+  step/epoch and exact dataloader position are not guaranteed.
+- Musubi's derived process uses process-local native steps. Trust the compiled
+  plan's logical source/target and native-step projection; do not rewrite `+N`
+  as an absolute native maximum.
+- Before approval, disclose that the recorded one-item 100-step controls were
+  themselves numerically nondeterministic. The observed Resume difference was
+  of the same scale, which is evidence for caution rather than Exact Resume.
+- Read the restoration table in `../../../docs/commands.md` and use only
+  revision-matching evidence from `../../../docs/smoke-evidence/`.
+
 ## Dataset policy
 
 - `datasets` is an array.

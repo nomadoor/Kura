@@ -50,6 +50,24 @@ cost, or is expected to increase elapsed time beyond roughly 2x.
   explicitly reviewed raw AI-Toolkit process override. Do not use the removed
   ambiguous `backend.config.config` spelling.
 
+## Resume boundary
+
+- Create continuation runs with `kura run resume`; do not turn the saved LoRA
+  into a fresh optimizer session and call it Resume.
+- The current standard-LoRA contract is Partial Resume. It restores the
+  full-precision Resume weight, compatible optimizer, logical step/epoch, and a
+  Kura RNG snapshot at the pre-iterator hook. It reconstructs the scheduler and
+  does not guarantee the exact post-iterator RNG or dataloader position.
+- The initial envelope is AdamW/AdamW8bit, constant scheduler, and gradient
+  accumulation 1. Treat a refusal outside that envelope as the contract, not as
+  permission to bypass the managed command.
+- Before approval, repeat the plan's continuity warning. The matching local
+  one-item experiment reached identical learned weight and optimizer state but
+  not exact final CPU RNG state; the RunPod smoke proves cross-Pod transport,
+  not Exact Resume.
+- Read the restoration table in `../../../docs/commands.md` and use only
+  revision-matching evidence from `../../../docs/smoke-evidence/`.
+
 ## Useful commands
 
 ```sh
