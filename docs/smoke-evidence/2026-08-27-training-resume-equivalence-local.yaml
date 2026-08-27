@@ -45,11 +45,12 @@ backends:
       weight_relative_l2: 0.00006883769159586734
       optimizer_semantic_leaves_different: 272
     capture_fidelity:
-      method: Compare two independent 50-step endpoint artifacts under the same current image and parameters.
+      method: Compare two independently persisted 50-step endpoint artifacts under the same current image and parameters.
       repeat_source_run: 20260827-1800_ai-main-split50-repeat_efcc
       repeat_source_artifact: state-step-00000050-ebb19531add7
       kura_commit: 1b779aa
-      exact_semantic_state: true
+      persisted_endpoint_reproducible: true
+      lossless_live_parameter_capture: false
       weight_tensors_total: 216
       weight_tensors_different: 0
       weight_max_abs: 0.0
@@ -60,8 +61,9 @@ backends:
       optimizer_file_sha256_exact: true
       weight_file_sha256_exact: false
       weight_file_difference: safetensors metadata ss_output_name contains the run ID; tensor payloads are identical.
+      correction: This established deterministic persisted F16 endpoints, not lossless capture of the live F32 network. Treating it as exact semantic-state capture was an overclaim.
       excluded_comparison: The 100-step controls publish their cadence checkpoint at logical step 51, so they are not step-50 capture controls.
-    result:
+    pre_fix_result:
       exact: false
       weight_tensors_total: 216
       weight_tensors_different: 111
@@ -70,8 +72,53 @@ backends:
       weight_relative_l2: 0.00006883769178705734
       optimizer_semantic_leaves_different: 272
       missing_state: [scheduler, rng, exact_dataloader_position]
-    warning_level: high
-    interpretation: The two uninterrupted controls matched exactly, and two independent step-50 endpoint captures matched semantically. Capture is therefore faithful in the recorded case; the measured learned-weight and optimizer divergence enters after the captured artifact, in the restoration or continued-training path. The relative error is small, but this is not exact continuation.
+    fp32_weight_only:
+      source_run: 20260827-1932_ai-fp32-state-source50_001b
+      source_artifact: state-step-00000050-a5cbff437d96
+      resumed_run: 20260827-1934_ai-fp32-state-resume-to100_70fd
+      resumed_artifact: state-step-00000100-d43205bbf608
+      distribution_weight_dtype: F16
+      resume_state_weight_dtype: F32
+      distribution_weight_bytes: 55504
+      resume_state_weight_bytes: 81096
+      comparison_to_uninterrupted_control:
+        exact: false
+        weight_tensors_total: 216
+        weight_tensors_different: 84
+        weight_max_abs: 0.00006103515625
+        optimizer_semantic_leaves_different: 264
+      interpretation: Capturing the live network as F32 removed part of the Resume-specific divergence but did not eliminate it, so F16 capture was a real but incomplete cause.
+    fp32_weight_and_rng:
+      kura_commit: 186c1a2
+      source_run: 20260827-1939_ai-fp32-rng-source50_6daa
+      source_artifact: state-step-00000050-4991d3cb05c8
+      resumed_run: 20260827-1940_ai-fp32-rng-resume-to100_4138
+      resumed_artifact: state-step-00000100-1203a46284f3
+      uninterrupted_run: 20260827-1939_ai-fp32-rng-direct100_0152
+      uninterrupted_artifact: state-step-00000100-3b881249a5a2
+      selected_state_size_kib: 312.3
+      result:
+        exact: false
+        learned_state_exact_in_recorded_case: true
+        resume_state_weight_dtype: F32
+        weight_tensors_total: 216
+        weight_tensors_different: 0
+        weight_max_abs: 0.0
+        weight_mean_abs: 0.0
+        weight_relative_l2: 0.0
+        distribution_weight_tensors_different: 0
+        optimizer_semantic_leaves_total: 589
+        optimizer_semantic_leaves_different: 0
+        rng_semantic_leaves_total: 1258
+        rng_semantic_leaves_different: 1
+        python_rng_exact: true
+        numpy_rng_exact: true
+        cuda_rng_exact: true
+        torch_cpu_rng_exact: false
+        torch_cpu_rng_bytes_different: 2
+        missing_state: [scheduler, exact_dataloader_position]
+    warning_level: caution
+    interpretation: With F32 Resume-only weight capture and RNG restoration, the uninterrupted and 50-to-100 Resume runs produced bit-identical learned weights and optimizer state in this one-item constant-scheduler case. The final torch CPU RNG position remained two draws apart, consistent with exact dataloader position remaining unrestored. This is strong evidence for learned-state equivalence in the recorded case, not proof of exact Resume for shuffled or multi-item datasets; capability remains partial_resume.
   musubi-tuner:
     upstream:
       commit: e0cbd8f3dfe38365b10f8bc790b980f8894e8ba1
