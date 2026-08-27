@@ -77,9 +77,34 @@ class TrainingStateArtifactTests(unittest.TestCase):
         )
 
         self.assertIn("rng.pt", contract["required_files"])
-        self.assertIn("rng", contract["restoration_contract"]["restored"])
-        self.assertNotIn("rng", contract["restoration_contract"]["not_restored"])
+        self.assertIn("rng_state_at_pre_iterator_hook", contract["restoration_contract"]["restored"])
+        self.assertIn("exact_rng_position", contract["restoration_contract"]["not_restored"])
         self.assertEqual(contract["state_step"]["digests"]["rng_sha256"], "rng.pt")
+
+    def test_ai_toolkit_current_resume_contract_requires_rng_at_runtime(self) -> None:
+        run = {
+            "id": "derived",
+            "parent_run": "source",
+            "backend": {"name": "ai-toolkit", "config": {"optimizer_type": "adamw"}},
+            "recipe": {"steps": 100, "seed": 1},
+        }
+        contract = training_state_contract_ai_toolkit(run)["restoration_contract"]
+        run["continuation"] = {
+            "mode": "resume",
+            "source": {
+                "artifact_id": "state-1",
+                "manifest_sha256": "a" * 64,
+                "observed_step": 50,
+                "recipe_sha256": "b" * 64,
+            },
+            "additional_steps": 50,
+            "target_step": 100,
+            "restoration_contract": contract,
+        }
+
+        command = command_ai_toolkit(run)
+
+        self.assertIn('"rng_required":true', " ".join(command["argv"]))
 
     def test_ai_toolkit_disabled_capture_uses_the_native_runner(self) -> None:
         run = {
@@ -255,6 +280,27 @@ class TrainingStateArtifactTests(unittest.TestCase):
             states = list((root / "outputs").glob("source-step*-state"))
             self.assertEqual([path.name for path in states], ["source-step00000002-state"])
 
+    def test_ai_toolkit_runner_does_not_coalesce_states_with_different_rng(self) -> None:
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = root / "existing"
+            staged = root / "staged"
+            existing.mkdir()
+            staged.mkdir()
+            for state in (existing, staged):
+                (state / "model.safetensors").write_bytes(b"same-weight")
+                (state / "optimizer.pt").write_text('{"step": 2}', encoding="utf-8")
+            (existing / "rng.pt").write_text('{"position": 10}', encoding="utf-8")
+            (staged / "rng.pt").write_text('{"position": 11}', encoding="utf-8")
+            torch = types.ModuleType("torch")
+            torch.is_tensor = lambda value: False
+            torch.load = lambda path, **kwargs: json.loads(Path(path).read_text(encoding="utf-8"))
+
+            with patch.dict(sys.modules, {"torch": torch}):
+                self.assertFalse(namespace["saved_states_equivalent"](existing, staged))
+
     def test_ai_toolkit_runner_uses_completed_optimizer_updates_instead_of_stale_process_step(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
@@ -384,7 +430,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
         namespace["restore_rng_state"] = lambda path, torch: events.append("rng")
         with patch.dict(sys.modules, modules):
             namespace["install_hooks"](
-                {"resume": {"source_step": 50, "payload": rng_directory.name}}, expected_weight
+                {"resume": {"source_step": 50, "payload": rng_directory.name, "rng_required": True}}, expected_weight
             )
         process = types.SimpleNamespace(
             _kura_loaded_weight=expected_weight,
@@ -403,6 +449,89 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
         self.assertEqual(result, "prepared")
         self.assertEqual(events, ["original", "rng"])
+
+    def test_ai_toolkit_runner_rejects_missing_required_rng_state(self) -> None:
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+
+        class Base:
+            def load_weights(self, path):
+                return path
+
+            def save(self, step=None):
+                return step
+
+        class Trainer(Base):
+            def hook_before_train_loop(self):
+                return "prepared"
+
+        torch = types.ModuleType("torch")
+        torch.load = lambda path, **kwargs: {"state": {0: {"step": 50}}}
+        modules = {
+            "torch": torch,
+            "extensions_built_in": types.ModuleType("extensions_built_in"),
+            "extensions_built_in.sd_trainer": types.ModuleType("extensions_built_in.sd_trainer"),
+            "extensions_built_in.sd_trainer.SDTrainer": types.ModuleType("extensions_built_in.sd_trainer.SDTrainer"),
+            "jobs": types.ModuleType("jobs"),
+            "jobs.process": types.ModuleType("jobs.process"),
+            "jobs.process.BaseSDTrainProcess": types.ModuleType("jobs.process.BaseSDTrainProcess"),
+        }
+        modules["extensions_built_in.sd_trainer.SDTrainer"].SDTrainer = Trainer
+        modules["jobs.process.BaseSDTrainProcess"].BaseSDTrainProcess = Base
+        expected_weight = Path("/tmp/expected.safetensors")
+        rng_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(rng_directory.cleanup)
+        with patch.dict(sys.modules, modules):
+            namespace["install_hooks"](
+                {"resume": {"source_step": 50, "payload": rng_directory.name, "rng_required": True}}, expected_weight
+            )
+        process = types.SimpleNamespace(
+            _kura_loaded_weight=expected_weight,
+            step_num=50,
+            start_step=50,
+            network=types.SimpleNamespace(did_change_weights=False),
+            save_root="/tmp",
+            optimizer=types.SimpleNamespace(
+                param_groups=[{"lr": 1.0e-6, "initial_lr": 1.0e-6}],
+                load_state_dict=lambda state: None,
+            ),
+        )
+
+        with patch.dict(sys.modules, {"torch": torch}):
+            with self.assertRaisesRegex(RuntimeError, "required RNG state"):
+                Trainer.hook_before_train_loop(process)
+
+    def test_ai_toolkit_rng_runtime_error_uses_training_state_failure_context(self) -> None:
+        import random
+
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+        numpy = types.ModuleType("numpy")
+        numpy.uint32 = "uint32"
+        numpy.asarray = lambda value, dtype=None: value
+        numpy.random = types.SimpleNamespace(set_state=lambda state: None)
+        state = {
+            "schema_version": 1,
+            "python": random.getstate(),
+            "numpy": {
+                "bit_generator": "MT19937",
+                "state": [1, 2, 3],
+                "position": 0,
+                "has_gauss": 0,
+                "cached_gaussian": 0.0,
+            },
+            "torch_cpu": "bad-state",
+            "torch_cuda": [],
+        }
+        torch = types.SimpleNamespace(
+            load=lambda path, **kwargs: state,
+            set_rng_state=lambda value: (_ for _ in ()).throw(RuntimeError("wrong state size")),
+            cuda=types.SimpleNamespace(is_available=lambda: False),
+        )
+
+        with patch.dict(sys.modules, {"numpy": numpy}):
+            with self.assertRaisesRegex(RuntimeError, "training-state failure: Resume RNG state is incomplete"):
+                namespace["restore_rng_state"]("rng.pt", torch)
 
     def test_sd_scripts_runner_normalizes_saved_application_step_from_persisted_training_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
@@ -1213,7 +1342,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertEqual(published[0]["restoration_contract"]["level"], "partial_resume")
             self.assertEqual(
                 published[0]["restoration_contract"]["not_restored"],
-                ["scheduler", "exact_dataloader_position"],
+                ["scheduler", "exact_rng_position", "exact_dataloader_position"],
             )
 
     def test_completion_marker_with_a_stale_payload_digest_is_not_published(self) -> None:

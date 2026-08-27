@@ -66,8 +66,8 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "capability": "partial_resume",
         "restoration_contract": {
             "level": "partial_resume",
-            "restored": ["model", "optimizer", "global_step", "epoch", "rng"],
-            "not_restored": ["scheduler", "exact_dataloader_position"],
+            "restored": ["model", "optimizer", "global_step", "epoch", "rng_state_at_pre_iterator_hook"],
+            "not_restored": ["scheduler", "exact_rng_position", "exact_dataloader_position"],
             "scheduler_behavior": "reconstructed to the saved step; initial Resume execution limited to constant scheduler",
         },
     }
@@ -273,6 +273,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         spec["resume"] = {
             "payload": f"/workspace/artifacts/training-state/{artifact_id}/payload",
             "source_step": continuation["source"]["observed_step"],
+            "rng_required": "rng_state_at_pre_iterator_hook" in continuation["restoration_contract"]["restored"],
         }
         runner[-1] = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
         verifier = [

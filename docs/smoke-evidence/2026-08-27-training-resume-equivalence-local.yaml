@@ -116,9 +116,10 @@ backends:
         cuda_rng_exact: true
         torch_cpu_rng_exact: false
         torch_cpu_rng_bytes_different: 2
-        missing_state: [scheduler, exact_dataloader_position]
+        restored_rng_boundary: after_backend_pre_loop_hook_before_dataloader_iterator
+        missing_state: [scheduler, exact_rng_position, exact_dataloader_position]
     warning_level: caution
-    interpretation: With F32 Resume-only weight capture and RNG restoration, the uninterrupted and 50-to-100 Resume runs produced bit-identical learned weights and optimizer state in this one-item constant-scheduler case. The final torch CPU RNG position remained two draws apart, consistent with exact dataloader position remaining unrestored. This is strong evidence for learned-state equivalence in the recorded case, not proof of exact Resume for shuffled or multi-item datasets; capability remains partial_resume.
+    interpretation: With F32 Resume-only weight capture and restoration of the captured RNG snapshot at the backend pre-iterator hook, the uninterrupted and 50-to-100 Resume runs produced bit-identical learned weights and optimizer state in this one-item constant-scheduler case. The backend then created a new dataloader iterator, and the final torch CPU RNG position remained two draws apart. Exact RNG and dataloader position are therefore not claimed. This is strong evidence for learned-state equivalence in the recorded case, not proof of exact Resume for shuffled or multi-item datasets; capability remains partial_resume.
   musubi-tuner:
     upstream:
       commit: e0cbd8f3dfe38365b10f8bc790b980f8894e8ba1

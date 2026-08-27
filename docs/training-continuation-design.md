@@ -236,9 +236,14 @@ loads `optimizer.pt` when compatible. An optimizer load failure is caught and
 training can continue with a fresh optimizer. That silent fallback is not
 acceptable for a Kura operation presented as Resume.
 
-AI-Toolkit does not save and restore a complete scheduler state, all RNG states,
-dataloader cursor/order, partial gradient accumulation, AMP scaler, or complete
-EMA state. The scheduler is reconstructed and advanced to the restored step.
+AI-Toolkit does not natively save and restore a complete scheduler state, all
+RNG states, dataloader cursor/order, partial gradient accumulation, AMP scaler,
+or complete EMA state. Kura's adapter captures Python, NumPy, torch CPU, and
+torch CUDA RNG state beside the native weight/optimizer pair and restores that
+snapshot after the backend's pre-loop hook. The backend constructs a new
+dataloader iterator after this hook, so exact post-iterator RNG position and
+dataloader position/order remain un-restored. The scheduler is reconstructed
+and advanced to the restored step.
 The configured `steps` value is an absolute stopping step; a requested `+N`
 would require native `steps = saved_step + N`.
 
@@ -265,10 +270,11 @@ Sources:
 - State Resume: partial and best-effort; suitable for a Kura Resume contract
   only when the paired weight and optimizer are verified and silent optimizer
   fallback is converted into a hard failure.
-- Restored: trained weight, optimizer when compatible, metadata step and epoch.
+- Restored: full-precision trained weight, optimizer when compatible, metadata
+  step and epoch, and Kura's RNG snapshot at the pre-iterator hook boundary.
 - Reconstructed rather than restored: scheduler.
-- Not restored: RNG, dataloader position/order, partial gradient accumulation,
-  scaler, and complete EMA state.
+- Not restored: exact post-iterator RNG position, dataloader position/order,
+  partial gradient accumulation, scaler, and complete EMA state.
 - Exact Resume: unsupported.
 - Initial Kura envelope: standard LoRA with AdamW or AdamW8bit, gradient
   accumulation 1, and a constant scheduler.
@@ -489,7 +495,7 @@ step-normalization fixes recorded here require a repeat acceptance run.
 
 | Kura built-in path | Backend state restored | Known missing or unreliable state | Proposed Resume level |
 | --- | --- | --- | --- |
-| AI-Toolkit generic native-config training | weight, compatible optimizer, metadata step/epoch | scheduler is reconstructed; RNG, data cursor, accumulation, scaler, EMA state missing | Best-effort Partial Resume |
+| AI-Toolkit generic native-config training | full-precision weight, compatible optimizer, metadata step/epoch, Kura RNG snapshot at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position, data cursor, accumulation, scaler, EMA state missing | Best-effort Partial Resume |
 | Musubi: all built-in architectures | network, optimizer, scheduler, Accelerate RNG/scaler and supported sampler state | application global step/epoch and deterministic data position restart; finite scheduler extension is unsafe in some cases | Best-effort State Resume when a safe stop/scheduler contract exists |
 | sd-scripts: SD 1.5 LoRA | network, optimizer, scheduler, RNG/scaler | application step requires Kura normalization; epoch and exact data position are not restored | Best-effort State Resume; constant scheduler and accumulation 1 |
 | sd-scripts: SDXL LoRA | network, optimizer, scheduler, RNG/scaler | application step requires Kura normalization; epoch and exact data position are not restored | Best-effort State Resume; constant scheduler and accumulation 1 |
@@ -839,7 +845,7 @@ Initial backend labels are intentionally qualified:
 
 | Backend path | Initial State Resume boundary |
 | --- | --- |
-| AI-Toolkit | Partial Resume: restore weight and compatible optimizer; reconstruct scheduler; report missing RNG/data/accumulation/scaler/complete EMA state |
+| AI-Toolkit | Partial Resume: restore full-precision weight, compatible optimizer, and the captured pre-iterator RNG snapshot; reconstruct scheduler; report exact RNG position/data/accumulation/scaler/complete EMA gaps |
 | Musubi all built-ins | Best-effort Resume only for a verified stop/scheduler envelope; otherwise reject that concrete request with the unsafe component named |
 | sd-scripts shared NetworkTrainer paths | Best-effort Resume: restore Accelerate state, normalize cumulative step metadata from the persisted scheduler, and report application epoch/data-order limitations |
 | sd-scripts Anima LoRA / LLLite | State capture can be recognized, but initial Resume execution is unsupported and rejected rather than downgraded |

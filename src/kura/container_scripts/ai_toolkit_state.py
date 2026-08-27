@@ -94,16 +94,25 @@ def saved_states_equivalent(existing, staged):
     staged_weight = staged / "model.safetensors"
     existing_optimizer = existing / "optimizer.pt"
     staged_optimizer = staged / "optimizer.pt"
-    if not all(path.is_file() for path in (existing_weight, staged_weight, existing_optimizer, staged_optimizer)):
+    existing_rng = existing / "rng.pt"
+    staged_rng = staged / "rng.pt"
+    if not all(path.is_file() for path in (
+        existing_weight, staged_weight, existing_optimizer, staged_optimizer, existing_rng, staged_rng
+    )):
         return False
     if weight_tensor_digest(existing_weight) != weight_tensor_digest(staged_weight):
         return False
     try:
-        left = torch.load(existing_optimizer, map_location="cpu", weights_only=True)
-        right = torch.load(staged_optimizer, map_location="cpu", weights_only=True)
+        left_optimizer = torch.load(existing_optimizer, map_location="cpu", weights_only=True)
+        right_optimizer = torch.load(staged_optimizer, map_location="cpu", weights_only=True)
+        left_rng = torch.load(existing_rng, map_location="cpu", weights_only=True)
+        right_rng = torch.load(staged_rng, map_location="cpu", weights_only=True)
     except Exception:
         return False
-    return state_values_equal(left, right, torch)
+    return (
+        state_values_equal(left_optimizer, right_optimizer, torch)
+        and state_values_equal(left_rng, right_rng, torch)
+    )
 
 
 def weight_metadata_with_logical_step(source, logical_step):
@@ -210,7 +219,7 @@ def restore_rng_state(path, torch):
         cuda_states = state.get("torch_cuda")
         if cuda_states and hasattr(torch, "cuda") and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(cuda_states)
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         fail(f"Resume RNG state is incomplete: {exc}")
 
 
@@ -363,6 +372,8 @@ def install_hooks(spec, expected_weight):
             if rng_path.is_file():
                 restore_rng_state(rng_path, torch)
                 print(f"[kura] AI Toolkit RNG Resume verified at step {source_step}", flush=True)
+            elif resume.get("rng_required"):
+                fail(f"Resume payload is missing required RNG state at step {source_step}")
             else:
                 print(f"[kura] AI Toolkit Resume artifact has no RNG state at step {source_step}", flush=True)
         return result
