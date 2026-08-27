@@ -106,9 +106,8 @@ def saved_states_equivalent(existing, staged):
     return state_values_equal(left, right, torch)
 
 
-def copy_weight_with_logical_step(source, target, logical_step):
+def weight_metadata_with_logical_step(source, logical_step):
     from safetensors import safe_open
-    from safetensors.torch import load_file, save_file
 
     with safe_open(str(source), framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
@@ -120,8 +119,99 @@ def copy_weight_with_logical_step(source, target, logical_step):
         training = {}
     training["step"] = int(logical_step)
     metadata["training_info"] = json.dumps(training)
-    tensors = load_file(str(source), device="cpu")
-    save_file(tensors, str(target), metadata=metadata)
+    return metadata
+
+
+def safetensors_tensor_dtypes(path):
+    with open(path, "rb") as handle:
+        prefix = handle.read(8)
+        if len(prefix) != 8:
+            fail(f"saved Resume weight has no safetensors header: {path}")
+        header_size = int.from_bytes(prefix, "little", signed=False)
+        try:
+            header = json.loads(handle.read(header_size))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            fail(f"saved Resume weight has an invalid safetensors header: {path}: {exc}")
+    if not isinstance(header, dict):
+        fail(f"saved Resume weight has a non-object safetensors header: {path}")
+    dtypes = {
+        value.get("dtype")
+        for name, value in header.items()
+        if name != "__metadata__" and isinstance(value, dict)
+    }
+    if not dtypes or None in dtypes:
+        fail(f"saved Resume weight has no complete tensor dtype inventory: {path}")
+    return dtypes
+
+
+def save_full_precision_resume_weight(process, source, target, logical_step, torch):
+    network = getattr(process, "network", None)
+    if network is None:
+        fail("trainer has no live network to capture for Resume")
+    metadata = weight_metadata_with_logical_step(source, logical_step)
+    network.save_weights(
+        str(target),
+        dtype=torch.float32,
+        metadata=metadata,
+    )
+    if not target.is_file():
+        fail(f"trainer did not save the full-precision Resume weight: {target}")
+    dtypes = safetensors_tensor_dtypes(target)
+    if dtypes != {"F32"}:
+        fail(f"Resume weight must contain only F32 tensors, found: {sorted(dtypes)}")
+
+
+def capture_rng_state(torch):
+    import random
+    import numpy
+
+    numpy_state = numpy.random.get_state()
+    cuda_states = []
+    if hasattr(torch, "cuda") and torch.cuda.is_available():
+        cuda_states = torch.cuda.get_rng_state_all()
+    return {
+        "schema_version": 1,
+        "python": random.getstate(),
+        "numpy": {
+            "bit_generator": numpy_state[0],
+            "state": numpy_state[1].tolist(),
+            "position": int(numpy_state[2]),
+            "has_gauss": int(numpy_state[3]),
+            "cached_gaussian": float(numpy_state[4]),
+        },
+        "torch_cpu": torch.get_rng_state(),
+        "torch_cuda": cuda_states,
+    }
+
+
+def restore_rng_state(path, torch):
+    import random
+    import numpy
+
+    try:
+        state = torch.load(path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        fail(f"cannot load Resume RNG state: {exc}")
+    if not isinstance(state, dict) or state.get("schema_version") != 1:
+        fail("Resume RNG state has an unsupported schema")
+    numpy_state = state.get("numpy")
+    if not isinstance(numpy_state, dict):
+        fail("Resume RNG state is missing NumPy state")
+    try:
+        random.setstate(state["python"])
+        numpy.random.set_state((
+            numpy_state["bit_generator"],
+            numpy.asarray(numpy_state["state"], dtype=numpy.uint32),
+            int(numpy_state["position"]),
+            int(numpy_state["has_gauss"]),
+            float(numpy_state["cached_gaussian"]),
+        ))
+        torch.set_rng_state(state["torch_cpu"])
+        cuda_states = state.get("torch_cuda")
+        if cuda_states and hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(cuda_states)
+    except (KeyError, TypeError, ValueError) as exc:
+        fail(f"Resume RNG state is incomplete: {exc}")
 
 
 def publish_generation(process, step, spec):
@@ -136,15 +226,16 @@ def publish_generation(process, step, spec):
     try:
         optimizer_state = process.optimizer.state_dict()
         logical_step = optimizer_completed_step(optimizer_state)
+        rng_state = capture_rng_state(torch)
     except Exception as exc:
-        fail(f"cannot inspect paired optimizer state: {exc}")
+        fail(f"cannot inspect paired optimizer/RNG state: {exc}")
     state_root = pathlib.Path(spec["state_root"])
     state_root.mkdir(parents=True, exist_ok=True)
     destination = state_root / f"{spec['run_id']}-step{logical_step:08d}-state"
     staging = pathlib.Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=state_root))
     try:
         model_target = staging / "model.safetensors"
-        copy_weight_with_logical_step(weight, model_target, logical_step)
+        save_full_precision_resume_weight(process, weight, model_target, logical_step, torch)
         if metadata_step(model_target) != logical_step:
             fail(f"paired weight step does not match completed optimizer updates {logical_step}: {weight}")
         optimizer_tmp = staging / "optimizer.pt.tmp"
@@ -158,12 +249,25 @@ def publish_generation(process, step, spec):
             fail(f"cannot save paired optimizer state: {exc}")
         optimizer_target = staging / "optimizer.pt"
         os.replace(optimizer_tmp, optimizer_target)
+        rng_tmp = staging / "rng.pt.tmp"
+        try:
+            torch.save(rng_state, rng_tmp)
+            loaded_rng = torch.load(rng_tmp, map_location="cpu", weights_only=True)
+            if not isinstance(loaded_rng, dict) or loaded_rng.get("schema_version") != 1:
+                fail("saved RNG state is not a supported mapping")
+            del loaded_rng, rng_state
+        except Exception as exc:
+            fail(f"cannot save paired RNG state: {exc}")
+        rng_target = staging / "rng.pt"
+        os.replace(rng_tmp, rng_target)
         info = {
             "schema_version": 1,
             "backend": "ai-toolkit",
             "logical_step": logical_step,
+            "model_dtype": "float32",
             "weight_sha256": sha256_file(model_target),
             "optimizer_sha256": sha256_file(optimizer_target),
+            "rng_sha256": sha256_file(rng_target),
         }
         (staging / "state-info.json").write_text(json.dumps(info, sort_keys=True) + "\n", encoding="utf-8")
         for path in staging.iterdir():
@@ -253,7 +357,15 @@ def install_hooks(spec, expected_weight):
                 group["lr"] = lr
                 group["initial_lr"] = lr if initial_lr is None else initial_lr
             print(f"[kura] AI Toolkit optimizer Resume verified at step {source_step}", flush=True)
-        return original_before_loop(process)
+        result = original_before_loop(process)
+        if isinstance(resume, dict):
+            rng_path = pathlib.Path(resume["payload"]) / "rng.pt"
+            if rng_path.is_file():
+                restore_rng_state(rng_path, torch)
+                print(f"[kura] AI Toolkit RNG Resume verified at step {source_step}", flush=True)
+            else:
+                print(f"[kura] AI Toolkit Resume artifact has no RNG state at step {source_step}", flush=True)
+        return result
 
     BaseSDTrainProcess.load_weights = load_weights
     BaseSDTrainProcess.save = save

@@ -284,7 +284,7 @@ def publish_training_state(
     if model_file.is_file():
         _validate_safetensors_file(model_file)
     for path in candidate.rglob("*"):
-        if path.is_file() and (path.name in {"optimizer.bin", "scheduler.bin", "optimizer.pt"} or re.fullmatch(r"random_states_\d+\.pkl", path.name)):
+        if path.is_file() and (path.name in {"optimizer.bin", "scheduler.bin", "optimizer.pt", "rng.pt"} or re.fullmatch(r"random_states_\d+\.pkl", path.name)):
             _validate_torch_archive(path)
     inventory: list[dict[str, Any]] = []
     for path in sorted(candidate.rglob("*")):

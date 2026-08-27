@@ -28,13 +28,17 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     if limitations:
         return {
             "native_format": "ai-toolkit-weight-optimizer-pair",
-            "required_files": ("model.safetensors", "optimizer.pt", "state-info.json"),
+            "required_files": ("model.safetensors", "optimizer.pt", "rng.pt", "state-info.json"),
             "native_progress": "logical",
             "native_target": "logical",
             "state_step": {
                 "path": "state-info.json", "field": "logical_step", "space": "logical",
                 "schema_version": 1, "backend": "ai-toolkit",
-                "digests": {"weight_sha256": "model.safetensors", "optimizer_sha256": "optimizer.pt"},
+                "digests": {
+                    "weight_sha256": "model.safetensors",
+                    "optimizer_sha256": "optimizer.pt",
+                    "rng_sha256": "rng.pt",
+                },
             },
             "capability": "unsupported",
             "restoration_contract": {
@@ -47,19 +51,23 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "native_format": "ai-toolkit-weight-optimizer-pair",
-        "required_files": ("model.safetensors", "optimizer.pt", "state-info.json"),
+        "required_files": ("model.safetensors", "optimizer.pt", "rng.pt", "state-info.json"),
         "native_progress": "logical",
         "native_target": "logical",
         "state_step": {
             "path": "state-info.json", "field": "logical_step", "space": "logical",
             "schema_version": 1, "backend": "ai-toolkit",
-            "digests": {"weight_sha256": "model.safetensors", "optimizer_sha256": "optimizer.pt"},
+            "digests": {
+                "weight_sha256": "model.safetensors",
+                "optimizer_sha256": "optimizer.pt",
+                "rng_sha256": "rng.pt",
+            },
         },
         "capability": "partial_resume",
         "restoration_contract": {
             "level": "partial_resume",
-            "restored": ["model", "optimizer", "global_step", "epoch"],
-            "not_restored": ["scheduler", "rng", "exact_dataloader_position"],
+            "restored": ["model", "optimizer", "global_step", "epoch", "rng"],
+            "not_restored": ["scheduler", "exact_dataloader_position"],
             "scheduler_behavior": "reconstructed to the saved step; initial Resume execution limited to constant scheduler",
         },
     }

@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.cli import cmd_run_resume
-from kura.backends.ai_toolkit import command_ai_toolkit
+from kura.backends.ai_toolkit import command_ai_toolkit, training_state_contract_ai_toolkit
 from kura.container_scripts import script_source
 from kura.executors.docker import reconcile_docker
 from kura.executors.common import _materialize_stdout_progress
@@ -52,6 +52,7 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
             "logical_step": logical_step,
             "weight_sha256": hashlib.sha256((candidate / "model.safetensors").read_bytes()).hexdigest(),
             "optimizer_sha256": hashlib.sha256((candidate / "optimizer.pt").read_bytes()).hexdigest(),
+            "rng_sha256": hashlib.sha256((candidate / "rng.pt").read_bytes()).hexdigest(),
         }
         name = "state-info.json"
     elif backend == "sd-scripts":
@@ -70,6 +71,16 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
 
 
 class TrainingStateArtifactTests(unittest.TestCase):
+    def test_ai_toolkit_resume_contract_requires_and_restores_rng_state(self) -> None:
+        contract = training_state_contract_ai_toolkit(
+            {"backend": {"name": "ai-toolkit", "config": {"optimizer_type": "adamw"}}}
+        )
+
+        self.assertIn("rng.pt", contract["required_files"])
+        self.assertIn("rng", contract["restoration_contract"]["restored"])
+        self.assertNotIn("rng", contract["restoration_contract"]["not_restored"])
+        self.assertEqual(contract["state_step"]["digests"]["rng_sha256"], "rng.pt")
+
     def test_ai_toolkit_disabled_capture_uses_the_native_runner(self) -> None:
         run = {
             "id": "source",
@@ -113,6 +124,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             (save_root / "source_000000010.safetensors").write_bytes(b"weight")
 
             torch = types.ModuleType("torch")
+            torch.float32 = "torch.float32"
             torch.save = lambda value, path: Path(path).write_text(json.dumps(value), encoding="utf-8")
             torch.load = lambda path, **kwargs: json.loads(Path(path).read_text(encoding="utf-8"))
             toolkit = types.ModuleType("toolkit")
@@ -123,9 +135,16 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 step_num=10,
                 save_root=str(save_root),
                 job=types.SimpleNamespace(name="source"),
+                network=types.SimpleNamespace(
+                    save_weights=lambda path, **kwargs: Path(path).write_bytes(
+                        (save_root / "source_000000010.safetensors").read_bytes()
+                    )
+                ),
                 optimizer=types.SimpleNamespace(state_dict=lambda: {"state": {0: {"step": 10}}}),
             )
-            namespace["copy_weight_with_logical_step"] = lambda source, target, step: Path(target).write_bytes(Path(source).read_bytes())
+            namespace["weight_metadata_with_logical_step"] = lambda source, step: {"training_info": json.dumps({"step": step})}
+            namespace["safetensors_tensor_dtypes"] = lambda path: {"F32"}
+            namespace["capture_rng_state"] = lambda torch: {"schema_version": 1}
             with patch.dict(sys.modules, {"torch": torch, "toolkit": toolkit, "toolkit.metadata": metadata}):
                 namespace["publish_generation"](
                     process,
@@ -137,6 +156,53 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertTrue((state / "optimizer.pt").is_file())
             self.assertEqual(json.loads((state / "state-info.json").read_text())["logical_step"], 10)
             self.assertFalse(any((root / "outputs").glob(".source-step*.partial")))
+
+    def test_ai_toolkit_runner_captures_live_network_as_float32_resume_weight(self) -> None:
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save_root = root / "outputs" / "source"
+            save_root.mkdir(parents=True)
+            regular_weight = save_root / "source_000000010.safetensors"
+            regular_weight.write_bytes(b"distribution-fp16")
+
+            torch = types.ModuleType("torch")
+            torch.float32 = "torch.float32"
+            torch.save = lambda value, path: Path(path).write_text(json.dumps(value), encoding="utf-8")
+            torch.load = lambda path, **kwargs: json.loads(Path(path).read_text(encoding="utf-8"))
+            toolkit = types.ModuleType("toolkit")
+            metadata = types.ModuleType("toolkit.metadata")
+            metadata.load_metadata_from_safetensors = lambda path: {"training_info": {"step": 10}}
+            saved: dict[str, object] = {}
+
+            def save_weights(path, *, dtype, metadata):
+                saved.update(dtype=dtype, metadata=metadata)
+                Path(path).write_bytes(b"resume-fp32")
+
+            process = types.SimpleNamespace(
+                accelerator=types.SimpleNamespace(is_main_process=True),
+                save_root=str(save_root),
+                job=types.SimpleNamespace(name="source"),
+                network=types.SimpleNamespace(save_weights=save_weights),
+                optimizer=types.SimpleNamespace(state_dict=lambda: {"state": {0: {"step": 10}}}),
+            )
+            namespace["weight_metadata_with_logical_step"] = lambda source, step: {"training_info": json.dumps({"step": step})}
+            namespace["safetensors_tensor_dtypes"] = lambda path: {"F32"}
+            namespace["capture_rng_state"] = lambda torch: {"schema_version": 1}
+            with patch.dict(sys.modules, {"torch": torch, "toolkit": toolkit, "toolkit.metadata": metadata}):
+                namespace["publish_generation"](
+                    process,
+                    10,
+                    {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2},
+                )
+
+            state = root / "outputs" / "source-step00000010-state"
+            self.assertEqual((state / "model.safetensors").read_bytes(), b"resume-fp32")
+            self.assertEqual(regular_weight.read_bytes(), b"distribution-fp16")
+            self.assertEqual(saved["dtype"], "torch.float32")
+            self.assertEqual(json.loads(saved["metadata"]["training_info"])["step"], 10)
+            self.assertEqual(json.loads((state / "state-info.json").read_text())["model_dtype"], "float32")
 
     def test_ai_toolkit_runner_coalesces_semantically_equal_periodic_and_final_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
@@ -155,6 +221,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 Path(path).write_text(json.dumps({"nonce": saves, "value": value}), encoding="utf-8")
 
             torch = types.ModuleType("torch")
+            torch.float32 = "torch.float32"
             torch.save = save
             torch.load = lambda path, **kwargs: json.loads(Path(path).read_text(encoding="utf-8"))["value"]
             process = types.SimpleNamespace(
@@ -162,11 +229,14 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 step_num=1,
                 save_root=str(save_root),
                 job=types.SimpleNamespace(name="source"),
+                network=types.SimpleNamespace(
+                    save_weights=lambda path, **kwargs: Path(path).write_text("same-weight-logical-2", encoding="utf-8")
+                ),
                 optimizer=types.SimpleNamespace(state_dict=lambda: {"state": {0: {"step": 2, "moment": [1, 2]}}}),
             )
-            namespace["copy_weight_with_logical_step"] = lambda source, target, step: Path(target).write_text(
-                f"{Path(source).read_text()}-logical-{step}", encoding="utf-8"
-            )
+            namespace["weight_metadata_with_logical_step"] = lambda source, step: {"training_info": json.dumps({"step": step})}
+            namespace["safetensors_tensor_dtypes"] = lambda path: {"F32"}
+            namespace["capture_rng_state"] = lambda torch: {"schema_version": 1}
             namespace["metadata_step"] = lambda path: int(Path(path).read_text().rsplit("-", 1)[1])
 
             with patch.dict(sys.modules, {"torch": torch}):
@@ -196,6 +266,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             weight.write_text("native-step-1", encoding="utf-8")
 
             torch = types.ModuleType("torch")
+            torch.float32 = "torch.float32"
             torch.save = lambda value, path: Path(path).write_text(json.dumps(value), encoding="utf-8")
             torch.load = lambda path, **kwargs: json.loads(Path(path).read_text(encoding="utf-8"))
             process = types.SimpleNamespace(
@@ -203,11 +274,14 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 step_num=1,
                 save_root=str(save_root),
                 job=types.SimpleNamespace(name="source"),
+                network=types.SimpleNamespace(
+                    save_weights=lambda path, **kwargs: Path(path).write_text("logical-step-2", encoding="utf-8")
+                ),
                 optimizer=types.SimpleNamespace(state_dict=lambda: {"state": {0: {"step": 2}, 1: {"step": 2}}}),
             )
-            namespace["copy_weight_with_logical_step"] = lambda source, target, step: Path(target).write_text(
-                f"logical-step-{step}", encoding="utf-8"
-            )
+            namespace["weight_metadata_with_logical_step"] = lambda source, step: {"training_info": json.dumps({"step": step})}
+            namespace["safetensors_tensor_dtypes"] = lambda path: {"F32"}
+            namespace["capture_rng_state"] = lambda torch: {"schema_version": 1}
             namespace["metadata_step"] = lambda path: int(Path(path).read_text(encoding="utf-8").rsplit("-", 1)[1])
 
             with patch.dict(sys.modules, {"torch": torch}):
@@ -271,6 +345,64 @@ class TrainingStateArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "before the first update"):
                 Trainer.hook_before_train_loop(process)
         self.assertFalse(process.original_hook_called)
+
+    def test_ai_toolkit_runner_restores_rng_after_original_before_loop(self) -> None:
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+        events: list[str] = []
+
+        class Base:
+            def load_weights(self, path):
+                return path
+
+            def save(self, step=None):
+                return step
+
+        class Trainer(Base):
+            def hook_before_train_loop(self):
+                events.append("original")
+                return "prepared"
+
+        torch = types.ModuleType("torch")
+        torch.load = lambda path, **kwargs: {"state": {0: {"step": 50}}}
+        modules = {
+            "torch": torch,
+            "extensions_built_in": types.ModuleType("extensions_built_in"),
+            "extensions_built_in.sd_trainer": types.ModuleType("extensions_built_in.sd_trainer"),
+            "extensions_built_in.sd_trainer.SDTrainer": types.ModuleType("extensions_built_in.sd_trainer.SDTrainer"),
+            "jobs": types.ModuleType("jobs"),
+            "jobs.process": types.ModuleType("jobs.process"),
+            "jobs.process.BaseSDTrainProcess": types.ModuleType("jobs.process.BaseSDTrainProcess"),
+        }
+        modules["extensions_built_in.sd_trainer.SDTrainer"].SDTrainer = Trainer
+        modules["jobs.process.BaseSDTrainProcess"].BaseSDTrainProcess = Base
+        expected_weight = Path("/tmp/expected.safetensors")
+        rng_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(rng_directory.cleanup)
+        rng_path = Path(rng_directory.name) / "rng.pt"
+        rng_path.write_bytes(b"rng")
+        namespace["restore_rng_state"] = lambda path, torch: events.append("rng")
+        with patch.dict(sys.modules, modules):
+            namespace["install_hooks"](
+                {"resume": {"source_step": 50, "payload": rng_directory.name}}, expected_weight
+            )
+        process = types.SimpleNamespace(
+            _kura_loaded_weight=expected_weight,
+            step_num=50,
+            start_step=50,
+            network=types.SimpleNamespace(did_change_weights=False),
+            save_root="/tmp",
+            optimizer=types.SimpleNamespace(
+                param_groups=[{"lr": 1.0e-6, "initial_lr": 1.0e-6}],
+                load_state_dict=lambda state: None,
+            ),
+        )
+
+        with patch.dict(sys.modules, {"torch": torch}):
+            result = Trainer.hook_before_train_loop(process)
+
+        self.assertEqual(result, "prepared")
+        self.assertEqual(events, ["original", "rng"])
 
     def test_sd_scripts_runner_normalizes_saved_application_step_from_persisted_training_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
@@ -1074,13 +1206,14 @@ class TrainingStateArtifactTests(unittest.TestCase):
             state.mkdir(parents=True)
             (state / "model.safetensors").write_bytes(_safetensors_bytes(b"weight"))
             (state / "optimizer.pt").write_bytes(_torch_archive_bytes(b"optimizer"))
+            (state / "rng.pt").write_bytes(_torch_archive_bytes(b"rng"))
             _write_state_marker(state, "ai-toolkit", 10)
             published = publish_completed_training_states(root, run_dir)
             self.assertEqual(len(published), 1)
             self.assertEqual(published[0]["restoration_contract"]["level"], "partial_resume")
             self.assertEqual(
                 published[0]["restoration_contract"]["not_restored"],
-                ["scheduler", "rng", "exact_dataloader_position"],
+                ["scheduler", "exact_dataloader_position"],
             )
 
     def test_completion_marker_with_a_stale_payload_digest_is_not_published(self) -> None:
@@ -1101,6 +1234,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (state / "model.safetensors").write_bytes(_safetensors_bytes(b"weight"))
             (state / "optimizer.pt").write_bytes(_torch_archive_bytes(b"optimizer"))
+            (state / "rng.pt").write_bytes(_torch_archive_bytes(b"rng"))
             _write_state_marker(state, "ai-toolkit", 10)
             (state / "optimizer.pt").write_bytes(_torch_archive_bytes(b"overwritten-after-marker"))
 
@@ -1126,6 +1260,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 state.mkdir(parents=True)
                 (state / "model.safetensors").write_bytes(_safetensors_bytes(b"weight"))
                 (state / "optimizer.pt").write_bytes(_torch_archive_bytes(b"optimizer"))
+                (state / "rng.pt").write_bytes(_torch_archive_bytes(b"rng"))
                 _write_state_marker(state, "ai-toolkit", 2)
 
             published = publish_completed_training_states(root, run_dir, allow_final_state=True)
