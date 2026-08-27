@@ -84,6 +84,23 @@ SDXL, SD 1.5, or FLUX prompt policy here.
 - Preserve recipe choices first. Explain any resolution, rank, effective batch,
   or model-size change before editing the run.
 
+## Resume boundary
+
+- Use `kura run resume` for SD 1.5, SDXL, and FLUX.1 LoRA continuation. The
+  current contract is Best-effort Resume: Accelerate restores model, optimizer,
+  scheduler, RNG, and compatible scaler state, while Kura normalizes cumulative
+  logical-step metadata from the persisted scheduler.
+- Application epoch/counter state and exact dataloader position are not
+  guaranteed. The initial envelope is constant scheduler and gradient
+  accumulation 1; explain these gaps before approval.
+- Anima LoRA and Anima ControlNet-LLLite Resume execution are unsupported in the
+  initial envelope. Do not silently degrade them to weight-only continuation.
+- Matching one-item local evidence produced identical learned state but a
+  different RNG state. The disposable-Pod smoke proves artifact transfer and
+  recovery, not Exact Resume or multi-item data-order continuity.
+- Read the restoration table in `../../../docs/commands.md` and use only
+  revision-matching evidence from `../../../docs/smoke-evidence/`.
+
 ## Verification
 
 Before launch, always run:

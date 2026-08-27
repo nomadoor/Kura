@@ -42,6 +42,8 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner\|sd-scripts] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run capabilities <backend> [--json]` | Show the `backend.config` fields that backend accepts, including reviewed nested fields and their types/ranges, selector applicability, unverified escape hatches, and unsupported concepts |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
+| `uv run kura run resume <source-run> --additional-steps <N>` | Create a derived draft from the latest valid training state and continue the same logical session for `N` optimizer updates |
+| `uv run kura run resume <source-run> --to-step <T> [--artifact <id>]` | Create a derived draft toward absolute logical step `T`, optionally selecting an older valid state |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
@@ -54,6 +56,23 @@ and does not request a second approval. A human running `run execute` directly
 in an interactive terminal may omit `--yes` and answer the one launch prompt.
 The agent normally performs compile for the user; it is listed below as a
 low-level command for inspection and development.
+
+Resume follows the same compile, plan, approval, and execute boundary as a new
+run. For example:
+
+```sh
+uv run kura run resume <source-run> --additional-steps 1000
+uv run kura run compile <derived-run>
+uv run kura run plan <derived-run>
+# After explicit approval of this plan:
+uv run kura run execute <derived-run> --yes
+```
+
+Use `--executor runpod --gpu "NVIDIA A40"` on `run resume` when recovery must
+move to a new execution environment. An executor or GPU change is a new compute
+and cost decision: create the derived draft with that choice, compile it, and
+obtain approval for the resulting plan before launch. The source artifact and
+training recipe remain frozen.
 
 For RunPod runs, `run plan` measures current stock and hourly price for every
 ordered GPU/cloud candidate before approval. Choose an available alternative or
@@ -87,6 +106,43 @@ available for evaluation and preserves the latest successfully mirrored weight
 if training later fails. The pull commands below remain available for an
 explicit immediate refresh or interrupted-controller recovery.
 
+Training-state capture is on by default at the backend's weight checkpoint
+cadence. Completed state directories are copied into the protected
+`artifacts/training-state/` store with a complete file inventory and SHA-256
+digests; the latest two valid generations are retained by default. Resume run
+creation selects the highest valid logical step, while `--artifact` can pin an
+older generation. The created run records the concrete artifact ID and digest,
+so later saves cannot change its input. A source run may be pruned without
+removing an artifact still referenced by a derived run.
+
+Backend completion sidecars are accepted only when their schema, backend name,
+logical step, and declared payload digests agree. For short Musubi Resume runs,
+the derived checkpoint cadence is capped at the requested additional steps so
+the endpoint remains resumable. RunPod compile freezes the effective runtime
+image, and Resume launch does not accept `--image` overrides.
+
+Resume does not mean "load a LoRA and start over." The plan reports the actual
+restoration contract:
+
+| Backend path | Initial Resume level | Restored | Known gap / restriction |
+| --- | --- | --- | --- |
+| AI-Toolkit standard LoRA | Partial | full-precision Resume weight, optimizer, step, epoch, and Kura RNG snapshot restored at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position and exact data position are not restored; AdamW/AdamW8bit, constant scheduler, and gradient accumulation 1 only |
+| Musubi built-ins | Best effort | Accelerate model, optimizer, scheduler, RNG and supported auxiliary state | application counters and exact data position are not restored; constant scheduler only |
+| sd-scripts SD 1.5 / SDXL / FLUX.1 LoRA | Best effort | Accelerate model, optimizer, scheduler, RNG and compatible scaler | Kura normalizes cumulative step metadata; application epoch and exact data position are not restored; constant scheduler and gradient accumulation 1 only |
+| sd-scripts Anima LoRA / LLLite | Unsupported for execution | state capture may be structurally recognized | Kura refuses Resume rather than silently degrading to weight-only training |
+
+The selected payload is verified again inside the target container before the
+trainer starts. A state-load failure is terminal before the first optimizer
+update. RunPod staging transfers only the selected protected artifact and does
+not require a Network Volume or the original Pod.
+
+The disposable-Pod path has been exercised for AI-Toolkit, Musubi, and
+sd-scripts: each source Pod was stopped after confirmed state download, then a
+different Pod received the protected artifact and produced the next logical
+step. This validates transport and lifecycle behavior, not Exact Resume. See
+`docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml` for the pinned
+images, run IDs, artifacts, and declared restoration levels.
+
 ## Diagnosis and recovery
 
 Use these only when a normal execution was interrupted or needs inspection.
@@ -119,6 +175,9 @@ additional steps in the normal workflow.
 
 Useful low-level `run remote` flags:
 
+- `--wait-for-capacity 6h --capacity-poll-interval 30s` opts this low-level
+  invocation into bounded capacity waiting. Unlike normal `run execute`,
+  `run remote` does not inherit `compute.capacity` from the compiled run.
 - `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
   can inspect results. Use `--hold-for 0` to stop immediately.
 - `--max-lease 12h` is a best-effort Pod-side billing fuse if the local

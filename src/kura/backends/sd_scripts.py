@@ -15,8 +15,58 @@ from kura.backends.sd_scripts_datasets import (
 from kura.backends.sd_scripts_models import explicit_model_paths, sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
 from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _script_command, _truthy
 from kura.container_scripts import script_source
-from kura.fsio import atomic_write_json, atomic_write_yaml
-from kura.run_envelope import validated_recipe
+from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+
+
+def training_state_contract_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
+    native = backend_config(run, "sd-scripts")
+    authored_architecture = native.get("architecture")
+    architecture = (
+        ""
+        if authored_architecture is None or (isinstance(authored_architecture, str) and not authored_architecture.strip())
+        else sd_scripts_architecture(run)
+    )
+    mode = sd_scripts_mode(run)
+    common = ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl")
+    if (architecture, mode) in {("sd15", "lora"), ("sdxl", "lora"), ("flux1", "lora")}:
+        return {
+            "native_format": "accelerate-state-directory",
+            "required_files": (*common, "train_state.json", "kura-state-info.json"),
+            "native_progress": "process_local",
+            "native_target": "logical",
+            "state_step": {
+                "path": "kura-state-info.json", "field": "logical_step", "space": "logical",
+                "schema_version": 1, "backend": "sd-scripts",
+                "digests": {
+                    "train_state_sha256": "train_state.json",
+                    "optimizer_sha256": "optimizer.bin",
+                    "scheduler_sha256": "scheduler.bin",
+                },
+            },
+            "capability": "best_effort_resume",
+            "restoration_contract": {
+                "level": "best_effort_resume",
+                "restored": ["model", "optimizer", "scheduler", "rng", "scaler_when_present"],
+                "not_restored": ["application_global_step", "application_epoch_counter", "exact_dataloader_position"],
+                "limitations": ["Kura normalizes sd-scripts application step metadata from the persisted scheduler after each complete save"],
+                "scheduler_behavior": "restored; initial Resume execution limited to constant scheduler",
+            },
+        }
+    return {
+        "native_format": "accelerate-state-directory",
+        "required_files": common,
+        "native_progress": "logical",
+        "native_target": "logical",
+        "capability": "unsupported",
+        "restoration_contract": {
+            "level": "unsupported",
+            "restored": [],
+            "not_restored": ["model", "optimizer", "scheduler", "rng", "application_global_step", "epoch", "exact_dataloader_position"],
+            "limitations": [f"{architecture}/{mode} execution is not yet supported by Kura"],
+            "scheduler_behavior": "backend state only; no supported Kura Resume execution envelope",
+        },
+    }
 
 
 ENTRYPOINTS = {
@@ -33,6 +83,7 @@ OWNED_FLAGS = {
     "--llm_adapter_path", "--t5_tokenizer_path", "--network_module", "--network_dim", "--network_alpha",
     "--learning_rate", "--optimizer_type", "--lr_scheduler", "--mixed_precision", "--max_train_steps", "--seed",
     "--output_dir", "--output_name", "--save_model_as", "--save_every_n_steps", "--save_last_n_steps",
+    "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", "--resume", "--skip_until_initial_step",
     "--gradient_accumulation_steps", "--network_train_unet_only",
     "--gradient_checkpointing", "--fp8_base", "--blocks_to_swap",
     "--cache_latents", "--cache_latents_to_disk", "--cache_text_encoder_outputs", "--cache_text_encoder_outputs_to_disk",
@@ -210,13 +261,23 @@ def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> 
 def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict[str, str], output_dir: str, output_name: str) -> list[str]:
     architecture, mode = sd_scripts_architecture(run), sd_scripts_mode(run)
     recipe = validated_recipe(run, required=True)
+    continuation = resume_intent(run)
+    native_steps = recipe["steps"]
+    if continuation is not None:
+        if (architecture, mode) not in {("sd15", "lora"), ("sdxl", "lora"), ("flux1", "lora")}:
+            raise ValueError(f"sd-scripts {architecture}/{mode} State Resume is not yet supported")
+        if str(native.get("lr_scheduler", "constant")).lower() != "constant":
+            raise ValueError("sd-scripts State Resume initially requires the constant scheduler")
+        if native.get("gradient_accumulation_steps", 1) != 1:
+            raise ValueError("sd-scripts State Resume initially requires gradient_accumulation_steps=1")
+        native_steps = continuation["target_step"]
     args = [
         ENTRYPOINTS[(architecture, mode)],
         "--dataset_config", f"/workspace/runs/{run['id']}/resolved/sd-scripts/dataset.toml",
         "--output_dir", output_dir,
         "--output_name", output_name,
         "--save_model_as", "safetensors",
-        "--max_train_steps", str(recipe["steps"]),
+        "--max_train_steps", str(native_steps),
         "--seed", str(recipe["seed"]),
         "--learning_rate", str(native.get("learning_rate", 1e-4)),
         "--optimizer_type", str(native.get("optimizer_type", "AdamW8bit")),
@@ -258,6 +319,21 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"sd-scripts {key} must be a positive integer")
             args.extend([f"--{key}", str(value)])
+    policy = training_state_policy(run)
+    if policy["enabled"]:
+        epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
+        configured_epoch_flags = sorted(arg.split("=", 1)[0] for arg in _extra_args(native) if arg.split("=", 1)[0] in epoch_flags)
+        if configured_epoch_flags:
+            raise ValueError(
+                "sd-scripts epoch save flags are incompatible with managed training-state retention; "
+                "use backend.config.save_every_n_steps instead: " + ", ".join(configured_epoch_flags)
+            )
+        cadence = native.get("save_every_n_steps") or recipe["steps"]
+        state_window = cadence if policy["keep_generations"] == 2 else 1
+        args.extend(["--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_window)])
+    if continuation is not None:
+        artifact_id = continuation["source"]["artifact_id"]
+        args.extend(["--resume", f"/workspace/artifacts/training-state/{artifact_id}/payload", "--skip_until_initial_step"])
     if _truthy(native.get("cache_latents")) or _truthy(native.get("cache_latents_to_disk")):
         args.append("--cache_latents")
     if _truthy(native.get("cache_latents_to_disk")):
@@ -342,16 +418,43 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     explicit = explicit_model_paths(run)
     download_commands, downloaded = sd_scripts_download_commands(run, explicit)
     paths.update(downloaded)
-    output_name = _safe_name(native.get("output_name", run["id"]), field="output_name")
+    # A Resume run owns a new output namespace.  The source output_name is part
+    # of the frozen training recipe, but reusing it would make the derived run
+    # report (and, with a shared workspace, potentially overwrite) source-run
+    # weights.
+    configured_output_name = run["id"] if resume_intent(run) is not None else native.get("output_name", run["id"])
+    output_name = _safe_name(configured_output_name, field="output_name")
     final_output = f"/workspace/runs/{run['id']}/outputs"
     train_output = f"/workspace/runs/{run['id']}/cache/sd-scripts/native-output" if architecture == "anima" and mode == "lora" else final_output
     model_items = [{"role": role, "path": path} for role, path in sorted(paths.items())]
-    training_argv = ["accelerate", "launch", "--num_cpu_threads_per_process", "1", *_base_training_args(run, native, paths, train_output, output_name)]
+    native_training_argv = _base_training_args(run, native, paths, train_output, output_name)
+    training_argv = ["accelerate", "launch", "--num_cpu_threads_per_process", "1"]
+    state_contract = training_state_contract_sd_scripts(run)
+    if training_state_policy(run)["enabled"] and state_contract.get("capability") != "unsupported":
+        runner_spec = {"entrypoint": native_training_argv[0], "argv": native_training_argv[1:]}
+        training_argv.extend(
+            [
+                f"/workspace/runs/{run['id']}/resolved/sd-scripts/state-runner.py",
+                json.dumps(runner_spec, ensure_ascii=False, separators=(",", ":")),
+            ]
+        )
+    else:
+        training_argv.extend(native_training_argv)
     commands: list[list[str]] = [
         ["python", "-c", script_source("sd_scripts_dataset_stage.py"), f"/workspace/runs/{run['id']}/resolved/sd-scripts/dataset-stage.lock.json", "/workspace"],
         *download_commands,
         _validation_command(models=model_items),
     ]
+    if resume_intent(run) is not None:
+        commands.append(
+            [
+                "python",
+                "-c",
+                script_source("training_state_verify.py"),
+                f"/workspace/runs/{run['id']}/resolved/training-state-source.lock.json",
+                "/workspace",
+            ]
+        )
     if architecture == "anima" and mode == "lora":
         commands.append(_anima_conversion_command(run["id"], output_name, training_argv))
     else:
@@ -371,6 +474,9 @@ def compile_sd_scripts(run: dict[str, Any], destination: Path, *, workspace: Pat
         return command
     write_sd_scripts_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
     atomic_write_yaml(destination / "model-bundle.lock.yaml", sd_scripts_model_lock(run))
+    state_contract = training_state_contract_sd_scripts(run)
+    if training_state_policy(run)["enabled"] and state_contract.get("capability") != "unsupported":
+        atomic_write_text(destination / "state-runner.py", script_source("sd_scripts_state.py") + "\n")
     command = command_sd_scripts(run)
     atomic_write_json(destination / "command.json", command)
     return command

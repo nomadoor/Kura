@@ -32,8 +32,8 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, validated_recipe
-from kura.provenance import adapter_source_identity, image_reference_identity
+from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
 from kura.run_commands import _runpod_secret_env_payload
@@ -52,6 +52,7 @@ from kura.run_commands import cmd_run_stage
 from kura.run_commands import cmd_run_stop
 from kura.run_commands import cmd_run_upload
 from kura.tui import run_textual_monitor
+from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import dump_yaml as _dump_yaml
 from kura.workspace import load_env_local as _load_env_local
 from kura.workspace import load_yaml as _load_yaml
@@ -116,6 +117,15 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
     native = backend_config(run, backend_name)
+    state_policy = training_state_policy(run)
+    if native.get("command") is not None and state_policy["enabled"]:
+        raise ValueError(
+            "recovery.training_state is enabled but backend.config.command has no managed training-state contract; "
+            "use the built-in backend command or explicitly disable training-state capture"
+        )
+    continuation = resume_intent(run)
+    if continuation is not None and not state_policy["enabled"]:
+        raise ValueError("Resume runs require recovery.training_state.enabled: true")
     validate_backend_config(run)
     validated_recipe(run, required=native.get("command") is None)
     adapter = get_backend(backend_name)
@@ -249,6 +259,129 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_resume(args: argparse.Namespace) -> int:
+    """Create a draft derived run from one durable training-state artifact."""
+
+    source_id = args.source_run
+    if not isinstance(source_id, str) or not source_id or Path(source_id).name != source_id:
+        print("cannot create Resume run: source run ID must be a safe directory name", file=sys.stderr)
+        return 1
+    additional_steps = args.additional_steps
+    to_step = args.to_step
+    if (additional_steps is None) == (to_step is None):
+        print("cannot create Resume run: specify exactly one of --additional-steps or --to-step", file=sys.stderr)
+        return 1
+    requested = additional_steps if additional_steps is not None else to_step
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested <= 0:
+        print("cannot create Resume run: step target must be a positive integer", file=sys.stderr)
+        return 1
+    safe_slug = re.sub(r"[^a-z0-9-]+", "-", str(args.slug or "resume").lower()).strip("-")
+    if not safe_slug:
+        print("cannot create Resume run: slug must contain letters or numbers", file=sys.stderr)
+        return 1
+    try:
+        with training_state_reference_lock(_workspace()):
+            run_id = _create_resume_derived_run(
+                args,
+                source_id=source_id,
+                additional_steps=additional_steps,
+                to_step=to_step,
+                safe_slug=safe_slug,
+            )
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot create Resume run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+    print(run_id)
+    return 0
+
+
+def _create_resume_derived_run(
+    args: argparse.Namespace,
+    *,
+    source_id: str,
+    additional_steps: int | None,
+    to_step: int | None,
+    safe_slug: str,
+) -> str:
+    """Create one derived run while the caller holds the artifact-store lock."""
+
+    source_dir = _run_path(source_id)
+    source_manifest = source_dir / "resolved" / "manifest.lock.yaml"
+    if not source_manifest.is_file():
+        raise ValueError("source run has no compiled manifest")
+    source_run = _load_yaml(source_manifest)
+    if source_run.get("type") != "train":
+        raise ValueError("source run must be a training run")
+    resume_contract = training_state_contract(source_run)
+    if resume_contract.get("capability") == "unsupported":
+        restoration = resume_contract.get("restoration_contract")
+        limitations = restoration.get("limitations") if isinstance(restoration, dict) else None
+        detail = "; ".join(limitations) if isinstance(limitations, list) else "backend configuration has no Resume execution contract"
+        raise ValueError(f"State Resume is unsupported for this source run: {detail}")
+    artifact = select_training_state(_workspace(), source_id, args.artifact)
+    backend = source_run.get("backend") if isinstance(source_run.get("backend"), dict) else {}
+    if artifact.get("backend") != backend.get("name"):
+        raise ValueError("training-state backend does not match the source run")
+    source_step = artifact.get("observed_step")
+    if isinstance(source_step, bool) or not isinstance(source_step, int) or source_step < 0:
+        raise ValueError("training-state artifact has no valid observed step")
+    if to_step is not None and to_step <= source_step:
+        raise ValueError(f"--to-step must be greater than the source step {source_step}")
+
+    timestamp = _now()
+    run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
+    run_dir = _run_path(run_id)
+    derived = deepcopy(source_run)
+    derived.pop("_kura", None)
+    derived.update(
+        {
+            "id": run_id,
+            "created": timestamp.isoformat(),
+            "created_by": "human",
+            "parent_run": source_id,
+        }
+    )
+    compute = deepcopy(source_run.get("compute") if isinstance(source_run.get("compute"), dict) else {})
+    if args.executor is not None:
+        compute["executor"] = args.executor
+        if args.executor == "runpod":
+            compute.setdefault("capacity", {"mode": "immediate"})
+        else:
+            compute.pop("capacity", None)
+    if args.gpu is not None:
+        compute["gpu"] = args.gpu
+    derived["compute"] = compute
+    target_step = to_step if to_step is not None else source_step + additional_steps
+    source_fingerprint = recipe_fingerprint(source_run)
+    continuation: dict[str, Any] = {
+        "mode": "resume",
+        "source": {
+            "artifact_id": artifact["id"],
+            "manifest_sha256": artifact["manifest_sha256"],
+            "observed_step": source_step,
+            "recipe_sha256": source_fingerprint,
+        },
+        "target_step": target_step,
+        "restoration_contract": deepcopy(artifact.get("restoration_contract") or {}),
+    }
+    if additional_steps is not None:
+        continuation["additional_steps"] = additional_steps
+    else:
+        continuation["to_step"] = to_step
+    derived["continuation"] = continuation
+
+    try:
+        run_dir.mkdir(parents=True, exist_ok=False)
+        _dump_yaml(run_dir / "run.yaml", derived)
+        atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
+        atomic_write_text(run_dir / "plan.md", "# Training Resume plan\n\n")
+        atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
+    except OSError:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
+    return run_id
+
+
 def cmd_run_capabilities(args: argparse.Namespace) -> int:
     payload = backend_capabilities(args.backend)
     if getattr(args, "json", False):
@@ -352,6 +485,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     locked = deepcopy(run)
     locked["datasets"] = locked_datasets
     locked.pop("dataset", None)
+    locked["recovery"] = {"training_state": training_state_policy(locked)}
     locked["_kura"] = {"frozen_at": _now().isoformat(), "artifact": "manifest.lock"}
     resolved = run_dir / "resolved"
     try:
@@ -362,7 +496,38 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             projection["digest"] = dataset["digest"]
             dataset_observations.append(projection)
         resolved.mkdir(exist_ok=True)
+        source_identity = adapter_source_identity(backend.get("name"))
+        declared_executor = (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker"
+        config = _workspace_config()
+        runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+        default_images = runpod_config.get("default_image") if isinstance(runpod_config.get("default_image"), dict) else {}
+        image_name = _backend_image_name(backend.get("name"))
+        effective_remote_image = default_images.get(image_name)
+        if not isinstance(effective_remote_image, str) or not effective_remote_image:
+            effective_remote_image = image["remote"]
+        local_image_identity = image_reference_identity(image["local"])
+        remote_image_identity = image_reference_identity(effective_remote_image)
+        selected_image_identity = remote_image_identity
+        if declared_executor != "runpod":
+            from kura.executors.docker import _docker_image_id
+
+            selected_image_identity = image_reference_identity(image["local"], _docker_image_id(image["local"]))
+        runtime_contract = training_runtime_contract(source_identity, local_image_identity, remote_image_identity)
+        target_runtime_identity = {
+            "adapter_source": source_identity,
+            "declared_executor": declared_executor,
+            "local_image_identity": local_image_identity,
+            "remote_image_identity": remote_image_identity,
+            "selected_image_identity": selected_image_identity,
+            "runtime_contract_sha256": runtime_contract,
+        }
         _dump_yaml(resolved / "manifest.lock.yaml", locked)
+        compile_resume_lock(
+            _workspace(),
+            locked,
+            resolved,
+            target_runtime_identity=target_runtime_identity,
+        )
         _dump_yaml(
             resolved / "model-requirements.lock.yaml",
             {
@@ -380,18 +545,20 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             },
         )
         command_spec = adapter.compile(locked, resolved, _workspace(), True)
-        source_identity = adapter_source_identity(backend.get("name"))
         atomic_write_json(resolved / "backend-display.lock.json", adapter.display(locked))
         atomic_write_json(resolved / "backend-command.lock.json", {**command_spec, "backend": backend.get("name"), "adapter_source": source_identity})
         env = {
             "kura_version": __version__, "python_version": platform.python_version(),
             "platform": platform.platform(), "backend_name": backend.get("name"),
             "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
-            "declared_executor": (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker",
+            "declared_executor": declared_executor,
             "local_image": image["local"], "dockerfile": image["dockerfile"],
+            "selected_image": image["local"] if declared_executor != "runpod" else effective_remote_image,
+            "selected_image_identity": selected_image_identity,
             "adapter_source": source_identity,
-            "local_image_identity": image_reference_identity(image["local"]),
-            "remote_image_identity": image_reference_identity(image["remote"]),
+            "local_image_identity": local_image_identity,
+            "remote_image_identity": remote_image_identity,
+            "runtime_contract_sha256": runtime_contract,
         }
         _dump_yaml(resolved / "env.lock", env)
         status_path = run_dir / "status.json"
@@ -1110,6 +1277,16 @@ def main() -> None:
     new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
     new.add_argument("--gpu")
     new.set_defaults(func=cmd_run_new)
+    resume = run_sub.add_parser("resume", help="Create a derived run from durable training state")
+    resume.add_argument("source_run")
+    target = resume.add_mutually_exclusive_group(required=True)
+    target.add_argument("--additional-steps", type=int, help="Run this many optimizer updates after the recovered step")
+    target.add_argument("--to-step", type=int, help="Resume toward this absolute logical optimizer step")
+    resume.add_argument("--artifact", help="Use an older explicit training-state artifact ID")
+    resume.add_argument("--slug", default="resume")
+    resume.add_argument("--executor", choices=("docker", "runpod"), help="Change only the execution location for the derived run")
+    resume.add_argument("--gpu", help="Select a compatible GPU for the new execution environment")
+    resume.set_defaults(func=cmd_run_resume)
     capabilities = run_sub.add_parser("capabilities", help="List a backend's authored configuration surface")
     capabilities.add_argument("backend", choices=backend_names())
     capabilities.add_argument("--json", action="store_true", help="Print the surface contract as JSON")

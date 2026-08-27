@@ -117,6 +117,19 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertNotEqual(baseline, changed)
 
+    def test_sd_scripts_adapter_identity_includes_training_state_runner(self) -> None:
+        baseline = adapter_source_identity("sd-scripts")["value"]
+        original = Path.read_bytes
+
+        def changed_helper(path):
+            payload = original(path)
+            return payload + (b"changed" if path.name == "sd_scripts_state.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_helper):
+            changed = adapter_source_identity("sd-scripts")["value"]
+
+        self.assertNotEqual(baseline, changed)
+
     def test_container_scripts_compile(self) -> None:
         for name in (
             "hf_download.py",

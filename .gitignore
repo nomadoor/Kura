@@ -17,6 +17,7 @@ workspace.yaml
 index.jsonl
 datasets/
 runs/
+artifacts/
 workflows/*
 !workflows/samples/
 promptsets/

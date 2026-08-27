@@ -30,7 +30,8 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
 from kura.run_commands.experiment import experiment_context, format_experiment_context
-from kura.run_envelope import backend_config, common_recipe
+from kura.run_envelope import backend_config, common_recipe, resume_intent, training_state_policy
+from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state
 
 
 NOT_SET = "(not set)"
@@ -938,12 +939,81 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         sampling_payload["cadence_steps"] = sampling.get("cadence_steps")
 
     native_config = backend_config(run, backend.get("name")) if isinstance(backend.get("name"), str) else {}
+    state_policy = training_state_policy(run)
+    state_cadence = native_config.get("save_every_n_steps")
+    ai_native = native_config.get("native_config") if isinstance(native_config.get("native_config"), dict) else {}
+    ai_save = ai_native.get("save") if isinstance(ai_native.get("save"), dict) else {}
+    if state_cadence is None:
+        state_cadence = ai_save.get("save_every")
+    if state_cadence is None:
+        state_cadence = run_recipe.get("steps")
+    state_capability = training_state_contract(run)["capability"]
+    training_state_payload = {
+        "enabled": state_policy["enabled"],
+        "keep_generations": state_policy["keep_generations"],
+        "cadence_steps": state_cadence,
+        "capability": state_capability,
+        "warning": (
+            "disabled: crash or Pod-loss Resume is unavailable"
+            if not state_policy["enabled"]
+            else "single generation: no fallback if the newest state is corrupt"
+            if state_policy["keep_generations"] == 1
+            else None
+        ),
+    }
     download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
     display_path = run_dir / "resolved" / "backend-display.lock.json"
     frozen_display = _load_yaml(display_path) if display_path.is_file() else None
     workspace_config = _workspace_config()
     resources = _resources_payload(run, workspace_config, download_estimate, adapter_display=frozen_display)
     preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate)
+    continuation = resume_intent(run)
+    resume_payload = None
+    if continuation is not None:
+        lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+        if lock_path.is_file():
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            source_step = lock.get("source_step")
+            target_step = lock.get("target_step")
+            artifact_id = lock.get("artifact_id")
+            manifest_sha256 = lock.get("manifest_sha256")
+            native_state_path = lock.get("native_state_path")
+            restoration = lock.get("restoration_contract") if isinstance(lock.get("restoration_contract"), dict) else {}
+            files = lock.get("files") if isinstance(lock.get("files"), list) else []
+        else:
+            source_intent = continuation["source"]
+            artifact = load_training_state(workspace, source_intent["artifact_id"])
+            if artifact["manifest_sha256"] != source_intent["manifest_sha256"]:
+                raise ValueError("Resume source manifest digest changed before planning")
+            verify_training_state(workspace, artifact)
+            source_step = source_intent["observed_step"]
+            target_step = continuation["target_step"]
+            artifact_id = artifact["id"]
+            manifest_sha256 = artifact["manifest_sha256"]
+            native_state_path = f"/workspace/artifacts/training-state/{artifact_id}/payload"
+            restoration = artifact.get("restoration_contract") if isinstance(artifact.get("restoration_contract"), dict) else {}
+            files = artifact.get("files") if isinstance(artifact.get("files"), list) else []
+        native_target_space = training_state_contract(run).get("native_target", "logical")
+        native_start = 0 if native_target_space == "process_local" else source_step
+        native_target = target_step - source_step if native_target_space == "process_local" else target_step
+        resume_payload = {
+            "source_run": run.get("parent_run"),
+            "artifact_id": artifact_id,
+            "manifest_sha256": manifest_sha256,
+            "source_step": source_step,
+            "target_step": target_step,
+            "additional_steps": target_step - source_step,
+            "restoration_level": restoration.get("level"),
+            "restored": restoration.get("restored") or [],
+            "not_restored": restoration.get("not_restored") or [],
+            "limitations": restoration.get("limitations") or [],
+            "scheduler_behavior": restoration.get("scheduler_behavior"),
+            "native_start": native_start,
+            "native_target": native_target,
+            "native_state_path": native_state_path,
+            "state_bytes": sum(item.get("size", 0) for item in files if isinstance(item, dict) and isinstance(item.get("size"), int)),
+            "capture_policy": training_state_policy(run),
+        }
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -964,6 +1034,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
             "capacity": compute.get("capacity") if isinstance(compute.get("capacity"), dict) else None,
         },
+        "resume": resume_payload,
+        "training_state": training_state_payload,
         "datasets": datasets,
         "recipe": {key: value for key, value in plan_recipe.items() if value is not None},
         "sampling": sampling_payload,
@@ -1050,6 +1122,35 @@ def format_run_plan(payload: dict[str, Any]) -> str:
     for key, value in payload.get("compute", {}).items():
         if value is not None:
             _append_kv(lines, key, value)
+
+    resume = payload.get("resume") if isinstance(payload.get("resume"), dict) else None
+    if resume is not None:
+        lines.append("")
+        lines.append("Resume")
+        for key in ("source_run", "artifact_id", "source_step", "target_step", "additional_steps", "restoration_level"):
+            _append_kv(lines, key, resume.get(key))
+        _append_kv(lines, "restored", resume.get("restored"))
+        _append_kv(lines, "not_restored", resume.get("not_restored"))
+        if resume.get("restoration_level") != "exact_resume":
+            missing = resume.get("not_restored") or []
+            detail = f"; missing: {', '.join(str(item) for item in missing)}" if missing else ""
+            _append_kv(lines, "continuity", "exact equivalence is not guaranteed" + detail)
+        if resume.get("limitations"):
+            _append_kv(lines, "limitations", resume.get("limitations"))
+        _append_kv(lines, "scheduler", resume.get("scheduler_behavior"))
+        _append_kv(lines, "native_steps", f"{resume.get('native_start')} -> {resume.get('native_target')}")
+        _append_kv(lines, "state_size", _format_bytes(resume.get("state_bytes")))
+
+    training_state = payload.get("training_state") if isinstance(payload.get("training_state"), dict) else None
+    if training_state is not None:
+        lines.append("")
+        lines.append("Training state")
+        _append_kv(lines, "enabled", "yes" if training_state.get("enabled") else "no")
+        _append_kv(lines, "keep", training_state.get("keep_generations"))
+        _append_kv(lines, "cadence", training_state.get("cadence_steps"))
+        _append_kv(lines, "capability", training_state.get("capability"))
+        if training_state.get("warning"):
+            _append_kv(lines, "warning", training_state.get("warning"))
 
     runpod_capacity = payload.get("runpod_capacity") if isinstance(payload.get("runpod_capacity"), dict) else None
     if runpod_capacity is not None:

@@ -82,8 +82,8 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     registry = backend_root / "registry.py"
     if backend_name == "ai-toolkit":
         paths = [backend_root / "ai_toolkit.py"]
-        symbols = [(shared, "_datasets")]
-        runtime_paths: list[Path] = []
+        symbols = [(shared, name) for name in ("_datasets", "_script_command")]
+        runtime_paths = [container_root / "ai_toolkit_state.py", container_root / "training_state_verify.py"]
     elif backend_name == "musubi-tuner":
         paths = [backend_root / "common.py", *sorted(backend_root.glob("musubi_*.py"))]
         symbols = [
@@ -92,7 +92,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         ]
         runtime_paths = [
             container_root / name
-            for name in ("hf_download.py", "musubi_dataset_assert.py", "prune_checkpoints.py", "safetensors_validator.py")
+            for name in ("hf_download.py", "musubi_dataset_assert.py", "prune_checkpoints.py", "safetensors_validator.py", "training_state_verify.py")
         ]
     elif backend_name == "sd-scripts":
         paths = sorted(backend_root.glob("sd_scripts*.py"))
@@ -107,7 +107,9 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
                 "sd_scripts_dataset_stage.py",
                 "sd_scripts_probe.py",
                 "sd_scripts_publish_anima.py",
+                "sd_scripts_state.py",
                 "sd_scripts_validate.py",
+                "training_state_verify.py",
             )
         ]
     else:
@@ -168,3 +170,19 @@ def image_reference_identity(reference: str, observed_id: str | None = None) -> 
             "detail": "runtime image digest was not observed",
         },
     }
+
+
+def training_runtime_contract(
+    adapter_source: dict[str, Any],
+    local_image_identity: dict[str, Any],
+    remote_image_identity: dict[str, Any],
+) -> str:
+    """Identify the declared local/remote runtime pair for portability checks."""
+
+    payload = {
+        "schema": "training-runtime-pair-v1",
+        "adapter_source": adapter_source,
+        "local_image_identity": local_image_identity,
+        "remote_image_identity": remote_image_identity,
+    }
+    return "sha256:" + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()

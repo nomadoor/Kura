@@ -238,6 +238,34 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 {"lr_scheduler": "constant"},
             )
 
+    def test_musubi_short_resume_saves_state_at_the_derived_endpoint(self) -> None:
+        commands = [["python", "train.py", "--max_train_steps", "2000", "--save_every_n_steps", "2000"]]
+        run = {
+            "id": "derived",
+            "parent_run": "source",
+            "recipe": {"steps": 2000, "seed": 1},
+            "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+            "continuation": {
+                "mode": "resume",
+                "source": {
+                    "artifact_id": "state-2000",
+                    "manifest_sha256": "a" * 64,
+                    "observed_step": 2000,
+                    "recipe_sha256": "b" * 64,
+                },
+                "additional_steps": 1000,
+                "target_step": 3000,
+                "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
+            },
+        }
+
+        result = musubi_script_command(commands, {"lr_scheduler": "constant"}, run)
+        script = result[2]
+
+        self.assertIn("--max_train_steps 1000", script)
+        self.assertIn("--save_every_n_steps 1000", script)
+        self.assertIn("--save_last_n_steps_state 1000", script)
+
     def test_explicit_command_cannot_silently_discard_other_config(self) -> None:
         for name in BACKENDS:
             with self.subTest(backend=name):
@@ -303,11 +331,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
                         "quantize": False, "quantize_te": False, "low_vram": True,
                     },
                 })
-                self.assertEqual(command, {
-                    "cwd": expected_cwd,
-                    "argv": ["python", "run.py", f"/workspace/runs/{run_id}/resolved/ai-toolkit.yaml"],
-                    "env": {},
-                })
+                self.assertEqual(command["cwd"], expected_cwd)
+                self.assertEqual(command["argv"][:2], ["python", "-c"])
+                self.assertIn(f"/workspace/runs/{run_id}/resolved/ai-toolkit.yaml", command["argv"][3])
+                self.assertEqual(command["env"], {"SEED": "1"})
 
     def test_musubi_escape_hatches_cannot_shadow_declared_fields(self) -> None:
         base = {

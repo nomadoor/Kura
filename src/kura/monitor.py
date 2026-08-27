@@ -28,7 +28,7 @@ TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
 TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
 HF_DOWNLOAD_RE = re.compile(r"\[kura\]\s+hf download (?P<kind>start|progress|idle|shared activity|shared idle)\s+(?P<label>\S+)(?P<rest>.*)", re.IGNORECASE)
 HF_DOWNLOAD_STALLED_RE = re.compile(r"\[kura\]\s+hf download stalled\s+(?P<label>[^;]+)", re.IGNORECASE)
-KURA_STEP_RE = re.compile(r"\[kura\]\s+(?:musubi|sd-scripts) step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
+KURA_STEP_RE = re.compile(r"\[kura\]\s+(?:ai-toolkit|musubi|sd-scripts) step\s+(?P<step>\d+)\s*/\s*(?P<total>\d+)\s*:\s*(?P<name>.+)", re.IGNORECASE)
 KURA_DOWNLOADED_RE = re.compile(r"\[kura\]\s+downloaded\s+(?P<key>\S+)\s+->", re.IGNORECASE)
 
 
@@ -38,6 +38,8 @@ class RunProgress:
     total: int | None = None
     seconds_per_iter: float | None = None
     current_case_id: str | None = None
+    current_run_step: int | None = None
+    current_run_total: int | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,10 @@ class RunSummary:
     capacity_wait: CapacityWaitInfo | None = None
     is_stale: bool = False
     activity: str | None = None
+    resume_source_run: str | None = None
+    resume_artifact_id: str | None = None
+    recoverable_state_step: int | None = None
+    recoverable_state_level: str | None = None
 
 
 def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: float = 90.0) -> list[RunSummary]:
@@ -337,6 +343,14 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         poll_interval = capacity_wait.poll_interval_sec or 30.0
         threshold = max(stale_after, poll_interval * 3)
         is_stale = bool(last_attempt and (datetime.now().astimezone() - last_attempt).total_seconds() > threshold)
+    continuation = config.get("continuation") if isinstance(config.get("continuation"), dict) else {}
+    resume_source = continuation.get("source") if continuation.get("mode") == "resume" and isinstance(continuation.get("source"), dict) else {}
+    recoverable = status.get("recoverable_training_states") if isinstance(status.get("recoverable_training_states"), list) else []
+    latest_state = max(
+        (item for item in recoverable if isinstance(item, dict) and isinstance(item.get("observed_step"), int)),
+        key=lambda item: item["observed_step"],
+        default={},
+    )
     return RunSummary(
         id=_string(config.get("id") or run.get("id")) or fallback_id,
         experiment=_string(config.get("experiment") or run.get("experiment")),
@@ -363,6 +377,10 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         capacity_wait=capacity_wait,
         is_stale=is_stale,
         activity=_capacity_wait_activity(capacity_wait, stale=is_stale) if capacity_wait else stdout_activity,
+        resume_source_run=_string(config.get("parent_run")) if resume_source else None,
+        resume_artifact_id=_string(resume_source.get("artifact_id")),
+        recoverable_state_step=_int_or_none(latest_state.get("observed_step")),
+        recoverable_state_level=_string(latest_state.get("restoration_level")),
     )
 
 
@@ -483,7 +501,7 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
         "alpha": display.get("alpha"),
         "lr": display.get("learning_rate"),
         "scheduler": display.get("scheduler"),
-        "steps": recipe.get("steps"),
+        "steps": _logical_total_steps(config, recipe),
         "batch_size": micro_batch,
         "gradient_accumulation_steps": grad_accum,
         "effective_batch_size": effective_batch,
@@ -496,14 +514,22 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
 def _progress(status: dict[str, Any], config: dict[str, Any]) -> RunProgress:
     recipe = common_recipe(config)
     step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
-    total = _int_or_none(_first_present(status.get("total_steps"), recipe.get("steps")))
+    total = _int_or_none(_first_present(status.get("total_steps"), _logical_total_steps(config, recipe)))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))
     return RunProgress(
         step=step,
         total=total,
         seconds_per_iter=seconds_per_iter,
         current_case_id=_string(status.get("current_case_id")),
+        current_run_step=_int_or_none(status.get("current_run_step")),
+        current_run_total=_int_or_none(status.get("current_run_total_steps")),
     )
+
+
+def _logical_total_steps(config: dict[str, Any], recipe: dict[str, Any]) -> Any:
+    continuation = config.get("continuation")
+    target = continuation.get("target_step") if isinstance(continuation, dict) and continuation.get("mode") == "resume" else None
+    return target if isinstance(target, int) and not isinstance(target, bool) else recipe.get("steps")
 
 
 def _read_training_stdout(path: Path, *, loss_tail: int) -> list[float]:
@@ -1015,6 +1041,9 @@ def _format_progress(progress: RunProgress) -> str:
     rendered = f"{step}/{progress.total}"
     if progress.current_case_id:
         rendered += f" · {progress.current_case_id}"
+    if progress.current_run_total is not None:
+        current = "unknown" if progress.current_run_step is None else str(progress.current_run_step)
+        rendered += f" · current {current}/{progress.current_run_total}"
     return rendered
 
 
@@ -1209,6 +1238,8 @@ def _watch_left(summary: RunSummary) -> Any:
         table.add_row("phase", "RunPod capacity wait · no Pod created")
     table.add_row("executor", summary.executor or "-")
     table.add_row("type", summary.type or "-")
+    if summary.resume_source_run:
+        table.add_row("resume", f"{summary.resume_source_run} · {summary.resume_artifact_id or '-'}")
     return table
 
 
@@ -1227,6 +1258,8 @@ def _watch_right(summary: RunSummary, status: dict[str, Any]) -> Any:
     table.add_row("started", summary.started.strftime("%m-%d %H:%M") if summary.started else "-")
     table.add_row("ended", summary.ended.strftime("%m-%d %H:%M") if summary.ended else "-")
     table.add_row("outputs", f"{output_count}" + (f"  {first_output}" if first_output else ""))
+    if summary.recoverable_state_step is not None:
+        table.add_row("state", f"step {summary.recoverable_state_step} · {summary.recoverable_state_level or '-'}")
     return table
 
 

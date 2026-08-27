@@ -17,8 +17,11 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import yaml
+
 from kura import __version__
 from kura.provenance import image_reference_identity
+from kura.training_artifacts import resume_artifact_directory
 from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
@@ -385,7 +388,16 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
     raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
     ids = list(dict.fromkeys(item for item in raw_ids if item))
+    try:
+        run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError("cannot stage invalid resolved manifest") from exc
+    if not isinstance(run, dict):
+        raise ValueError("cannot stage invalid resolved manifest")
+    dependency = resume_artifact_directory(workspace, run)
     sources = [run_dir / "run.yaml", run_dir / "resolved", *(workspace / "datasets" / item for item in ids)]
+    if dependency is not None:
+        sources.append(dependency)
     files: list[tuple[Path, str]] = []
     for source in sources:
         if not source.exists():

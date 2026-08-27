@@ -128,6 +128,55 @@ Gather these before proposing parameters:
 6. Backend mechanics: `musubi-tuner-backend` / `ai-toolkit-backend` skills for
    flag names, constraints, and interactions.
 
+## Resume continuity warnings
+
+Treat a Resume plan as continuity-risk analysis, not as a promise of bitwise
+equivalence. Read the plan's `Resume` section and repeat its `continuity`,
+`restored`, and `not_restored` facts in the approval summary.
+
+Before asking for approval, explain in plain language that Resume is primarily
+a recovery and extension safety net: it can avoid throwing away useful training
+after a crash or an undersized run, but it may not reproduce an uninterrupted
+session exactly. Never leave that caveat implicit in a capability label. Name
+the selected backend, what it restores, what it does not restore exactly, and
+whether matching evidence exists. Keep Weight Continue or Fork from Weight
+separate; neither is a fallback that may be silently substituted for Resume.
+
+Use revision-specific equivalence evidence only when backend revision or image
+digest, architecture, optimizer/scheduler, and dataset cardinality match. The
+local 100-step versus 50+50 evidence is recorded in
+`../../../docs/smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml`.
+Disposable-Pod transfer evidence is recorded separately in
+`../../../docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml`; it proves
+artifact portability and lifecycle recovery, not uninterrupted-run numerical
+equivalence.
+Do not transfer a one-item result to a shuffled or multi-item dataset.
+
+Do not infer warning severity from the restoration contract's missing-state
+list. That list is a fact about what the backend restores, not a measurement of
+the resulting divergence. When matching evidence contains two uninterrupted
+controls, use their difference as the observed nondeterminism baseline and
+classify the user warning as follows:
+
+- **HIGH** — Resume introduced learned-weight or optimizer divergence materially
+  beyond the uninterrupted-control baseline, including any difference when the
+  two controls matched exactly. State both baseline and Resume tensor counts,
+  maximum absolute error, and relative L2 error. A small numeric error describes
+  magnitude; it does not make the Resume exact.
+- **CAUTION** — Resume learned-state divergence stayed within the same measured
+  scale as the uninterrupted-control baseline, or learned weights, optimizer, and scheduler
+  matched while RNG, application counters, sampler, or exact dataloader position
+  differed. Name the narrow tested conditions and the baseline comparison; one
+  control pair is evidence, not a statistical bound.
+- **UNVERIFIED** — no evidence matches the selected revision and conditions.
+  This includes evidence without an uninterrupted repeat control. Report the
+  restoration contract without inventing an expected error size or severity.
+
+Never label Resume exact from weight equality alone. Exactness requires all
+declared training-state components and the data position to match. File SHA
+differences alone are not semantic differences when recursive state comparison
+shows equal values; report both facts separately.
+
 ## Building the proposal
 
 Assemble each parameter from the first source that covers it:

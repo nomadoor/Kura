@@ -13,6 +13,7 @@ from typing import Any
 
 from kura import __version__
 from kura.provenance import image_reference_identity
+from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
@@ -328,6 +329,43 @@ def reconcile_docker(
             _materialize_stdout_progress(run_dir, latest, state=effective_state)
 
         status = _mutate_run_status(run_dir, mutate, blocking=blocking)
+        if state in TERMINAL_STATES:
+            try:
+                published = publish_completed_training_states(
+                    run_dir.parent.parent,
+                    run_dir,
+                    allow_final_state=exit_code == 0,
+                )
+            except (OSError, ValueError) as exc:
+                status = _mutate_run_status(
+                    run_dir,
+                    lambda latest: latest.__setitem__("training_state_sync_error", _redact_secret_text(str(exc))),
+                    blocking=blocking,
+                )
+            else:
+                capture_required = training_state_capture_required(run_dir)
+
+                def record_training_states(latest: dict[str, Any]) -> None:
+                    if published:
+                        latest.pop("training_state_sync_error", None)
+                        latest["recoverable_training_states"] = [
+                            {
+                                "artifact_id": item["id"],
+                                "manifest_sha256": item["manifest_sha256"],
+                                "observed_step": item["observed_step"],
+                                "restoration_level": item["restoration_contract"]["level"],
+                            }
+                            for item in published
+                        ]
+                    elif capture_required:
+                        latest["training_state_sync_error"] = (
+                            "terminal local run snapshot has no valid training-state artifact; "
+                            "inspect the backend state output before relying on Resume"
+                        )
+                    else:
+                        latest.pop("training_state_sync_error", None)
+
+                status = _mutate_run_status(run_dir, record_training_states, blocking=blocking)
         if recorded:
             append_run_event(run_dir, {"event": "run_reconciled", **observation})
         return status
