@@ -1,0 +1,100 @@
+schema_version: 1
+kind: training-resume-runpod-portability
+observed_at: 2026-08-27
+kura_commit: 0c500ef
+executor: runpod
+method:
+  storage_mode: upload
+  network_volume_gb: 0
+  source_optimizer_steps: 2
+  resumed_additional_steps: 1
+  required_sequence:
+    - complete source training and download a valid protected training-state artifact
+    - stop and remove the source Pod
+    - create a derived run that freezes the selected artifact ID and manifest hash
+    - upload the selected artifact to a different Pod
+    - restore backend-declared state and perform one optimizer update
+    - download logical step 3 state before stopping the derived Pod
+  scope: This proves artifact portability and disposable-Pod lifecycle behavior. It does not prove bitwise equivalence with uninterrupted training.
+images:
+  ai-toolkit: nomadoor/kura-ai-toolkit@sha256:0ac951f9ac595ed488dad5d171df0e0691db1a790b79520f64f8c3cd737b0508
+  musubi-tuner: nomadoor/kura-musubi-tuner@sha256:0e91be1ca0d4445017cf368669c48f5dd784616f3035a143d9ad2530c6f0c1e3
+  sd-scripts: nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+backends:
+  ai-toolkit:
+    restoration_level: partial_resume
+    source:
+      run: 20260827-2052_runpod-resume-ai-source-retry_95e6
+      gpu: NVIDIA RTX A5000
+      pod: sezi3edi0jf4rh
+      exit_code: 0
+      observed_step: 2
+      artifact: state-step-00000002-445deda0c5d0
+      manifest_sha256: 14bb3073fe655b02988e9f965b49472581a3a1c6da632d3a5c9a8f6bde7bd166
+    resumed:
+      run: 20260827-2240_runpod-resume-ai-plus1-a40_0e8a
+      gpu: NVIDIA A40
+      pod: vonu3u014pf3cl
+      exit_code: 0
+      current_run_step: 1
+      observed_step: 3
+      artifact: state-step-00000003-76cd2a454913
+      manifest_sha256: 6f59ae0b0c8ec85de8176c1fce7c310e9bddd906e9738a693a0df34639c69118
+      verified_log_markers:
+        - training state verified
+        - optimizer Resume verified at step 2
+        - RNG Resume verified at step 2
+    result: pass
+  musubi-tuner:
+    restoration_level: best_effort_resume
+    source:
+      run: 20260827-2246_runpod-resume-musubi-source-a40_9219
+      gpu: NVIDIA A40
+      pod: o66ikyzqiw8l4o
+      exit_code: 0
+      retained_generations: [1, 2]
+      artifact: state-step-00000002-b7665c895531
+      manifest_sha256: 3e358cedad2839238cd130adb08b4260353467489cdc034fb3b2aef6f6ed2b1a
+    resumed:
+      run: 20260827-2250_runpod-resume-musubi-plus1-a40_ad4e
+      gpu: NVIDIA A40
+      pod: vmhzeu465y5mgm
+      exit_code: 0
+      native_updates: 1
+      observed_step: 3
+      artifact: state-step-00000003-ff237ed0e54b
+      manifest_sha256: 09d7869c20383db56c64dcf8bd28dd4732a41662bf8b40c1f19e53661f047758
+      verified_log_markers:
+        - training state verified
+        - resume training from local state
+    result: pass
+  sd-scripts:
+    restoration_level: best_effort_resume
+    source:
+      run: 20260827-2256_runpod-resume-sd15-source-a40_4c16
+      gpu: NVIDIA A40
+      pod: 5hisl8fxnrvmgq
+      exit_code: 0
+      retained_logical_generations: [1, 2]
+      auto_selected_artifact: state-step-00000002-6d1fe597451c
+      manifest_sha256: 7ee0003f6a540c373e9218f7cc6c9e237675cd5ed9c35b41a6c400fd707bca9e
+    resumed:
+      run: 20260827-2307_runpod-resume-sd15-plus1-a40_e298
+      gpu: NVIDIA A40
+      pod: 3c9dc84qi39rhu
+      exit_code: 0
+      current_run_step: 1
+      observed_step: 3
+      artifact: state-step-00000003-7c6841789b2f
+      manifest_sha256: 5899d08dffd45e653db9e98184a3d4f0855a6791fa8a4e0e16c8dd92a374e039
+    result: pass
+lifecycle:
+  source_and_resumed_pods_were_distinct: true
+  remote_exit_confirmed_before_stop: true
+  local_download_confirmed_before_stop: true
+  final_pods_empty: true
+  final_network_volumes_empty: true
+observations:
+  - The first AI-Toolkit attempt failed before Pod creation because the previously configured registry digest no longer existed. Current images were published under unique tags and frozen by content digest before the passing runs.
+  - An A5000 Resume attempt waited for 120 capacity probes over one hour and ended before Pod creation. No Pod or billing resource remained.
+  - The run remote command does not inherit compute.capacity from the compiled run; advanced direct use must pass wait-for-capacity and capacity-poll-interval explicitly. The normal run execute path reads the frozen capacity policy.

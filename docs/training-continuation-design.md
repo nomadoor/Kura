@@ -855,6 +855,28 @@ Kura restores the listed state, discloses the gaps, and refuses requests outside
 the verified envelope. Fork from Weight may be added as a secondary operation,
 but it is not a substitute or prerequisite for this boundary.
 
+### 9.1 Implemented RunPod portability validation
+
+The 2026-08-27 disposable-Pod smoke validated the implemented transport and
+lifecycle contract for AI-Toolkit, Musubi, and sd-scripts:
+
+- the source run completed and published a hash-verified local training-state
+  artifact;
+- the source Pod was stopped and absent from RunPod before the derived run;
+- the derived run staged only its selected protected artifact without a Network
+  Volume;
+- a different Pod verified the artifact, restored the backend-declared state,
+  performed one optimizer update, and published logical step 3 from source step
+  2;
+- remote exit and local download were confirmed before every derived Pod was
+  stopped; the final RunPod inventory contained no Pods or Network Volumes.
+
+This test establishes cross-Pod artifact portability. It does not upgrade any
+backend to Exact Resume. Numerical continuity remains bounded by the separate
+100-step versus 50+50 local experiment and each plan's restoration contract.
+The complete mechanical evidence is in
+`docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml`.
+
 ### 10. CLI and TUI language
 
 Implemented CLI concepts:

@@ -134,10 +134,22 @@ Treat a Resume plan as continuity-risk analysis, not as a promise of bitwise
 equivalence. Read the plan's `Resume` section and repeat its `continuity`,
 `restored`, and `not_restored` facts in the approval summary.
 
+Before asking for approval, explain in plain language that Resume is primarily
+a recovery and extension safety net: it can avoid throwing away useful training
+after a crash or an undersized run, but it may not reproduce an uninterrupted
+session exactly. Never leave that caveat implicit in a capability label. Name
+the selected backend, what it restores, what it does not restore exactly, and
+whether matching evidence exists. Keep Weight Continue or Fork from Weight
+separate; neither is a fallback that may be silently substituted for Resume.
+
 Use revision-specific equivalence evidence only when backend revision or image
 digest, architecture, optimizer/scheduler, and dataset cardinality match. The
 local 100-step versus 50+50 evidence is recorded in
 `../../../docs/smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml`.
+Disposable-Pod transfer evidence is recorded separately in
+`../../../docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml`; it proves
+artifact portability and lifecycle recovery, not uninterrupted-run numerical
+equivalence.
 Do not transfer a one-item result to a shuffled or multi-item dataset.
 
 Do not infer warning severity from the restoration contract's missing-state

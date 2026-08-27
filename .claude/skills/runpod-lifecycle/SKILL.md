@@ -34,6 +34,10 @@ stop Pod
   second user prompt.
 - `kura run remote <run-id>` remains the low-level entry point for advanced
   lifecycle flags and recovery work.
+- Prefer `run execute` when the compiled `compute.capacity` policy should apply.
+  Low-level `run remote` does not inherit that policy: pass
+  `--wait-for-capacity` and `--capacity-poll-interval` explicitly or it uses its
+  immediate-launch default.
 - `--hold-for 30m`: normal post-download review window.
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.

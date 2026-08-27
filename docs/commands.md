@@ -109,7 +109,7 @@ restoration contract:
 
 | Backend path | Initial Resume level | Restored | Known gap / restriction |
 | --- | --- | --- | --- |
-| AI-Toolkit standard LoRA | Partial | weight, optimizer, step, epoch | scheduler is reconstructed; RNG and exact data position are not restored; AdamW/AdamW8bit, constant scheduler, and gradient accumulation 1 only |
+| AI-Toolkit standard LoRA | Partial | full-precision Resume weight, optimizer, step, epoch, and Kura RNG snapshot restored at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position and exact data position are not restored; AdamW/AdamW8bit, constant scheduler, and gradient accumulation 1 only |
 | Musubi built-ins | Best effort | Accelerate model, optimizer, scheduler, RNG and supported auxiliary state | application counters and exact data position are not restored; constant scheduler only |
 | sd-scripts SD 1.5 / SDXL / FLUX.1 LoRA | Best effort | Accelerate model, optimizer, scheduler, RNG and compatible scaler | Kura normalizes cumulative step metadata; application epoch and exact data position are not restored; constant scheduler and gradient accumulation 1 only |
 | sd-scripts Anima LoRA / LLLite | Unsupported for execution | state capture may be structurally recognized | Kura refuses Resume rather than silently degrading to weight-only training |
@@ -118,6 +118,13 @@ The selected payload is verified again inside the target container before the
 trainer starts. A state-load failure is terminal before the first optimizer
 update. RunPod staging transfers only the selected protected artifact and does
 not require a Network Volume or the original Pod.
+
+The disposable-Pod path has been exercised for AI-Toolkit, Musubi, and
+sd-scripts: each source Pod was stopped after confirmed state download, then a
+different Pod received the protected artifact and produced the next logical
+step. This validates transport and lifecycle behavior, not Exact Resume. See
+`docs/smoke-evidence/2026-08-27-training-resume-runpod.yaml` for the pinned
+images, run IDs, artifacts, and declared restoration levels.
 
 ## Diagnosis and recovery
 
@@ -151,6 +158,9 @@ additional steps in the normal workflow.
 
 Useful low-level `run remote` flags:
 
+- `--wait-for-capacity 6h --capacity-poll-interval 30s` opts this low-level
+  invocation into bounded capacity waiting. Unlike normal `run execute`,
+  `run remote` does not inherit `compute.capacity` from the compiled run.
 - `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
   can inspect results. Use `--hold-for 0` to stop immediately.
 - `--max-lease 12h` is a best-effort Pod-side billing fuse if the local
