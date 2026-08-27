@@ -71,6 +71,59 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
 
 
 class SdScriptsBackendTests(unittest.TestCase):
+    def test_state_capture_rejects_epoch_save_escape_hatches(self) -> None:
+        run = base_run("sd15", "lora")
+        run["backend"]["config"]["extra_args"] = ["--save_every_n_epochs", "1"]
+        with self.assertRaisesRegex(ValueError, "epoch.*training-state"):
+            command_sd_scripts(run)
+
+    def test_state_capture_is_on_by_default_and_resume_uses_logical_target(self) -> None:
+        run = base_run("sd15", "lora")
+        run["id"] = "derived-run"
+        run["backend"]["config"]["output_name"] = "source-run"
+        run["recipe"]["steps"] = 100
+        run["parent_run"] = "source"
+        run["continuation"] = {
+            "mode": "resume",
+            "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 100, "recipe_sha256": "b" * 64},
+            "additional_steps": 50,
+            "target_step": 150,
+            "restoration_contract": {"level": "best_effort_resume", "restored": ["model", "optimizer", "scheduler", "rng", "global_step", "epoch"], "not_restored": ["exact_dataloader_position"]},
+        }
+        script = command_sd_scripts(run)["argv"][2]
+        self.assertIn("--save_state", script)
+        self.assertIn("--save_state_on_train_end", script)
+        self.assertIn('"--save_last_n_steps_state","100"', script)
+        self.assertIn('"--resume","/workspace/artifacts/training-state/state-1/payload"', script)
+        self.assertIn("--skip_until_initial_step", script)
+        self.assertIn('"--max_train_steps","150"', script)
+        self.assertIn("state-runner.py", script)
+        self.assertIn("training state verified", script)
+        self.assertIn("/workspace/runs/derived-run/resolved/training-state-source.lock.json", script)
+        self.assertIn('"--output_name","derived-run"', script)
+        self.assertNotIn('"--output_name","source-run"', script)
+
+    def test_sd_scripts_resume_rejects_unsafe_initial_envelopes(self) -> None:
+        for architecture, mode, change, message in (
+            ("sd15", "lora", {"lr_scheduler": "cosine"}, "constant scheduler"),
+            ("sd15", "lora", {"gradient_accumulation_steps": 2}, "gradient_accumulation_steps=1"),
+            ("anima", "lora", {}, "not yet supported"),
+            ("anima", "controlnet_lllite", {}, "not yet supported"),
+        ):
+            with self.subTest(architecture=architecture, mode=mode):
+                run = base_run(architecture, mode)
+                run["backend"]["config"].update(change)
+                run["parent_run"] = "source"
+                run["continuation"] = {
+                    "mode": "resume",
+                    "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 10, "recipe_sha256": "b" * 64},
+                    "additional_steps": 5,
+                    "target_step": 15,
+                    "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
+                }
+                with self.assertRaisesRegex(ValueError, message):
+                    command_sd_scripts(run)
+
     def test_caption_dropout_is_supported_at_every_upstream_inheritance_level(self) -> None:
         for level in ("general", "dataset", "subset"):
             with self.subTest(level=level), tempfile.TemporaryDirectory() as directory:
@@ -336,6 +389,10 @@ class SdScriptsBackendTests(unittest.TestCase):
                     self.assertIn('"--max_train_steps", "1"', script)
                     self.assertIn('"--mixed_precision", "bf16"', script)
                     self.assertIn('"--gradient_accumulation_steps", "1"', script)
+                elif selector[0] != "anima":
+                    self.assertIn('"--max_train_steps","1"', script)
+                    self.assertIn('"--mixed_precision","bf16"', script)
+                    self.assertIn('"--gradient_accumulation_steps","1"', script)
                 else:
                     self.assertIn("--max_train_steps 1", script)
                     self.assertIn("--mixed_precision bf16", script)
@@ -354,6 +411,7 @@ class SdScriptsBackendTests(unittest.TestCase):
 
             toml = (destination / "dataset.toml").read_text(encoding="utf-8")
             lock = json.loads((destination / "dataset-stage.lock.json").read_text(encoding="utf-8"))
+            self.assertTrue((destination / "state-runner.py").is_file())
         self.assertIn("[[datasets]]", toml)
         self.assertIn("[[datasets.subsets]]", toml)
         self.assertIn('image_dir = "/workspace/runs/sd-smoke/cache/sd-scripts/datasets/000-000/images"', toml)
@@ -723,7 +781,7 @@ class SdScriptsBackendTests(unittest.TestCase):
             }
         )
         command = command_sd_scripts(run)["argv"][2]
-        self.assertIn("--blocks_to_swap 18", command)
+        self.assertIn('"--blocks_to_swap","18"', command)
         self.assertIn("--cache_latents_to_disk", command)
         self.assertIn("--cache_text_encoder_outputs_to_disk", command)
         run["backend"]["config"]["cpu_offload_checkpointing"] = True
@@ -781,9 +839,9 @@ class SdScriptsBackendTests(unittest.TestCase):
     def test_flow_matching_defaults_are_explicit_and_visible_in_plan_data(self) -> None:
         flux = base_run("flux1")
         flux_command = command_sd_scripts(flux)["argv"][2]
-        self.assertIn("--timestep_sampling flux_shift", flux_command)
-        self.assertIn("--guidance_scale 1.0", flux_command)
-        self.assertIn("--model_prediction_type raw", flux_command)
+        self.assertIn('"--timestep_sampling","flux_shift"', flux_command)
+        self.assertIn('"--guidance_scale","1.0"', flux_command)
+        self.assertIn('"--model_prediction_type","raw"', flux_command)
         self.assertEqual(display_sd_scripts(flux)["flow_matching"]["timestep_sampling"], "flux_shift")
 
         lllite = base_run("anima", "controlnet_lllite")
@@ -842,8 +900,8 @@ class SdScriptsBackendTests(unittest.TestCase):
         run["backend"]["config"].update({"save_every_n_steps": 100, "save_last_n_steps": 1000})
         command = command_sd_scripts(run)["argv"][2]
         checkpoint = display_sd_scripts(run)["checkpoint"]
-        self.assertIn("--save_every_n_steps 100", command)
-        self.assertIn("--save_last_n_steps 1000", command)
+        self.assertIn('"--save_every_n_steps","100"', command)
+        self.assertIn('"--save_last_n_steps","1000"', command)
         self.assertEqual(checkpoint["retention_window_steps"], 1000)
         self.assertNotIn("keep_last", checkpoint)
 

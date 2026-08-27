@@ -956,12 +956,17 @@ class WatchPane(VerticalScroll):
         left.add_row("state", _badge(summary))
         step = "unknown" if summary.progress.step is None else str(summary.progress.step)
         left.add_row("progress", f"{step}/{summary.progress.total or '-'}")
+        if summary.progress.current_run_total is not None:
+            current = "unknown" if summary.progress.current_run_step is None else str(summary.progress.current_run_step)
+            left.add_row("current", f"{current}/{summary.progress.current_run_total}")
         left.add_row("executor", _executor_label(summary))
         if summary.capacity_wait and summary.activity:
             left.add_row("wait", summary.activity)
         phase = _remote_execution_phase(summary)
         if phase:
             left.add_row("phase", phase.removeprefix("● "))
+        if summary.resume_source_run:
+            left.add_row("resume", f"{summary.resume_source_run} · {summary.resume_artifact_id or '-'}")
         right = Table.grid(padding=(0, 2))
         right.add_column(style=FG_MUTED)
         right.add_column()
@@ -970,6 +975,8 @@ class WatchPane(VerticalScroll):
         right.add_row("finished", _fmt_dt(summary.finished))
         right.add_row("weights", _checkpoint_count_text(summary))
         right.add_row("outputs", str(summary.outputs_path or "-"))
+        if summary.recoverable_state_step is not None:
+            right.add_row("state", f"step {summary.recoverable_state_step} · {summary.recoverable_state_level or '-'}")
         overview.add_row(left, right)
         self.mount(Static(overview))
         self.mount(Static("", classes="section-gap"))

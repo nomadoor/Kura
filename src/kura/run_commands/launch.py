@@ -295,6 +295,10 @@ def launch_run(
             file=sys.stderr,
         )
         return 1
+    continuation = locked.get("continuation") if isinstance(locked.get("continuation"), dict) else None
+    if continuation is not None and continuation.get("mode") == "resume" and image is not None:
+        print("cannot launch run: Resume runtime image is frozen at compile time; remove --image or create and compile a new run", file=sys.stderr)
+        return 1
     try:
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
@@ -315,6 +319,10 @@ def launch_run(
         adapter = get_backend(backend_name)
         image_name = _backend_image_name(backend_name)
         image_config = _image_config(image_name)
+        try:
+            env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
+        except (OSError, ValueError, yaml.YAMLError):
+            env_lock = {}
         if executor == "docker":
             docker = config.get("docker", {})
             workspace_target = str(docker.get("workspace_target", "/workspace"))
@@ -325,11 +333,19 @@ def launch_run(
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
                 _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config, enforce_model_download_safety=False)
+            local_image = image or image_config["local"]
+            if continuation is not None and continuation.get("mode") == "resume":
+                selected_identity = env_lock.get("selected_image_identity") if isinstance(env_lock, dict) else None
+                pinning = selected_identity.get("pinning") if isinstance(selected_identity, dict) else None
+                pinned_id = pinning.get("value") if isinstance(pinning, dict) and pinning.get("strength") == "content-hash" else None
+                if not isinstance(pinned_id, str) or not pinned_id.startswith("sha256:"):
+                    raise ValueError("Resume local runtime has no compile-time content ID; recompile the run")
+                local_image = pinned_id
             launch_docker(
                 workspace=_workspace(),
                 run_dir=run_dir,
                 spec=spec,
-                image=image or image_config["local"],
+                image=local_image,
                 dockerfile=image_config["dockerfile"],
                 mounts=mounts,
                 gpu=bool(docker.get("gpu", False)),
@@ -344,7 +360,8 @@ def launch_run(
                 raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
-            remote_image = image_config["remote"]
+            frozen_image = env_lock.get("selected_image") if isinstance(env_lock, dict) else None
+            remote_image = frozen_image if isinstance(frozen_image, str) and frozen_image else image_config["remote"]
             if not adapter.runpod_template_compatible:
                 runpod_config.pop("template_id", None)
                 backend_ports = runpod_config.get("backend_ports")
@@ -352,9 +369,10 @@ def launch_run(
                     runpod_config["ports"] = backend_ports[image_name]
                 else:
                     runpod_config["ports"] = list(adapter.default_ports)
-            default_image = runpod_config.get("default_image")
-            if isinstance(default_image, dict) and isinstance(default_image.get(image_name), str):
-                remote_image = default_image[image_name]
+            if not isinstance(frozen_image, str) or not frozen_image:
+                default_image = runpod_config.get("default_image")
+                if isinstance(default_image, dict) and isinstance(default_image.get(image_name), str):
+                    remote_image = default_image[image_name]
             if image:
                 remote_image = image
             compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}

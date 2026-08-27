@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit
-from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner
+from kura.backends.ai_toolkit import command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, training_state_contract_ai_toolkit
+from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
 from kura.backends.musubi_datasets import validate_musubi_dataset_layout
-from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts
+from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
@@ -72,6 +72,7 @@ class BackendAdapter:
     validate_authored: Callable[[dict[str, Any]], None] | None = None
     download_specs: Callable[..., tuple[list[dict[str, Any]], dict[str, str]]] | None = None
     validate_dataset: Callable[[dict[str, Any], Path], None] | None = None
+    training_state: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     runpod_template_compatible: bool = False
     default_ports: tuple[str, ...] = ("22/tcp",)
 
@@ -202,18 +203,21 @@ BACKENDS: dict[str, BackendAdapter] = {
     "ai-toolkit": BackendAdapter(
         name="ai-toolkit", image_name="ai-toolkit", compile=_compile_ai, command=command_ai_toolkit,
         display=display_ai_toolkit, requirements=requirements_ai_toolkit, surface=AI_TOOLKIT_SURFACE,
+        training_state=training_state_contract_ai_toolkit,
         default_ports=("8675/http", "22/tcp"),
     ),
     "musubi-tuner": BackendAdapter(
         name="musubi-tuner", image_name="musubi-tuner", compile=_compile_musubi, command=command_musubi_tuner,
         display=display_musubi_tuner, requirements=requirements_musubi, surface=MUSUBI_SURFACE,
         download_specs=musubi_model_download_specs, validate_dataset=validate_musubi_dataset_layout,
+        training_state=training_state_contract_musubi,
     ),
     "sd-scripts": BackendAdapter(
         name="sd-scripts", image_name="sd-scripts", compile=_compile_sd_scripts, command=command_sd_scripts,
         display=display_sd_scripts, requirements=requirements_sd_scripts, surface=SD_SCRIPTS_SURFACE,
         validate_authored=validate_sd_scripts_dataset_config,
         download_specs=sd_scripts_model_download_specs,
+        training_state=training_state_contract_sd_scripts,
     ),
 }
 

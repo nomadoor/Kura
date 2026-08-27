@@ -3,13 +3,66 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
 
-from kura.backends.shared import _datasets
+from kura.backends.shared import _datasets, _script_command
+from kura.container_scripts import script_source
 from kura.fsio import atomic_write_yaml
-from kura.run_envelope import backend_config, validated_recipe
 from kura.provenance import artifact_pinning
+from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+
+
+def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
+    native = backend_config(run, "ai-toolkit")
+    config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
+    train = config.get("train") if isinstance(config.get("train"), dict) else {}
+    accumulation = native.get("gradient_accumulation_steps", train.get("gradient_accumulation_steps", 1))
+    optimizer = str(native.get("optimizer_type", train.get("optimizer", "adamw8bit"))).lower()
+    limitations = []
+    if accumulation != 1:
+        limitations.append("AI-Toolkit Resume initially requires gradient_accumulation_steps=1")
+    if optimizer not in {"adamw", "adamw8bit"}:
+        limitations.append("AI-Toolkit Resume initially requires AdamW or AdamW8bit optimizer state with a verified update counter")
+    if limitations:
+        return {
+            "native_format": "ai-toolkit-weight-optimizer-pair",
+            "required_files": ("model.safetensors", "optimizer.pt", "state-info.json"),
+            "native_progress": "logical",
+            "native_target": "logical",
+            "state_step": {
+                "path": "state-info.json", "field": "logical_step", "space": "logical",
+                "schema_version": 1, "backend": "ai-toolkit",
+                "digests": {"weight_sha256": "model.safetensors", "optimizer_sha256": "optimizer.pt"},
+            },
+            "capability": "unsupported",
+            "restoration_contract": {
+                "level": "unsupported",
+                "restored": [],
+                "not_restored": ["optimizer_update_step"],
+                "limitations": limitations,
+                "scheduler_behavior": "not available without a verified optimizer-update counter",
+            },
+        }
+    return {
+        "native_format": "ai-toolkit-weight-optimizer-pair",
+        "required_files": ("model.safetensors", "optimizer.pt", "state-info.json"),
+        "native_progress": "logical",
+        "native_target": "logical",
+        "state_step": {
+            "path": "state-info.json", "field": "logical_step", "space": "logical",
+            "schema_version": 1, "backend": "ai-toolkit",
+            "digests": {"weight_sha256": "model.safetensors", "optimizer_sha256": "optimizer.pt"},
+        },
+        "capability": "partial_resume",
+        "restoration_contract": {
+            "level": "partial_resume",
+            "restored": ["model", "optimizer", "global_step", "epoch"],
+            "not_restored": ["scheduler", "rng", "exact_dataloader_position"],
+            "scheduler_behavior": "reconstructed to the saved step; initial Resume execution limited to constant scheduler",
+        },
+    }
 
 
 def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, resolution: Any) -> list[dict[str, Any]]:
@@ -163,6 +216,19 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         for dataset in process.get("datasets", []):
             if isinstance(dataset, dict):
                 dataset["resolution"] = deepcopy(override["resolution"])
+    policy = training_state_policy(run)
+    continuation = resume_intent(run)
+    if policy["enabled"]:
+        if process.get("type") != "sd_trainer" or _nested(process, "network", "type") != "lora":
+            raise ValueError("AI-Toolkit training-state capture initially supports only the standard sd_trainer LoRA process")
+        ema_config = process.get("ema_config") if isinstance(process.get("ema_config"), dict) else {}
+        if any(process.get(key) for key in ("embedding", "adapter", "decorator")) or ema_config.get("use_ema") or _nested(process, "train", "merge_network_on_save"):
+            raise ValueError("AI-Toolkit training-state capture does not support embedding, adapter, decorator, EMA, or merge_network_on_save")
+    if continuation is not None:
+        scheduler = str(_nested(process, "train", "lr_scheduler") or "constant").lower()
+        if scheduler != "constant":
+            raise ValueError("AI-Toolkit State Resume initially requires the constant scheduler")
+        process["train"]["steps"] = continuation["target_step"]
     atomic_write_yaml(destination.with_suffix(".yaml"), config)
     return command_ai_toolkit(run)
 
@@ -175,7 +241,36 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     if command is None:
         compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
         cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
-        return {"cwd": cwd, "argv": ["python", "run.py", f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"], "env": {}}
+        config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"
+        continuation = resume_intent(run)
+        policy = training_state_policy(run)
+        state_contract = training_state_contract_ai_toolkit(run)
+        if not policy["enabled"] or state_contract.get("capability") == "unsupported":
+            if continuation is not None:
+                limitations = state_contract.get("restoration_contract", {}).get("limitations") or []
+                detail = "; ".join(limitations) if limitations else "training-state capture is disabled"
+                raise ValueError(f"AI-Toolkit Resume is unavailable: {detail}")
+            return {"cwd": cwd, "argv": ["python", "run.py", config_path], "env": {}}
+        spec: dict[str, Any] = {
+            "config_path": config_path,
+            "run_id": run["id"],
+            "state_root": f"/workspace/runs/{run['id']}/outputs",
+            "keep_generations": policy["keep_generations"],
+        }
+        runner = ["python", "-c", script_source("ai_toolkit_state.py"), json.dumps(spec, ensure_ascii=False, separators=(",", ":"))]
+        if continuation is None:
+            return {"cwd": cwd, "argv": runner, "env": {}}
+        artifact_id = continuation["source"]["artifact_id"]
+        spec["resume"] = {
+            "payload": f"/workspace/artifacts/training-state/{artifact_id}/payload",
+            "source_step": continuation["source"]["observed_step"],
+        }
+        runner[-1] = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
+        verifier = [
+            "python", "-c", script_source("training_state_verify.py"),
+            f"/workspace/runs/{run['id']}/resolved/training-state-source.lock.json", "/workspace",
+        ]
+        return {"cwd": cwd, "argv": _script_command([verifier, runner], step_name="ai-toolkit"), "env": {}}
     combined = sorted(set(override) - {"command"})
     if combined:
         raise ValueError("AI-Toolkit explicit command cannot be combined with: " + ", ".join(combined))

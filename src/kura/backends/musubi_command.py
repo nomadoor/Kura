@@ -15,14 +15,31 @@ from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import wan_native_selector
 from kura.fsio import atomic_write_yaml
-from kura.run_envelope import validated_recipe
+from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
+
+
+def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
+    del run
+    return {
+        "native_format": "accelerate-state-directory",
+        "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"),
+        "native_progress": "process_local",
+        "native_target": "process_local",
+        "capability": "best_effort_resume",
+        "restoration_contract": {
+            "level": "best_effort_resume",
+            "restored": ["model", "optimizer", "scheduler", "rng", "scaler_when_present", "supported_sampler_state"],
+            "not_restored": ["application_global_step", "epoch", "exact_dataloader_position"],
+            "scheduler_behavior": "restored; Resume execution limited to constant scheduler",
+        },
+    }
 
 
 def _extra_args(override: dict[str, Any]) -> list[str]:
     return _shared_extra_args(override, backend_label="Musubi Tuner")
 
 
-def _script_command(commands: list[list[str]], override: dict[str, Any]) -> list[str]:
+def _script_command(commands: list[list[str]], override: dict[str, Any], run: dict[str, Any] | None = None) -> list[str]:
     training_commands = [command for command in commands if "--max_train_steps" in command]
     if len(training_commands) != 1:
         raise ValueError(
@@ -30,6 +47,59 @@ def _script_command(commands: list[list[str]], override: dict[str, Any]) -> list
             f"found {len(training_commands)}"
         )
     train = training_commands[0]
+    if run is None:
+        raise ValueError("Musubi training command assembly requires the frozen run envelope")
+    state_flags = {"--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", "--resume"}
+    duplicated_state = sorted(
+        arg.split("=", 1)[0]
+        for arg in _extra_args(override)
+        if arg.split("=", 1)[0] in state_flags
+    )
+    if duplicated_state:
+        raise ValueError("Musubi backend.config.extra_args duplicates adapter-owned Resume flag(s): " + ", ".join(duplicated_state))
+    continuation = resume_intent(run)
+    additional_steps = None
+    if continuation is not None:
+        additional_steps = continuation["target_step"] - continuation["source"]["observed_step"]
+        target_index = train.index("--max_train_steps") + 1
+        train[target_index] = str(additional_steps)
+    policy = training_state_policy(run)
+    if policy["enabled"]:
+        epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
+        configured_epoch_flags = sorted(arg.split("=", 1)[0] for arg in _extra_args(override) if arg.split("=", 1)[0] in epoch_flags)
+        if configured_epoch_flags:
+            raise ValueError(
+                "Musubi epoch save flags are incompatible with managed training-state retention; "
+                "use backend.config.save_every_n_steps instead: " + ", ".join(configured_epoch_flags)
+            )
+        recipe = validated_recipe(run, required=True)
+        cadence = override.get("save_every_n_steps") or recipe["steps"]
+        if additional_steps is not None:
+            cadence = min(cadence, additional_steps)
+            try:
+                cadence_index = train.index("--save_every_n_steps") + 1
+            except ValueError:
+                train.extend(["--save_every_n_steps", str(cadence)])
+            else:
+                train[cadence_index] = str(cadence)
+        state_window = cadence if policy["keep_generations"] == 2 else 1
+        train.extend(["--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_window)])
+    if continuation is not None:
+        scheduler = str(override.get("lr_scheduler") or "constant").lower()
+        if scheduler != "constant":
+            raise ValueError("Musubi State Resume initially requires the constant scheduler")
+        artifact_id = continuation["source"]["artifact_id"]
+        train.extend(["--resume", f"/workspace/artifacts/training-state/{artifact_id}/payload"])
+        commands.insert(
+            commands.index(train),
+            [
+                "python",
+                "-c",
+                script_source("training_state_verify.py"),
+                f"/workspace/runs/{run['id']}/resolved/training-state-source.lock.json",
+                "/workspace",
+            ],
+        )
     for key, flag in (
         ("lr_scheduler", "--lr_scheduler"),
         ("gradient_accumulation_steps", "--gradient_accumulation_steps"),
@@ -365,7 +435,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture == "wan":
         dit, vae, t5 = _require_paths(paths, ("dit", "vae", "t5"))
         task = str(override.get("task") or "t2v-1.3B")
@@ -447,7 +517,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("krea2", "krea_2"):
         _validate_krea2_dataset_shape(override)
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
@@ -508,7 +578,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("qwen_image", "qwen"):
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         model_version = str(override.get("model_version") or "original")
@@ -555,7 +625,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("zimage", "z_image"):
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         train_argv = [
@@ -597,7 +667,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("flux_kontext", "flux1_kontext"):
         dit, vae, text_encoder1, text_encoder2 = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2"))
         train_argv = [
@@ -642,7 +712,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("ideogram4", "ideogram_4"):
         extra_args = _extra_args(override)
         uses_sampling = _musubi_uses_sample_prompts(override, extra_args)
@@ -693,7 +763,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("hidream_o1", "hidream"):
         dit = _require_paths(paths, ("dit",))[0]
         model_type = str(override.get("model_type") or "full")
@@ -747,7 +817,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("hunyuan_video", "hunyuanvideo"):
         dit, vae, text_encoder1, text_encoder2 = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2"))
         train_argv = [
@@ -792,7 +862,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture == "hunyuan_video_1_5":
         task = str(override.get("task") or "t2v")
         required = ("dit", "vae", "text_encoder", "byt5", "image_encoder") if task == "i2v" else ("dit", "vae", "text_encoder", "byt5")
@@ -845,7 +915,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("framepack", "frame_pack"):
         dit, vae, text_encoder1, text_encoder2, image_encoder = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2", "image_encoder"))
         train_argv = [
@@ -906,7 +976,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     elif architecture in ("kandinsky5", "kandinsky_5"):
         dit, vae, text_encoder_qwen, text_encoder_clip = _require_paths(paths, ("dit", "vae", "text_encoder_qwen", "text_encoder_clip"))
         task = str(override.get("task") or "k5-pro-t2v-5s-sd")
@@ -956,7 +1026,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(prune_command)
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
-        argv = _script_command(commands, override)
+        argv = _script_command(commands, override, run)
     else:
         raise _unsupported_musubi_adapter_error(architecture)
 

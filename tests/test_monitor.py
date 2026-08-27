@@ -20,6 +20,62 @@ from kura.container_scripts import hf_download
 
 
 class MonitorProjectionTests(unittest.TestCase):
+    def test_resume_progress_and_comparison_use_the_logical_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "derived"
+            run_dir.mkdir(parents=True)
+            run = {
+                "id": "derived",
+                "type": "train",
+                "recipe": {"steps": 1000, "seed": 1},
+                "continuation": {"mode": "resume", "target_step": 1500},
+            }
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 1001}), encoding="utf-8")
+
+            summary = collect_run_summaries(root)[0]
+
+            self.assertEqual(summary.progress.total, 1500)
+            self.assertEqual(summary.key_config["steps"], 1500)
+
+    def test_summary_projects_resume_lineage_and_latest_recoverable_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "derived"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "id": "derived",
+                        "type": "train",
+                        "parent_run": "source",
+                        "recipe": {"steps": 100, "seed": 1},
+                        "continuation": {
+                            "mode": "resume",
+                            "source": {"artifact_id": "state-1"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "status.json").write_text(
+                json.dumps(
+                    {
+                        "state": "failed",
+                        "recoverable_training_states": [
+                            {"id": "state-2", "observed_step": 20, "restoration_level": "best_effort_resume"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            summary = collect_run_summaries(root)[0]
+            self.assertEqual(summary.resume_source_run, "source")
+            self.assertEqual(summary.resume_artifact_id, "state-1")
+            self.assertEqual(summary.recoverable_state_step, 20)
+            self.assertEqual(summary.recoverable_state_level, "best_effort_resume")
+
     def test_active_time_shows_total_elapsed_and_update_age(self) -> None:
         now = datetime.now().astimezone()
         summary = RunSummary(

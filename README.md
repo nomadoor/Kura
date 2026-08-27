@@ -79,6 +79,14 @@ You (🧑) decide the direction; the agent (🤖) does the hands-on work.
 7. 🤖 After the training report, generate ComfyUI comparison images from an explicit render case queue only after the user separately approves that evaluation.
 8. 🧑 Record your judgment in the render run's `notes.md` and decide whether to stop or run another experiment (🤖 carries out the instruction).
 
+To continue the same training session after a completed checkpoint or a lost
+container/Pod, create a derived Resume run with `uv run kura run resume
+<source-run> --additional-steps <N>`. Kura selects the latest validated
+training-state artifact by default, freezes its ID and hashes in the new run,
+and shows each backend's restored and missing state in `kura run plan` before
+launch. This is distinct from starting a new training session from a LoRA
+weight.
+
 > 💡 For the basics of building a dataset, [Training an SDXL (Illustrious) LoRA with AI-Toolkit](https://comfyui.nomadoor.net/en/notes/ai-toolkit-sdxl-lora-training/) is a useful reference (it targets SDXL, but the approach carries over).
 
 ## Monitoring
@@ -116,6 +124,7 @@ Kura keeps everything as files inside the workspace.
 | --- | --- |
 | `datasets/<id>/` | Your datasets (images + captions) |
 | `runs/<run-id>/outputs/` | Trained LoRAs and other results |
+| `artifacts/training-state/<id>/` | Protected, hash-verified Resume state referenced by derived runs |
 | `cache/huggingface/` | Downloaded model weights (can be tens of GB) |
 
 None of these are tracked by Git. If disk is a concern, start with a read-only look:

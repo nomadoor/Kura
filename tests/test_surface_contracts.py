@@ -24,7 +24,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from kura.render import authored_cases, promptset, reconcile_promptset  # noqa: E402
-from kura.run_envelope import common_recipe  # noqa: E402
+from kura.run_envelope import common_recipe, resume_intent, training_state_policy  # noqa: E402
 from kura.workspace import (  # noqa: E402
     WORKSPACE_OBSOLETE_KEYS,
     WORKSPACE_SCHEMA,
@@ -166,6 +166,15 @@ class SurfaceContractTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             common_recipe({"recipe": {"steps": 1, "seed": 1, SENTINEL: True}})
         self.assertIn(SENTINEL, str(caught.exception))
+
+    def test_recovery_and_continuation_reject_undeclared_keys(self) -> None:
+        with self.assertRaisesRegex(ValueError, SENTINEL):
+            training_state_policy({"recovery": {"training_state": {SENTINEL: True}}})
+        with self.assertRaisesRegex(ValueError, SENTINEL):
+            resume_intent({
+                "parent_run": "source",
+                "continuation": {"mode": "resume", SENTINEL: True},
+            })
 
     def test_promptset_rejects_an_unbound_key(self) -> None:
         patches = {"prompt": {"node": "6", "field": "inputs.text"}, "seed": {"node": "3", "field": "inputs.seed"}}

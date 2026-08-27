@@ -310,6 +310,8 @@ class InitCommandTests(unittest.TestCase):
 
             env_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "env.lock").read_text(encoding="utf-8"))
             self.assertEqual(env_lock["declared_executor"], "runpod")
+            self.assertEqual(env_lock["selected_image"], "ostris/aitoolkit:0.10.22")
+            self.assertEqual(env_lock["selected_image_identity"]["reference"], "ostris/aitoolkit:0.10.22")
             requirements_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "model-requirements.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(requirements_lock["schema_version"], 1)
             self.assertEqual(requirements_lock["requirements"][0]["acquisition"], "backend")
@@ -3495,7 +3497,33 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertFalse(process["model"]["quantize"])
         self.assertFalse(process["model"]["quantize_te"])
         self.assertFalse(process["model"]["low_vram"])
-        self.assertEqual(command, {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py", "/workspace/runs/ai-toolkit-example/resolved/ai-toolkit.yaml"], "env": {}})
+        self.assertEqual(command["cwd"], "/opt/ai-toolkit")
+        self.assertEqual(command["argv"][:2], ["python", "-c"])
+        self.assertIn("hook_before_train_loop", command["argv"][2])
+        self.assertIn("ai-toolkit.yaml", command["argv"][3])
+        self.assertEqual(command["env"], {})
+
+    def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
+        run = self._run()
+        run["recipe"]["steps"] = 100
+        run["parent_run"] = "source"
+        run["continuation"] = {
+            "mode": "resume",
+            "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 100, "recipe_sha256": "b" * 64},
+            "additional_steps": 50,
+            "target_step": 150,
+            "restoration_contract": {"level": "partial_resume", "restored": ["model", "optimizer", "global_step", "epoch"], "not_restored": ["scheduler", "rng", "dataloader_position"]},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            command = compile_ai_toolkit(run, destination)
+            process = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+        self.assertEqual(process["train"]["steps"], 150)
+        script = command["argv"][2]
+        self.assertIn("training state verified", script)
+        self.assertIn("hook_before_train_loop", script)
+        self.assertIn("/workspace/runs/ai-toolkit-example/resolved/training-state-source.lock.json", script)
+        self.assertIn("state-1", command["argv"][2] + " ".join(command["argv"][3:]))
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
         run = self._run()
@@ -3606,6 +3634,47 @@ class MusubiBackendTests(unittest.TestCase):
                 }
             },
         }
+
+    def test_musubi_state_capture_and_constant_scheduler_resume_use_process_local_steps(self) -> None:
+        run = self._run()
+        run["parent_run"] = "source"
+        run["continuation"] = {
+            "mode": "resume",
+            "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 30, "recipe_sha256": "b" * 64},
+            "additional_steps": 10,
+            "target_step": 40,
+            "restoration_contract": {"level": "best_effort_resume", "restored": ["model", "optimizer", "scheduler", "rng"], "not_restored": ["global_step", "epoch", "data_position"]},
+        }
+        script = command_musubi_tuner(run)["argv"][2]
+        self.assertIn("--save_state", script)
+        self.assertIn("--save_state_on_train_end", script)
+        self.assertIn("--save_every_n_steps 10", script)
+        self.assertIn("--save_last_n_steps_state 10", script)
+        self.assertIn("--resume /workspace/artifacts/training-state/state-1/payload", script)
+        self.assertIn("--max_train_steps 10", script)
+        self.assertNotIn("--max_train_steps 40", script)
+        self.assertIn("training state verified", script)
+        self.assertIn("/workspace/runs/musubi-example/resolved/training-state-source.lock.json", script)
+
+    def test_musubi_state_capture_rejects_epoch_save_escape_hatches(self) -> None:
+        run = self._run()
+        run["backend"]["config"]["extra_args"] = ["--save_every_n_epochs", "1"]
+        with self.assertRaisesRegex(ValueError, "epoch.*training-state"):
+            command_musubi_tuner(run)
+
+    def test_musubi_resume_rejects_finite_scheduler(self) -> None:
+        run = self._run()
+        run["backend"]["config"]["lr_scheduler"] = "cosine"
+        run["parent_run"] = "source"
+        run["continuation"] = {
+            "mode": "resume",
+            "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 30, "recipe_sha256": "b" * 64},
+            "additional_steps": 10,
+            "target_step": 40,
+            "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
+        }
+        with self.assertRaisesRegex(ValueError, "constant scheduler"):
+            command_musubi_tuner(run)
 
     def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -5144,6 +5213,106 @@ class DockerLifecycleTests(unittest.TestCase):
             launch.assert_not_called()
             self.assertIn("compiled for executor.name=docker", stderr.getvalue())
             self.assertIn("recompile", stderr.getvalue())
+
+    def test_resume_launch_rejects_runtime_image_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "derived"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                yaml.safe_dump({
+                    "id": "derived", "type": "train", "compute": {"executor": "runpod"},
+                    "backend": {"name": "ai-toolkit", "config": {}},
+                    "continuation": {"mode": "resume"},
+                }),
+                encoding="utf-8",
+            )
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.launch_runpod") as launch, patch(
+                    "sys.stderr", new_callable=io.StringIO
+                ) as stderr:
+                    self.assertEqual(launch_run("derived", executor="runpod", dry_run=True, image="other@sha256:bad"), 1)
+            finally:
+                os.chdir(previous)
+            launch.assert_not_called()
+            self.assertIn("runtime image is frozen at compile time", stderr.getvalue())
+
+    def test_runpod_launch_uses_the_image_frozen_by_compile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            manifest = {
+                "id": "example", "type": "train", "compute": {"executor": "runpod"},
+                "backend": {"name": "ai-toolkit", "config": {}},
+            }
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"},
+                "cwd": "/workspace", "argv": ["true"], "env": {},
+            }), encoding="utf-8")
+            (run_dir / "resolved" / "env.lock").write_text(yaml.safe_dump({
+                "selected_image": "frozen/image@sha256:1234",
+            }), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({
+                "docker": {"images": {"ai-toolkit": {
+                    "local": "local", "remote": "docker-remote", "dockerfile": "Dockerfile", "context": ".",
+                }}},
+                "runpod": {"default_image": {"ai-toolkit": "changed-after-compile"}},
+            }), encoding="utf-8")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.observe_run", return_value={"state": "compiled"}), patch(
+                    "kura.run_commands.launch.collect_run_preflight", return_value=[]
+                ), patch("kura.run_commands.launch.launch_runpod") as launch:
+                    self.assertEqual(launch_run("example", executor="runpod", dry_run=True), 0)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(launch.call_args.kwargs["image"], "frozen/image@sha256:1234")
+
+    def test_local_resume_launch_uses_the_content_id_observed_at_compile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "derived"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            manifest = {
+                "id": "derived", "type": "train", "compute": {"executor": "docker"},
+                "backend": {"name": "ai-toolkit", "config": {}},
+                "continuation": {"mode": "resume"},
+            }
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"},
+                "cwd": "/workspace", "argv": ["true"], "env": {},
+            }), encoding="utf-8")
+            (run_dir / "resolved" / "env.lock").write_text(yaml.safe_dump({
+                "selected_image": "mutable-local:dev",
+                "selected_image_identity": {
+                    "reference": "mutable-local:dev",
+                    "pinning": {"strength": "content-hash", "value": "sha256:compiled-image"},
+                },
+            }), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({
+                "docker": {"gpu": False, "mounts": [], "images": {"ai-toolkit": {
+                    "local": "mutable-local:dev", "remote": "remote", "dockerfile": "Dockerfile", "context": ".",
+                }}},
+            }), encoding="utf-8")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.observe_run", return_value={"state": "compiled"}), patch(
+                    "kura.run_commands.launch.collect_run_preflight", return_value=[]
+                ), patch("kura.run_commands.launch.launch_docker") as launch:
+                    self.assertEqual(launch_run("derived", executor="docker", dry_run=True), 0)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(launch.call_args.kwargs["image"], "sha256:compiled-image")
 
     def test_launch_docker_uses_image_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6836,6 +7005,9 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "outputs").mkdir()
             (run_dir / "outputs" / "intermediate-step00000250.safetensors").write_text("intermediate", encoding="utf-8")
             (output_dir / "artifact.safetensors").write_text("artifact", encoding="utf-8")
+            state_dir = output_dir / "example-step00000010-state"
+            state_dir.mkdir()
+            (state_dir / "optimizer.bin").write_text("optimizer", encoding="utf-8")
             (realization_dir / "remote-exit-20260101.json").write_text(json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
             previous = Path.cwd()
@@ -6850,6 +7022,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["outputs"], ["outputs/artifact.safetensors"])
             self.assertEqual(status["downloaded_run"], "downloads/example")
+            self.assertFalse((run_dir / "outputs" / state_dir.name).exists())
 
     def test_run_download_records_recovery_without_publishing_it_as_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

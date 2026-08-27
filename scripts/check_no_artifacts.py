@@ -13,6 +13,7 @@ FORBIDDEN_PARTS = {
     ".pytest_cache",
     "__pycache__",
     "runs",
+    "artifacts",
     "datasets",
     "workflows",
     "promptsets",

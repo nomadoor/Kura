@@ -42,6 +42,8 @@ for the complete, authoritative, up-to-date list of commands and options.
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner\|sd-scripts] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
 | `uv run kura run capabilities <backend> [--json]` | Show the `backend.config` fields that backend accepts, including reviewed nested fields and their types/ranges, selector applicability, unverified escape hatches, and unsupported concepts |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
+| `uv run kura run resume <source-run> --additional-steps <N>` | Create a derived draft from the latest valid training state and continue the same logical session for `N` optimizer updates |
+| `uv run kura run resume <source-run> --to-step <T> [--artifact <id>]` | Create a derived draft toward absolute logical step `T`, optionally selecting an older valid state |
 | `uv run kura run execute <run-id>` | Execute through the Docker or RunPod executor frozen in the compiled run; waits through completion, downloads results, and stops a disposable Pod immediately after confirmed recovery |
 | `uv run kura run discard <run-id>` | Preview deletion of a draft or unlaunched compiled run (add `--yes` to delete) |
 | `uv run kura run prune` | Preview cleanup of old runs (add `--yes` to delete) |
@@ -86,6 +88,36 @@ the run's `outputs/` while training continues. This makes already-saved weights
 available for evaluation and preserves the latest successfully mirrored weight
 if training later fails. The pull commands below remain available for an
 explicit immediate refresh or interrupted-controller recovery.
+
+Training-state capture is on by default at the backend's weight checkpoint
+cadence. Completed state directories are copied into the protected
+`artifacts/training-state/` store with a complete file inventory and SHA-256
+digests; the latest two valid generations are retained by default. Resume run
+creation selects the highest valid logical step, while `--artifact` can pin an
+older generation. The created run records the concrete artifact ID and digest,
+so later saves cannot change its input. A source run may be pruned without
+removing an artifact still referenced by a derived run.
+
+Backend completion sidecars are accepted only when their schema, backend name,
+logical step, and declared payload digests agree. For short Musubi Resume runs,
+the derived checkpoint cadence is capped at the requested additional steps so
+the endpoint remains resumable. RunPod compile freezes the effective runtime
+image, and Resume launch does not accept `--image` overrides.
+
+Resume does not mean "load a LoRA and start over." The plan reports the actual
+restoration contract:
+
+| Backend path | Initial Resume level | Restored | Known gap / restriction |
+| --- | --- | --- | --- |
+| AI-Toolkit standard LoRA | Partial | weight, optimizer, step, epoch | scheduler is reconstructed; RNG and exact data position are not restored; AdamW/AdamW8bit, constant scheduler, and gradient accumulation 1 only |
+| Musubi built-ins | Best effort | Accelerate model, optimizer, scheduler, RNG and supported auxiliary state | application counters and exact data position are not restored; constant scheduler only |
+| sd-scripts SD 1.5 / SDXL / FLUX.1 LoRA | Best effort | Accelerate model, optimizer, scheduler, RNG and compatible scaler | Kura normalizes cumulative step metadata; application epoch and exact data position are not restored; constant scheduler and gradient accumulation 1 only |
+| sd-scripts Anima LoRA / LLLite | Unsupported for execution | state capture may be structurally recognized | Kura refuses Resume rather than silently degrading to weight-only training |
+
+The selected payload is verified again inside the target container before the
+trainer starts. A state-load failure is terminal before the first optimizer
+update. RunPod staging transfers only the selected protected artifact and does
+not require a Network Volume or the original Pod.
 
 ## Diagnosis and recovery
 

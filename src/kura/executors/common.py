@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
+from kura.training_artifacts import is_training_state_output
 
 
 CONTAINER_WORKSPACE = "/workspace"
@@ -201,6 +202,39 @@ def _stdout_progress(run_dir: Path) -> tuple[int | None, int | None, float | Non
 
 def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
     step, total, seconds_per_iter = _stdout_progress(run_dir)
+    resume_lock: dict[str, Any] = {}
+    lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+    if lock_path.is_file():
+        try:
+            loaded = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            resume_lock = loaded
+    source_step = resume_lock.get("source_step")
+    target_step = resume_lock.get("target_step")
+    additional_steps = resume_lock.get("additional_steps")
+    if (
+        isinstance(step, int)
+        and isinstance(source_step, int)
+        and isinstance(target_step, int)
+        and isinstance(additional_steps, int)
+    ):
+        current_step = step if resume_lock.get("native_progress") == "process_local" else max(0, step - source_step)
+        status["current_run_step"] = min(current_step, additional_steps)
+        status["current_run_total_steps"] = additional_steps
+        step = source_step + current_step if resume_lock.get("native_progress") == "process_local" else step
+        total = target_step
+    if (
+        state == "completed"
+        and isinstance(source_step, int)
+        and isinstance(target_step, int)
+        and isinstance(additional_steps, int)
+    ):
+        status["current_run_step"] = additional_steps
+        status["current_run_total_steps"] = additional_steps
+        step = target_step
+        total = target_step
     if total is not None:
         existing_total = status.get("total_steps")
         status["total_steps"] = max(existing_total, total) if isinstance(existing_total, int) else total
@@ -216,7 +250,9 @@ def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state
             outputs = [
                 str(path.relative_to(run_dir))
                 for path in sorted(outputs_dir.rglob("*"))
-                if path.is_file() and not path.is_symlink()
+                if path.is_file()
+                and not path.is_symlink()
+                and not is_training_state_output(path.relative_to(outputs_dir))
             ]
             if outputs:
                 status["outputs"] = outputs
