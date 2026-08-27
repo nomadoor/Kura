@@ -23,6 +23,10 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 ARTIFACT_SCHEMA_VERSION = 1
 
 
+class _ReferenceInspectionError(ValueError):
+    """Signal that retention must skip deletion without invalidating publication."""
+
+
 def training_state_reference_lock(workspace: Path):
     """Serialize artifact selection/reference creation with publication retention."""
 
@@ -208,8 +212,8 @@ def _protected_artifact_ids(workspace: Path) -> set[str]:
             import yaml
 
             run = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError) as exc:
-            raise ValueError(f"cannot safely inspect training-state reference: {path}") from exc
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise _ReferenceInspectionError(f"cannot safely inspect training-state reference: {path}") from exc
         continuation = run.get("continuation") if isinstance(run, dict) else None
         source = continuation.get("source") if isinstance(continuation, dict) else None
         artifact_id = source.get("artifact_id") if isinstance(source, dict) else None
@@ -218,12 +222,43 @@ def _protected_artifact_ids(workspace: Path) -> set[str]:
     for path in (workspace / "runs").glob("*/resolved/training-state-source.lock.json"):
         try:
             lock = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"cannot safely inspect training-state reference: {path}") from exc
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise _ReferenceInspectionError(f"cannot safely inspect training-state reference: {path}") from exc
         artifact_id = lock.get("artifact_id") if isinstance(lock, dict) else None
         if isinstance(artifact_id, str):
             protected.add(artifact_id)
     return protected
+
+
+def _manifest_observed_step(manifest: dict[str, Any]) -> int:
+    value = manifest.get("observed_step")
+    return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+
+def _retained_steps(candidates: list[dict[str, Any]], keep_generations: int) -> set[int]:
+    steps = {
+        step
+        for step in dict.fromkeys(_manifest_observed_step(item) for item in candidates)
+        if step >= 0
+    }
+    return set(sorted(steps, reverse=True)[:keep_generations])
+
+
+def training_state_retention_floor(workspace: Path, source_run: str, keep_generations: int) -> int | None:
+    """Return the oldest logical step in the ordinary retention window."""
+
+    if isinstance(keep_generations, bool) or not isinstance(keep_generations, int) or keep_generations <= 0:
+        raise ValueError("training-state keep_generations must be a positive integer")
+    candidates: list[dict[str, Any]] = []
+    for path in _artifact_root(workspace).glob("*/manifest.json"):
+        try:
+            manifest = _load_manifest_path(path)
+        except ValueError:
+            continue
+        if manifest.get("source_run") == source_run:
+            candidates.append(manifest)
+    retained = _retained_steps(candidates, keep_generations)
+    return min(retained) if retained else None
 
 
 def _apply_retention(workspace: Path, source_run: str, keep_generations: int) -> None:
@@ -237,16 +272,11 @@ def _apply_retention(workspace: Path, source_run: str, keep_generations: int) ->
             continue
         if manifest.get("source_run") == source_run:
             candidates.append(manifest)
-    candidates.sort(key=lambda item: (int(item.get("observed_step") or -1), str(item.get("id"))), reverse=True)
-    retained_steps = {
-        step
-        for step in dict.fromkeys(int(item.get("observed_step") or -1) for item in candidates)
-        if step >= 0
-    }
-    retained_steps = set(sorted(retained_steps, reverse=True)[:keep_generations])
+    candidates.sort(key=lambda item: (_manifest_observed_step(item), str(item.get("id"))), reverse=True)
+    retained_steps = _retained_steps(candidates, keep_generations)
     protected = _protected_artifact_ids(workspace)
     for manifest in candidates:
-        if int(manifest.get("observed_step") or -1) in retained_steps:
+        if _manifest_observed_step(manifest) in retained_steps:
             continue
         artifact_id = manifest.get("id")
         if not isinstance(artifact_id, str) or artifact_id in protected:
@@ -353,7 +383,12 @@ def publish_training_state(
             shutil.rmtree(staging)
     published = load_training_state(workspace, artifact_id)
     verify_training_state(workspace, published)
-    _apply_retention(workspace, source_run, keep_generations)
+    try:
+        _apply_retention(workspace, source_run, keep_generations)
+    except _ReferenceInspectionError:
+        # Reference discovery failed closed: keep every generation, but do not
+        # relabel an already-published and verified artifact as a sync failure.
+        pass
     return published
 
 
@@ -376,7 +411,7 @@ def select_training_state(workspace: Path, source_run: str, artifact_id: str | N
         candidates.append(candidate)
     if not candidates:
         raise ValueError(f"source run {source_run} has no recoverable training-state artifact")
-    return max(candidates, key=lambda item: (int(item.get("observed_step") or -1), str(item.get("id"))))
+    return max(candidates, key=lambda item: (_manifest_observed_step(item), str(item.get("id"))))
 
 
 def training_state_at_step(

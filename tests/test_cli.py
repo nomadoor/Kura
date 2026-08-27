@@ -3254,6 +3254,62 @@ class RunPodPullSelectionTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "running")
             self.assertIn("network interrupted", status["checkpoint_sync_error"])
+            self.assertNotIn("training_state_sync_error", status)
+
+    def test_training_state_sync_failure_does_not_report_checkpoint_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({
+                "id": "example",
+                "backend": {"name": "musubi-tuner", "config": {}},
+                "recipe": {"steps": 10, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+            }), encoding="utf-8")
+            with patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[]), patch(
+                "kura.run_commands.runpod_ssh._runpod_remote_training_states", side_effect=ValueError("state listing interrupted")
+            ):
+                synced = _try_sync_runpod_checkpoints(
+                    run_dir,
+                    {"ip": "host", "port": 22, "key": "key"},
+                    workspace="/workspace",
+                    run_id="example",
+                )
+
+            self.assertFalse(synced)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertIn("state listing interrupted", status["training_state_sync_error"])
+            self.assertNotIn("checkpoint_sync_error", status)
+
+    def test_training_state_status_record_failure_is_not_labeled_as_checkpoint_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({
+                "id": "example",
+                "backend": {"name": "musubi-tuner", "config": {}},
+                "recipe": {"steps": 10, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+            }), encoding="utf-8")
+            with patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[]), patch(
+                "kura.run_commands.runpod_ssh._runpod_remote_training_states", return_value=[]
+            ), patch(
+                "kura.run_commands.runpod_ssh._record_pulled_training_states", side_effect=OSError("state status interrupted")
+            ):
+                synced = _try_sync_runpod_checkpoints(
+                    run_dir,
+                    {"ip": "host", "port": 22, "key": "key"},
+                    workspace="/workspace",
+                    run_id="example",
+                )
+
+            self.assertFalse(synced)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertIn("state status interrupted", status["training_state_sync_error"])
+            self.assertNotIn("checkpoint_sync_error", status)
 
     def test_checkpoint_sync_disk_shortage_is_nonfatal_and_visible(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3675,6 +3731,38 @@ class MusubiBackendTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "constant scheduler"):
             command_musubi_tuner(run)
+
+    def test_musubi_resume_rejects_finite_scheduler_from_extra_args(self) -> None:
+        for extra_args in (["--lr_scheduler", "cosine"], ["--lr_scheduler=cosine"]):
+            with self.subTest(extra_args=extra_args):
+                run = self._run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                run["parent_run"] = "source"
+                run["continuation"] = {
+                    "mode": "resume",
+                    "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 30, "recipe_sha256": "b" * 64},
+                    "additional_steps": 10,
+                    "target_step": 40,
+                    "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
+                }
+                with self.assertRaisesRegex(ValueError, "constant scheduler"):
+                    command_musubi_tuner(run)
+
+    def test_musubi_resume_rejects_invalid_state_save_cadence_cleanly(self) -> None:
+        for cadence in ("10", True, 0, -1):
+            with self.subTest(cadence=cadence):
+                run = self._run()
+                run["backend"]["config"]["save_every_n_steps"] = cadence
+                run["parent_run"] = "source"
+                run["continuation"] = {
+                    "mode": "resume",
+                    "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 30, "recipe_sha256": "b" * 64},
+                    "additional_steps": 10,
+                    "target_step": 40,
+                    "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
+                }
+                with self.assertRaisesRegex(ValueError, "save_every_n_steps must be a positive integer"):
+                    command_musubi_tuner(run)
 
     def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -5274,6 +5362,45 @@ class DockerLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(launch.call_args.kwargs["image"], "frozen/image@sha256:1234")
+
+    def test_runpod_resume_launch_rejects_missing_compile_time_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "derived"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            manifest = {
+                "id": "derived",
+                "type": "train",
+                "compute": {"executor": "runpod"},
+                "backend": {"name": "ai-toolkit", "config": {}},
+                "continuation": {"mode": "resume"},
+            }
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"},
+                "cwd": "/workspace", "argv": ["true"], "env": {},
+            }), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({
+                "docker": {"images": {"ai-toolkit": {
+                    "local": "local", "remote": "current/image:latest", "dockerfile": "Dockerfile", "context": ".",
+                }}},
+                "runpod": {"default_image": {"ai-toolkit": "current/default:latest"}},
+            }), encoding="utf-8")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                with patch("kura.run_commands.launch.observe_run", return_value={"state": "compiled"}), patch(
+                    "kura.run_commands.launch.collect_run_preflight", return_value=[]
+                ), patch("kura.run_commands.launch.launch_runpod") as launch, patch(
+                    "sys.stderr", new_callable=io.StringIO
+                ) as stderr:
+                    self.assertEqual(launch_run("derived", executor="runpod", dry_run=True), 1)
+            finally:
+                os.chdir(previous)
+
+            launch.assert_not_called()
+            self.assertIn("no compile-time frozen image", stderr.getvalue())
 
     def test_local_resume_launch_uses_the_content_id_observed_at_compile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

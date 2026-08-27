@@ -31,7 +31,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
-from kura.training_artifacts import is_training_state_output, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract
+from kura.training_artifacts import is_training_state_output, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor
 
 
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
@@ -376,11 +376,12 @@ def _same_remote_training_state_version(before: dict[str, Any], after: dict[str,
     after_files = after.get("files")
     if not isinstance(before_files, list) or not isinstance(after_files, list):
         return False
-    normalize = lambda items: sorted(
-        (item.get("path"), item.get("size"), item.get("mtime_ns"))
-        for item in items
-        if isinstance(item, dict)
-    )
+    def normalize(items: list[Any]) -> list[tuple[Any, Any, Any]]:
+        return sorted(
+            (item.get("path"), item.get("size"), item.get("mtime_ns"))
+            for item in items
+            if isinstance(item, dict)
+        )
     return (
         len(before_files) == len(after_files)
         and normalize(before_files) == normalize(after_files)
@@ -535,6 +536,19 @@ def _pull_remote_training_state_items(
     published: list[dict[str, Any]] = []
     pending_root = run_dir / "recovery" / "training-state-pull"
     pending_root.mkdir(parents=True, exist_ok=True)
+    try:
+        run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        continuation = resume_intent(run)
+        contract = training_state_contract(run)
+        retention_floor = training_state_retention_floor(
+            host_workspace,
+            run_dir.name,
+            training_state_policy(run)["keep_generations"],
+        )
+    except (OSError, ValueError, yaml.YAMLError):
+        continuation = None
+        contract = {}
+        retention_floor = None
     for item in items:
         name, remote_path, step, files = item.get("name"), item.get("path"), item.get("step"), item.get("files")
         if not isinstance(name, str) or Path(name).name != name or not isinstance(remote_path, str):
@@ -544,15 +558,10 @@ def _pull_remote_training_state_items(
         logical_step = item.get("logical_step")
         if isinstance(logical_step, bool) or not isinstance(logical_step, int):
             logical_step = step
-            try:
-                run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-                continuation = resume_intent(run)
-                contract = training_state_contract(run)
-            except (OSError, ValueError, yaml.YAMLError):
-                continuation = None
-                contract = {}
             if continuation is not None and contract.get("native_progress") == "process_local":
                 logical_step = continuation["source"]["observed_step"] + step
+        if retention_floor is not None and logical_step < retention_floor:
+            continue
         existing = training_state_at_step(host_workspace, run_dir.name, logical_step, verify_payload=False)
         if existing is not None:
             published.append(existing)
@@ -764,20 +773,30 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
             # and clear stale errors without emitting the same event twice.
             _record_pulled_outputs(run_dir, pulled, emit_event=False)
             if _directory_training_state_sync_enabled(run_dir):
-                state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id)
-                training_states = _pull_remote_training_state_items(run_dir, details, workspace=workspace, items=state_items)
-                _record_pulled_training_states(run_dir, training_states)
+                try:
+                    state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id)
+                    training_states = _pull_remote_training_state_items(run_dir, details, workspace=workspace, items=state_items)
+                    _record_pulled_training_states(run_dir, training_states)
+                except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+                    state_error = _safe_error(exc)
+                    try:
+                        _mutate_run_status(
+                            run_dir,
+                            lambda status: status.__setitem__("training_state_sync_error", state_error),
+                        )
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                    return False
         return True
     except _OperationBusy:
         return True
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         error_message = _safe_error(exc)
         try:
-            def record_error(status: dict[str, Any]) -> None:
-                status["checkpoint_sync_error"] = error_message
-                status["training_state_sync_error"] = error_message
-
-            _mutate_run_status(run_dir, record_error)
+            _mutate_run_status(
+                run_dir,
+                lambda status: status.__setitem__("checkpoint_sync_error", error_message),
+            )
         except (OSError, json.JSONDecodeError):
             pass
         return False

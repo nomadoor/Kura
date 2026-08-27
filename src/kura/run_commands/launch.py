@@ -361,6 +361,10 @@ def launch_run(
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
             frozen_image = env_lock.get("selected_image") if isinstance(env_lock, dict) else None
+            if continuation is not None and continuation.get("mode") == "resume" and not (
+                isinstance(frozen_image, str) and frozen_image
+            ):
+                raise ValueError("Resume remote runtime has no compile-time frozen image; recompile the run")
             remote_image = frozen_image if isinstance(frozen_image, str) and frozen_image else image_config["remote"]
             if not adapter.runpod_template_compatible:
                 runpod_config.pop("template_id", None)

@@ -226,7 +226,8 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
                 dataset["resolution"] = deepcopy(override["resolution"])
     policy = training_state_policy(run)
     continuation = resume_intent(run)
-    if policy["enabled"]:
+    state_contract = training_state_contract_ai_toolkit(run)
+    if policy["enabled"] and state_contract.get("capability") != "unsupported":
         if process.get("type") != "sd_trainer" or _nested(process, "network", "type") != "lora":
             raise ValueError("AI-Toolkit training-state capture initially supports only the standard sd_trainer LoRA process")
         ema_config = process.get("ema_config") if isinstance(process.get("ema_config"), dict) else {}

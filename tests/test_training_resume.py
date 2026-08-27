@@ -19,7 +19,8 @@ from unittest.mock import patch
 import yaml
 
 from kura.cli import cmd_run_resume
-from kura.backends.ai_toolkit import command_ai_toolkit, training_state_contract_ai_toolkit
+from kura.backends.ai_toolkit import compile_ai_toolkit, command_ai_toolkit, training_state_contract_ai_toolkit
+from kura.backends.sd_scripts import training_state_contract_sd_scripts
 from kura.container_scripts import script_source
 from kura.executors.docker import reconcile_docker
 from kura.executors.common import _materialize_stdout_progress
@@ -71,6 +72,20 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
 
 
 class TrainingStateArtifactTests(unittest.TestCase):
+    def test_sd_scripts_resume_contract_uses_normalized_selectors(self) -> None:
+        for architecture in ("flux", "SDXL", "sd-1.5"):
+            with self.subTest(architecture=architecture):
+                contract = training_state_contract_sd_scripts(
+                    {"backend": {"name": "sd-scripts", "config": {"architecture": architecture, "mode": "LORA"}}}
+                )
+                self.assertEqual(contract["capability"], "best_effort_resume")
+                self.assertIn("kura-state-info.json", contract["required_files"])
+
+        anima = training_state_contract_sd_scripts(
+            {"backend": {"name": "sd-scripts", "config": {"architecture": "Anima", "mode": "LORA"}}}
+        )
+        self.assertEqual(anima["capability"], "unsupported")
+
     def test_ai_toolkit_resume_contract_requires_and_restores_rng_state(self) -> None:
         contract = training_state_contract_ai_toolkit(
             {"backend": {"name": "ai-toolkit", "config": {"optimizer_type": "adamw"}}}
@@ -127,6 +142,40 @@ class TrainingStateArtifactTests(unittest.TestCase):
         command = command_ai_toolkit(run)
 
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
+
+    def test_ai_toolkit_unsupported_capture_contract_does_not_reject_native_ema_training(self) -> None:
+        run = {
+            "id": "source",
+            "backend": {
+                "name": "ai-toolkit",
+                "config": {
+                    "gradient_accumulation_steps": 2,
+                    "native_config": {"ema_config": {"use_ema": True}},
+                },
+            },
+            "model": {"base": "example/model"},
+            "datasets": [{"id": "tiny"}],
+            "recipe": {"steps": 10, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            command = compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+
+        self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
+
+    def test_ai_toolkit_supported_capture_contract_still_rejects_ema(self) -> None:
+        run = {
+            "id": "source",
+            "backend": {
+                "name": "ai-toolkit",
+                "config": {"native_config": {"ema_config": {"use_ema": True}}},
+            },
+            "model": {"base": "example/model"},
+            "datasets": [{"id": "tiny"}],
+            "recipe": {"steps": 10, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "does not support.*EMA"):
+                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
 
     def test_ai_toolkit_optimizer_without_a_verified_update_counter_does_not_claim_resume(self) -> None:
         run = {
@@ -811,6 +860,71 @@ class TrainingStateArtifactTests(unittest.TestCase):
             transfer.assert_not_called()
             digest.assert_not_called()
             self.assertEqual([entry["id"] for entry in published], [existing["id"]])
+
+    def test_remote_state_older_than_local_retention_window_is_not_retransferred(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "source"
+            (run_dir / "resolved").mkdir(parents=True)
+            run = {
+                "id": "source",
+                "type": "train",
+                "backend": {"name": "musubi-tuner", "config": {}},
+                "recipe": {"steps": 3, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+            }
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            protected = publish_training_state(
+                root,
+                source_run="source",
+                source_realization=None,
+                backend="musubi-tuner",
+                observed_step=1,
+                candidate=self._candidate(root, "protected-1", b"1"),
+                native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": [], "not_restored": []},
+                keep_generations=2,
+            )
+            derived = root / "runs" / "derived"
+            derived.mkdir()
+            (derived / "run.yaml").write_text(yaml.safe_dump({
+                "id": "derived",
+                "continuation": {"mode": "resume", "source": {"artifact_id": protected["id"]}},
+            }), encoding="utf-8")
+            for step in (3, 4):
+                publish_training_state(
+                    root,
+                    source_run="source",
+                    source_realization=None,
+                    backend="musubi-tuner",
+                    observed_step=step,
+                    candidate=self._candidate(root, f"retained-{step}", str(step).encode()),
+                    native_format="accelerate-state-directory",
+                    restoration_contract={"level": "best_effort_resume", "restored": [], "not_restored": []},
+                    keep_generations=2,
+                )
+            self.assertTrue((root / "artifacts" / "training-state" / protected["id"]).is_dir())
+            old_remote = {
+                "path": "/workspace/runs/source/outputs/source-step00000002-state",
+                "name": "source-step00000002-state",
+                "step": 2,
+                "logical_step": 2,
+                "files": [{"path": "model.safetensors", "size": 1, "mtime_ns": 1}],
+            }
+
+            with patch(
+                "kura.run_commands.runpod_ssh._run_bounded",
+                side_effect=AssertionError("old state must not be transferred"),
+            ):
+                published = _pull_remote_training_state_items(
+                    run_dir,
+                    {"ip": "example", "port": 22, "key": root / "key"},
+                    workspace="/workspace",
+                    items=[old_remote],
+                )
+
+            self.assertEqual(published, [])
+
     def _candidate(self, root: Path, name: str, content: bytes) -> Path:
         candidate = root / name
         candidate.mkdir()
@@ -851,26 +965,82 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertEqual(model["sha256"], hashlib.sha256(_safetensors_bytes(b"300")).hexdigest())
             self.assertFalse((root / "artifacts" / "training-state" / published[0]["id"]).exists())
 
-    def test_retention_fails_closed_when_a_run_reference_is_malformed(self) -> None:
+    def test_retention_preserves_a_valid_step_zero_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            broken = root / "runs" / "broken"
-            broken.mkdir(parents=True)
-            (broken / "run.yaml").write_text("continuation: [\n", encoding="utf-8")
-            candidate = self._candidate(root, "candidate", b"state")
-            with self.assertRaisesRegex(ValueError, "cannot safely inspect training-state reference"):
+            published = publish_training_state(
+                root,
+                source_run="source",
+                source_realization=None,
+                backend="sd-scripts",
+                observed_step=0,
+                candidate=self._candidate(root, "candidate-0", b"0"),
+                native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": [], "not_restored": []},
+                keep_generations=1,
+            )
+
+            self.assertTrue((root / "artifacts" / "training-state" / published["id"]).is_dir())
+            self.assertEqual(select_training_state(root, "source")["observed_step"], 0)
+
+    def test_retention_failure_does_not_relabel_a_completed_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for step in (1, 2):
                 publish_training_state(
                     root,
                     source_run="source",
                     source_realization=None,
                     backend="sd-scripts",
-                    observed_step=10,
-                    candidate=candidate,
+                    observed_step=step,
+                    candidate=self._candidate(root, f"candidate-{step}", str(step).encode()),
                     native_format="accelerate-state-directory",
                     restoration_contract={"level": "best_effort_resume", "restored": [], "not_restored": []},
-                    keep_generations=1,
+                    keep_generations=2,
                 )
-            self.assertTrue(any((root / "artifacts" / "training-state").glob("*/manifest.json")))
+            broken = root / "runs" / "broken"
+            broken.mkdir(parents=True)
+            (broken / "run.yaml").write_text("continuation: [\n", encoding="utf-8")
+            published = publish_training_state(
+                root,
+                source_run="source",
+                source_realization=None,
+                backend="sd-scripts",
+                observed_step=3,
+                candidate=self._candidate(root, "candidate-3", b"3"),
+                native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": [], "not_restored": []},
+                keep_generations=1,
+            )
+
+            self.assertEqual(published["observed_step"], 3)
+            retained_steps = sorted(
+                json.loads(path.read_text(encoding="utf-8"))["observed_step"]
+                for path in (root / "artifacts" / "training-state").glob("*/manifest.json")
+            )
+            self.assertEqual(retained_steps, [1, 2, 3])
+
+    def test_invalid_utf8_reference_does_not_relabel_a_completed_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            broken = root / "runs" / "broken"
+            broken.mkdir(parents=True)
+            (broken / "run.yaml").write_bytes(b"\xff")
+
+            published = publish_training_state(
+                root,
+                source_run="source",
+                source_realization=None,
+                backend="sd-scripts",
+                observed_step=1,
+                candidate=self._candidate(root, "candidate-1", b"1"),
+                native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": [], "not_restored": []},
+                keep_generations=1,
+            )
+
+            self.assertEqual(published["observed_step"], 1)
+            self.assertTrue((root / "artifacts" / "training-state" / published["id"]).is_dir())
 
     def test_publication_rejects_structurally_invalid_model_safetensors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

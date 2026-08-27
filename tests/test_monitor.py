@@ -64,7 +64,7 @@ class MonitorProjectionTests(unittest.TestCase):
                     {
                         "state": "failed",
                         "recoverable_training_states": [
-                            {"id": "state-2", "observed_step": 20, "restoration_level": "best_effort_resume"}
+                            {"artifact_id": "state-2", "observed_step": 20, "restoration_level": "best_effort_resume"}
                         ],
                     }
                 ),

@@ -21,8 +21,13 @@ from kura.run_envelope import backend_config, resume_intent, training_state_poli
 
 def training_state_contract_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     native = backend_config(run, "sd-scripts")
-    architecture = str(native.get("architecture") or "")
-    mode = str(native.get("mode") or "lora")
+    authored_architecture = native.get("architecture")
+    architecture = (
+        ""
+        if authored_architecture is None or (isinstance(authored_architecture, str) and not authored_architecture.strip())
+        else sd_scripts_architecture(run)
+    )
+    mode = sd_scripts_mode(run)
     common = ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl")
     if (architecture, mode) in {("sd15", "lora"), ("sdxl", "lora"), ("flux1", "lora")}:
         return {

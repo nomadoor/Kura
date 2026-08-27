@@ -107,6 +107,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
                 "sd_scripts_dataset_stage.py",
                 "sd_scripts_probe.py",
                 "sd_scripts_publish_anima.py",
+                "sd_scripts_state.py",
                 "sd_scripts_validate.py",
                 "training_state_verify.py",
             )

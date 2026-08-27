@@ -39,6 +39,23 @@ def _extra_args(override: dict[str, Any]) -> list[str]:
     return _shared_extra_args(override, backend_label="Musubi Tuner")
 
 
+def _extra_arg_value(arguments: list[str], flag: str) -> str | None:
+    values: list[str] = []
+    for index, argument in enumerate(arguments):
+        if argument == flag:
+            if index + 1 >= len(arguments) or arguments[index + 1].startswith("--"):
+                raise ValueError(f"Musubi backend.config.extra_args {flag} requires a value")
+            values.append(arguments[index + 1])
+        elif argument.startswith(flag + "="):
+            value = argument.split("=", 1)[1]
+            if not value:
+                raise ValueError(f"Musubi backend.config.extra_args {flag} requires a value")
+            values.append(value)
+    if len(values) > 1:
+        raise ValueError(f"Musubi backend.config.extra_args duplicates {flag}")
+    return values[0] if values else None
+
+
 def _script_command(commands: list[list[str]], override: dict[str, Any], run: dict[str, Any] | None = None) -> list[str]:
     training_commands = [command for command in commands if "--max_train_steps" in command]
     if len(training_commands) != 1:
@@ -73,7 +90,14 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
                 "use backend.config.save_every_n_steps instead: " + ", ".join(configured_epoch_flags)
             )
         recipe = validated_recipe(run, required=True)
-        cadence = override.get("save_every_n_steps") or recipe["steps"]
+        configured_cadence = override.get("save_every_n_steps")
+        if configured_cadence is not None and (
+            isinstance(configured_cadence, bool)
+            or not isinstance(configured_cadence, int)
+            or configured_cadence <= 0
+        ):
+            raise ValueError("Musubi backend.config.save_every_n_steps must be a positive integer")
+        cadence = configured_cadence if configured_cadence is not None else recipe["steps"]
         if additional_steps is not None:
             cadence = min(cadence, additional_steps)
             try:
@@ -85,7 +109,10 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         state_window = cadence if policy["keep_generations"] == 2 else 1
         train.extend(["--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_window)])
     if continuation is not None:
-        scheduler = str(override.get("lr_scheduler") or "constant").lower()
+        extra_scheduler = _extra_arg_value(_extra_args(override), "--lr_scheduler")
+        if extra_scheduler is not None and override.get("lr_scheduler") is not None:
+            raise ValueError("Musubi backend.config.lr_scheduler duplicates backend.config.extra_args --lr_scheduler")
+        scheduler = str(override.get("lr_scheduler") or extra_scheduler or "constant").lower()
         if scheduler != "constant":
             raise ValueError("Musubi State Resume initially requires the constant scheduler")
         artifact_id = continuation["source"]["artifact_id"]
