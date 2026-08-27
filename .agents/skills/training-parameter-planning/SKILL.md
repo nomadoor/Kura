@@ -128,6 +128,35 @@ Gather these before proposing parameters:
 6. Backend mechanics: `musubi-tuner-backend` / `ai-toolkit-backend` skills for
    flag names, constraints, and interactions.
 
+## Resume continuity warnings
+
+Treat a Resume plan as continuity-risk analysis, not as a promise of bitwise
+equivalence. Read the plan's `Resume` section and repeat its `continuity`,
+`restored`, and `not_restored` facts in the approval summary.
+
+Use revision-specific equivalence evidence only when backend revision or image
+digest, architecture, optimizer/scheduler, and dataset cardinality match. The
+local 100-step versus 50+50 evidence is recorded in
+`../../../docs/smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml`.
+Do not transfer a one-item result to a shuffled or multi-item dataset.
+
+Classify the user warning as follows:
+
+- **HIGH** — learned weights or optimizer state differed. State the measured
+  tensor count, maximum absolute error, and relative L2 error. A small numeric
+  error describes magnitude; it does not make the Resume exact.
+- **CAUTION** — learned weights, optimizer, and scheduler were semantically
+  equal in a matching test, but RNG, application counters, sampler, or exact
+  dataloader position differed. Name the narrow conditions that matched and
+  keep the general non-exact warning.
+- **UNVERIFIED** — no evidence matches the selected revision and conditions.
+  Report the restoration contract without inventing an expected error size.
+
+Never label Resume exact from weight equality alone. Exactness requires all
+declared training-state components and the data position to match. File SHA
+differences alone are not semantic differences when recursive state comparison
+shows equal values; report both facts separately.
+
 ## Building the proposal
 
 Assemble each parameter from the first source that covers it:

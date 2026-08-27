@@ -1,0 +1,94 @@
+schema_version: 1
+kind: training-resume-equivalence
+observed_at: 2026-08-27
+executor: docker
+kura_commit: 46fff2a
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+method:
+  control: 100 uninterrupted optimizer updates
+  resumed: 50 optimizer updates, publish durable state, create a new run and process, Resume for 50 updates
+  comparison:
+    weights: semantic tensor comparison with safetensors metadata excluded
+    optimizer_scheduler_rng: recursive semantic state comparison
+  dataset_scope: one training item per backend
+  warning: Results establish only the recorded revision, architecture, parameters, and dataset cardinality. They do not prove exact Resume for multi-item or shuffled datasets.
+backends:
+  ai-toolkit:
+    upstream:
+      distribution: ostris/aitoolkit:latest@sha256:8207b9b7cbe4742c839743fa976d1da76324ed1a0d177353085e7e01560ea235
+      embedded_commit: da79ebce991c16bc6d343348085d0f7173e367ab
+      main_at_observation: 5497a001cb8752c665f93907a0393fc612116fd5
+    runtime_image_digest: sha256:0ac951f9ac595ed488dad5d171df0e0691db1a790b79520f64f8c3cd737b0508
+    architecture: sd15
+    seed: 1
+    control_run: 20260827-1649_ai-main-direct100_dd63
+    source_run: 20260827-1649_ai-main-split50_847a
+    resumed_run: 20260827-1653_ai-main-resume50-to100_483c
+    control_artifact: state-step-00000100-3332b50070d7
+    resumed_artifact: state-step-00000100-40e8c5599578
+    result:
+      exact: false
+      weight_tensors_total: 216
+      weight_tensors_different: 111
+      weight_max_abs: 0.0001220703125
+      weight_mean_abs: 0.0000027131806060494077
+      weight_relative_l2: 0.00006883769178705734
+      optimizer_semantic_leaves_different: 272
+      missing_state: [scheduler, rng, exact_dataloader_position]
+    warning_level: high
+    interpretation: Learned weights and optimizer state diverged. The measured relative error is small, but this is not exact continuation.
+  musubi-tuner:
+    upstream:
+      commit: e0cbd8f3dfe38365b10f8bc790b980f8894e8ba1
+      branch: main
+    runtime_image_digest: sha256:0e91be1ca0d4445017cf368669c48f5dd784616f3035a143d9ad2530c6f0c1e3
+    architecture: wan
+    task: t2v-1.3B
+    seed: 1
+    control_run: 20260827-1649_musubi-main-direct100_9fd7
+    source_run: 20260827-1649_musubi-main-split50_a5cf
+    resumed_run: 20260827-1658_musubi-main-resume50-to100_57d7
+    control_artifact: state-step-00000100-d5463da67df9
+    resumed_artifact: state-step-00000100-0b9eaa2171a8
+    result:
+      exact: false
+      weight_tensors_total: 900
+      weight_tensors_different: 600
+      weight_max_abs: 0.000028481841582106426
+      weight_mean_abs: 0.0000004885248216952786
+      weight_relative_l2: 0.00004675262859460885
+      optimizer_semantic_leaves_different: 1320
+      scheduler_exact: true
+      rng_semantic_leaves_different: 1
+      missing_state: [application_global_step, epoch, exact_dataloader_position]
+    warning_level: high
+    interpretation: Learned weights and optimizer state diverged even though the scheduler state matched exactly.
+  sd-scripts:
+    upstream:
+      commit: 37a1cbbc5725ed2a3575506e7bd2001c9908ac92
+      branch: main
+    runtime_image_digest: sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+    architecture: sd15
+    seed: 42
+    control_run: 20260827-1649_sd15-main-direct100_f73f
+    source_run: 20260827-1649_sd15-main-split50_7fa8
+    resumed_run: 20260827-1704_sd15-main-resume50-to100_5dd8
+    control_artifact: state-step-00000100-b42508a7b5c3
+    resumed_artifact: state-step-00000100-e59e1d981890
+    result:
+      exact: false
+      learned_state_exact_in_recorded_case: true
+      weight_tensors_total: 792
+      weight_tensors_different: 0
+      weight_max_abs: 0.0
+      weight_mean_abs: 0.0
+      weight_relative_l2: 0.0
+      optimizer_semantic_leaves_different: 0
+      scheduler_exact: true
+      normalized_train_state_exact: true
+      rng_semantic_leaves_different: 625
+      missing_state: [application_global_step, application_epoch_counter, exact_dataloader_position]
+    warning_level: caution
+    interpretation: Learned state matched in this one-item constant-scheduler case, but RNG and exact data position did not. Do not generalize this result to shuffled or multi-item datasets.
