@@ -44,6 +44,23 @@ backends:
       weight_mean_abs: 0.0000027131806060494077
       weight_relative_l2: 0.00006883769159586734
       optimizer_semantic_leaves_different: 272
+    capture_fidelity:
+      method: Compare two independent 50-step endpoint artifacts under the same current image and parameters.
+      repeat_source_run: 20260827-1800_ai-main-split50-repeat_efcc
+      repeat_source_artifact: state-step-00000050-ebb19531add7
+      kura_commit: 1b779aa
+      exact_semantic_state: true
+      weight_tensors_total: 216
+      weight_tensors_different: 0
+      weight_max_abs: 0.0
+      weight_mean_abs: 0.0
+      weight_relative_l2: 0.0
+      optimizer_semantic_leaves_total: 589
+      optimizer_semantic_leaves_different: 0
+      optimizer_file_sha256_exact: true
+      weight_file_sha256_exact: false
+      weight_file_difference: safetensors metadata ss_output_name contains the run ID; tensor payloads are identical.
+      excluded_comparison: The 100-step controls publish their cadence checkpoint at logical step 51, so they are not step-50 capture controls.
     result:
       exact: false
       weight_tensors_total: 216
@@ -54,7 +71,7 @@ backends:
       optimizer_semantic_leaves_different: 272
       missing_state: [scheduler, rng, exact_dataloader_position]
     warning_level: high
-    interpretation: The two uninterrupted controls matched exactly, while Resume changed learned weights and optimizer state. Resume therefore introduced the measured divergence in this recorded case. The relative error is small, but this is not exact continuation.
+    interpretation: The two uninterrupted controls matched exactly, and two independent step-50 endpoint captures matched semantically. Capture is therefore faithful in the recorded case; the measured learned-weight and optimizer divergence enters after the captured artifact, in the restoration or continued-training path. The relative error is small, but this is not exact continuation.
   musubi-tuner:
     upstream:
       commit: e0cbd8f3dfe38365b10f8bc790b980f8894e8ba1
