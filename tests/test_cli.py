@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import io
 import importlib.util
 import os
@@ -26,7 +27,7 @@ import yaml
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate_musubi_dataset_layout
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.run_commands.runpod_ssh import _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file
+from kura.run_commands.runpod_ssh import _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
@@ -3216,6 +3217,107 @@ class RunPodPullSelectionTests(unittest.TestCase):
         self.assertEqual(_parse_duration_seconds("2h"), 7200)
         self.assertEqual(_parse_duration_seconds("45"), 45)
         self.assertEqual(_parse_duration_seconds(None), 0)
+
+    def test_terminal_manifest_rejects_unsafe_and_duplicate_paths(self) -> None:
+        valid = {"size": 1, "mtime_ns": 1, "sha256": "0" * 64}
+        with self.assertRaisesRegex(ValueError, "unsafe path"):
+            _validated_snapshot_manifest([{"path": "../outputs/model.safetensors", **valid}])
+        with self.assertRaisesRegex(ValueError, "duplicate path"):
+            _validated_snapshot_manifest([
+                {"path": "outputs/model.safetensors", **valid},
+                {"path": "outputs/model.safetensors", **valid},
+            ])
+
+    def test_same_size_checkpoint_with_wrong_hash_is_not_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            output = run_dir / "outputs" / "model-step00000100.safetensors"
+            output.parent.mkdir(parents=True)
+            payload = self._fake_safetensors()
+            output.write_bytes(payload)
+            (run_dir / "status.json").write_text(
+                json.dumps({
+                    "mirrored_outputs": [{
+                        "name": output.name,
+                        "path": f"outputs/{output.name}",
+                        "size": len(payload),
+                        "remote_path": f"/workspace/runs/example/outputs/{output.name}",
+                        "remote_mtime_ns": 1,
+                    }]
+                }),
+                encoding="utf-8",
+            )
+            item = {
+                "path": "outputs/model-step00000100.safetensors",
+                "size": len(payload),
+                "mtime_ns": 1,
+                "sha256": hashlib.sha256(payload[:-1] + b"\x01").hexdigest(),
+            }
+
+            self.assertIsNone(_local_reusable_snapshot_source(run_dir, item, remote_root="/workspace/runs/example"))
+
+    def test_unpublished_output_and_raw_state_file_are_not_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            output = run_dir / "outputs" / "model-step00000100.safetensors"
+            raw_state = run_dir / "outputs" / "example-step00000100-state" / "model.safetensors"
+            raw_state.parent.mkdir(parents=True)
+            payload = self._fake_safetensors()
+            output.write_bytes(payload)
+            raw_state.write_bytes(payload)
+            (run_dir / "status.json").write_text("{}", encoding="utf-8")
+            common = {
+                "size": len(payload),
+                "mtime_ns": 1,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+
+            self.assertIsNone(_local_reusable_snapshot_source(
+                run_dir,
+                {"path": f"outputs/{output.name}", **common},
+                remote_root="/workspace/runs/example",
+            ))
+            self.assertIsNone(_local_reusable_snapshot_source(
+                run_dir,
+                {"path": "outputs/example-step00000100-state/model.safetensors", **common},
+                remote_root="/workspace/runs/example",
+            ))
+
+    def test_corrupt_delta_archive_is_reported_as_download_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "delta.tar.gz"
+            archive.write_bytes(b"not a tar archive")
+            with self.assertRaisesRegex(ValueError, "invalid delta snapshot archive"):
+                _extract_snapshot_delta_archive(
+                    archive,
+                    Path(directory) / "destination",
+                    run_id="example",
+                    expected_paths={"example/outputs/model.safetensors"},
+                )
+
+    def test_snapshot_copy_fallback_checks_space_for_reused_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.bin"
+            target = root / "snapshot" / "target.bin"
+            source.write_bytes(b"data")
+            target.parent.mkdir()
+
+            with patch("kura.run_commands.runpod_ssh.os.link", side_effect=OSError("cross-device link")), \
+                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes") as ensure_free:
+                _link_or_copy_snapshot_file(
+                    source,
+                    target,
+                    free_space_root=root,
+                    required_free_bytes=123,
+                )
+
+            ensure_free.assert_called_once_with(
+                root,
+                127,
+                context="RunPod delta download reusable copy fallback",
+            )
+            self.assertEqual(target.read_bytes(), b"data")
 
     def test_select_remote_outputs_defaults_to_latest_step(self) -> None:
         items = [
@@ -7105,6 +7207,253 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 0)
             stop.assert_called_once()
+
+    def test_run_download_reuses_verified_local_checkpoint_in_terminal_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "outputs").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "backend: {name: sd-scripts}\nrecipe: {steps: 100}\n",
+                encoding="utf-8",
+            )
+            header = json.dumps(
+                {"weight": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}},
+                separators=(",", ":"),
+            ).encode()
+            checkpoint_bytes = len(header).to_bytes(8, "little") + header + b"\x00\x00\x00\x00"
+            checkpoint = run_dir / "outputs" / "model-step00000100.safetensors"
+            checkpoint.write_bytes(checkpoint_bytes)
+            remote_exit_bytes = json.dumps(
+                {"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}
+            ).encode()
+            manifest = [
+                {
+                    "path": "outputs/model-step00000100.safetensors",
+                    "size": len(checkpoint_bytes),
+                    "mtime_ns": 10,
+                    "sha256": hashlib.sha256(checkpoint_bytes).hexdigest(),
+                },
+                {
+                    "path": "realizations/remote-exit-20260101.json",
+                    "size": len(remote_exit_bytes),
+                    "mtime_ns": 20,
+                    "sha256": hashlib.sha256(remote_exit_bytes).hexdigest(),
+                },
+            ]
+            (run_dir / "status.json").write_text(
+                json.dumps({
+                    "state": "running",
+                    "pod_id": "pod-1",
+                    "mirrored_outputs": [{
+                        "name": checkpoint.name,
+                        "path": f"outputs/{checkpoint.name}",
+                        "size": len(checkpoint_bytes),
+                        "remote_path": f"/workspace/runs/example/outputs/{checkpoint.name}",
+                        "remote_mtime_ns": 10,
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            transferred: list[str] = []
+
+            def transfer_delta(*_: object, files: list[dict[str, object]], destination: Path, **__: object) -> None:
+                transferred.extend(str(item["path"]) for item in files)
+                target = destination / "example" / "realizations" / "remote-exit-20260101.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(remote_exit_bytes)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                     patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
+                     patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
+                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 0)
+            self.assertEqual(transferred, ["realizations/remote-exit-20260101.json"])
+            snapshot_checkpoint = run_dir / "downloads" / "example" / "outputs" / checkpoint.name
+            self.assertTrue(snapshot_checkpoint.samefile(checkpoint))
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(
+                status["terminal_download"],
+                {
+                    "files": 2,
+                    "bytes": len(checkpoint_bytes) + len(remote_exit_bytes),
+                    "reused_files": 1,
+                    "reused_bytes": len(checkpoint_bytes),
+                    "transferred_files": 1,
+                    "transferred_bytes": len(remote_exit_bytes),
+                },
+            )
+
+    def test_run_download_preserves_previous_snapshot_when_remote_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "backend: {name: sd-scripts}\nrecipe: {steps: 100}\n",
+                encoding="utf-8",
+            )
+            previous_snapshot = run_dir / "downloads" / "example"
+            previous_snapshot.mkdir(parents=True)
+            (previous_snapshot / "incomplete-marker.txt").write_text("keep", encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8"
+            )
+            first_bytes = json.dumps(
+                {"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}
+            ).encode()
+            changed_bytes = json.dumps(
+                {"timestamp": "2026-01-01T00:00:01+00:00", "exit_code": 0}
+            ).encode()
+            first = [{
+                "path": "realizations/remote-exit-20260101.json",
+                "size": len(first_bytes),
+                "mtime_ns": 10,
+                "sha256": hashlib.sha256(first_bytes).hexdigest(),
+            }]
+            changed = [{
+                "path": "realizations/remote-exit-20260101.json",
+                "size": len(changed_bytes),
+                "mtime_ns": 20,
+                "sha256": hashlib.sha256(changed_bytes).hexdigest(),
+            }]
+
+            def transfer_delta(*_: object, destination: Path, **__: object) -> None:
+                target = destination / "example" / "realizations" / "remote-exit-20260101.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(first_bytes)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                     patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[first, changed]), \
+                     patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
+                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertEqual((previous_snapshot / "incomplete-marker.txt").read_text(encoding="utf-8"), "keep")
+            self.assertEqual(
+                json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"],
+                "running",
+            )
+
+    def test_run_download_rejects_manifest_mismatch_and_preserves_previous_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "backend: {name: sd-scripts}\nrecipe: {steps: 100}\n",
+                encoding="utf-8",
+            )
+            previous_snapshot = run_dir / "downloads" / "example"
+            previous_snapshot.mkdir(parents=True)
+            (previous_snapshot / "incomplete-marker.txt").write_text("keep", encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8"
+            )
+            expected = b"expected"
+            corrupted = b"corrupt!"
+            manifest = [{
+                "path": "logs/stdout.log",
+                "size": len(expected),
+                "mtime_ns": 10,
+                "sha256": hashlib.sha256(expected).hexdigest(),
+            }]
+
+            def transfer_delta(*_: object, destination: Path, **__: object) -> None:
+                target = destination / "example" / "logs" / "stdout.log"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(corrupted)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                     patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
+                     patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
+                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertEqual((previous_snapshot / "incomplete-marker.txt").read_text(encoding="utf-8"), "keep")
+            self.assertEqual(
+                json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"],
+                "running",
+            )
+            self.assertEqual(
+                sorted(path.name for path in (run_dir / "downloads").iterdir()),
+                ["example"],
+            )
+
+    def test_run_download_restores_previous_snapshot_when_completion_record_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
+                "backend: {name: sd-scripts}\nrecipe: {steps: 100}\n",
+                encoding="utf-8",
+            )
+            previous_snapshot = run_dir / "downloads" / "example"
+            previous_snapshot.mkdir(parents=True)
+            (previous_snapshot / "incomplete-marker.txt").write_text("keep", encoding="utf-8")
+            (run_dir / "status.json").write_text(
+                json.dumps({"state": "running", "pod_id": "pod-1", "recovery_artifacts": ["old"]}),
+                encoding="utf-8",
+            )
+            log_bytes = b"finished without an exit record"
+            manifest = [{
+                "path": "logs/stdout.log",
+                "size": len(log_bytes),
+                "mtime_ns": 10,
+                "sha256": hashlib.sha256(log_bytes).hexdigest(),
+            }]
+
+            def transfer_delta(*_: object, destination: Path, **__: object) -> None:
+                target = destination / "example" / "logs" / "stdout.log"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(log_bytes)
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
+                     patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
+                     patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
+                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+
+            self.assertEqual(code, 1)
+            self.assertEqual((previous_snapshot / "incomplete-marker.txt").read_text(encoding="utf-8"), "keep")
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "running")
+            self.assertEqual(status["recovery_artifacts"], ["old"])
 
     def test_run_download_rejects_snapshot_without_remote_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

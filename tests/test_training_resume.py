@@ -25,7 +25,7 @@ from kura.container_scripts import script_source
 from kura.executors.docker import reconcile_docker
 from kura.executors.common import _materialize_stdout_progress
 from kura.executors.runpod import stage_runpod
-from kura.run_commands.runpod_ssh import _download_run_unlocked, _pull_remote_training_state_items, _same_remote_training_state_version
+from kura.run_commands.runpod_ssh import _download_run_unlocked, _local_reusable_training_state_sources, _pull_remote_training_state_items, _same_remote_training_state_version
 from kura.run_commands.plan import format_run_plan
 from kura.run_envelope import resume_intent, training_state_policy
 from kura.training_artifacts import compile_resume_lock, load_training_state, publish_completed_training_states, publish_training_state, recipe_fingerprint, select_training_state, verify_training_state
@@ -1569,6 +1569,45 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
 
 class ResumeRunTests(unittest.TestCase):
+    def test_terminal_snapshot_reuses_exact_published_training_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "source"
+            run_dir.mkdir(parents=True)
+            candidate = workspace / "candidate"
+            candidate.mkdir()
+            (candidate / "model.safetensors").write_bytes(_safetensors_bytes(b"weight"))
+            (candidate / "state-info.json").write_text(
+                json.dumps({"schema_version": 1, "logical_step": 50}), encoding="utf-8"
+            )
+            artifact = publish_training_state(
+                workspace,
+                source_run="source",
+                source_realization=None,
+                backend="ai-toolkit",
+                observed_step=50,
+                candidate=candidate,
+                native_format="ai-toolkit-kura-state-v1",
+                restoration_contract={"level": "partial_resume"},
+            )
+            state_root = "outputs/source-step00000050-state"
+            remote_manifest = [
+                {
+                    "path": f"{state_root}/{item['path']}",
+                    "size": item["size"],
+                    "mtime_ns": 10,
+                    "sha256": item["sha256"],
+                }
+                for item in artifact["files"]
+            ]
+
+            reusable = _local_reusable_training_state_sources(run_dir, remote_manifest)
+
+            self.assertEqual(set(reusable), {item["path"] for item in remote_manifest})
+            payload = workspace / artifact["payload"]
+            for item in artifact["files"]:
+                self.assertTrue(reusable[f"{state_root}/{item['path']}"].samefile(payload / item["path"]))
+
     def test_runpod_download_refuses_terminal_snapshot_without_required_state(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
