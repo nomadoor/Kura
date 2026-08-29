@@ -41,6 +41,6 @@ project. Conversation with the user may use the user's language.
 - Default branch: `main`
 - Work branches use a descriptive `fix/`, `feat/`, `docs/`, or `release/`
   prefix.
-- The default branch is currently not protected by GitHub. Workflow discipline
-  therefore supplies the review boundary rather than relying on a server-side
-  protection rule.
+- Check the current GitHub branch-protection settings before relying on a
+  server-side review boundary. Repository workflow requirements still apply
+  when branch protection is absent or less strict.

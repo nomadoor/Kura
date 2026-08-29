@@ -7,6 +7,5 @@ GitHub is the repository's issue tracker when durable ticketing is needed.
   source when the work fits in one development session.
 - Creating an issue, publishing a specification, or posting an issue comment
   requires explicit user approval.
-- This repository currently has no open or closed issues. Existing pull
-  requests establish branch and review history, not permission to create
-  tickets automatically.
+- Query the current issue list before referring to existing tickets. Existing
+  pull requests or issues do not authorize creating or posting to a ticket.
