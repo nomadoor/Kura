@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -31,7 +33,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
-from kura.training_artifacts import is_training_state_output, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor
+from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
 
 
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
@@ -42,6 +44,363 @@ def _run_bounded(command: list[str], *, context: str, timeout: int = RUNPOD_TRAN
         return subprocess.run(command, check=False, timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired as exc:
         raise ValueError(f"{context} timed out after {exc.timeout} seconds") from exc
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _link_or_copy_snapshot_file(
+    source: Path,
+    target: Path,
+    *,
+    free_space_root: Path,
+    required_free_bytes: int,
+) -> None:
+    """Reuse immutable bytes, accounting for disk only when linking is unavailable."""
+
+    try:
+        # Both the publication source and terminal snapshot are immutable Kura
+        # artifacts; linking avoids duplicating large protected state payloads.
+        os.link(source, target)
+    except OSError:
+        _ensure_free_bytes(
+            free_space_root,
+            required_free_bytes + source.stat().st_size,
+            context="RunPod delta download reusable copy fallback",
+        )
+        shutil.copy2(source, target)
+
+
+def _validated_snapshot_manifest(items: Any) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        raise ValueError("remote snapshot manifest did not return a file list")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("remote snapshot manifest contains a non-object entry")
+        path_value = item.get("path")
+        size = item.get("size")
+        mtime_ns = item.get("mtime_ns")
+        digest = item.get("sha256")
+        if not isinstance(path_value, str):
+            raise ValueError("remote snapshot manifest entry has no path")
+        relative = PurePosixPath(path_value)
+        if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+            raise ValueError(f"remote snapshot manifest has an unsafe path: {path_value}")
+        canonical = relative.as_posix()
+        if canonical in seen:
+            raise ValueError(f"remote snapshot manifest contains a duplicate path: {canonical}")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise ValueError(f"remote snapshot manifest has an invalid size: {canonical}")
+        if not isinstance(mtime_ns, int) or isinstance(mtime_ns, bool) or mtime_ns < 0:
+            raise ValueError(f"remote snapshot manifest has an invalid mtime: {canonical}")
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"remote snapshot manifest has an invalid SHA-256: {canonical}")
+        seen.add(canonical)
+        normalized.append({"path": canonical, "size": size, "mtime_ns": mtime_ns, "sha256": digest})
+    return sorted(normalized, key=lambda item: item["path"])
+
+
+def _runpod_remote_snapshot_manifest(
+    details: dict[str, Any],
+    *,
+    workspace: str,
+    run_id: str,
+    timeout_sec: int = RUNPOD_TRANSFER_TIMEOUT_SEC,
+) -> list[dict[str, Any]]:
+    remote_root = f"{workspace.rstrip('/')}/runs/{run_id}"
+    script = f"""
+export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
+python - <<'PY'
+import hashlib
+import json
+import os
+
+root = {remote_root!r}
+items = []
+errors = []
+for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
+    relative_root = os.path.relpath(current, root)
+    if relative_root == ".":
+        dirs[:] = [name for name in dirs if name not in {{"cache", "transfer"}}]
+    kept_dirs = []
+    for name in sorted(dirs):
+        path = os.path.join(current, name)
+        if os.path.islink(path):
+            errors.append("symlink directory: " + os.path.relpath(path, root))
+        else:
+            kept_dirs.append(name)
+    dirs[:] = kept_dirs
+    for name in sorted(files):
+        path = os.path.join(current, name)
+        relative = os.path.relpath(path, root).replace(os.sep, "/")
+        if os.path.islink(path) or not os.path.isfile(path):
+            errors.append("non-regular file: " + relative)
+            continue
+        stat = os.stat(path)
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        items.append({{"path": relative, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "sha256": digest.hexdigest()}})
+print(json.dumps({{"files": items, "errors": errors}}))
+PY
+""".strip()
+    result = _run_bounded(
+        [*_ssh_base(details), script],
+        context="remote snapshot inventory",
+        timeout=timeout_sec,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode:
+        raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "remote snapshot inventory failed"))
+    payload = json.loads(result.stdout or "{}")
+    if not isinstance(payload, dict):
+        raise ValueError("remote snapshot inventory did not return an object")
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        raise ValueError(f"remote snapshot contains unsupported entries: {errors[0]}")
+    return _validated_snapshot_manifest(payload.get("files"))
+
+
+def _transfer_runpod_snapshot_delta(
+    details: dict[str, Any],
+    *,
+    remote_root: str,
+    run_id: str,
+    files: list[dict[str, Any]],
+    destination: Path,
+) -> None:
+    (destination / run_id).mkdir(parents=True, exist_ok=True)
+    if not files:
+        return
+    paths = [item["path"] for item in files]
+    archive_nonce = secrets.token_hex(6)
+    remote_archive = f"/tmp/kura-download-{run_id}-{archive_nonce}.tar.gz"
+    local_archive = destination / f".kura-download-{run_id}-{archive_nonce}.tar.gz"
+    script = f"""
+export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
+python - <<'PY'
+import json
+import os
+import pathlib
+import tarfile
+
+root = pathlib.Path({remote_root!r})
+run_id = {run_id!r}
+paths = json.loads({json.dumps(json.dumps(paths))})
+archive = {remote_archive!r}
+with tarfile.open(archive, "w:gz") as handle:
+    for value in paths:
+        relative = pathlib.PurePosixPath(value)
+        if relative.is_absolute() or not relative.parts or any(part in {{"", ".", ".."}} for part in relative.parts):
+            raise SystemExit("unsafe snapshot path: " + value)
+        source = root
+        for part in relative.parts:
+            source = source / part
+            if source.is_symlink():
+                raise SystemExit("snapshot path traverses a symlink: " + value)
+        if not source.is_file():
+            raise SystemExit("snapshot file is missing: " + value)
+        handle.add(source, arcname=str(pathlib.PurePosixPath(run_id) / relative), recursive=False)
+PY
+""".strip()
+    try:
+        packed = _run_bounded([*_ssh_base(details), script], context="remote delta archive packing")
+        if packed.returncode:
+            raise ValueError(f"remote delta archive packing failed with exit code {packed.returncode}")
+        copied = _run_bounded(
+            [
+                "scp",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-P", str(details["port"]),
+                "-i", str(details["key"]),
+                f"root@{details['ip']}:{remote_archive}",
+                str(local_archive),
+            ],
+            context="scp delta snapshot",
+        )
+        if copied.returncode:
+            raise ValueError(f"scp delta snapshot failed with exit code {copied.returncode}")
+        _extract_snapshot_delta_archive(
+            local_archive,
+            destination,
+            run_id=run_id,
+            expected_paths={f"{run_id}/{item['path']}" for item in files},
+        )
+    finally:
+        local_archive.unlink(missing_ok=True)
+        try:
+            _run_bounded(
+                [*_ssh_base(details), f"rm -f {shlex.quote(remote_archive)}"],
+                context="remote delta archive cleanup",
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            # The disposable Pod cleanup path removes /tmp. Do not mask the
+            # actual packing, transfer, or verification result with a failed
+            # best-effort temporary-file cleanup.
+            pass
+
+
+def _extract_snapshot_delta_archive(
+    archive_path: Path,
+    destination: Path,
+    *,
+    run_id: str,
+    expected_paths: set[str],
+) -> None:
+    try:
+        with tarfile.open(archive_path, "r:gz") as archive:
+            file_members: dict[str, tarfile.TarInfo] = {}
+            for member in archive.getmembers():
+                relative = PurePosixPath(member.name)
+                if relative.is_absolute() or not relative.parts or relative.parts[0] != run_id or any(part in {"", ".", ".."} for part in relative.parts):
+                    raise ValueError(f"download archive contains an unsafe path: {member.name}")
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    raise ValueError(f"download archive contains a non-regular entry: {member.name}")
+                canonical = relative.as_posix()
+                if canonical in file_members:
+                    raise ValueError(f"download archive contains a duplicate path: {canonical}")
+                file_members[canonical] = member
+            if set(file_members) != expected_paths:
+                raise ValueError("download archive inventory does not match the requested delta")
+            for relative, member in file_members.items():
+                target = destination.joinpath(*PurePosixPath(relative).parts)
+                if target.exists() or target.is_symlink():
+                    raise ValueError(f"download archive collides with a reusable file: {relative}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = archive.extractfile(member)
+                if source is None:
+                    raise ValueError(f"download archive file cannot be read: {relative}")
+                temporary = target.with_name(f".{target.name}.partial-{secrets.token_hex(4)}")
+                try:
+                    with source, temporary.open("xb") as output:
+                        shutil.copyfileobj(source, output)
+                    os.replace(temporary, target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+    except tarfile.TarError as exc:
+        raise ValueError("invalid delta snapshot archive") from exc
+
+
+def _local_reusable_snapshot_source(
+    run_dir: Path,
+    item: dict[str, Any],
+    *,
+    remote_root: str,
+) -> Path | None:
+    relative = PurePosixPath(item["path"])
+    if len(relative.parts) != 2 or relative.parts[0] != "outputs" or not relative.name.endswith(".safetensors"):
+        return None
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    mirrored = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
+    publication = next(
+        (
+            candidate
+            for candidate in mirrored
+            if isinstance(candidate, dict)
+            and candidate.get("name") == relative.name
+            and candidate.get("path") == relative.as_posix()
+        ),
+        None,
+    )
+    if not isinstance(publication, dict):
+        return None
+    if (
+        publication.get("size") != item["size"]
+        or publication.get("remote_mtime_ns") != item["mtime_ns"]
+        or publication.get("remote_path") != f"{remote_root.rstrip('/')}/{relative.as_posix()}"
+    ):
+        return None
+    candidate = run_dir.joinpath(*relative.parts)
+    if candidate.is_symlink() or not candidate.is_file():
+        return None
+    try:
+        if candidate.stat().st_size != item["size"] or _sha256_file(candidate) != item["sha256"]:
+            return None
+        if candidate.suffix == ".safetensors":
+            _validate_safetensors_file(candidate)
+    except (OSError, ValueError):
+        return None
+    return candidate
+
+
+def _local_reusable_training_state_sources(
+    run_dir: Path,
+    snapshot_manifest: list[dict[str, Any]],
+) -> dict[str, Path]:
+    """Map complete remote state directories to identical protected payloads."""
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in snapshot_manifest:
+        parts = PurePosixPath(item["path"]).parts
+        if len(parts) < 3 or parts[0] != "outputs" or not parts[1].endswith("-state"):
+            continue
+        groups.setdefault("/".join(parts[:2]), []).append(item)
+    if not groups:
+        return {}
+    workspace = run_dir.parent.parent
+    artifacts: list[tuple[dict[str, Any], Path]] = []
+    for manifest_path in sorted((workspace / "artifacts" / "training-state").glob("*/manifest.json")):
+        try:
+            manifest = load_training_state(workspace, manifest_path.parent.name)
+            if manifest.get("source_run") != run_dir.name:
+                continue
+            payload = verify_training_state(workspace, manifest)
+        except (OSError, ValueError):
+            continue
+        artifacts.append((manifest, payload))
+    reusable: dict[str, Path] = {}
+    for state_root, remote_files in groups.items():
+        remote_inventory = {
+            "/".join(PurePosixPath(item["path"]).parts[2:]): (item["size"], item["sha256"])
+            for item in remote_files
+        }
+        for artifact, payload in artifacts:
+            local_inventory = {
+                item["path"]: (item.get("size"), item.get("sha256"))
+                for item in artifact.get("files", [])
+                if isinstance(item, dict) and isinstance(item.get("path"), str)
+            }
+            if local_inventory != remote_inventory:
+                continue
+            for relative in remote_inventory:
+                reusable[f"{state_root}/{relative}"] = payload.joinpath(*PurePosixPath(relative).parts)
+            break
+    return reusable
+
+
+def _verify_snapshot_tree(snapshot: Path, manifest: list[dict[str, Any]]) -> None:
+    expected = {item["path"]: item for item in manifest}
+    actual: set[str] = set()
+    for path in snapshot.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"downloaded snapshot contains a symlink: {path.relative_to(snapshot)}")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(snapshot).as_posix()
+        item = expected.get(relative)
+        if item is None:
+            raise ValueError(f"downloaded snapshot contains an unexpected file: {relative}")
+        if path.stat().st_size != item["size"] or _sha256_file(path) != item["sha256"]:
+            raise ValueError(f"downloaded snapshot does not match the remote manifest: {relative}")
+        actual.add(relative)
+    missing = sorted(set(expected) - actual)
+    if missing:
+        raise ValueError(f"downloaded snapshot is missing a remote file: {missing[0]}")
 
 
 def _latest_runpod_transfer(run_dir: Path) -> dict[str, Any]:
@@ -250,65 +609,106 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
                 return 0
             raise ValueError("downloaded run snapshot is missing remote-exit; use --force to retry or inspect the Pod before stopping it")
-        if downloaded_run.exists() and force:
-            shutil.rmtree(downloaded_run)
-            _mutate_run_status(run_dir, lambda status: status.update({"recovery_artifacts": []}))
         if not shutil.which("runpodctl"):
             raise ValueError("runpodctl is not installed locally; install it before downloading")
-        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-        pod_id = status.get("pod_id")
-        if not isinstance(pod_id, str):
-            raise ValueError("run has no RunPod pod ID")
         config = _workspace_config()
         min_download_free = _configured_download_min_free_bytes(config)
-        pod = _run_bounded(["runpodctl", "pod", "get", pod_id], text=True, capture_output=True, context="runpodctl pod get")
-        if pod.returncode:
-            raise ValueError(_redact_secret_text(pod.stderr.strip() or pod.stdout.strip() or "runpodctl pod get failed"))
-        details = json.loads(pod.stdout)
-        ssh = details.get("ssh", {})
-        ip, port = ssh.get("ip"), ssh.get("port")
-        key = ssh.get("ssh_key", {}).get("path")
-        if not isinstance(ip, str) or not isinstance(port, int) or not isinstance(key, str):
-            raise ValueError("pod SSH is not ready")
+        details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
         destination.mkdir(exist_ok=True)
         workspace = _runpod_workspace_for_run(run_dir)
         remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
-        remote_size = _remote_path_size({"ip": ip, "port": port, "key": key}, remote_run_dir)
-        if isinstance(remote_size, int) and remote_size > 0:
-            _ensure_free_bytes(destination, max(min_download_free, remote_size * 2 + 5 * 1024**3), context="RunPod download")
-        else:
-            _ensure_free_bytes(destination, min_download_free, context="RunPod download")
-        remote_archive = f"/tmp/kura-download-{run_id}.tar.gz"
-        remote_script = (
-            f"tar -C /workspace/runs "
-            f"--exclude {shlex.quote(run_id + '/cache')} "
-            f"--exclude {shlex.quote(run_id + '/transfer')} "
-            f"-czf {shlex.quote(remote_archive)} {shlex.quote(run_id)}"
+        snapshot_manifest = _runpod_remote_snapshot_manifest(details, workspace=workspace, run_id=run_id)
+        reusable = _local_reusable_training_state_sources(run_dir, snapshot_manifest)
+        pending: list[dict[str, Any]] = []
+        for item in snapshot_manifest:
+            if item["path"] in reusable:
+                continue
+            source = _local_reusable_snapshot_source(run_dir, item, remote_root=remote_run_dir)
+            if source is None:
+                pending.append(item)
+            else:
+                reusable[item["path"]] = source
+        pending_size = sum(item["size"] for item in pending)
+        terminal_download = {
+            "files": len(snapshot_manifest),
+            "bytes": sum(item["size"] for item in snapshot_manifest),
+            "reused_files": len(reusable),
+            "reused_bytes": sum(item["size"] for item in snapshot_manifest if item["path"] in reusable),
+            "transferred_files": len(pending),
+            "transferred_bytes": pending_size,
+        }
+        required_free_bytes = max(min_download_free, pending_size * 2 + 5 * 1024**3)
+        _ensure_free_bytes(
+            destination,
+            required_free_bytes,
+            context="RunPod delta download",
         )
-        packed = _run_bounded([*_ssh_base({"ip": ip, "port": port, "key": key}), remote_script], context="remote archive packing")
-        if packed.returncode:
-            return packed.returncode
-        local_archive = destination / f"kura-download-{run_id}.tar.gz"
-        command = [
-            "scp",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            "-P", str(port),
-            "-i", key,
-            f"root@{ip}:{remote_archive}",
-            str(local_archive),
-        ]
-        result = _run_bounded(command, context="scp download")
-        _run_bounded([*_ssh_base({"ip": ip, "port": port, "key": key}), f"rm -f {shlex.quote(remote_archive)}"], context="remote archive cleanup")
-        if result.returncode:
-            return result.returncode
-        extracted = _run_bounded(["tar", "--warning=no-timestamp", "-xzf", str(local_archive), "-C", str(destination)], context="download archive extraction")
-        local_archive.unlink(missing_ok=True)
-        if extracted.returncode:
-            return extracted.returncode
-        materialized, recovery_artifacts = materialize_downloaded_status()
-        if not materialized:
-            raise ValueError("downloaded run snapshot is missing remote-exit; remote completion is not confirmed")
+        staging = destination / f".{run_id}.partial-{secrets.token_hex(6)}"
+        backup: Path | None = None
+        recovery_artifacts: list[str] = []
+        try:
+            snapshot = staging / run_id
+            snapshot.mkdir(parents=True)
+            for relative, source in reusable.items():
+                target = snapshot.joinpath(*PurePosixPath(relative).parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _link_or_copy_snapshot_file(
+                    source,
+                    target,
+                    free_space_root=destination,
+                    required_free_bytes=required_free_bytes,
+                )
+            _transfer_runpod_snapshot_delta(
+                details,
+                remote_root=remote_run_dir,
+                run_id=run_id,
+                files=pending,
+                destination=staging,
+            )
+            refreshed = _runpod_remote_snapshot_manifest(details, workspace=workspace, run_id=run_id)
+            if refreshed != snapshot_manifest:
+                raise ValueError("remote run changed while its terminal snapshot was being downloaded")
+            _verify_snapshot_tree(snapshot, snapshot_manifest)
+            if downloaded_run.exists():
+                backup = destination / f".{run_id}.previous-{secrets.token_hex(6)}"
+                os.replace(downloaded_run, backup)
+            try:
+                os.replace(snapshot, downloaded_run)
+            except BaseException:
+                if backup is not None and backup.exists() and not downloaded_run.exists():
+                    os.replace(backup, downloaded_run)
+                raise
+            try:
+                materialized, recovery_artifacts = materialize_downloaded_status()
+                if not materialized:
+                    raise ValueError("downloaded run snapshot is missing remote-exit; remote completion is not confirmed")
+            except BaseException:
+                if backup is not None and backup.exists():
+                    rejected = destination / f".{run_id}.rejected-{secrets.token_hex(6)}"
+                    os.replace(downloaded_run, rejected)
+                    os.replace(backup, downloaded_run)
+                    backup = None
+                    # The rejected tree is not a valid reusable snapshot; keeping
+                    # it would bypass the next remote-manifest verification pass.
+                    shutil.rmtree(rejected)
+                raise
+            if backup is not None:
+                shutil.rmtree(backup)
+                backup = None
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+            if backup is not None and backup.exists() and not downloaded_run.exists():
+                os.replace(backup, downloaded_run)
+        _mutate_run_status(run_dir, lambda status: status.__setitem__("terminal_download", terminal_download))
+        append_run_event(
+            run_dir,
+            {
+                "event": "run_terminal_snapshot_downloaded",
+                "timestamp": datetime.now().astimezone().isoformat(),
+                **terminal_download,
+            },
+        )
         record_recovery_download(recovery_artifacts)
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:

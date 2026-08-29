@@ -19,7 +19,7 @@ launch disposable Pod
 upload over SSH
 run backend command detached from SSH control
 poll remote logs/exit record
-download snapshot
+verify terminal manifest and download only the snapshot delta
 hold for review
 stop Pod
 ```
@@ -72,6 +72,12 @@ stop Pod
   maximum lease, obtain user approval, then record and compile the approved
   executor change.
 - Do not stop a disposable Pod until remote exit and local download are confirmed.
+- Terminal finalization reuses only checkpoints recorded by the periodic mirror
+  or protected training-state bytes whose size and SHA-256 match the post-exit
+  remote manifest. It downloads missing or changed files, verifies a second
+  remote inventory and the complete staged snapshot, then publishes atomically.
+  Do not replace this with a broad output exclusion or treat periodic mirror
+  metadata alone as completion.
 - If download/completion is uncertain, leave the Pod running and print/notify recovery steps.
 - Do not add unbounded keep-alive flags. Use bounded leases only.
 - If review hold is interrupted, stop the Pod.

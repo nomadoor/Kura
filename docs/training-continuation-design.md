@@ -164,24 +164,32 @@ declared datasets to a disposable Pod. It does not stage an artifact from a
 past run.
 
 During training, the controller polls approximately every 20 seconds and
-mirrors `outputs/*.safetensors`:
+mirrors `outputs/*.safetensors` and eligible directory-based training states:
 
 - it compares remote path, size, and nanosecond mtime before and after copy;
 - it writes to a local `.partial` path;
 - it validates safetensors header, tensor intervals, and file extent;
-- it atomically replaces the final local file.
+- it atomically replaces the final local file;
+- it verifies the recursive training-state inventory and publishes valid state
+  candidates into the protected artifact store.
 
 The mirror does not currently:
 
-- transfer directory-based training states;
 - recurse into nested output directories;
-- calculate SHA-256;
-- record a semantic artifact manifest;
+- calculate SHA-256 for ordinary weight checkpoints during periodic sync;
+- record a semantic artifact manifest for ordinary weight checkpoints;
 - prove which save event produced an accompanying optimizer file.
 
-The terminal snapshot downloads most of the remote run after a remote exit
-record exists. It excludes `cache/` and `transfer/`, and it does not apply a
-general artifact validator to every downloaded output.
+After a remote exit record exists, terminal finalization inventories every
+regular remote run file except `cache/` and `transfer/`, recording path, size,
+mtime, and SHA-256. Exact checkpoints recorded by the periodic mirror and
+protected training-state bytes are reused in a staged snapshot; only missing or
+changed files are packed and downloaded. Kura inventories the remote run again,
+verifies the complete staged tree against the original manifest, and atomically
+publishes the snapshot
+before marking the download complete. A remote change, unsafe path, unsupported
+link, corrupt local file, or incomplete inventory leaves completion unconfirmed
+and therefore does not permit automatic Pod stop.
 
 ### Cleanup risk
 

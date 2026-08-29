@@ -1,5 +1,12 @@
 # Repository Guidelines
 
+## Agent skills
+
+Repository workflow configuration is recorded under `docs/agents/`. Start with
+`docs/agents/workflow.md`, then use `issue-tracker.md`, `labels.md`, and
+`domain.md` when the task touches those concerns. Project-specific operational
+guidance remains canonical under `.agents/skills/`.
+
 ## First: what kind of session is this?
 
 Almost everyone who opens this repository is **using Kura as a tool** —
