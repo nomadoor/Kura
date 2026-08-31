@@ -13,7 +13,7 @@ import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
 from kura.notifications import notify as _notify
-from kura.render import _safe_stage_name, launch_render, load_resolved_cases
+from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
@@ -98,6 +98,69 @@ def _render_runpod_loras(workspace: Path, run_dir: Path, frozen: dict[str, Any])
             "name": "Kura_tmp/" + _safe_stage_name(run_dir.name, source),
         })
     return items
+
+
+def _render_runpod_images(run_dir: Path, frozen: dict[str, Any]) -> list[dict[str, Any]]:
+    """Resolve and verify compile-frozen image inputs before any Pod is created."""
+    names = image_patch_names(frozen.get("workflow_patches", {}))
+    if not names:
+        return []
+    cases_path = run_dir / "resolved" / "cases.jsonl"
+    if not cases_path.is_file():
+        raise ValueError("runpod image render requires resolved/cases.jsonl; compile the render again")
+    cases = load_resolved_cases(cases_path)
+    raw_records = frozen.get("promptset_images")
+    if not isinstance(raw_records, list):
+        raise ValueError("runpod image render manifest has no frozen image records; compile the render again")
+    records: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in raw_records:
+        if not isinstance(record, dict):
+            raise ValueError("runpod image render manifest contains an invalid frozen image record")
+        patch_name = record.get("patch")
+        resolved = record.get("resolved")
+        if not isinstance(patch_name, str) or not isinstance(resolved, str):
+            raise ValueError("runpod image render manifest contains an invalid frozen image record")
+        key = (patch_name, resolved)
+        if key in records:
+            raise ValueError(f"runpod image render manifest contains a duplicate frozen image record: {resolved}")
+        records[key] = record
+
+    frozen_root = (run_dir / "resolved" / "images").resolve()
+    items: dict[str, dict[str, Any]] = {}
+    expected_records: set[tuple[str, str]] = set()
+    for case in cases:
+        values = case.get("values") if isinstance(case.get("values"), dict) else {}
+        for name in names:
+            resolved = values.get(name)
+            if not isinstance(resolved, str) or not resolved:
+                raise ValueError(f"runpod render case {case.get('id')!r} has no frozen image for workflow_patches.{name}")
+            expected_records.add((name, resolved))
+            relative = Path(resolved)
+            expected_prefix = Path("resolved") / "images" / name
+            if relative.is_absolute() or ".." in relative.parts or "\\" in resolved or relative.parent != expected_prefix:
+                raise ValueError(f"runpod render case {case.get('id')!r} has an unsafe frozen image path: {resolved}")
+            source = (run_dir / relative).resolve()
+            if source.parent != (frozen_root / name).resolve() or not source.is_file():
+                raise ValueError(f"runpod render frozen image is missing or not a regular file: {resolved}")
+            record = records.get((name, resolved))
+            expected_digest = record.get("digest") if isinstance(record, dict) else None
+            if not isinstance(expected_digest, str) or digest(source) != expected_digest:
+                raise ValueError(f"runpod render frozen image does not match its manifest digest: {resolved}")
+            items.setdefault(resolved, {
+                "patch": name,
+                "frozen": resolved,
+                "source": source,
+                "name": "Kura_tmp/" + _safe_stage_name(run_dir.name, source),
+                "bytes": source.stat().st_size,
+            })
+    if set(records) != expected_records:
+        missing = sorted(expected_records - set(records))
+        unexpected = sorted(set(records) - expected_records)
+        raise ValueError(
+            "runpod image render manifest does not match the frozen case queue; "
+            f"missing={missing} unexpected={unexpected}"
+        )
+    return list(items.values())
 
 
 def _start_runpod_comfyui(details: dict[str, Any], *, workspace: str, run_id: str, workflow_remote: str, registry_remote: str, lora_remote_name: str | None, lora_remote_path: str | None, lora_remote_files: list[dict[str, str]] | None = None, max_lease_sec: int = 12 * 3600) -> None:
@@ -209,6 +272,7 @@ def launch_render_runpod(
         if not isinstance(model_specs, list) or not isinstance(model_registry, dict):
             raise ValueError("runpod render requires a manifest compiled for executor.name=runpod; set executor.name=runpod in run.yaml and recompile before launching on RunPod")
         loras = _render_runpod_loras(workspace, run_dir, frozen)
+        images = _render_runpod_images(run_dir, frozen)
         multiple_loras = len(loras) > 1
         lora_name = loras[0]["name"] if len(loras) == 1 else None
         plan = {
@@ -221,6 +285,12 @@ def launch_render_runpod(
         }
         if multiple_loras:
             plan["loras"] = [{"id": item["id"], "name": item["name"]} for item in loras]
+        if images:
+            plan["input_images"] = [
+                {"frozen": item["frozen"], "name": item["name"], "bytes": item["bytes"]}
+                for item in images
+            ]
+            plan["input_image_bytes"] = sum(int(item["bytes"]) for item in images)
         if dry_run:
             plan["billing"] = _render_runpod_billing_plan(runpod_config, max_lease_sec=max_lease_sec)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
@@ -240,7 +310,7 @@ def launch_render_runpod(
         remote_workspace = str(runpod_config.get("workspace_path") or "/workspace")
         remote_run_dir = f"{remote_workspace.rstrip('/')}/runs/{run_dir.name}"
         _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name, max_lease_sec=max_lease_sec)
-        prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp"], check=False, timeout=600)
+        prepared = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp /opt/ComfyUI/input/Kura_tmp"], check=False, timeout=600)
         if prepared.returncode:
             raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
         workflow_path = run_dir / "resolved" / "workflow_used.json"
@@ -254,6 +324,8 @@ def launch_render_runpod(
             remote_path = "/opt/ComfyUI/models/loras/" + item["name"]
             _scp_to_runpod(details, item["source"], remote_path)
             remote_loras.append({"name": item["name"], "path": remote_path})
+        for item in images:
+            _scp_to_runpod(details, item["source"], "/opt/ComfyUI/input/" + item["name"])
         lora_remote_path = remote_loras[0]["path"] if len(remote_loras) == 1 else None
         _start_runpod_comfyui(details, workspace=remote_workspace, run_id=run_dir.name, workflow_remote=remote_workflow, registry_remote=remote_registry, lora_remote_name=lora_name, lora_remote_path=lora_remote_path, lora_remote_files=remote_loras, max_lease_sec=0)
         local_port = _free_local_port()
@@ -285,6 +357,7 @@ def launch_render_runpod(
                 lora_name_overrides=lora_name_overrides,
                 executor_name="runpod",
                 manage_lora_stage=False,
+                image_name_overrides={str(item["frozen"]): str(item["name"]) for item in images},
             )
             state_word = "completed" if code == 0 else "failed"
             _notify(notify_channels, subject=f"Kura render {state_word}: {run_id}", body=f"RunPod render {run_id} {state_word} with exit code {code}.", priority="3")

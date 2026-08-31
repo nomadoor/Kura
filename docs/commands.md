@@ -282,12 +282,13 @@ sidecar `lora_insert`: omit `checkpoint` from the baseline row and Kura leaves
 the base workflow unchanged for that case. Direct `lora`, `checkpoint`, and
 `model_patch` bindings require a checkpoint on every row because an empty model
 name is not a valid loader input.
-`type: image` is supported only by the local executor. It marks a value as a
-path relative to the explicit cases JSONL directory, or to the legacy
-promptset directory for a legacy run. `kura render compile` copies it into
-`resolved/images/` and `kura render launch` stages it into
-`comfyui.input_dir`, then removes it afterwards. RunPod compile rejects image
-bindings before creating frozen image artifacts.
+`type: image` marks a value as a path relative to the explicit cases JSONL
+directory, or to the legacy promptset directory for a legacy run. `kura render
+compile` copies it into `resolved/images/` and records its digest. Local launch
+stages that frozen copy into `comfyui.input_dir`; RunPod launch verifies and
+uploads the frozen copy into the disposable Pod before ComfyUI starts. Runtime
+file names are recorded in `applied_values` without replacing the frozen
+logical path in the case provenance.
 
 `id` becomes part of a file name under `resolved/` and `samples/`, so it must be
 a single safe name — no path separators, no `.`/`..`, no leading dot — and must
@@ -305,8 +306,9 @@ Local ComfyUI supports case checkpoints through `lora`, `checkpoint`, and
 deduplicated; distinct required artifacts are staged before the queue starts
 and cleaned up afterwards. RunPod case queues support trained LoRAs through a `lora` binding
 or the workflow sidecar's `lora_insert`; Kura uploads every selected LoRA before
-starting the remote render. Dynamic full-checkpoint and model-patch staging
-remain local-executor features.
+starting the remote render. Frozen `type: image` inputs are also deduplicated,
+verified, and uploaded before ComfyUI starts. Dynamic full-checkpoint and
+model-patch staging remain local-executor features.
 
 ### Legacy promptsets
 

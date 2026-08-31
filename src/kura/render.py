@@ -1204,8 +1204,6 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
             "RunPod case checkpoints currently require a lora workflow binding or sidecar lora_insert; "
             "dynamic checkpoint and model_patch staging are local-executor features"
         )
-    if is_runpod and image_patch_names(patches):
-        raise ValueError("promptset image bindings are not supported for the runpod executor; render image-driven promptsets against a local ComfyUI endpoint")
     frozen = deepcopy(run)
     frozen["workflow_patches"] = deepcopy(patches)
     frozen.setdefault("inputs", {})["train_run"] = train_run
@@ -1282,6 +1280,7 @@ def launch_render(
     endpoint_override: str | None = None,
     lora_name_override: str | None = None,
     lora_name_overrides: dict[str, str] | None = None,
+    image_name_overrides: dict[str, str] | None = None,
     executor_name: str | None = None,
     manage_lora_stage: bool = True,
 ) -> int:
@@ -1295,8 +1294,6 @@ def launch_render(
         raise ValueError("render runs require generator.name=comfyui and executor.name=local or runpod")
     if resolved_executor == "runpod" and "model_patch" in frozen.get("workflow_patches", {}):
         raise ValueError("ComfyUI model patch staging is not supported for the runpod executor")
-    if resolved_executor == "runpod" and image_patch_names(frozen.get("workflow_patches", {})):
-        raise ValueError("promptset image bindings are not supported for the runpod executor")
     current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     allowed_states = {"compiled"} if resolved_executor == "local" else {"compiled", "running"}
     if current_status.get("state") not in allowed_states:
@@ -1320,7 +1317,47 @@ def launch_render(
         legacy_cases = _legacy_render_cases(legacy_items, legacy_checkpoint, patches=frozen.get("workflow_patches", {}), default_seed=frozen.get("render", {}).get("default_seed"), workflow_fixed=workflow_fixed)
         cases = _indexed_cases(legacy_cases)
     endpoint = endpoint_override or frozen["generator"].get("endpoint")
-    image_stages = _image_stage_plans(workspace, run_dir, frozen)
+    image_names = image_patch_names(frozen.get("workflow_patches", {}))
+    if resolved_executor == "runpod":
+        expected_images: set[str] = set()
+        for case in cases:
+            values = case.get("values") if isinstance(case.get("values"), dict) else {}
+            for name in image_names:
+                value = values.get(name)
+                if not isinstance(value, str) or not value:
+                    raise ValueError(
+                        f"runpod remote image mapping cannot resolve case {case.get('id')!r} "
+                        f"workflow_patches.{name}"
+                    )
+                expected_images.add(value)
+        provided_images = set(image_name_overrides or {})
+        if expected_images != provided_images:
+            missing = sorted(expected_images - provided_images)
+            unexpected = sorted(provided_images - expected_images)
+            raise ValueError(
+                "runpod remote image mapping must exactly cover every frozen image; "
+                f"missing={missing} unexpected={unexpected}"
+            )
+        image_stages = []
+        for frozen_path, image_name in sorted((image_name_overrides or {}).items()):
+            image_path = Path(image_name)
+            if (
+                not image_name
+                or image_path.is_absolute()
+                or ".." in image_path.parts
+                or "\\" in image_name
+            ):
+                raise ValueError(f"runpod remote image mapping has an unsafe ComfyUI input name: {image_name!r}")
+            image_stages.append({
+                "kind": "image",
+                "frozen": frozen_path,
+                "image_name": image_name,
+                "remote": True,
+            })
+    else:
+        if image_name_overrides is not None:
+            raise ValueError("remote image mapping is only valid for the runpod executor")
+        image_stages = _image_stage_plans(workspace, run_dir, frozen)
     workflow = json.loads(workflow_used_path.read_text(encoding="utf-8"))
     runtime_cases: list[dict[str, Any]] = []
     lora_stages: dict[str, dict[str, Any]] = {}
@@ -1429,8 +1466,9 @@ def launch_render(
         for model_patch_stage in model_patch_stages.values():
             _materialize_stage(model_patch_stage)
             _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
-        for plan in image_stages:
-            _materialize_stage(plan)
+        if resolved_executor == "local":
+            for plan in image_stages:
+                _materialize_stage(plan)
         event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "case_count": len(cases), "image_stages": image_stages})
         for runtime_case in runtime_cases:
             active_runtime_case = runtime_case
@@ -1524,5 +1562,6 @@ def launch_render(
             _cleanup_stage(plan)
         for plan in model_patch_stages.values():
             _cleanup_stage(plan)
-        for plan in image_stages:
-            _cleanup_stage(plan)
+        if resolved_executor == "local":
+            for plan in image_stages:
+                _cleanup_stage(plan)

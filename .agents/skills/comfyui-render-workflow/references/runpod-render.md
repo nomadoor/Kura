@@ -11,8 +11,16 @@ workflow-sidecar `lora_insert`. Kura deduplicates required LoRAs, uploads all of
 them before ComfyUI starts, and maps the frozen case checkpoint to its remote
 visible name.
 
-Do not present dynamic full-checkpoint staging, model-patch staging, or
-`type: image` bindings as supported by the RunPod render executor.
+RunPod also supports `type: image` bindings. Compile freezes each authored input
+under the run's `resolved/images/` tree and records its digest. Launch validates
+the complete case-to-image mapping before Pod creation, deduplicates the frozen
+files, uploads them to ComfyUI's managed `Kura_tmp` input directory before the
+server starts, and passes the remote-visible names to the workflow. The logical
+case value remains the frozen `resolved/images/...` path; the runtime name is
+recorded separately in `applied_values`.
+
+Do not present dynamic full-checkpoint or model-patch staging as supported by
+the RunPod render executor.
 
 Switching a failed local render to RunPod is a billed plan change. Do not edit
 the executor automatically. Show the RunPod dry-run and obtain approval under
