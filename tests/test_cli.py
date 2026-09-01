@@ -2887,6 +2887,36 @@ class RenderNotificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match its manifest digest"):
                 _render_runpod_images(run_dir, frozen)
 
+    def test_runpod_render_rejects_frozen_image_symlink_escape_before_pod_creation(self) -> None:
+        from kura.run_commands.render_runpod import _render_runpod_images
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            frozen_image = run_dir / "resolved" / "images" / "control_image" / "p1.png"
+            frozen_image.parent.mkdir(parents=True)
+            outside = root / "outside.png"
+            outside.write_bytes(b"outside")
+            frozen_image.symlink_to(outside)
+            frozen_name = "resolved/images/control_image/p1.png"
+            (run_dir / "resolved" / "cases.jsonl").write_text(
+                json.dumps({"id": "p1", "index": 1, "values": {"control_image": frozen_name}}) + "\n",
+                encoding="utf-8",
+            )
+            frozen = {
+                "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
+                "promptset_images": [{
+                    "patch": "control_image",
+                    "prompt_id": "p1",
+                    "source": "/authored/control.png",
+                    "resolved": frozen_name,
+                    "digest": "sha256:" + hashlib.sha256(outside.read_bytes()).hexdigest(),
+                }],
+            }
+
+            with self.assertRaisesRegex(ValueError, "missing or not a regular file"):
+                _render_runpod_images(run_dir, frozen)
+
     def test_runpod_render_uploads_frozen_images_before_launching_cases(self) -> None:
         from kura.run_commands.render_runpod import launch_render_runpod
 
