@@ -573,6 +573,86 @@ class RenderCasesLaunchTests(unittest.TestCase):
             self.assertEqual(staged_during_queue, [True])
             self.assertEqual(list((input_dir / "Kura_tmp").glob("*")), [])
 
+    def test_runpod_uses_remote_image_names_without_local_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("controlled", step=None, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            row["values"]["control_image"] = "a/control.png"
+            patches = {
+                **{key: value for key, value in PATCHES.items() if key != "lora"},
+                "control_image": {"node": "19", "field": "inputs.image", "type": "image"},
+            }
+            run_dir = _workspace(root, cases=[row], patches=patches)
+            run_config = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run_config["executor"] = {"name": "runpod"}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run_config, sort_keys=False), encoding="utf-8")
+            source = root / "cases" / "a" / "control.png"
+            source.parent.mkdir()
+            source.write_bytes(b"control")
+            compile_render(root, run_dir)
+            frozen_name = "resolved/images/control_image/controlled.png"
+            remote_name = "Kura_tmp/render-1-control.png"
+            queued: list[dict[str, Any]] = []
+
+            class FakeClient:
+                def __init__(self, endpoint: str, timeout: int) -> None:
+                    pass
+
+                def queue(self, workflow: dict[str, Any]) -> str:
+                    queued.append(workflow)
+                    return "prompt-1"
+
+                def wait(self, prompt_id: str) -> list[dict[str, Any]]:
+                    return [{"filename": "out.png", "subfolder": "", "type": "output"}]
+
+                def download(self, image: dict[str, Any]) -> bytes:
+                    return b"png"
+
+            with patch("kura.render.ComfyUIClient", FakeClient):
+                self.assertEqual(
+                    launch_render(
+                        root,
+                        run_dir,
+                        endpoint_override="http://127.0.0.1:8188",
+                        executor_name="runpod",
+                        image_name_overrides={frozen_name: remote_name},
+                    ),
+                    0,
+                )
+            self.assertEqual(queued[0]["19"]["inputs"]["image"], remote_name)
+            record = json.loads((run_dir / "samples" / "images.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(record["patch_inputs"]["control_image"], frozen_name)
+            self.assertEqual(record["applied_values"]["control_image"], remote_name)
+
+    def test_runpod_rejects_incomplete_image_mapping_before_running(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = _case("controlled", step=None, prompt="first", seed=1, strength=1.0, cfg=4.0)
+            row["values"]["control_image"] = "a/control.png"
+            patches = {
+                **{key: value for key, value in PATCHES.items() if key != "lora"},
+                "control_image": {"node": "19", "field": "inputs.image", "type": "image"},
+            }
+            run_dir = _workspace(root, cases=[row], patches=patches)
+            run_config = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+            run_config["executor"] = {"name": "runpod"}
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run_config, sort_keys=False), encoding="utf-8")
+            source = root / "cases" / "a" / "control.png"
+            source.parent.mkdir()
+            source.write_bytes(b"control")
+            compile_render(root, run_dir)
+
+            with self.assertRaisesRegex(ValueError, "remote image mapping"):
+                launch_render(
+                    root,
+                    run_dir,
+                    endpoint_override="http://127.0.0.1:8188",
+                    executor_name="runpod",
+                    image_name_overrides={},
+                )
+            state = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["state"], "compiled")
+
     def test_failure_preserves_logical_progress_after_completed_cases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -266,7 +266,7 @@ class RenderImageBindingTest(unittest.TestCase):
             records = [json.loads(line) for line in (run_dir / "samples" / "images.jsonl").read_text().splitlines()]
             self.assertEqual(records[0]["patch_inputs"]["control_image"], "resolved/images/control_image/a.png")
 
-    def test_runpod_rejection_does_not_freeze_control_images(self) -> None:
+    def test_runpod_compile_freezes_control_images_for_remote_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             patches = {**BASE_PATCHES, "control_image": {"node": "15", "field": "inputs.image", "type": "image"}}
@@ -277,10 +277,14 @@ class RenderImageBindingTest(unittest.TestCase):
             source = root / "promptsets" / "grid" / "a" / "control.png"
             source.parent.mkdir()
             source.write_bytes(b"control-a")
-            with self.assertRaises(ValueError) as caught:
-                compile_render(root, run_dir)
-            self.assertIn("not supported for the runpod executor", str(caught.exception))
-            self.assertFalse((run_dir / "resolved" / "images").exists())
+            compile_render(root, run_dir)
+            frozen_image = run_dir / "resolved" / "images" / "control_image" / "a.png"
+            self.assertEqual(frozen_image.read_bytes(), b"control-a")
+            used = [json.loads(line) for line in (run_dir / "resolved" / "promptset_used.jsonl").read_text().splitlines()]
+            self.assertEqual(used[0]["control_image"], "resolved/images/control_image/a.png")
+            manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["promptset_images"][0]["resolved"], "resolved/images/control_image/a.png")
+            self.assertTrue(manifest["promptset_images"][0]["digest"].startswith("sha256:"))
 
     def test_late_compile_validation_does_not_freeze_control_images(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

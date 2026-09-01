@@ -2792,14 +2792,24 @@ class RenderNotificationTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+                frozen_image = run_dir / "resolved" / "images" / "control_image" / "p1.png"
+                frozen_image.parent.mkdir(parents=True)
+                frozen_image.write_bytes(b"control-image")
+                frozen_name = "resolved/images/control_image/p1.png"
+                frozen_digest = "sha256:" + hashlib.sha256(frozen_image.read_bytes()).hexdigest()
+                (run_dir / "resolved" / "cases.jsonl").write_text(
+                    json.dumps({"id": "p1", "index": 1, "values": {"control_image": frozen_name}}) + "\n",
+                    encoding="utf-8",
+                )
                 (run_dir / "resolved" / "manifest.lock.yaml").write_text(
                     yaml.safe_dump({
                         "type": "render",
                         "inputs": {"checkpoint": {"path": ""}, "workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
                         "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"},
                         "executor": {"name": "runpod"},
-                        "workflow_patches": {},
+                        "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
                         "render": {"default_seed": 1},
+                        "promptset_images": [{"patch": "control_image", "prompt_id": "p1", "source": "/authored/control.png", "resolved": frozen_name, "digest": frozen_digest}],
                         "comfyui_model_registry": {"checkpoints": {"toy.safetensors": {"repo": "owner/toy", "filename": "toy.safetensors"}}},
                         "comfyui_models": [{"name": "toy.safetensors", "repo": "owner/toy", "filename": "toy.safetensors", "target_dir": "checkpoints"}],
                     }),
@@ -2839,12 +2849,167 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(plan["image"], "remote/default-comfy")
             self.assertEqual(plan["executor"], "runpod")
             self.assertEqual(plan["models"][0]["repo"], "owner/toy")
+            self.assertEqual(plan["input_images"][0]["frozen"], frozen_name)
+            self.assertTrue(plan["input_images"][0]["name"].startswith("Kura_tmp/"))
+            self.assertEqual(plan["input_images"][0]["bytes"], len(b"control-image"))
+            self.assertEqual(plan["input_image_bytes"], len(b"control-image"))
             price_probe.assert_called_once()
             self.assertEqual(plan["billing"]["gpu_candidates"][0]["display_name"], "RTX A5000")
             self.assertEqual(plan["billing"]["gpu_candidates"][0]["clouds"][0]["price_per_hour"], 0.29)
             self.assertEqual(plan["billing"]["price_checked_at"], "2026-07-16T12:00:00+09:00")
             self.assertEqual(plan["billing"]["maximum_lease"], "12h")
             self.assertEqual(plan["billing"]["maximum_lease_sec"], 12 * 3600)
+
+    def test_runpod_render_rejects_tampered_frozen_image_before_billing_probe(self) -> None:
+        from kura.run_commands.render_runpod import _render_runpod_images
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "render-1"
+            frozen_image = run_dir / "resolved" / "images" / "control_image" / "p1.png"
+            frozen_image.parent.mkdir(parents=True)
+            frozen_image.write_bytes(b"tampered")
+            frozen_name = "resolved/images/control_image/p1.png"
+            (run_dir / "resolved" / "cases.jsonl").write_text(
+                json.dumps({"id": "p1", "index": 1, "values": {"control_image": frozen_name}}) + "\n",
+                encoding="utf-8",
+            )
+            frozen = {
+                "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
+                "promptset_images": [{
+                    "patch": "control_image",
+                    "prompt_id": "p1",
+                    "source": "/authored/control.png",
+                    "resolved": frozen_name,
+                    "digest": "sha256:" + hashlib.sha256(b"original").hexdigest(),
+                }],
+            }
+
+            with self.assertRaisesRegex(ValueError, "does not match its manifest digest"):
+                _render_runpod_images(run_dir, frozen)
+
+    def test_runpod_render_rejects_frozen_image_symlink_escape_before_pod_creation(self) -> None:
+        from kura.run_commands.render_runpod import _render_runpod_images
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "render-1"
+            frozen_image = run_dir / "resolved" / "images" / "control_image" / "p1.png"
+            frozen_image.parent.mkdir(parents=True)
+            outside = root / "outside.png"
+            outside.write_bytes(b"outside")
+            frozen_image.symlink_to(outside)
+            frozen_name = "resolved/images/control_image/p1.png"
+            (run_dir / "resolved" / "cases.jsonl").write_text(
+                json.dumps({"id": "p1", "index": 1, "values": {"control_image": frozen_name}}) + "\n",
+                encoding="utf-8",
+            )
+            frozen = {
+                "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
+                "promptset_images": [{
+                    "patch": "control_image",
+                    "prompt_id": "p1",
+                    "source": "/authored/control.png",
+                    "resolved": frozen_name,
+                    "digest": "sha256:" + hashlib.sha256(outside.read_bytes()).hexdigest(),
+                }],
+            }
+
+            with self.assertRaisesRegex(ValueError, "missing or not a regular file"):
+                _render_runpod_images(run_dir, frozen)
+
+    def test_runpod_render_uploads_frozen_images_before_launching_cases(self) -> None:
+        from kura.run_commands.render_runpod import launch_render_runpod
+
+        class FakeTunnel:
+            def terminate(self) -> None:
+                pass
+
+            def wait(self, timeout: int) -> int:
+                return 0
+
+            def kill(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                run_dir = root / "runs" / "render-1"
+                resolved = run_dir / "resolved"
+                resolved.mkdir(parents=True)
+                (root / "workspace.yaml").write_text(
+                    "docker:\n"
+                    "  images:\n"
+                    "    comfyui:\n"
+                    "      local: local/comfy\n"
+                    "      remote: remote/comfy\n"
+                    "      dockerfile: docker/comfyui/Dockerfile\n"
+                    "      context: .\n"
+                    "runpod:\n"
+                    "  storage_mode: upload\n"
+                    "  gpu_type_ids: [NVIDIA RTX A5000]\n"
+                    "comfyui:\n"
+                    "  runpod:\n"
+                    "    ports: [22/tcp]\n",
+                    encoding="utf-8",
+                )
+                (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+                frozen_image = resolved / "images" / "control_image" / "p1.png"
+                frozen_image.parent.mkdir(parents=True)
+                frozen_image.write_bytes(b"control-image")
+                frozen_name = "resolved/images/control_image/p1.png"
+                image_digest = "sha256:" + hashlib.sha256(frozen_image.read_bytes()).hexdigest()
+                (resolved / "cases.jsonl").write_text(
+                    json.dumps({"id": "p1", "index": 1, "values": {"control_image": frozen_name}}) + "\n",
+                    encoding="utf-8",
+                )
+                (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
+                (resolved / "comfyui_model_registry.json").write_text("{}", encoding="utf-8")
+                (resolved / "manifest.lock.yaml").write_text(
+                    yaml.safe_dump({
+                        "type": "render",
+                        "inputs": {"workflow": {"path": "workflows/wf.json"}, "promptset": {"path": "promptsets/prompts.jsonl"}},
+                        "generator": {"name": "comfyui", "endpoint": ""},
+                        "executor": {"name": "runpod"},
+                        "workflow_patches": {"control_image": {"node": "2", "field": "inputs.image", "type": "image"}},
+                        "render": {"timeout_sec": 5},
+                        "promptset_images": [{"patch": "control_image", "prompt_id": "p1", "source": "/authored/control.png", "resolved": frozen_name, "digest": image_digest}],
+                        "comfyui_model_registry": {},
+                        "comfyui_models": [],
+                    }),
+                    encoding="utf-8",
+                )
+                details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+                completed = subprocess.CompletedProcess(["ssh"], 0, "", "")
+                with patch("kura.run_commands.render_runpod.launch_runpod_session"), patch(
+                    "kura.run_commands.render_runpod._runpod_ssh_details", return_value=details,
+                ), patch("kura.run_commands.render_runpod._start_runpod_session_lease_guard"), patch(
+                    "kura.run_commands.render_runpod.subprocess.run", return_value=completed,
+                ) as remote_prepare, patch(
+                    "kura.run_commands.render_runpod._scp_to_runpod",
+                ) as scp, patch("kura.run_commands.render_runpod._start_runpod_comfyui"), patch(
+                    "kura.run_commands.render_runpod._free_local_port", return_value=18888,
+                ), patch("kura.run_commands.render_runpod.subprocess.Popen", return_value=FakeTunnel()), patch(
+                    "kura.run_commands.render_runpod._wait_http_ready",
+                ), patch("kura.run_commands.render_runpod.launch_render", return_value=0) as render, patch(
+                    "kura.run_commands.render_runpod._sync_runpod_remote_stdout",
+                ), patch("kura.run_commands.render_runpod.stop_run"), patch("kura.run_commands.render_runpod._notify"):
+                    self.assertEqual(launch_render_runpod("render-1", dry_run=False, yes=True), 0)
+            finally:
+                os.chdir(previous)
+
+            prepare_script = remote_prepare.call_args_list[0].args[0][-1]
+            self.assertIn("/opt/ComfyUI/input/Kura_tmp", prepare_script)
+            image_uploads = [
+                call for call in scp.call_args_list
+                if call.args[1] == frozen_image
+            ]
+            self.assertEqual(len(image_uploads), 1)
+            remote_image = image_uploads[0].args[2]
+            self.assertTrue(remote_image.startswith("/opt/ComfyUI/input/Kura_tmp/"))
+            mapping = render.call_args.kwargs["image_name_overrides"]
+            self.assertEqual(mapping, {frozen_name: remote_image.removeprefix("/opt/ComfyUI/input/")})
 
     def test_runpod_render_launch_requires_runpod_compiled_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

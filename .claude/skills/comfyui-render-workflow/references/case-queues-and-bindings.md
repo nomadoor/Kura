@@ -61,11 +61,14 @@ workflow_patches:
 
 ## Images
 
-For a local `type: image` binding, make the logical value relative to the cases
-JSONL directory. Compile copies it into `resolved/images/`; launch copies it
+For a `type: image` binding under `inputs.cases`, make the logical value relative
+to the cases JSONL directory. A legacy `inputs.promptset` image value is relative
+to the promptset file directory instead. Compile copies it into
+`resolved/images/` and records its digest. Local launch copies that frozen file
 into the configured ComfyUI input staging directory and removes the staged copy
-afterward. RunPod rejects image bindings. Never upload the image through the
-ComfyUI API or write into its directories manually.
+afterward. RunPod launch verifies and uploads the frozen file into the disposable
+Pod before ComfyUI starts. Never upload the authored source through the ComfyUI
+API or write into ComfyUI's directories manually.
 
 ComfyUI does not list files in input subdirectories through
 `/object_info/LoadImage`. Queue-time acceptance, not that list, proves image
