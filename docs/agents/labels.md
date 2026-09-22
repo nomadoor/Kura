@@ -1,8 +1,11 @@
-# Issue labels
+# Workflow labels
 
-Reuse the repository's existing GitHub labels when an explicitly approved
-issue is created. Query the current label list before selecting a label; do not
-rely on an inventory recorded in repository documentation.
+The configured label for work that an implementation agent can start is:
 
-Do not create a missing label without explicit user approval. Label selection
-never authorizes implementation or publication.
+```text
+ready-for-agent
+```
+
+Query the current GitHub label list before use. If this label does not yet
+exist, do not create it without explicit user approval. Applying the label also
+requires publication approval and never authorizes implementation by itself.

@@ -159,10 +159,10 @@ stop and ask the user to start or identify their local ComfyUI.
 - `runpod-lifecycle` — remote training, billing safety, Pod recovery
 - `comfyui-render-workflow` — render runs, workflows, comparisons
 - `monitor-tui` — reading `kura monitor` / `kura run watch`
-- `musubi-tuner-backend` / `ai-toolkit-backend` — trainer flag mechanics
+- `training-backends` — trainer adapter, native-config, model-role, image, and output mechanics
 
 For a trained-LoRA evaluation, use this order:
-`dataset-prep -> training-parameter-planning -> backend skill -> training ->
+`dataset-prep -> training-parameter-planning -> training-backends -> training ->
 lora-evaluation -> model-family knowledge -> render execution -> notes`.
 Trainer backends provide training facts; model-family knowledge owns prompt
 semantics; `lora-evaluation` judges the plan. Do not bypass Kura to execute a
@@ -223,7 +223,10 @@ missing skill metadata or any drift in the Claude compatibility mirror.
 
 For local workspace configuration keys, see `docs/workspace-config.md`.
 
-Skills for development sessions: `kura-core` (start here), `musubi-adapter-smoke`, `readme-docs-update`, `release-check`, plus the usage skills above when the change touches their areas.
+Skills for development sessions: start with `kura-core`; use
+`training-backends` for adapter work, `backend-upgrade-audit` for pinned trainer
+updates, and `release-check` for broad handoff. Add the usage skills above only
+when the change touches their operational domain.
 
 Validation — run focused tests for behavior changes; for broad changes:
 

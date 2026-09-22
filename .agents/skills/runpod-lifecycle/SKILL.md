@@ -42,7 +42,9 @@ stop Pod
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.
 - `runpod.storage_mode: upload`: no Network Volume by default.
-- GPU candidates default to `NVIDIA RTX A5000` then `NVIDIA A40` with custom priority.
+- Treat configured GPU candidates as workspace policy, not durable skill
+  knowledge. Inspect current availability, price, and the compiled resource
+  plan before selecting one.
 - If a run explicitly sets `compute.gpu`, treat it as part of the user's run
   intent and use it before workspace-level candidates.
 - Run `kura run plan` once while the RunPod run is still a draft so current

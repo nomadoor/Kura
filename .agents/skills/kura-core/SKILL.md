@@ -57,6 +57,17 @@ The durable path rules are in
 - Do not commit datasets, model weights, checkpoints, outputs, caches, downloads, or generated workspace data.
 - Registry image names belong in workspace/config, not hardcoded policy.
 
+## Documentation
+
+- Keep README, focused docs, examples, CLI help, and project skills consistent
+  with changed behavior.
+- Verify current CLI output instead of copying remembered flags or historical
+  examples.
+- Keep README concise and move detailed contracts or history to focused docs or
+  ADRs.
+- Do not publish local paths, machine-specific state, credentials, dataset
+  contents, or generated run artifacts.
+
 ## Validation
 
 Use the narrowest relevant check first, then broader checks when lifecycle behavior changes:
@@ -64,4 +75,5 @@ Use the narrowest relevant check first, then broader checks when lifecycle behav
 ```sh
 uv run python -m unittest discover -s tests
 uv run kura --help
+uv run python scripts/check_readme_cli_sync.py
 ```
