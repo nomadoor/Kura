@@ -7052,7 +7052,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     "memoryInGb": 48,
                     "vcpuCount": 8,
                     "machine": {
-                        "machineId": "machine-1",
+                        "id": "machine-1",
                         "dataCenterId": "DC-1",
                         "gpuDisplayName": "A40",
                     },
@@ -7092,8 +7092,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(request.unredirected_hdrs["Authorization"], "Bearer api-secret")
         body = json.loads(request.data)
         self.assertIn("podFindAndDeployOnDemand", body["query"])
-        self.assertIn("machineId", body["query"])
-        self.assertIn("dataCenterId", body["query"])
+        self.assertIn("machine { id dataCenterId", body["query"])
         gql_input = body["variables"]["input"]
         self.assertEqual(gql_input["gpuTypeId"], "NVIDIA H100 80GB HBM3")
         self.assertEqual(gql_input["ports"], "22/tcp")
@@ -7144,8 +7143,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(deleted, {})
         queries = [json.loads(call.args[0].data)["query"] for call in urlopen.call_args_list]
         self.assertIn("pod(input:", queries[0])
-        self.assertIn("machineId", queries[0])
-        self.assertIn("dataCenterId", queries[0])
+        self.assertIn("machine { id dataCenterId", queries[0])
         self.assertIn("podTerminate", queries[1])
 
     @staticmethod
@@ -7421,7 +7419,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                          "memoryInGb": 48,
                          "vcpuCount": 8,
                          "machine": {
-                             "machineId": "machine-1",
+                             "id": "machine-1",
                              "dataCenterId": "US-GA-1",
                              "gpuDisplayName": "A40",
                          },

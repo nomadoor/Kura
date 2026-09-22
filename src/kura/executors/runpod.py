@@ -126,7 +126,7 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
           podFindAndDeployOnDemand(input: $input) {
             id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
             volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange env
-            machine { machineId dataCenterId gpuDisplayName location }
+            machine { id dataCenterId gpuDisplayName location }
           }
         }
         """
@@ -145,7 +145,7 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
               pod(input: {podId: $podId}) {
                 id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
                 volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange
-                machine { machineId dataCenterId gpuDisplayName location }
+                machine { id dataCenterId gpuDisplayName location }
                 runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
               }
             }
@@ -595,7 +595,7 @@ def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
         "public_ip": pod.get("publicIp"),
         "port_mappings": pod.get("portMappings"),
         "machine": {
-            "id": machine.get("machineId"),
+            "id": machine.get("id"),
             "data_center_id": machine.get("dataCenterId"),
             "gpu_display_name": gpu.get("displayName") or gpu.get("id") or machine.get("gpuDisplayName"),
             "memory_gb": pod.get("memoryInGb"),
