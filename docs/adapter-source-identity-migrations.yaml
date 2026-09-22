@@ -7,6 +7,51 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-review-fixes-existing-evidence-2026-09-22
+    backend: ai-toolkit
+    reason: >-
+      Vectorize the saved lora_B finite/non-zero scan and make RunPod location
+      fallback explicit instead of silently truncating location candidates.
+      The recorded AI-Toolkit probes use the same finite/non-zero acceptance
+      criteria, one GPU candidate, and no location filters. Their native
+      commands, optimizer steps, inspected artifacts, and pinned-image import
+      result are therefore unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 425d2ef5a1ee651969fae350122884b549aa285045cb480f7b495446f991d69a
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e07ff331240e4f87c5f685232385ad72c8b9ef7929f199f6083ac27559555091
+  - id: musubi-review-fixes-existing-evidence-2026-09-22
+    backend: musubi-tuner
+    reason: >-
+      Reject duplicate native flags, require the unconditional cache for H3
+      guidance, preserve distinct typed video dataset blocks, and make RunPod
+      location fallback explicit instead of silently truncating candidates.
+      The recorded Musubi probes use no duplicate flags, guidance runs with
+      precache enabled, one typed dataset block, one GPU candidate, and no
+      location filters. Their native commands, optimizer steps, artifacts, and
+      pinned-image entrypoint inventory are therefore unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d915865008a2c7043263878a080507c2356c77bbff2313c3024ff37136b8b9ff
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2afd65a613129de3ce66080606f4761c32998bb1bc002fdd1aa452bce61a5788
   - id: ai-toolkit-h3-finite-output-guard-2026-09-22
     backend: ai-toolkit
     reason: >-

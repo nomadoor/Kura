@@ -294,15 +294,6 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
     return any(arg.startswith("--sample_") for arg in extra_args)
 
 
-def _extra_arg_value(extra_args: list[str], flag: str) -> str | None:
-    for index, arg in enumerate(extra_args):
-        if arg == flag and index + 1 < len(extra_args):
-            return extra_args[index + 1]
-        if arg.startswith(flag + "="):
-            return arg.split("=", 1)[1]
-    return None
-
-
 def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display and safety."""
     native = _musubi_backend_override(run)
@@ -658,6 +649,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             *_musubi_common_train_args(run, override, output_dir, output_name),
         ]
         if loss_method == "guidance":
+            if not precache:
+                raise ValueError("Musubi MiniMax-H3 guidance requires precache=true to produce the unconditional cache")
             guidance_scale = float(override.get("h3_guidance_loss_scale", 4.0))
             guidance_sigma_min = float(override.get("h3_guidance_loss_sigma_min", 0.15))
             if guidance_scale <= 0:

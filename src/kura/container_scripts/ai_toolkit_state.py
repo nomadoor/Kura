@@ -3,12 +3,10 @@
 
 import hashlib
 import json
-import math
 import os
 import pathlib
 import runpy
 import shutil
-import struct
 import sys
 import tempfile
 
@@ -156,6 +154,11 @@ def safetensors_tensor_dtypes(path):
 
 
 def lora_b_update_stats(path):
+    try:
+        import numpy
+    except ModuleNotFoundError:  # Host-side unit tests do not install the container's NumPy dependency.
+        numpy = None
+
     with open(path, "rb") as handle:
         prefix = handle.read(8)
         if len(prefix) != 8:
@@ -196,26 +199,41 @@ def lora_b_update_stats(path):
             if dtype == "BF16":
                 if len(payload) % 2:
                     fail(f"saved LoRA BF16 tensor has invalid byte length: {name}")
-                has_update = False
-                for (bits,) in struct.iter_unpack("<H", payload):
-                    if (bits & 0x7F80) == 0x7F80:
+                if numpy is None:
+                    import struct
+
+                    bits_fallback = [bits for (bits,) in struct.iter_unpack("<H", payload)]
+                    if any((bits & 0x7F80) == 0x7F80 for bits in bits_fallback):
                         fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
-                    if (bits & 0x7FFF) != 0:
-                        has_update = True
+                    has_update = any((bits & 0x7FFF) != 0 for bits in bits_fallback)
+                else:
+                    bits = numpy.frombuffer(payload, dtype="<u2")
+                    if bool(((bits & 0x7F80) == 0x7F80).any()):
+                        fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
+                    has_update = bool(((bits & 0x7FFF) != 0).any())
             else:
-                formats = {"F16": "e", "F32": "f", "F64": "d"}
-                code = formats.get(dtype)
-                if code is None:
+                numpy_dtypes = {"F16": "<f2", "F32": "<f4", "F64": "<f8"}
+                numpy_dtype = numpy_dtypes.get(dtype)
+                if numpy_dtype is None:
                     fail(f"saved LoRA lora_B tensor uses unsupported dtype {dtype!r}: {name}")
-                width = struct.calcsize(code)
+                widths = {"F16": 2, "F32": 4, "F64": 8}
+                width = widths[dtype]
                 if len(payload) % width:
                     fail(f"saved LoRA tensor has invalid byte length: {name}")
-                has_update = False
-                for (value,) in struct.iter_unpack("<" + code, payload):
-                    if not math.isfinite(value):
+                if numpy is None:
+                    import math
+                    import struct
+
+                    code = {"F16": "e", "F32": "f", "F64": "d"}[dtype]
+                    values_fallback = [value for (value,) in struct.iter_unpack("<" + code, payload)]
+                    if not all(math.isfinite(value) for value in values_fallback):
                         fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
-                    if value != 0.0:
-                        has_update = True
+                    has_update = any(value != 0.0 for value in values_fallback)
+                else:
+                    values = numpy.frombuffer(payload, dtype=numpy_dtype)
+                    if not bool(numpy.isfinite(values).all()):
+                        fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
+                    has_update = bool((values != 0).any())
             if has_update:
                 updated += 1
         if updated == 0:

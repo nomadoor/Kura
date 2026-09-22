@@ -174,7 +174,10 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.volume_in_gb` | Network Volume size; Kura defaults to none | `0` |
 | `runpod.workspace_path` | Workspace path inside the Pod | `/workspace` |
 | `runpod.cloud_type` / `runpod.cloud_types` | RunPod cloud preference; `ANY` tries community then secure | `ANY` |
-| `runpod.gpu_type_priority` | RunPod GPU selection priority | `custom` |
+| `runpod.gpu_type_priority` | GPU candidate ordering: `custom` uses the listed order; `availability` is accepted only for one GPU because the GraphQL control plane cannot preserve availability ordering across fallback attempts | `custom` |
+| `runpod.data_center_ids` | Ordered RunPod data-center candidates; Kura tries each configured data center in order | unset |
+| `runpod.data_center_priority` | Data-center ordering: `custom` uses the listed order; `availability` is accepted only for one data center because the GraphQL control plane cannot preserve availability ordering across fallback attempts | unset |
+| `runpod.country_codes` | Ordered RunPod country candidates; Kura tries each configured country within each data-center attempt | unset |
 | `runpod.interruptible` | Whether to allow interruptible Pods | `false` |
 
 `--hold-for` and `--max-lease` are not `workspace.yaml` keys. They are

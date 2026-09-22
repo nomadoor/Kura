@@ -3981,6 +3981,31 @@ class MusubiBackendTests(unittest.TestCase):
                 self.assertNotIn("source =", rendered)
                 self.assertNotIn("path =", rendered)
 
+    def test_compile_musubi_minimax_h3_keeps_distinct_video_blocks_for_one_dataset(self) -> None:
+        run = self._run()
+        run["datasets"] = [
+            {"id": "tiny", "role": "short"},
+            {"id": "tiny", "role": "long"},
+        ]
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "minimax_h3",
+            "task": "t2va",
+            "h3_dataset_config": {"datasets": [
+                {"source": "video_directory", "path": "short", "target_frames": [22]},
+                {"source": "video_directory", "path": "long", "target_frames": [39]},
+            ]},
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+
+            BACKENDS["musubi-tuner"].compile(run, destination, Path(directory), False)
+
+            rendered = (destination / "musubi" / "dataset.toml").read_text(encoding="utf-8")
+        self.assertIn('video_directory = "/workspace/datasets/tiny/short"', rendered)
+        self.assertIn('target_frames = [22]', rendered)
+        self.assertIn('video_directory = "/workspace/datasets/tiny/long"', rendered)
+        self.assertIn('target_frames = [39]', rendered)
+
     def test_musubi_minimax_h3_typed_dataset_contract_rejects_ambiguous_or_incomplete_shapes(self) -> None:
         base = self._run()
         base["backend"] = {"name": "musubi-tuner", "config": {
@@ -4410,6 +4435,15 @@ class MusubiBackendTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(ValueError, "constant scheduler"):
                     command_musubi_tuner(run)
+
+    def test_musubi_rejects_duplicate_value_flags_in_extra_args(self) -> None:
+        run = self._run()
+        run["backend"]["config"]["extra_args"] = [
+            "--blocks_to_swap", "2", "--blocks_to_swap=3",
+        ]
+
+        with self.assertRaisesRegex(ValueError, "duplicates --blocks_to_swap"):
+            command_musubi_tuner(run)
 
     def test_musubi_resume_rejects_invalid_state_save_cadence_cleanly(self) -> None:
         for cadence in ("10", True, 0, -1):
@@ -4945,6 +4979,24 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--text_encoder_blocks_to_swap 50", script)
         self.assertIn("--video_only", script)
         self.assertIn("--gradient_checkpointing", script)
+
+    def test_command_musubi_minimax_h3_guidance_requires_precache(self) -> None:
+        run = self._run()
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "minimax_h3",
+            "task": "t2va",
+            "model_paths": {
+                "dit": "/models/minimax-h3.safetensors",
+                "video_vae": "/models/minimax-h3-video-vae.safetensors",
+                "audio_vae": "/models/minimax-h3-audio-vae.safetensors",
+                "text_encoder": "/models/minimax-h3-text-encoder.safetensors",
+            },
+            "h3_loss_method": "guidance",
+            "precache": False,
+        }}
+
+        with self.assertRaisesRegex(ValueError, "guidance requires precache=true"):
+            command_musubi_tuner(run)
 
     def test_command_musubi_minimax_h3_projects_fl2va_and_ref2va_tasks_to_every_stage(self) -> None:
         for task in ("fl2va", "ref2va"):
@@ -7036,6 +7088,22 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(gql_input["dockerArgs"], "sh -lc 'sleep infinity'")
         self.assertTrue(gql_input["startSsh"])
 
+    def test_runpod_control_plane_rejects_multi_location_create_attempts(self) -> None:
+        payload = {
+            "gpuTypeIds": ["NVIDIA A40"],
+            "dataCenterIds": ["DC-1", "DC-2"],
+        }
+
+        with self.assertRaisesRegex(ValueError, "at most one dataCenterIds"):
+            _runpod_request("POST", "/pods", "api-secret", payload)
+
+        payload = {
+            "gpuTypeIds": ["NVIDIA A40"],
+            "countryCodes": ["US", "CA"],
+        }
+        with self.assertRaisesRegex(ValueError, "at most one countryCodes"):
+            _runpod_request("POST", "/pods", "api-secret", payload)
+
     def test_runpod_control_plane_gets_and_terminates_pod_with_graphql(self) -> None:
         responses = [
             {"data": {"pod": {"id": "pod-1", "desiredStatus": "RUNNING"}}},
@@ -7336,9 +7404,85 @@ class RunPodLifecycleTests(unittest.TestCase):
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
             payload = request.call_args.args[3]
             self.assertEqual(payload["dataCenterIds"], ["US-GA-1"])
-            self.assertEqual(payload["dataCenterPriority"], "availability")
-            self.assertEqual(payload["gpuTypePriority"], "availability")
             self.assertEqual(payload["countryCodes"], ["US"])
+            self.assertNotIn("dataCenterPriority", payload)
+            self.assertNotIn("gpuTypePriority", payload)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+            self.assertEqual(realization["request"]["dataCenterCandidates"], ["US-GA-1"])
+            self.assertEqual(realization["request"]["dataCenterPriority"], "availability")
+            self.assertEqual(realization["request"]["gpuTypePriority"], "availability")
+            self.assertEqual(realization["request"]["countryCandidates"], ["US"])
+
+    def test_launch_runpod_falls_back_across_all_configured_locations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {
+                "storage_mode": "upload",
+                "gpu_type_ids": ["NVIDIA A40"],
+                "cloud_types": ["COMMUNITY"],
+                "gpu_type_priority": "custom",
+                "data_center_ids": ["DC-1", "DC-2"],
+                "data_center_priority": "custom",
+                "country_codes": ["US", "CA"],
+            }
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
+                     patch(
+                         "kura.executors.runpod._runpod_request",
+                         side_effect=[
+                             ValueError("no GPU capacity"),
+                             ValueError("no GPU capacity"),
+                             ValueError("no GPU capacity"),
+                             {"id": "pod-1", "desiredStatus": "RUNNING"},
+                         ],
+                     ) as request:
+                    launch_runpod(
+                        run_dir=run_dir,
+                        spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                        image="registry/image:tag",
+                        config=config,
+                        yes=True,
+                    )
+
+            placements = [
+                (call.args[3]["dataCenterIds"], call.args[3]["countryCodes"])
+                for call in request.call_args_list
+            ]
+            self.assertEqual(
+                placements,
+                [(["DC-1"], ["US"]), (["DC-1"], ["CA"]), (["DC-2"], ["US"]), (["DC-2"], ["CA"])],
+            )
+
+    def test_runpod_rejects_unrepresentable_availability_priority_lists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "gpu_type_priority=availability.*multiple GPU"):
+                launch_runpod_session(
+                    run_dir=run_dir,
+                    image="registry/image:tag",
+                    purpose="review-test",
+                    config={
+                        "gpu_type_ids": ["NVIDIA A40", "NVIDIA RTX A5000"],
+                        "gpu_type_priority": "availability",
+                    },
+                    dry_run=True,
+                )
+            with self.assertRaisesRegex(ValueError, "data_center_priority=availability.*multiple data centers"):
+                launch_runpod_session(
+                    run_dir=run_dir,
+                    image="registry/image:tag",
+                    purpose="review-test",
+                    config={
+                        "gpu_type_ids": ["NVIDIA A40"],
+                        "data_center_ids": ["DC-1", "DC-2"],
+                        "data_center_priority": "availability",
+                    },
+                    dry_run=True,
+                )
 
     def test_launch_runpod_falls_back_across_cloud_types(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

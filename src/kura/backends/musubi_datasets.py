@@ -477,9 +477,14 @@ def _collapse_duplicate_musubi_bucket_items(raw_items: list[tuple[dict[str, Any]
     collapsed: list[dict[str, Any]] = []
     by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
     for dataset, item in raw_items:
+        paired_key = item.get("_kura_paired_key")
         key = (
             dataset.get("id"),
-            item.get("_kura_paired_key") or item.get("image_jsonl_file") or item.get("image_directory"),
+            paired_key,
+            None if paired_key is not None else item.get("image_jsonl_file") or item.get("image_directory"),
+            item.get("video_jsonl_file"),
+            item.get("video_directory"),
+            tuple(item["target_frames"]) if isinstance(item.get("target_frames"), list) else item.get("target_frames"),
             item.get("control_directory"),
             item.get("num_repeats"),
             item.get("batch_size"),
