@@ -685,8 +685,8 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         "runpodctl_command": bool(shutil.which("runpodctl")),
         "api_key": api_key_present,
         "pod_list": False,
-        "rest_pods": False,
         "pods_empty": None,
+        "network_volume_list": False,
         "network_volumes_empty": None,
         "default_images_pinned": True,
     }
@@ -700,29 +700,32 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         version = subprocess.run(["runpodctl", "version"], text=True, capture_output=True, check=False)
         diagnostics["runpodctl_version"] = _redact_secret_text((version.stdout or version.stderr).strip())
     if checks["runpodctl_command"] and api_key_present:
-        pods = subprocess.run(["runpodctl", "pod", "list"], text=True, capture_output=True, check=False)
-        checks["pod_list"] = pods.returncode == 0
-        diagnostics["pod_list_returncode"] = pods.returncode
-        diagnostics["pod_list_stdout"] = _redact_secret_text(pods.stdout.strip())
-        diagnostics["pod_list_stderr"] = _redact_secret_text(pods.stderr.strip())
         try:
-            request = urllib.request.Request("https://rest.runpod.io/v1/pods", headers={"Authorization": "Bearer " + os.environ[str(api_key_env)], "Content-Type": "application/json"})
-            with urllib.request.urlopen(request, timeout=20) as response:
-                all_pods = json.loads(response.read().decode("utf-8"))
-            checks["rest_pods"] = True
-            diagnostics["pods"] = _redact_secrets(all_pods)
-            checks["pods_empty"] = all_pods == []
+            pods = subprocess.run(["runpodctl", "pod", "list"], text=True, capture_output=True, check=False)
+            checks["pod_list"] = pods.returncode == 0
+            diagnostics["pod_list_returncode"] = pods.returncode
+            diagnostics["pod_list_stdout"] = _redact_secret_text(pods.stdout.strip())
+            diagnostics["pod_list_stderr"] = _redact_secret_text(pods.stderr.strip())
+            if pods.returncode == 0:
+                all_pods = json.loads(pods.stdout)
+                diagnostics["pods"] = _redact_secrets(all_pods)
+                checks["pods_empty"] = all_pods == []
         except Exception as exc:
             diagnostics["pods_error"] = _redact_secret_text(str(exc))
         try:
-            request = urllib.request.Request("https://rest.runpod.io/v1/networkvolumes", headers={"Authorization": "Bearer " + os.environ[str(api_key_env)], "Content-Type": "application/json"})
-            with urllib.request.urlopen(request, timeout=20) as response:
-                volumes = json.loads(response.read().decode("utf-8"))
-            diagnostics["network_volumes"] = _redact_secrets(volumes)
-            checks["network_volumes_empty"] = volumes == []
+            volumes_result = subprocess.run(["runpodctl", "network-volume", "list"], text=True, capture_output=True, check=False)
+            checks["network_volume_list"] = volumes_result.returncode == 0
+            diagnostics["network_volume_list_returncode"] = volumes_result.returncode
+            diagnostics["network_volume_list_stderr"] = _redact_secret_text(volumes_result.stderr.strip())
+            if volumes_result.returncode == 0:
+                volumes = json.loads(volumes_result.stdout)
+                diagnostics["network_volumes"] = _redact_secrets(volumes)
+                checks["network_volumes_empty"] = volumes == []
+            else:
+                diagnostics["network_volumes_error"] = diagnostics["network_volume_list_stderr"] or "runpodctl network-volume list failed"
         except Exception as exc:  # read-only doctor; keep diagnosis broad.
             diagnostics["network_volumes_error"] = _redact_secret_text(str(exc))
-    ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["rest_pods"] and checks["pods_empty"] is not False and checks["network_volumes_empty"] is True)
+    ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["pods_empty"] is not False and checks["network_volume_list"] and checks["network_volumes_empty"] is True)
     if ok and mutable_images:
         diagnosis = "RunPod CLI/API are ready, but mutable default image tags should be pinned before reproducible runs."
     elif ok:

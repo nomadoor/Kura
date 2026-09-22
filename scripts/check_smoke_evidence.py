@@ -26,6 +26,16 @@ def _normalized_backend(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def _historical_record_is_retired(record: dict[str, object], invalidation_ids: set[str]) -> bool:
+    superseded_by = record.get("superseded_by")
+    invalidated_by = record.get("invalidated_by")
+    return (
+        isinstance(superseded_by, str) and bool(superseded_by)
+    ) or (
+        isinstance(invalidated_by, str) and invalidated_by in invalidation_ids
+    )
+
+
 def _support_evidence_claims(text: str) -> list[tuple[int, str, str, list[str]]]:
     claims: list[tuple[int, str, str, list[str]]] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
@@ -78,6 +88,26 @@ def main() -> int:
         records = []
     seen: set[str] = set()
     records_by_id: dict[str, dict[str, object]] = {}
+    invalidations = payload.get("invalidations", []) if isinstance(payload, dict) else []
+    invalidation_ids: set[str] = set()
+    if not isinstance(invalidations, list):
+        failures.append("invalidations must be a list")
+        invalidations = []
+    for index, invalidation in enumerate(invalidations):
+        label = f"invalidations[{index}]"
+        if not isinstance(invalidation, dict):
+            failures.append(f"{label} must be a mapping")
+            continue
+        invalidation_id = invalidation.get("id")
+        if not isinstance(invalidation_id, str) or not invalidation_id or invalidation_id in invalidation_ids:
+            failures.append(f"{label}.id must be a unique string")
+        else:
+            invalidation_ids.add(invalidation_id)
+        for key in ("backend", "reason"):
+            if not isinstance(invalidation.get(key), str) or not invalidation[key]:
+                failures.append(f"{label}.{key} must be a non-empty string")
+        if not isinstance(invalidation.get("observed_at"), (str, date, datetime)):
+            failures.append(f"{label}.observed_at must be a date")
     for index, record in enumerate(records):
         label = f"records[{index}]"
         if not isinstance(record, dict):
@@ -102,6 +132,11 @@ def main() -> int:
             failures.append(f"{label}.evidence_kind is unknown")
         if not isinstance(record.get("observed_at"), (str, date, datetime)):
             failures.append(f"{label}.observed_at must be a date")
+        invalidated_by = record.get("invalidated_by")
+        if invalidated_by is not None and (
+            not isinstance(invalidated_by, str) or invalidated_by not in invalidation_ids
+        ):
+            failures.append(f"{label}.invalidated_by must reference a declared invalidation")
         artifact = record.get("artifact")
         artifact_path = PATH.parent / artifact if isinstance(artifact, str) else None
         if isinstance(artifact, str) and not artifact_path.is_file():
@@ -151,7 +186,12 @@ def main() -> int:
                     failures.append(f"{label} evidence {record_id!r} adapter identity does not reach the current adapter through an evidence-scoped behavior-preserving migration chain")
 
     for record_id, record in records_by_id.items():
-        if record.get("outcome") == "passed" and record.get("evidence_kind") == "real-optimizer-step" and record_id not in referenced and not record.get("superseded_by"):
+        if (
+            record.get("outcome") == "passed"
+            and record.get("evidence_kind") == "real-optimizer-step"
+            and record_id not in referenced
+            and not _historical_record_is_retired(record, invalidation_ids)
+        ):
             failures.append(f"passed optimizer evidence is not referenced by backend-support.md: {record_id}")
     if failures:
         raise SystemExit("smoke evidence check failed:\n" + "\n".join(f"- {item}" for item in failures))

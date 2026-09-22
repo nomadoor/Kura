@@ -1,0 +1,37 @@
+schema_version: 1
+run_id: 20260921-2216_ai-toolkit-minimax-h3-a40-no-checkpoint-smoke_3d64
+executor: runpod
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+  gpu: NVIDIA A40
+  cost_per_hour_usd: 0.49
+  gradient_checkpointing: false
+dataset:
+  items: 1
+  resolution: 256x256
+  frames: 5
+observed:
+  optimizer_steps: 1
+  remote_exit_code: 0
+  output_safetensors: 1
+  output_bytes: 155109880
+  output_sha256: 9f97d1c77b4f2e755ef2e4efc66fa1acdc36e940f72d080f4296857d4a1f9123
+  lora_b_tensors: 208
+  nonzero_lora_b_tensors: 208
+  durable_state_step: 1
+  recovery_required: false
+  pod_stopped_at: 2026-09-21T23:02:15.346621+09:00
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  finite_nonzero_lora_update: true
+  durable_state_recovered: true
+  output_recovered: true
+  pod_stopped: true
+  runpod_pods_empty_afterward: true
+  runpod_network_volumes_empty_afterward: true
+scope: >-
+  Establishes execution compatibility for the base MiniMax-H3 LoRA path with
+  gradient checkpointing disabled. It does not establish output quality or
+  real-runtime coverage for Ref2VA or VSA/Fast.

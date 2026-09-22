@@ -1,0 +1,450 @@
+schema_version: 1
+upgrade:
+  id: 2026-09-21-training-backends
+  status: complete
+  backends:
+    - name: ai-toolkit
+      from: {kind: embedded-git-commit, value: a4bbe167ce03521bf9052d2349f01b2997d67ac7}
+      to: {kind: embedded-git-commit-plus-patch, value: "31ddc709c35d3d3b820c636745397561f806b246+d1985f9bf380b6ce1c409b7875e2d367df486e19"}
+      source_refs:
+        - https://github.com/ostris/ai-toolkit/compare/a4bbe167ce03521bf9052d2349f01b2997d67ac7...31ddc709c35d3d3b820c636745397561f806b246
+        - https://github.com/ostris/ai-toolkit/commit/d1985f9bf380b6ce1c409b7875e2d367df486e19
+    - name: musubi-tuner
+      from: {kind: git-tag, value: v0.3.4}
+      to: {kind: git-commit, value: 4e7c7149249e7715e9168920feb4c420423abba7}
+      source_refs:
+        - https://github.com/kohya-ss/musubi-tuner/compare/v0.3.4...v0.3.5
+        - https://github.com/kohya-ss/musubi-tuner/releases/tag/v0.3.5
+
+changes:
+  - id: ai-qwen-image-2
+    backend: ai-toolkit
+    summary: Qwen-Image 2.1 text-to-image and edit/control implementations were added.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/diffusion_models/qwen_image_2]
+  - id: ai-anima
+    backend: ai-toolkit
+    summary: Anima image training was added.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/diffusion_models/anima]
+  - id: ai-mageflow
+    backend: ai-toolkit
+    summary: Mage-Flow base and edit/control implementations were added.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/diffusion_models/mageflow]
+  - id: ai-ltx25
+    backend: ai-toolkit
+    summary: LTX-2.5 image, video, audio-video, and conditioned video paths were added.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/diffusion_models/ltx2]
+  - id: ai-minimax-h3
+    backend: ai-toolkit
+    summary: MiniMax-H3 base, first-frame, Ref2VA, VSA/Fast, image, video, and optional-audio paths were added.
+    kind: execution-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/diffusion_models/minimax_h3]
+  - id: ai-yue2
+    backend: ai-toolkit
+    summary: YuE2 audio training was added.
+    kind: outside-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/tree/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/audio_models/yue2]
+  - id: ai-qwen25-omni
+    backend: ai-toolkit
+    summary: Qwen2.5-Omni language-model training was added.
+    kind: outside-contract
+    source_refs: [https://github.com/ostris/ai-toolkit/blob/31ddc709c35d3d3b820c636745397561f806b246/extensions_built_in/llm_models/qwen25_omni.py]
+  - id: ai-runtime-refresh
+    backend: ai-toolkit
+    summary: The pinned image's Python and model-library dependency set changed with the release.
+    kind: enhancement
+    source_refs: [https://github.com/ostris/ai-toolkit/compare/a4bbe167ce03521bf9052d2349f01b2997d67ac7...31ddc709c35d3d3b820c636745397561f806b246]
+  - id: musubi-minimax-h3
+    backend: musubi-tuner
+    summary: MiniMax-H3 T2VA, FL2VA, Ref2VA, and one-frame image training were added.
+    kind: execution-contract
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/blob/v0.3.5/docs/minimax_h3.md]
+  - id: musubi-minimax-h3-loss-recipes
+    backend: musubi-tuner
+    summary: Training-adapter, guidance-loss, and teacher-matching recipes were added for MiniMax-H3.
+    kind: execution-contract
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/blob/v0.3.5/docs/minimax_h3.md#choosing-a-training-recipe--]
+  - id: musubi-minimax-h3-mixed
+    backend: musubi-tuner
+    summary: Mixed image and video datasets are described as expected to work but untested upstream.
+    kind: enhancement
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/blob/v0.3.5/docs/minimax_h3.md#choosing-a-training-recipe--]
+  - id: musubi-krea-convrot
+    backend: musubi-tuner
+    summary: Krea 2 ConvRot INT8 execution was added.
+    kind: enhancement
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/releases/tag/v0.3.5]
+  - id: musubi-krea-offload
+    backend: musubi-tuner
+    summary: Krea 2 checkpoint CPU offload was added.
+    kind: enhancement
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/releases/tag/v0.3.5]
+  - id: musubi-krea-turbo
+    backend: musubi-tuner
+    summary: Krea 2 Turbo LoRA composition was added to sampling.
+    kind: enhancement
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/releases/tag/v0.3.5]
+  - id: musubi-audio-sidecars
+    backend: musubi-tuner
+    summary: Audio sidecars and JSONL-relative media paths were added to shared datasets.
+    kind: execution-contract
+    source_refs: [https://github.com/kohya-ss/musubi-tuner/blob/v0.3.5/docs/minimax_h3.md#dataset-configuration--]
+
+contracts:
+  - id: ai-qwen-image-2-t2i
+    change_ids: [ai-qwen-image-2]
+    backend: ai-toolkit
+    family: qwen-image-2.1
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 T2I.
+  - id: ai-qwen-image-2-edit
+    change_ids: [ai-qwen-image-2]
+    backend: ai-toolkit
+    family: qwen-image-2.1
+    variant: edit
+    mode: image-edit
+    dataset: {kind: image, conditioning: single-control-image}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_control_subdir_inside_each_owned_dataset], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Edit.
+  - id: ai-anima-image
+    change_ids: [ai-anima]
+    backend: ai-toolkit
+    family: anima
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for AI-Toolkit Anima.
+  - id: ai-mageflow-base
+    change_ids: [ai-mageflow]
+    backend: ai-toolkit
+    family: mage-flow
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Mage-Flow Base.
+  - id: ai-mageflow-edit
+    change_ids: [ai-mageflow]
+    backend: ai-toolkit
+    family: mage-flow
+    variant: edit
+    mode: image-edit
+    dataset: {kind: image, conditioning: single-control-image}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for Mage-Flow Edit.
+  - id: ai-ltx25-image
+    change_ids: [ai-ltx25]
+    backend: ai-toolkit
+    family: ltx-2.5
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The image dataset path has no real optimizer smoke.
+  - id: ai-ltx25-video
+    change_ids: [ai-ltx25]
+    backend: ai-toolkit
+    family: ltx-2.5
+    variant: base
+    mode: text-to-video
+    dataset: {kind: video, conditioning: none-no-audio}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for silent LTX-2.5 video.
+  - id: ai-ltx25-video-audio
+    change_ids: [ai-ltx25]
+    backend: ai-toolkit
+    family: ltx-2.5
+    variant: base
+    mode: text-to-video-with-audio
+    dataset: {kind: video, conditioning: target-audio}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for LTX-2.5 joint audio-video training.
+  - id: ai-ltx25-conditioned-video
+    change_ids: [ai-ltx25]
+    backend: ai-toolkit
+    family: ltx-2.5
+    variant: base
+    mode: image-to-video
+    dataset: {kind: video, conditioning: first-frame-control}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: A real optimizer smoke is missing for conditioned video.
+  - id: ai-minimax-h3-image
+    change_ids: [ai-minimax-h3]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: base
+    mode: text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit-single-latent-frame], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [ai-toolkit-minimax-h3-image-runpod-2026-09-22], lifecycle: [ai-toolkit-minimax-h3-image-runpod-2026-09-22]}
+  - id: ai-minimax-h3-video
+    change_ids: [ai-minimax-h3]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: base
+    mode: text-to-video
+    dataset: {kind: video, conditioning: none-no-audio}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_typed_video_dataset_settings], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [ai-toolkit-minimax-h3-runpod-2026-09-21], lifecycle: [ai-toolkit-minimax-h3-runpod-2026-09-21]}
+  - id: ai-minimax-h3-video-audio
+    change_ids: [ai-minimax-h3]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: base
+    mode: text-to-video-with-audio
+    dataset: {kind: video, conditioning: target-audio}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit-joint-audio], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The completed base smoke explicitly disabled audio; joint audio remains untested.
+  - id: ai-minimax-h3-first-frame
+    change_ids: [ai-minimax-h3]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: base
+    mode: first-frame-to-video
+    dataset: {kind: video, conditioning: first-frame-control}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-class-audit-first-frame], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: No real optimizer-step smoke has been run for first-frame conditioning.
+  - id: ai-minimax-h3-ref2va
+    change_ids: [ai-minimax-h3]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: ref2va
+    mode: reference-to-video-with-audio
+    dataset: {kind: video, conditioning: reference-control}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-ref2va-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Ref2VA has no real optimizer-step smoke.
+  - id: ai-minimax-h3-vsa
+    change_ids: [ai-minimax-h3]
+    backend: ai-toolkit
+    family: minimax-h3
+    variant: vsa-fast
+    mode: text-to-video
+    dataset: {kind: video, conditioning: none-no-audio}
+    execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [exact-vsa-class-audit], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: VSA/Fast has no real optimizer-step smoke and cannot inherit base-model evidence.
+  - id: ai-yue2-audio
+    change_ids: [ai-yue2]
+    backend: ai-toolkit
+    family: yue2
+    variant: base
+    mode: audio-training
+    dataset: {kind: audio, conditioning: text}
+    disposition: unsupported
+    missing_capability: Kura has no audio-training dataset and artifact contract.
+    evidence: {source: [exact-registry-and-class-diff]}
+  - id: ai-qwen25-omni-llm
+    change_ids: [ai-qwen25-omni]
+    backend: ai-toolkit
+    family: qwen2.5-omni
+    variant: base
+    mode: language-model-training
+    dataset: {kind: multimodal-language, conditioning: mixed}
+    disposition: unsupported
+    missing_capability: Kura has no language-model training dataset, output, or evaluation contract.
+    evidence: {source: [exact-registry-and-class-diff]}
+  - id: ai-runtime-dependencies
+    change_ids: [ai-runtime-refresh]
+    backend: ai-toolkit
+    family: shared-runtime
+    variant: 0.13.18
+    mode: dependency-refresh
+    dataset: {kind: none, conditioning: none}
+    disposition: not_applicable
+    rationale: Dependency compatibility is exercised by per-family pinned-image import smoke and is not an optimizer contract by itself.
+    evidence: {source: [exact-lockfile-and-container-diff]}
+
+  - id: musubi-h3-t2va-guidance
+    change_ids: [musubi-minimax-h3, musubi-minimax-h3-loss-recipes]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: t2va-guidance-loss
+    dataset: {kind: video, conditioning: none-optional-target-audio}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_command_musubi_minimax_h3_generates_guidance_loss_pipeline], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [musubi-minimax-h3-runpod-2026-09-22], lifecycle: [musubi-minimax-h3-runpod-2026-09-22]}
+  - id: musubi-h3-fl2va
+    change_ids: [musubi-minimax-h3]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: fl2va
+    dataset: {kind: video, conditioning: first-and-last-frame}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed first/last-frame dataset and native command path compile; a real optimizer step remains unverified.
+  - id: musubi-h3-ref2va
+    change_ids: [musubi-minimax-h3]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: ref2va-base
+    mode: ref2va
+    dataset: {kind: video-jsonl, conditioning: ordered-image-video-audio-references}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed ordered-reference JSONL, Ref2VA transformer selection, and native command path compile; a real optimizer step remains unverified.
+  - id: musubi-h3-image-plain
+    change_ids: [musubi-minimax-h3]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: one-frame-text-to-image
+    dataset: {kind: image, conditioning: none}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [musubi-minimax-h3-image-runpod-2026-09-22], lifecycle: [musubi-minimax-h3-image-runpod-2026-09-22]}
+  - id: musubi-h3-image-edit
+    change_ids: [musubi-minimax-h3]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: one-frame-edit-inbetween
+    dataset: {kind: image, conditioning: timed-controls}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed timed-control dataset and FL2VA one-frame command path compile; a real optimizer step remains unverified.
+  - id: musubi-h3-image-reference
+    change_ids: [musubi-minimax-h3]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: ref2va-base
+    mode: one-frame-reference-conditioned
+    dataset: {kind: image, conditioning: ordered-untimed-references}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed ordered-reference image dataset and Ref2VA one-frame command path compile; a real optimizer step remains unverified.
+  - id: musubi-h3-training-adapter
+    change_ids: [musubi-minimax-h3-loss-recipes]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-or-ref2va
+    mode: de-distillation-training-adapter
+    dataset: {kind: image-or-video, conditioning: recipe-dependent}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder, base_weights], cache_stages: [latents, text-encoder], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide-training-adapters], compile: [tests/test_cli.py::MusubiBackendTests.test_command_musubi_minimax_h3_training_adapter_is_recorded_without_guidance_loss], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed loss selector and base_weights role compile with a BF16 DiT, and known pre-quantized ConvRot INT8 bundles are rejected early; a real optimizer step remains unverified.
+  - id: musubi-h3-teacher-video
+    change_ids: [musubi-minimax-h3-loss-recipes]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: teacher-matching-video
+    dataset: {kind: video, conditioning: endpoint-or-reference-teacher}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [condition-specific-latents, teacher-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed teacher datasets, teacher fields, and asymmetric task projection compile; a real optimizer step remains unverified.
+  - id: musubi-h3-teacher-image
+    change_ids: [musubi-minimax-h3-loss-recipes]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: teacher-matching-image
+    dataset: {kind: image, conditioning: subject-reference-teacher}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-subject-reference-latents, teacher-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed subject-reference image dataset and one-frame teacher path compile; a real optimizer step remains unverified.
+  - id: musubi-h3-mixed-image-video
+    change_ids: [musubi-minimax-h3-mixed]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: fl2va-base
+    mode: mixed-image-video
+    dataset: {kind: mixed-image-video, conditioning: recipe-dependent}
+    disposition: not_applicable
+    rationale: Upstream explicitly describes this combination as expected but untested, so this upgrade makes no Kura support claim for it.
+    evidence: {source: [v0.3.5-minimax-guide-table-b]}
+  - id: musubi-krea-convrot-int8
+    change_ids: [musubi-krea-convrot]
+    backend: musubi-tuner
+    family: krea-2
+    variant: convrot-int8
+    mode: lora
+    dataset: {kind: image, conditioning: model-dependent}
+    execution: {adapter: built-in, entrypoints: [krea2_cache_latents.py, krea2_cache_text_encoder_outputs.py, krea2_train_network.py], model_roles: [dit, vae, text_encoder], cache_stages: [latents, text-encoder], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-release-and-source-audit], compile: [tests/test_cli.py::MusubiBackendTests.test_command_musubi_krea2_projects_convrot_and_checkpoint_cpu_offload, tests/test_cli.py::MusubiBackendTests.test_command_musubi_krea2_rejects_incompatible_memory_modes], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed ConvRot INT8 path compiles and its incompatibilities are guarded; a real optimizer step remains unverified.
+  - id: musubi-krea-checkpoint-offload
+    change_ids: [musubi-krea-offload]
+    backend: musubi-tuner
+    family: krea-2
+    variant: base
+    mode: lora-with-checkpoint-offload
+    dataset: {kind: image, conditioning: model-dependent}
+    execution: {adapter: built-in, entrypoints: [krea2_cache_latents.py, krea2_cache_text_encoder_outputs.py, krea2_train_network.py], model_roles: [dit, vae, text_encoder], cache_stages: [latents, text-encoder], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-release-and-source-audit], compile: [tests/test_cli.py::MusubiBackendTests.test_command_musubi_krea2_projects_convrot_and_checkpoint_cpu_offload, tests/test_cli.py::MusubiBackendTests.test_command_musubi_krea2_rejects_incompatible_memory_modes], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The typed checkpoint CPU-offload path compiles and its gradient-checkpointing prerequisite is guarded; a real optimizer step remains unverified.
+  - id: musubi-krea-turbo-sampling
+    change_ids: [musubi-krea-turbo]
+    backend: musubi-tuner
+    family: krea-2
+    variant: turbo
+    mode: training-time-sampling
+    dataset: {kind: image, conditioning: model-dependent}
+    disposition: not_applicable
+    rationale: Kura disables Musubi training-time sampling; evaluation and rendering use separate Kura render contracts.
+    evidence: {source: [v0.3.5-release-and-source-audit]}
+  - id: musubi-shared-audio-sidecars
+    change_ids: [musubi-audio-sidecars]
+    backend: musubi-tuner
+    family: shared-video-datasets
+    variant: v0.3.5
+    mode: target-and-reference-audio
+    dataset: {kind: video-jsonl-or-directory, conditioning: audio-sidecars-and-relative-references}
+    disposition: unsupported
+    missing_capability: MiniMax-H3 now has a typed JSONL contract for target and reference audio, but Kura does not yet expose the shared upstream audio-sidecar fields for its other video architectures.
+    evidence: {source: [v0.3.5-dataset-source-audit]}
+  - id: musubi-h3-audio-sidecars
+    change_ids: [musubi-audio-sidecars]
+    backend: musubi-tuner
+    family: minimax-h3
+    variant: v0.3.5
+    mode: target-and-reference-audio
+    dataset: {kind: video-jsonl, conditioning: audio-sidecars-and-relative-references}
+    execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [audio-video-reference-latents, text-encoder], output: lora-safetensors-plus-state, lifecycle_changed: false}
+    disposition: support
+    evidence: {source: [v0.3.5-dataset-source-audit], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records, tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_reference_jsonl_rejects_one_frame_audio_and_reference_overflow], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Target and reference audio paths and limits are typed and validated for MiniMax-H3; a real optimizer step with explicit sidecars remains unverified.

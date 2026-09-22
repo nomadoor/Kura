@@ -1,0 +1,45 @@
+schema_version: 1
+run_id: 20260922-1610_musubi-h3-t2va-guidance-h2d-ring1_fde5
+executor: runpod
+runtime:
+  image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+  gpu: NVIDIA A40
+  cost_per_hour_usd: 0.49
+  gradient_checkpointing: true
+  blocks_to_swap: 48
+  block_swap_h2d_only: true
+  block_swap_ring_size: 1
+dataset:
+  items: 1
+  resolution: 256x256
+  frames: 124
+  target_audio: absent
+observed:
+  optimizer_steps: 1
+  average_loss: 4.01
+  remote_exit_code: 0
+  output_safetensors: 2
+  final_output_bytes: 9387880
+  final_output_sha256: 62562271f1bee2e607f56fc227f512a81fc6cd851501bbaf995469063dde81f4
+  lora_b_tensors: 200
+  finite_lora_b_tensors: 200
+  nonzero_lora_b_tensors: 200
+  durable_state_step: 1
+  recovery_required: false
+  pod_stopped_at: 2026-09-22T16:57:12.124915+09:00
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  finite_nonzero_lora_update: true
+  durable_state_recovered: true
+  output_recovered: true
+  pod_stopped: true
+  runpod_pods_empty_afterward: true
+  runpod_network_volumes_empty_afterward: true
+scope: >-
+  Establishes real optimizer execution and lifecycle recovery for the built-in
+  MiniMax-H3 T2VA guidance-loss path with a silent 124-frame target video,
+  ConvRot INT8 base, and typed H2D-only block swap. It does not establish
+  output quality, supervised-audio training, one-frame/image-only training,
+  FL2VA, Ref2VA, training-adapter, or teacher-matching runtime coverage.

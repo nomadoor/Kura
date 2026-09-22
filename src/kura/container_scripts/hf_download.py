@@ -94,6 +94,34 @@ def stable_link_target(path, link_path):
     return path
 
 
+def publish_download(path, link_path, item):
+    mode = item.get("link_mode") or "symlink"
+    if mode not in ("symlink", "hardlink"):
+        raise SystemExit(f"[kura] unsupported model cache link_mode {mode!r}: {link_path}")
+    source = os.path.realpath(path)
+    if os.path.lexists(link_path):
+        if os.path.islink(link_path):
+            os.unlink(link_path)
+        else:
+            try:
+                same_file = os.path.samefile(link_path, source)
+            except OSError:
+                same_file = False
+            if same_file:
+                return
+            raise SystemExit(f"[kura] cannot replace non-symlink model cache path: {link_path}")
+    if mode == "hardlink":
+        try:
+            os.link(source, link_path)
+        except OSError as exc:
+            raise SystemExit(
+                f"[kura] cannot hardlink model cache path; Hugging Face cache and model cache "
+                f"must share a filesystem for this backend role: {link_path}: {exc}"
+            ) from exc
+        return
+    os.symlink(stable_link_target(path, link_path), link_path)
+
+
 def workspace_mapped_path(path):
     try:
         target = os.path.abspath(path)
@@ -264,13 +292,7 @@ def run_one(item):
             path = output.strip().splitlines()[-1] if output.strip() else ""
             if not path:
                 raise SystemExit(f"[kura] hf download did not return a cache path: {label}")
-            if os.path.lexists(link_path):
-                if os.path.islink(link_path):
-                    os.unlink(link_path)
-                elif os.path.realpath(link_path) != os.path.realpath(path):
-                    raise SystemExit(f"[kura] cannot replace non-symlink model cache path: {link_path}")
-            if not os.path.lexists(link_path):
-                os.symlink(stable_link_target(path, link_path), link_path)
+            publish_download(path, link_path, item)
             print(f"[kura] downloaded {item['key']} -> {path}", flush=True)
             print(f"[kura] linked {item['key']} -> {link_path}", flush=True)
             return

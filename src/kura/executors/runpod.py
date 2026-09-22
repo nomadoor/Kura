@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,7 @@ import yaml
 from kura import __version__
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
-from kura.executors.common import CONTAINER_WORKSPACE, RUNPOD_API_ROOT, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
 class RunPodAPIError(ValueError):
@@ -33,30 +34,136 @@ class RunPodAPIError(ValueError):
         self.status_code = status_code
 
 
-def _runpod_request_json(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None, *, timeout: float = 30.0) -> Any:
-    body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = Request(f"{RUNPOD_API_ROOT}{path}", data=body, method=method, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"})
+def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, timeout: float = 30.0) -> dict[str, Any]:
+    body = json.dumps({"query": query, "variables": variables}).encode("utf-8")
+    request = Request(
+        "https://api.runpod.io/graphql",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": f"Kura/{__version__}",
+        },
+    )
+    request.add_unredirected_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         detail = _redact_secret_text(exc.read().decode("utf-8", errors="replace"))
-        raise RunPodAPIError(f"RunPod API {method} {path} failed ({exc.code}): {detail}", status_code=exc.code) from exc
+        raise RunPodAPIError(f"RunPod GraphQL failed ({exc.code}): {detail}", status_code=exc.code) from exc
     except URLError as exc:
         raise ValueError(f"RunPod API is unreachable: {exc.reason}") from exc
-    if not raw:
-        return {}
     try:
-        return json.loads(raw)
+        value = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError("RunPod API returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("RunPod GraphQL returned an unexpected response")
+    errors = value.get("errors")
+    if isinstance(errors, list) and errors:
+        messages = [str(item.get("message")) for item in errors if isinstance(item, dict) and item.get("message")]
+        raise RunPodAPIError(
+            "RunPod GraphQL failed: " + _redact_secret_text("; ".join(messages) or str(errors)),
+            status_code=400,
+        )
+    data = value.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("RunPod GraphQL response did not contain data")
+    return data
+
+
+def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("interruptible"):
+        raise ValueError("RunPod interruptible Pod creation is not supported by Kura's GraphQL control plane")
+    gpu_type_ids = payload.get("gpuTypeIds")
+    if not isinstance(gpu_type_ids, list) or len(gpu_type_ids) != 1 or not isinstance(gpu_type_ids[0], str):
+        raise ValueError("RunPod GraphQL Pod creation requires exactly one gpuTypeIds entry")
+    result: dict[str, Any] = {
+        "gpuTypeId": gpu_type_ids[0],
+        "gpuCount": payload.get("gpuCount", 1),
+        "containerDiskInGb": payload.get("containerDiskInGb", 50),
+        "volumeInGb": payload.get("volumeInGb", 0),
+        "startSsh": True,
+    }
+    for source, target in (
+        ("name", "name"),
+        ("cloudType", "cloudType"),
+        ("imageName", "imageName"),
+        ("templateId", "templateId"),
+        ("supportPublicIp", "supportPublicIp"),
+        ("volumeMountPath", "volumeMountPath"),
+        ("networkVolumeId", "networkVolumeId"),
+    ):
+        if payload.get(source) is not None:
+            result[target] = payload[source]
+    ports = payload.get("ports")
+    if isinstance(ports, list):
+        result["ports"] = ",".join(str(item) for item in ports)
+    env = payload.get("env")
+    if isinstance(env, dict):
+        result["env"] = [{"key": str(key), "value": str(value)} for key, value in sorted(env.items())]
+    start_command = payload.get("dockerStartCmd")
+    if isinstance(start_command, list) and all(isinstance(item, str) for item in start_command):
+        result["dockerArgs"] = shlex.join(start_command)
+    data_center_ids = payload.get("dataCenterIds")
+    if isinstance(data_center_ids, list) and data_center_ids:
+        if len(data_center_ids) != 1:
+            raise ValueError("RunPod GraphQL Pod creation requires at most one dataCenterIds entry per attempt")
+        result["dataCenterId"] = str(data_center_ids[0])
+    country_codes = payload.get("countryCodes")
+    if isinstance(country_codes, list) and country_codes:
+        if len(country_codes) != 1:
+            raise ValueError("RunPod GraphQL Pod creation requires at most one countryCodes entry per attempt")
+        result["countryCode"] = str(country_codes[0])
+    return result
 
 
 def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any] | None = None, *, timeout: float = 30.0) -> dict[str, Any]:
-    value = _runpod_request_json(method, path, api_key, payload, timeout=timeout)
-    if not isinstance(value, dict):
-        raise ValueError("RunPod API returned an unexpected response")
-    return value
+    if method == "POST" and path == "/pods" and isinstance(payload, dict):
+        query = """
+        mutation createPod($input: PodFindAndDeployOnDemandInput!) {
+          podFindAndDeployOnDemand(input: $input) {
+            id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
+            volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange env
+            machine { id dataCenterId gpuDisplayName location }
+          }
+        }
+        """
+        data = _runpod_graphql(query, {"input": _runpod_graphql_create_input(payload)}, api_key, timeout=timeout)
+        pod = data.get("podFindAndDeployOnDemand")
+        if not isinstance(pod, dict):
+            raise ValueError("RunPod GraphQL create response did not contain a Pod")
+        return pod
+    if path.startswith("/pods/"):
+        pod_id = path.removeprefix("/pods/")
+        if not pod_id or "/" in pod_id:
+            raise ValueError(f"unsupported RunPod API path: {path}")
+        if method == "GET":
+            query = """
+            query getPod($podId: String!) {
+              pod(input: {podId: $podId}) {
+                id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
+                volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange
+                machine { id dataCenterId gpuDisplayName location }
+                runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
+              }
+            }
+            """
+            data = _runpod_graphql(query, {"podId": pod_id}, api_key, timeout=timeout)
+            pod = data.get("pod")
+            if not isinstance(pod, dict):
+                raise RunPodAPIError("RunPod Pod not found", status_code=404)
+            return pod
+        if method == "DELETE":
+            query = """
+            mutation terminatePod($podId: String!) {
+              podTerminate(input: {podId: $podId})
+            }
+            """
+            _runpod_graphql(query, {"podId": pod_id}, api_key, timeout=timeout)
+            return {}
+    raise ValueError(f"unsupported RunPod API operation: {method} {path}")
 
 
 def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> dict[str, Any]:
@@ -86,11 +193,11 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> 
         data=body,
         method="POST",
         headers={
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "User-Agent": f"Kura/{__version__}",
         },
     )
+    request.add_unredirected_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -244,6 +351,18 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     gpu_type_priority = config.get("gpu_type_priority")
     if gpu_type_priority is not None and gpu_type_priority not in ("availability", "custom"):
         raise ValueError("runpod.gpu_type_priority must be availability or custom")
+    if gpu_type_priority == "availability" and len(gpu_types) > 1:
+        raise ValueError(
+            "runpod.gpu_type_priority=availability cannot preserve availability ordering "
+            "across multiple GPU candidates through the GraphQL control plane; "
+            "use custom ordering or configure one GPU type"
+        )
+    if data_center_priority == "availability" and data_center_ids is not None and len(data_center_ids) > 1:
+        raise ValueError(
+            "runpod.data_center_priority=availability cannot preserve availability ordering "
+            "across multiple data centers through the GraphQL control plane; "
+            "use custom ordering or configure one data center"
+        )
     cloud_types_raw = config.get("cloud_types")
     cloud_type_raw = config.get("cloud_type", "ANY")
     if cloud_types_raw is not None:
@@ -283,6 +402,23 @@ def _runpod_gpu_attempts(gpu_type_ids: list[str]) -> list[list[str]]:
     """Return ordered GPU attempts for deterministic fallback."""
 
     return [[gpu_type_id] for gpu_type_id in gpu_type_ids]
+
+
+def _runpod_location_attempts(settings: dict[str, Any]) -> list[dict[str, list[str]]]:
+    """Expand location filters into GraphQL-compatible single-location attempts."""
+
+    data_centers = settings.get("data_center_ids") or [None]
+    countries = settings.get("country_codes") or [None]
+    attempts: list[dict[str, list[str]]] = []
+    for data_center in data_centers:
+        for country in countries:
+            attempt: dict[str, list[str]] = {}
+            if data_center is not None:
+                attempt["dataCenterIds"] = [str(data_center)]
+            if country is not None:
+                attempt["countryCodes"] = [str(country)]
+            attempts.append(attempt)
+    return attempts
 
 
 def _is_runpod_capacity_error(exc: ValueError) -> bool:
@@ -459,11 +595,11 @@ def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
         "public_ip": pod.get("publicIp"),
         "port_mappings": pod.get("portMappings"),
         "machine": {
-            "id": machine.get("machineId"),
+            "id": machine.get("id"),
             "data_center_id": machine.get("dataCenterId"),
             "gpu_display_name": gpu.get("displayName") or gpu.get("id") or machine.get("gpuDisplayName"),
-            "memory_gb": machine.get("memoryInGb"),
-            "vcpu_count": machine.get("vcpuCount"),
+            "memory_gb": pod.get("memoryInGb"),
+            "vcpu_count": pod.get("vcpuCount"),
         },
     }
 
@@ -555,14 +691,6 @@ sleep infinity
     }
     if settings.get("support_public_ip") is not None:
         request_body["supportPublicIp"] = bool(settings["support_public_ip"])
-    if settings.get("data_center_ids") is not None:
-        request_body["dataCenterIds"] = settings["data_center_ids"]
-    if settings.get("data_center_priority") is not None:
-        request_body["dataCenterPriority"] = settings["data_center_priority"]
-    if settings.get("gpu_type_priority") is not None:
-        request_body["gpuTypePriority"] = settings["gpu_type_priority"]
-    if settings.get("country_codes") is not None:
-        request_body["countryCodes"] = settings["country_codes"]
     if start_command is not None:
         request_body["dockerStartCmd"] = start_command
     if isinstance(settings.get("template_id"), str) and settings["template_id"]:
@@ -575,7 +703,11 @@ sleep infinity
     safe_request["env"] = _safe_env(runtime_env)
     safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
     safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
+    safe_request["gpuTypePriority"] = settings.get("gpu_type_priority")
     safe_request["cloudTypeCandidates"] = settings["cloud_types"]
+    safe_request["dataCenterCandidates"] = settings.get("data_center_ids")
+    safe_request["dataCenterPriority"] = settings.get("data_center_priority")
+    safe_request["countryCandidates"] = settings.get("country_codes")
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
         return None
@@ -607,7 +739,7 @@ sleep infinity
                 break
             launch_errors = []
             round_exceptions: list[ValueError] = []
-            attempts: list[tuple[list[str], str]] = []
+            attempts: list[tuple[list[str], str, dict[str, list[str]]]] = []
             transient_probe = False
             if wait_for_capacity_sec:
                 controller_phase = "probe"
@@ -621,7 +753,10 @@ sleep infinity
                             continue
                         for cloud in candidate.get("clouds", []):
                             if isinstance(cloud, dict) and cloud.get("available") and cloud.get("cloud_type") in settings["cloud_types"]:
-                                attempts.append(([candidate["gpu_type_id"]], cloud["cloud_type"]))
+                                attempts.extend(
+                                    ([candidate["gpu_type_id"]], cloud["cloud_type"], placement)
+                                    for placement in _runpod_location_attempts(settings)
+                                )
                     if not attempts:
                         transient_rounds = 0
                         launch_errors.append({"gpu_type_ids": ", ".join(settings["gpu_type_ids"]), "cloud_type": ", ".join(settings["cloud_types"]), "error": "RunPod stock snapshot reports no matching GPU capacity", "classification": "capacity"})
@@ -633,12 +768,18 @@ sleep infinity
                         break
                     transient_rounds += 1
             else:
-                attempts = [(gpu_type_ids, cloud_type) for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]) for cloud_type in settings["cloud_types"]]
+                attempts = [
+                    (gpu_type_ids, cloud_type, placement)
+                    for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"])
+                    for cloud_type in settings["cloud_types"]
+                    for placement in _runpod_location_attempts(settings)
+                ]
 
-            for gpu_type_ids, cloud_type in attempts:
+            for gpu_type_ids, cloud_type, placement in attempts:
                 attempt_request = dict(request_body)
                 attempt_request["gpuTypeIds"] = gpu_type_ids
                 attempt_request["cloudType"] = cloud_type
+                attempt_request.update(placement)
                 controller_phase = "create"
                 try:
                     pod = _runpod_request("POST", "/pods", api_key, attempt_request)
@@ -750,7 +891,12 @@ sleep infinity
         raise ValueError("RunPod launch failed for all configured cloud types: " + realization["error"])
     safe_used_request = dict(used_request)
     safe_used_request["env"] = _safe_env(runtime_env)
+    safe_used_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
+    safe_used_request["gpuTypePriority"] = settings.get("gpu_type_priority")
     safe_used_request["cloudTypeCandidates"] = settings["cloud_types"]
+    safe_used_request["dataCenterCandidates"] = settings.get("data_center_ids")
+    safe_used_request["dataCenterPriority"] = settings.get("data_center_priority")
+    safe_used_request["countryCandidates"] = settings.get("country_codes")
     if capacity_wait_started_at is not None:
         safe_used_request["capacityWait"] = {"startedAt": capacity_wait_started_at, "failedRounds": capacity_rounds}
     pod_id = pod.get("id")
@@ -835,21 +981,17 @@ sleep infinity
     }
     if settings.get("support_public_ip") is not None:
         request_body["supportPublicIp"] = bool(settings["support_public_ip"])
-    if settings.get("data_center_ids") is not None:
-        request_body["dataCenterIds"] = settings["data_center_ids"]
-    if settings.get("data_center_priority") is not None:
-        request_body["dataCenterPriority"] = settings["data_center_priority"]
-    if settings.get("gpu_type_priority") is not None:
-        request_body["gpuTypePriority"] = settings["gpu_type_priority"]
-    if settings.get("country_codes") is not None:
-        request_body["countryCodes"] = settings["country_codes"]
     if isinstance(settings.get("ports"), list) and all(isinstance(port, str) for port in settings["ports"]):
         request_body["ports"] = settings["ports"]
     safe_request = dict(request_body)
     safe_request["env"] = _safe_env(runtime_env)
     safe_request["gpuTypeIds"] = _runpod_gpu_attempts(settings["gpu_type_ids"])[0]
     safe_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
+    safe_request["gpuTypePriority"] = settings.get("gpu_type_priority")
     safe_request["cloudTypeCandidates"] = settings["cloud_types"]
+    safe_request["dataCenterCandidates"] = settings.get("data_center_ids")
+    safe_request["dataCenterPriority"] = settings.get("data_center_priority")
+    safe_request["countryCandidates"] = settings.get("country_codes")
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
         return None
@@ -862,15 +1004,19 @@ sleep infinity
     launch_errors: list[dict[str, str]] = []
     for gpu_type_ids in _runpod_gpu_attempts(settings["gpu_type_ids"]):
         for cloud_type in settings["cloud_types"]:
-            attempt_request = dict(request_body)
-            attempt_request["gpuTypeIds"] = gpu_type_ids
-            attempt_request["cloudType"] = cloud_type
-            try:
-                pod = _runpod_request("POST", "/pods", api_key, attempt_request)
-                used_request = attempt_request
+            for placement in _runpod_location_attempts(settings):
+                attempt_request = dict(request_body)
+                attempt_request["gpuTypeIds"] = gpu_type_ids
+                attempt_request["cloudType"] = cloud_type
+                attempt_request.update(placement)
+                try:
+                    pod = _runpod_request("POST", "/pods", api_key, attempt_request)
+                    used_request = attempt_request
+                    break
+                except ValueError as exc:
+                    launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
+            if pod is not None:
                 break
-            except ValueError as exc:
-                launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})
         if pod is not None:
             break
     if pod is None or used_request is None:
@@ -893,7 +1039,12 @@ sleep infinity
         raise ValueError("RunPod create response did not include a pod ID")
     safe_used_request = dict(used_request)
     safe_used_request["env"] = _safe_env(runtime_env)
+    safe_used_request["gpuTypeCandidates"] = settings["gpu_type_ids"]
+    safe_used_request["gpuTypePriority"] = settings.get("gpu_type_priority")
     safe_used_request["cloudTypeCandidates"] = settings["cloud_types"]
+    safe_used_request["dataCenterCandidates"] = settings.get("data_center_ids")
+    safe_used_request["dataCenterPriority"] = settings.get("data_center_priority")
+    safe_used_request["countryCandidates"] = settings.get("country_codes")
     state, _ = _runpod_state(pod)
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)

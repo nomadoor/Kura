@@ -12,6 +12,11 @@ from kura.backends.shared import _truthy
 from kura.provenance import artifact_pinning
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
+    "minimax_h3": (
+        "minimax_h3_train_network.py",
+        "minimax_h3_cache_latents.py",
+        "minimax_h3_cache_text_encoder_outputs.py",
+    ),
     "flux2": (
         "flux_2_train_network.py",
         "flux_2_cache_latents.py",
@@ -184,14 +189,52 @@ def _krea2_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return downloads
 
 
+def _minimax_h3_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    override = _musubi_backend_override(run)
+    architecture = _musubi_architecture(run)
+    if architecture not in ("minimax_h3", "minimaxh3"):
+        return {}
+    bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
+    if bundle in ("none", "off", "false"):
+        return {}
+    aliases = {
+        "minimax-h3-pruned-int8": "auto",
+        "minimax-h3-fl2va-pruned-int8": "fl2va",
+        "minimax-h3-ref2va-pruned-int8": "ref2va",
+    }
+    bundle = aliases.get(bundle, bundle)
+    if bundle not in ("auto", "fl2va", "ref2va"):
+        raise ValueError(
+            "Musubi MiniMax-H3 model_bundle must be auto, minimax-h3-fl2va-pruned-int8, "
+            "minimax-h3-ref2va-pruned-int8, or none"
+        )
+    task = str(override.get("task") or "t2va").lower()
+    transformer_family = "ref2va" if bundle == "ref2va" or (bundle == "auto" and task == "ref2va") else "fl2va"
+    repo = "Comfy-Org/MiniMax-H3"
+    return {
+        "dit": {
+            "repo": repo,
+            "filename": f"diffusion_models/minimax_h3_{transformer_family}_pruned_int8_convrot.safetensors",
+        },
+        "video_vae": {"repo": repo, "filename": "vae/minimax_h3_video_vae_fp16.safetensors"},
+        "audio_vae": {"repo": repo, "filename": "vae/minimax_h3_audio_vae_fp32.safetensors"},
+        "text_encoder": {
+            "repo": repo,
+            "filename": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        },
+    }
+
+
 def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     downloads = _flux2_klein_bundle(run)
     downloads.update(_krea2_bundle(run))
+    downloads.update(_minimax_h3_bundle(run))
     return downloads
 
 
 def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[dict[str, str]], dict[str, str]]:
     override = _musubi_backend_override(run)
+    architecture = _musubi_architecture(run)
     existing_paths = existing_paths or {}
     resolved_downloads: dict[str, Any] = _known_musubi_bundle(run)
     downloads = override.get("model_downloads")
@@ -223,6 +266,8 @@ def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, s
                 "filename": item_filename,
                 "link_path": _musubi_model_cache_path(repo_id, key, item_filename),
             }
+            if architecture in ("minimax_h3", "minimaxh3"):
+                item["link_mode"] = "hardlink"
             revision = value.get("revision")
             if isinstance(revision, str) and revision:
                 item["revision"] = revision
@@ -347,6 +392,18 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "vae": "safetensors",
             "text_encoder": "safetensors",
             "turbo_dit": "safetensors",
+        },
+        "minimax_h3": {
+            "dit": "safetensors",
+            "video_vae": "safetensors",
+            "audio_vae": "safetensors",
+            "text_encoder": "safetensors",
+        },
+        "minimaxh3": {
+            "dit": "safetensors",
+            "video_vae": "safetensors",
+            "audio_vae": "safetensors",
+            "text_encoder": "safetensors",
         },
         "qwen_image": {
             "dit": "safetensors",

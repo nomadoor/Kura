@@ -153,6 +153,94 @@ def safetensors_tensor_dtypes(path):
     return dtypes
 
 
+def lora_b_update_stats(path):
+    try:
+        import numpy
+    except ModuleNotFoundError:  # Host-side unit tests do not install the container's NumPy dependency.
+        numpy = None
+
+    with open(path, "rb") as handle:
+        prefix = handle.read(8)
+        if len(prefix) != 8:
+            fail(f"saved LoRA has no safetensors header: {path}")
+        header_size = int.from_bytes(prefix, "little", signed=False)
+        if header_size <= 0 or header_size > path.stat().st_size - 8:
+            fail(f"saved LoRA has an invalid safetensors header size: {path}")
+        try:
+            header = json.loads(handle.read(header_size))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            fail(f"saved LoRA has an invalid safetensors header: {path}: {exc}")
+        if not isinstance(header, dict):
+            fail(f"saved LoRA has a non-object safetensors header: {path}")
+        data_start = 8 + header_size
+        candidates = [
+            (name, value)
+            for name, value in header.items()
+            if name != "__metadata__" and "lora_b" in name.lower() and isinstance(value, dict)
+        ]
+        if not candidates:
+            fail(f"saved LoRA has no lora_B tensors: {path}")
+        updated = 0
+        for name, tensor in candidates:
+            offsets = tensor.get("data_offsets")
+            dtype = tensor.get("dtype")
+            if (
+                not isinstance(offsets, list)
+                or len(offsets) != 2
+                or not all(isinstance(value, int) for value in offsets)
+                or offsets[0] < 0
+                or offsets[1] < offsets[0]
+            ):
+                fail(f"saved LoRA tensor has invalid offsets: {name}")
+            handle.seek(data_start + offsets[0])
+            payload = handle.read(offsets[1] - offsets[0])
+            if len(payload) != offsets[1] - offsets[0]:
+                fail(f"saved LoRA tensor data is truncated: {name}")
+            if dtype == "BF16":
+                if len(payload) % 2:
+                    fail(f"saved LoRA BF16 tensor has invalid byte length: {name}")
+                if numpy is None:
+                    import struct
+
+                    bits_fallback = [bits for (bits,) in struct.iter_unpack("<H", payload)]
+                    if any((bits & 0x7F80) == 0x7F80 for bits in bits_fallback):
+                        fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
+                    has_update = any((bits & 0x7FFF) != 0 for bits in bits_fallback)
+                else:
+                    bits = numpy.frombuffer(payload, dtype="<u2")
+                    if bool(((bits & 0x7F80) == 0x7F80).any()):
+                        fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
+                    has_update = bool(((bits & 0x7FFF) != 0).any())
+            else:
+                numpy_dtypes = {"F16": "<f2", "F32": "<f4", "F64": "<f8"}
+                numpy_dtype = numpy_dtypes.get(dtype)
+                if numpy_dtype is None:
+                    fail(f"saved LoRA lora_B tensor uses unsupported dtype {dtype!r}: {name}")
+                widths = {"F16": 2, "F32": 4, "F64": 8}
+                width = widths[dtype]
+                if len(payload) % width:
+                    fail(f"saved LoRA tensor has invalid byte length: {name}")
+                if numpy is None:
+                    import math
+                    import struct
+
+                    code = {"F16": "e", "F32": "f", "F64": "d"}[dtype]
+                    values_fallback = [value for (value,) in struct.iter_unpack("<" + code, payload)]
+                    if not all(math.isfinite(value) for value in values_fallback):
+                        fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
+                    has_update = any(value != 0.0 for value in values_fallback)
+                else:
+                    values = numpy.frombuffer(payload, dtype=numpy_dtype)
+                    if not bool(numpy.isfinite(values).all()):
+                        fail(f"saved LoRA tensor has non-finite lora_B values: {name}")
+                    has_update = bool((values != 0).any())
+            if has_update:
+                updated += 1
+        if updated == 0:
+            fail(f"saved LoRA has no non-zero lora_B tensors after an optimizer step: {path}")
+        return {"lora_b_tensors": len(candidates), "nonzero_lora_b_tensors": updated}
+
+
 def save_full_precision_resume_weight(process, source, target, logical_step, torch):
     network = getattr(process, "network", None)
     if network is None:
@@ -226,12 +314,20 @@ def restore_rng_state(path, torch):
 def publish_generation(process, step, spec):
     if not process.accelerator.is_main_process:
         return
-    import torch
-
     suffix = f"_{int(step):09d}" if step is not None else ""
     weight = pathlib.Path(process.save_root) / f"{process.job.name}{suffix}.safetensors"
     if not weight.is_file():
         fail(f"paired weight was not saved: {weight}")
+    lora_update = None
+    if spec.get("require_nonzero_lora_b"):
+        lora_update = lora_b_update_stats(weight)
+        print(
+            f"[kura] AI Toolkit LoRA update verified: "
+            f"{lora_update['nonzero_lora_b_tensors']}/{lora_update['lora_b_tensors']} lora_B tensors non-zero",
+            flush=True,
+        )
+    import torch
+
     try:
         optimizer_state = process.optimizer.state_dict()
         logical_step = optimizer_completed_step(optimizer_state)
@@ -278,6 +374,8 @@ def publish_generation(process, step, spec):
             "optimizer_sha256": sha256_file(optimizer_target),
             "rng_sha256": sha256_file(rng_target),
         }
+        if lora_update is not None:
+            info["lora_update"] = lora_update
         (staging / "state-info.json").write_text(json.dumps(info, sort_keys=True) + "\n", encoding="utf-8")
         for path in staging.iterdir():
             fsync_file(path)

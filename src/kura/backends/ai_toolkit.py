@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from kura.backends.shared import _datasets, _script_command
@@ -12,6 +12,54 @@ from kura.container_scripts import script_source
 from kura.fsio import atomic_write_yaml
 from kura.provenance import artifact_pinning
 from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+
+
+AI_TOOLKIT_DATASET_FIELD_SPECS = {
+    "control_subdir": {"type": "relative-path"},
+    "num_frames": {"type": "integer", "minimum": 1},
+    "fps": {"type": "integer", "minimum": 1},
+    "do_audio": {"type": "boolean"},
+}
+
+
+def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
+    native = backend_config(run, "ai-toolkit")
+    native_config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
+    native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
+    native_train = native_config.get("train") if isinstance(native_config.get("train"), dict) else {}
+    model_arch = str(native.get("model_arch") or native_model.get("arch") or "").lower().replace("-", "_")
+    gradient_checkpointing = native.get(
+        "gradient_checkpointing", native_train.get("gradient_checkpointing", False)
+    )
+    if (model_arch.startswith("minimax_h3") or model_arch.startswith("minimaxh3")) and gradient_checkpointing is True:
+        raise ValueError(
+            "AI-Toolkit MiniMax-H3 requires gradient_checkpointing=false with the pinned runtime; "
+            "real A40 probes observed non-reentrant checkpoint recomputation tensor-count mismatches"
+        )
+    dataset_config = native.get("dataset_config")
+    if dataset_config is None:
+        return
+    if not isinstance(dataset_config, dict):
+        raise ValueError("AI-Toolkit backend.config.dataset_config must be a mapping")
+    unknown = sorted(set(dataset_config) - set(AI_TOOLKIT_DATASET_FIELD_SPECS))
+    if unknown:
+        raise ValueError("AI-Toolkit backend.config.dataset_config contains unsupported key(s): " + ", ".join(unknown))
+    for field, value in dataset_config.items():
+        spec = AI_TOOLKIT_DATASET_FIELD_SPECS[field]
+        if spec["type"] == "relative-path":
+            if not isinstance(value, str) or not value or not _dataset_relative_path(value):
+                raise ValueError(
+                    f"AI-Toolkit backend.config.dataset_config.{field} must be a relative path inside the dataset"
+                )
+            continue
+        if spec["type"] == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError(f"AI-Toolkit backend.config.dataset_config.{field} must be true or false")
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < spec["minimum"]:
+            raise ValueError(
+                f"AI-Toolkit backend.config.dataset_config.{field} must be an integer >= {spec['minimum']}"
+            )
 
 
 def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
@@ -73,7 +121,9 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, resolution: Any) -> list[dict[str, Any]]:
+def _ai_toolkit_datasets(
+    datasets: list[dict[str, Any]], override_folder: Any, resolution: Any, dataset_config: Any
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for index, dataset in enumerate(datasets):
         dataset_id = dataset.get("id", "")
@@ -81,8 +131,19 @@ def _ai_toolkit_datasets(datasets: list[dict[str, Any]], override_folder: Any, r
         entry = {"folder_path": folder, "caption_ext": ".txt", "cache_latents_to_disk": True}
         if resolution is not None:
             entry["resolution"] = resolution
+        if isinstance(dataset_config, dict):
+            projected = deepcopy(dataset_config)
+            control_subdir = projected.pop("control_subdir", None)
+            entry.update(projected)
+            if isinstance(control_subdir, str):
+                entry["control_path"] = f"/workspace/datasets/{dataset_id}/{control_subdir}"
         entries.append(entry)
     return entries
+
+
+def _dataset_relative_path(value: str) -> bool:
+    path = PurePosixPath(value)
+    return not path.is_absolute() and all(part not in {"", ".", ".."} for part in path.parts)
 
 
 def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
@@ -104,6 +165,7 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
     first_dataset = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
+    dataset_config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
     return {
         "architecture": native.get("model_arch") or _nested(config, "model", "arch"),
         "rank": native.get("network_dim") or _nested(config, "network", "linear"),
@@ -113,6 +175,7 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
         "gradient_accumulation_steps": native.get("gradient_accumulation_steps") or _nested(config, "train", "gradient_accumulation_steps"),
         "resolution": first_dataset.get("resolution") or native.get("resolution"),
+        "dataset": deepcopy(dataset_config),
         "optimizer": native.get("optimizer_type") or _nested(config, "train", "optimizer"),
         "precision": native.get("mixed_precision") or _nested(config, "train", "dtype"),
         "memory": {
@@ -184,7 +247,9 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
                 "device": "cuda:0",
                 "network": {"type": "lora"},
                 "save": {},
-                "datasets": _ai_toolkit_datasets(datasets, override.get("dataset_folder"), None),
+                "datasets": _ai_toolkit_datasets(
+                    datasets, override.get("dataset_folder"), None, override.get("dataset_config")
+                ),
                 "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
             }],
@@ -267,6 +332,11 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "state_root": f"/workspace/runs/{run['id']}/outputs",
             "keep_generations": policy["keep_generations"],
         }
+        native_config = override.get("native_config") if isinstance(override.get("native_config"), dict) else {}
+        native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
+        model_arch = str(override.get("model_arch") or native_model.get("arch") or "").lower().replace("-", "_")
+        if model_arch.startswith("minimax_h3") or model_arch.startswith("minimaxh3"):
+            spec["require_nonzero_lora_b"] = True
         runner = ["python", "-c", script_source("ai_toolkit_state.py"), json.dumps(spec, ensure_ascii=False, separators=(",", ":"))]
         if continuation is None:
             return {"cwd": cwd, "argv": runner, "env": runner_env}

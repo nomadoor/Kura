@@ -321,6 +321,31 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertEqual(incomplete.read_bytes(), b"partial")
             self.assertTrue(link.is_symlink())
 
+    def test_hf_download_hardlink_mode_preserves_named_safetensors_path(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            blob = root / "cache" / "blobs" / "extensionless"
+            blob.parent.mkdir(parents=True)
+            blob.write_bytes(b"weights")
+            snapshot = root / "cache" / "snapshots" / "model.safetensors"
+            snapshot.parent.mkdir(parents=True)
+            snapshot.symlink_to(blob)
+            published = root / "models" / "model.safetensors"
+            published.parent.mkdir(parents=True)
+
+            namespace["publish_download"](
+                str(snapshot),
+                str(published),
+                {"link_mode": "hardlink"},
+            )
+
+            self.assertFalse(published.is_symlink())
+            self.assertTrue(published.samefile(blob))
+            self.assertEqual(published.resolve().suffix, ".safetensors")
+
     def test_hf_download_preflight_rejects_insufficient_disk_before_download(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
