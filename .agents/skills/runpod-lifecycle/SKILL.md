@@ -43,8 +43,9 @@ stop Pod
 - `--job-timeout 0`: wait until remote exit.
 - `runpod.storage_mode: upload`: no Network Volume by default.
 - Treat configured GPU candidates as workspace policy, not durable skill
-  knowledge. Inspect current availability, price, and the compiled resource
-  plan before selecting one.
+  knowledge. Inspect current availability and price before selecting one.
+  After that choice, compile the run and inspect the compiled resource plan
+  before approval.
 - If a run explicitly sets `compute.gpu`, treat it as part of the user's run
   intent and use it before workspace-level candidates.
 - Run `kura run plan` once while the RunPod run is still a draft so current
