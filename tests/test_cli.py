@@ -7030,6 +7030,8 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertNotIn("api-secret", request.data.decode("utf-8"))
         self.assertNotIn("api-secret", request.full_url)
         self.assertEqual(request.get_header("Authorization"), "Bearer api-secret")
+        self.assertNotIn("Authorization", request.headers)
+        self.assertEqual(request.unredirected_hdrs["Authorization"], "Bearer api-secret")
         self.assertRegex(request.get_header("User-agent"), r"^Kura/\d")
 
     def test_runpod_gpu_availability_without_key_is_nonfatal(self) -> None:
@@ -7047,6 +7049,13 @@ class RunPodLifecycleTests(unittest.TestCase):
                     "id": "pod-1",
                     "desiredStatus": "RUNNING",
                     "costPerHr": 3.49,
+                    "memoryInGb": 48,
+                    "vcpuCount": 8,
+                    "machine": {
+                        "machineId": "machine-1",
+                        "dataCenterId": "DC-1",
+                        "gpuDisplayName": "A40",
+                    },
                 }
             }
         }
@@ -7079,8 +7088,12 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(result["id"], "pod-1")
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "https://api.runpod.io/graphql")
+        self.assertNotIn("Authorization", request.headers)
+        self.assertEqual(request.unredirected_hdrs["Authorization"], "Bearer api-secret")
         body = json.loads(request.data)
         self.assertIn("podFindAndDeployOnDemand", body["query"])
+        self.assertIn("machineId", body["query"])
+        self.assertIn("dataCenterId", body["query"])
         gql_input = body["variables"]["input"]
         self.assertEqual(gql_input["gpuTypeId"], "NVIDIA H100 80GB HBM3")
         self.assertEqual(gql_input["ports"], "22/tcp")
@@ -7131,6 +7144,8 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(deleted, {})
         queries = [json.loads(call.args[0].data)["query"] for call in urlopen.call_args_list]
         self.assertIn("pod(input:", queries[0])
+        self.assertIn("machineId", queries[0])
+        self.assertIn("dataCenterId", queries[0])
         self.assertIn("podTerminate", queries[1])
 
     @staticmethod
@@ -7400,7 +7415,17 @@ class RunPodLifecycleTests(unittest.TestCase):
             }
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
-                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                     patch("kura.executors.runpod._runpod_request", return_value={
+                         "id": "pod-1",
+                         "desiredStatus": "RUNNING",
+                         "memoryInGb": 48,
+                         "vcpuCount": 8,
+                         "machine": {
+                             "machineId": "machine-1",
+                             "dataCenterId": "US-GA-1",
+                             "gpuDisplayName": "A40",
+                         },
+                     }) as request:
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
             payload = request.call_args.args[3]
             self.assertEqual(payload["dataCenterIds"], ["US-GA-1"])
@@ -7413,6 +7438,13 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(realization["request"]["dataCenterPriority"], "availability")
             self.assertEqual(realization["request"]["gpuTypePriority"], "availability")
             self.assertEqual(realization["request"]["countryCandidates"], ["US"])
+            self.assertEqual(realization["pod"]["machine"], {
+                "id": "machine-1",
+                "data_center_id": "US-GA-1",
+                "gpu_display_name": "A40",
+                "memory_gb": 48,
+                "vcpu_count": 8,
+            })
 
     def test_launch_runpod_falls_back_across_all_configured_locations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

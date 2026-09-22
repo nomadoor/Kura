@@ -41,11 +41,11 @@ def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, time
         data=body,
         method="POST",
         headers={
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "User-Agent": f"Kura/{__version__}",
         },
     )
+    request.add_unredirected_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
@@ -126,7 +126,7 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
           podFindAndDeployOnDemand(input: $input) {
             id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
             volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange env
-            machine { gpuDisplayName location }
+            machine { machineId dataCenterId gpuDisplayName location }
           }
         }
         """
@@ -145,7 +145,7 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
               pod(input: {podId: $podId}) {
                 id name imageName desiredStatus costPerHr containerDiskInGb volumeInGb
                 volumeMountPath gpuCount memoryInGb vcpuCount ports lastStatusChange
-                machine { gpuDisplayName location }
+                machine { machineId dataCenterId gpuDisplayName location }
                 runtime { uptimeInSeconds ports { ip isIpPublic privatePort publicPort type } }
               }
             }
@@ -193,11 +193,11 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> 
         data=body,
         method="POST",
         headers={
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "User-Agent": f"Kura/{__version__}",
         },
     )
+    request.add_unredirected_header("Authorization", f"Bearer {api_key}")
     try:
         with urlopen(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -598,8 +598,8 @@ def _runpod_pod_snapshot(pod: dict[str, Any]) -> dict[str, Any]:
             "id": machine.get("machineId"),
             "data_center_id": machine.get("dataCenterId"),
             "gpu_display_name": gpu.get("displayName") or gpu.get("id") or machine.get("gpuDisplayName"),
-            "memory_gb": machine.get("memoryInGb"),
-            "vcpu_count": machine.get("vcpuCount"),
+            "memory_gb": pod.get("memoryInGb"),
+            "vcpu_count": pod.get("vcpuCount"),
         },
     }
 
