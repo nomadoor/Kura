@@ -1,0 +1,40 @@
+schema_version: 1
+run_id: 20260922-1720_ai-h3-image-only-1step_d6c0
+executor: runpod
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+  gpu: NVIDIA A40
+  cost_per_hour_usd: 0.49
+  gradient_checkpointing: false
+dataset:
+  items: 1
+  kind: image
+  resolution: 256x256
+observed:
+  optimizer_steps: 1
+  loss: 17.59
+  remote_exit_code: 0
+  output_safetensors: 1
+  output_bytes: 9741240
+  output_sha256: 70e134853f627bd292136ee6de56907392abe9da257c37fe9ac28ee1059cf674
+  lora_b_tensors: 208
+  finite_lora_b_tensors: 208
+  nonzero_lora_b_tensors: 208
+  durable_state_step: 1
+  recovery_required: false
+  pod_stopped_at: 2026-09-22T17:36:34.220296+09:00
+checks:
+  completed: true
+  exit_code_zero: true
+  one_step: true
+  finite_nonzero_lora_update: true
+  durable_state_recovered: true
+  output_recovered: true
+  pod_stopped: true
+  runpod_pods_empty_afterward: true
+  runpod_network_volumes_empty_afterward: true
+scope: >-
+  Establishes real optimizer execution and lifecycle recovery for the
+  MiniMax-H3 single-image LoRA path. It does not establish output quality,
+  first-frame video conditioning, joint audio-video training, Ref2VA, or
+  VSA/Fast runtime coverage.

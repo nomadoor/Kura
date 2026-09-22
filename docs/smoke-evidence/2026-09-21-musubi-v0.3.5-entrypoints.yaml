@@ -1,0 +1,21 @@
+schema_version: 1
+backend: musubi-tuner
+observed_at: 2026-09-21
+runtime:
+  image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+  source_commit: 4e7c7149249e7715e9168920feb4c420423abba7
+probe:
+  kind: registered-entrypoint-help
+  command: uv run kura doctor musubi
+observed:
+  passed_entrypoints: 39
+  expected_entrypoints: 39
+  exit_code: 0
+  minimax_h3_entrypoints:
+    - minimax_h3_cache_latents.py
+    - minimax_h3_cache_text_encoder_outputs.py
+    - minimax_h3_train_network.py
+scope: >-
+  Proves that every Kura-registered Musubi v0.3.5 script exists in the image
+  and completes its help/parser path. It is not launch or optimizer-step
+  evidence for a model, mode, or dataset shape.

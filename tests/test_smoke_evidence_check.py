@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.check_smoke_evidence import _support_evidence_claims
+from scripts.check_smoke_evidence import _historical_record_is_retired, _support_evidence_claims
 
 
 class SmokeEvidenceCheckTests(unittest.TestCase):
@@ -25,6 +25,11 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         )
 
         self.assertEqual(claims, [(3, "AI-Toolkit", "✅", ["local-proof", "remote-proof"])])
+
+    def test_historical_evidence_requires_a_declared_retirement(self) -> None:
+        self.assertTrue(_historical_record_is_retired({"superseded_by": "new-proof"}, set()))
+        self.assertTrue(_historical_record_is_retired({"invalidated_by": "contract-change"}, {"contract-change"}))
+        self.assertFalse(_historical_record_is_retired({"invalidated_by": "typo"}, {"contract-change"}))
 
 
 if __name__ == "__main__":

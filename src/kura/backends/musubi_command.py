@@ -131,12 +131,22 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         ("lr_scheduler", "--lr_scheduler"),
         ("gradient_accumulation_steps", "--gradient_accumulation_steps"),
         ("blocks_to_swap", "--blocks_to_swap"),
+        ("block_swap_ring_size", "--block_swap_ring_size"),
     ):
         if override.get(key) is None:
             continue
         if any(arg == flag or arg.startswith(flag + "=") for arg in train):
             raise ValueError(f"Musubi backend.config.{key} duplicates backend.config.extra_args {flag}")
         train.extend([flag, str(override[key])])
+    for key, flag in (
+        ("block_swap_h2d_only", "--block_swap_h2d_only"),
+        ("use_pinned_memory_for_block_swap", "--use_pinned_memory_for_block_swap"),
+    ):
+        if not _truthy(override.get(key)):
+            continue
+        if any(arg == flag or arg.startswith(flag + "=") for arg in train):
+            raise ValueError(f"Musubi backend.config.{key} duplicates backend.config.extra_args {flag}")
+        train.append(flag)
     return _shared_script_command(commands, step_name="musubi")
 
 
@@ -222,8 +232,30 @@ def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int
 
 def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any], architecture: str) -> None:
     extra_args = _extra_args(override)
-    if "--block_swap_h2d_only" in extra_args and not (_truthy(override.get("gradient_checkpointing")) or "--gradient_checkpointing" in extra_args):
+    h2d_extra = any(arg == "--block_swap_h2d_only" or arg.startswith("--block_swap_h2d_only=") for arg in extra_args)
+    h2d_typed = _truthy(override.get("block_swap_h2d_only"))
+    if h2d_typed and h2d_extra:
+        raise ValueError(
+            "Musubi backend.config.block_swap_h2d_only duplicates backend.config.extra_args --block_swap_h2d_only"
+        )
+    h2d_only = h2d_typed or h2d_extra
+    checkpointing = _truthy(override.get("gradient_checkpointing")) or "--gradient_checkpointing" in extra_args
+    if h2d_only and not checkpointing:
         raise ValueError("Musubi H2D-only block swap requires explicit gradient_checkpointing")
+    blocks = _int_or_none(override.get("blocks_to_swap"))
+    if blocks is None:
+        blocks = _int_or_none(_extra_arg_value(extra_args, "--blocks_to_swap"))
+    if h2d_only and (blocks is None or blocks <= 0):
+        raise ValueError("Musubi H2D-only block swap requires blocks_to_swap > 0")
+    ring_size = override.get("block_swap_ring_size")
+    if ring_size is not None:
+        if not h2d_only:
+            raise ValueError("Musubi block_swap_ring_size requires block_swap_h2d_only=true")
+        if isinstance(ring_size, bool) or not isinstance(ring_size, int) or ring_size <= 0:
+            raise ValueError("Musubi block_swap_ring_size must be a positive integer")
+    pinned = _truthy(override.get("use_pinned_memory_for_block_swap"))
+    if pinned and (blocks is None or blocks <= 0):
+        raise ValueError("Musubi use_pinned_memory_for_block_swap requires blocks_to_swap > 0")
     if architecture not in ("flux2", "flux_2"):
         return
     model_version = str(override.get("model_version") or "").lower()
@@ -278,7 +310,20 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     general = dataset_config.get("general") if isinstance(dataset_config.get("general"), dict) else {}
     extra_args = _extra_args(native)
     gradient_accumulation = native.get("gradient_accumulation_steps") or _extra_arg_value(extra_args, "--gradient_accumulation_steps") or 1
-    memory = {key: native.get(key) for key in ("fp8_base", "fp8_scaled", "fp8_t5", "fp8_llm", "fp8_vl", "gradient_checkpointing")}
+    memory = {
+        key: native.get(key)
+        for key in (
+            "fp8_base",
+            "fp8_scaled",
+            "fp8_t5",
+            "fp8_llm",
+            "fp8_vl",
+            "gradient_checkpointing",
+            "block_swap_h2d_only",
+            "block_swap_ring_size",
+            "use_pinned_memory_for_block_swap",
+        )
+    }
     memory["blocks_to_swap"] = native.get("blocks_to_swap") or _extra_arg_value(extra_args, "--blocks_to_swap")
     return {
         "architecture": native.get("architecture") or native.get("model_arch"),
@@ -545,10 +590,171 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
+    elif architecture in ("minimax_h3", "minimaxh3"):
+        dit, video_vae, audio_vae, text_encoder = _require_paths(
+            paths, ("dit", "video_vae", "audio_vae", "text_encoder")
+        )
+        task = str(override.get("task") or "t2va")
+        if task not in {"t2va", "fl2va", "ref2va"}:
+            raise ValueError("Musubi MiniMax-H3 task must be t2va, fl2va, or ref2va")
+        loss_method = str(override.get("h3_loss_method") or "guidance")
+        if loss_method not in {"guidance", "training_adapter", "teacher_matching"}:
+            raise ValueError(
+                "Musubi MiniMax-H3 h3_loss_method must be guidance, training_adapter, or teacher_matching"
+            )
+        one_frame = _truthy(override.get("one_frame"))
+        if one_frame and not _truthy(override.get("video_only")):
+            raise ValueError("Musubi MiniMax-H3 one_frame requires video_only=true")
+        latent_task = task
+        text_task = task
+        train_task = task
+        teacher_conditions = None
+        if loss_method == "training_adapter":
+            if not paths.get("base_weights"):
+                raise ValueError(
+                    "Musubi MiniMax-H3 training_adapter requires model_paths.base_weights "
+                    "or model_downloads.base_weights"
+                )
+            if "int8_convrot" in Path(dit).name.lower():
+                raise ValueError(
+                    "Musubi MiniMax-H3 training_adapter cannot merge base_weights into a "
+                    "pre-quantized ConvRot INT8 DiT; provide a BF16 DiT and optionally request "
+                    "upstream dynamic ConvRot quantization through a reviewed execution setting"
+                )
+        elif loss_method == "teacher_matching":
+            if task != "t2va":
+                raise ValueError("Musubi MiniMax-H3 teacher_matching requires task t2va")
+            teacher_conditions = str(override.get("h3_teacher_conditions") or "")
+            if teacher_conditions not in {"first,last", "ref", "subject_ref"}:
+                raise ValueError(
+                    "Musubi MiniMax-H3 teacher_matching h3_teacher_conditions must be "
+                    "first,last, ref, or subject_ref"
+                )
+            if one_frame and teacher_conditions != "subject_ref":
+                raise ValueError(
+                    "Musubi MiniMax-H3 teacher_matching one_frame requires h3_teacher_conditions=subject_ref"
+                )
+            latent_task = {
+                "first,last": "fl2va",
+                "ref": "t2va",
+                "subject_ref": "ref2va",
+            }[teacher_conditions]
+            text_task = "t2va"
+            train_task = "t2va"
+        text_encoder_blocks_to_swap = _int_or_none(override.get("text_encoder_blocks_to_swap"))
+        if text_encoder_blocks_to_swap is not None and not 0 <= text_encoder_blocks_to_swap <= 50:
+            raise ValueError("Musubi MiniMax-H3 text_encoder_blocks_to_swap must be in [0, 50]")
+        blocks_to_swap = _int_or_none(override.get("blocks_to_swap"))
+        if blocks_to_swap is not None and not 0 <= blocks_to_swap <= 48:
+            raise ValueError("Musubi MiniMax-H3 blocks_to_swap must be in [0, 48]")
+        uncond_cache = f"/workspace/runs/{run['id']}/resolved/musubi/minimax-h3-uncond.safetensors"
+        train_argv = [
+            *common, "src/musubi_tuner/minimax_h3_train_network.py",
+            "--dataset_config", dataset_config,
+            "--task", train_task,
+            "--dit", dit,
+            "--sdpa", "--mixed_precision", "bf16",
+            "--network_module", "networks.lora_minimax_h3",
+            *_musubi_common_train_args(run, override, output_dir, output_name),
+        ]
+        if loss_method == "guidance":
+            guidance_scale = float(override.get("h3_guidance_loss_scale", 4.0))
+            guidance_sigma_min = float(override.get("h3_guidance_loss_sigma_min", 0.15))
+            if guidance_scale <= 0:
+                raise ValueError("Musubi MiniMax-H3 requires h3_guidance_loss_scale > 0")
+            if not 0 <= guidance_sigma_min <= 1:
+                raise ValueError("Musubi MiniMax-H3 h3_guidance_loss_sigma_min must be in [0, 1]")
+            train_argv.extend([
+                "--h3_guidance_loss_scale", str(guidance_scale),
+                "--h3_guidance_loss_sigma_min", str(guidance_sigma_min),
+                "--h3_guidance_loss_uncond_cache", uncond_cache,
+            ])
+        elif loss_method == "training_adapter":
+            train_argv.extend(["--base_weights", str(paths["base_weights"])])
+        else:
+            train_argv.extend([
+                "--h3_teacher_matching",
+                "--h3_teacher_conditions", str(teacher_conditions),
+            ])
+            for key in (
+                "h3_teacher_condition_sigma_min",
+                "h3_teacher_condition_sigma_max",
+                "h3_teacher_loss_dc_weight",
+                "h3_teacher_loss_mag_weight",
+                "h3_teacher_preservation_weight",
+                "h3_timestep_focus_min",
+                "h3_timestep_focus_max",
+                "h3_timestep_focus_prob",
+            ):
+                if override.get(key) is not None:
+                    train_argv.extend(["--" + key, str(override[key])])
+        if _truthy(override.get("gradient_checkpointing")):
+            train_argv.append("--gradient_checkpointing")
+        if one_frame:
+            train_argv.append("--one_frame")
+        if _truthy(override.get("video_only")):
+            train_argv.append("--video_only")
+        train_argv.extend(_extra_args(override))
+        commands = _musubi_start_commands(dataset_config, download_commands)
+        if override.get("validate_models", True):
+            commands.append(_musubi_model_validation_command(run, paths))
+        if precache:
+            latent_argv = [
+                "python", "src/musubi_tuner/minimax_h3_cache_latents.py",
+                "--dataset_config", dataset_config,
+                "--task", latent_task,
+                "--video_vae", video_vae,
+                "--audio_vae", audio_vae,
+                "--cache_seed", str(recipe["seed"]),
+                "--skip_existing",
+            ]
+            text_argv = [
+                "python", "src/musubi_tuner/minimax_h3_cache_text_encoder_outputs.py",
+                "--dataset_config", dataset_config,
+                "--task", text_task,
+                "--text_encoder", text_encoder,
+                "--text_cache_dtype", "bf16",
+                "--skip_existing",
+            ]
+            if loss_method == "guidance":
+                text_argv.extend(["--uncond_output", uncond_cache])
+            elif loss_method == "teacher_matching":
+                text_argv.extend(["--teacher_conditions", str(teacher_conditions)])
+            if one_frame:
+                latent_argv.append("--one_frame")
+                text_argv.append("--one_frame")
+            commands.extend([latent_argv, text_argv])
+            if text_encoder_blocks_to_swap is not None:
+                commands[-1].extend(["--text_encoder_blocks_to_swap", str(text_encoder_blocks_to_swap)])
+        commands.append(train_argv)
+        prune_command = _musubi_prune_checkpoints_command(
+            output_dir, output_name, override.get("prune_checkpoints_before_step")
+        )
+        if prune_command is not None:
+            commands.append(prune_command)
+        if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
+            commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
+        argv = _script_command(commands, override, run)
     elif architecture in ("krea2", "krea_2"):
         _validate_krea2_dataset_shape(override)
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         extra_args = _extra_args(override)
+        convrot_int8 = _truthy(override.get("convrot_int8"))
+        convrot_int8_bwd = override.get("convrot_int8_bwd")
+        checkpoint_cpu_offload = _truthy(override.get("gradient_checkpointing_cpu_offload"))
+        if convrot_int8 and (_truthy(override.get("fp8_base")) or _truthy(override.get("fp8_scaled"))):
+            raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with fp8_base or fp8_scaled")
+        if convrot_int8 and _truthy(override.get("include_turbo_dit")):
+            raise ValueError("Musubi Krea 2 convrot_int8 cannot be combined with include_turbo_dit")
+        if convrot_int8_bwd is not None:
+            if not isinstance(convrot_int8_bwd, str) or convrot_int8_bwd not in ("bf16", "int8"):
+                raise ValueError("Musubi Krea 2 convrot_int8_bwd must be one of: bf16, int8")
+            if not convrot_int8:
+                raise ValueError("Musubi Krea 2 convrot_int8_bwd requires convrot_int8=true")
+        if checkpoint_cpu_offload and not _truthy(override.get("gradient_checkpointing")):
+            raise ValueError(
+                "Musubi Krea 2 gradient_checkpointing_cpu_offload requires gradient_checkpointing=true"
+            )
         train_argv = [
             *common, "src/musubi_tuner/krea2_train_network.py",
             "--dit", dit, "--vae", vae,
@@ -571,6 +777,12 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         ]
         if _truthy(override.get("gradient_checkpointing")):
             train_argv.append("--gradient_checkpointing")
+        if checkpoint_cpu_offload:
+            train_argv.append("--gradient_checkpointing_cpu_offload")
+        if convrot_int8:
+            train_argv.append("--convrot_int8")
+        if convrot_int8_bwd is not None:
+            train_argv.extend(["--convrot_int8_bwd", convrot_int8_bwd])
         if _truthy(override.get("fp8_base")):
             train_argv.extend(["--fp8_base", "--fp8_scaled"])
         elif _truthy(override.get("fp8_scaled")):

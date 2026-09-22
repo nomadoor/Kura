@@ -36,6 +36,22 @@ def _safetensors_bytes(content: bytes) -> bytes:
     return len(header).to_bytes(8, "little") + header + content
 
 
+def _f32_safetensors_bytes(tensors: dict[str, list[float]]) -> bytes:
+    import struct
+
+    data = bytearray()
+    header: dict[str, object] = {}
+    for name, values in tensors.items():
+        start = len(data)
+        for value in values:
+            data.extend(struct.pack("<f", value))
+        header[name] = {"dtype": "F32", "shape": [len(values)], "data_offsets": [start, len(data)]}
+    encoded = json.dumps(header, separators=(",", ":")).encode()
+    padding = (-len(encoded)) % 8
+    encoded += b" " * padding
+    return len(encoded).to_bytes(8, "little") + encoded + data
+
+
 def _torch_archive_bytes(content: bytes) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
@@ -72,6 +88,80 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
 
 
 class TrainingStateArtifactTests(unittest.TestCase):
+    def test_ai_toolkit_h3_command_requires_a_nonzero_lora_update(self) -> None:
+        run = {
+            "id": "h3-smoke",
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "minimax_h3"}},
+            "recipe": {"steps": 1, "seed": 1},
+        }
+
+        command = command_ai_toolkit(run)
+
+        self.assertIn('"require_nonzero_lora_b":true', " ".join(command["argv"]))
+
+    def test_ai_toolkit_native_h3_command_requires_a_nonzero_lora_update(self) -> None:
+        run = {
+            "id": "h3-native-smoke",
+            "backend": {"name": "ai-toolkit", "config": {
+                "native_config": {"model": {"arch": "minimax_h3_ref2va"}},
+            }},
+            "recipe": {"steps": 1, "seed": 1},
+        }
+
+        command = command_ai_toolkit(run)
+
+        self.assertIn('"require_nonzero_lora_b":true', " ".join(command["argv"]))
+
+    def test_ai_toolkit_h3_runner_rejects_a_checkpoint_with_no_lora_update(self) -> None:
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save_root = root / "outputs" / "h3-smoke"
+            save_root.mkdir(parents=True)
+            weight = save_root / "h3-smoke_000000001.safetensors"
+            weight.write_bytes(
+                _f32_safetensors_bytes({"transformer.block.lora_B.weight": [0.0, 0.25]})
+            )
+            self.assertEqual(
+                namespace["lora_b_update_stats"](weight),
+                {"lora_b_tensors": 1, "nonzero_lora_b_tensors": 1},
+            )
+            weight.write_bytes(
+                _f32_safetensors_bytes({"transformer.block.lora_B.weight": [0.0, 0.0]})
+            )
+            process = types.SimpleNamespace(
+                accelerator=types.SimpleNamespace(is_main_process=True),
+                save_root=str(save_root),
+                job=types.SimpleNamespace(name="h3-smoke"),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "no non-zero lora_B tensors"):
+                namespace["publish_generation"](
+                    process,
+                    1,
+                    {
+                        "run_id": "h3-smoke",
+                        "state_root": str(root / "outputs"),
+                        "keep_generations": 2,
+                        "require_nonzero_lora_b": True,
+                    },
+                )
+
+    def test_ai_toolkit_h3_runner_rejects_nonfinite_lora_update_values(self) -> None:
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            weight = Path(directory) / "h3.safetensors"
+            weight.write_bytes(
+                _f32_safetensors_bytes(
+                    {"transformer.block.lora_B.weight": [0.25, float("nan")]}
+                )
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "non-finite lora_B values"):
+                namespace["lora_b_update_stats"](weight)
+
     def test_sd_scripts_resume_contract_uses_normalized_selectors(self) -> None:
         for architecture in ("flux", "SDXL", "sd-1.5"):
             with self.subTest(architecture=architecture):

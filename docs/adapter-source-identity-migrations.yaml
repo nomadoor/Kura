@@ -7,6 +7,85 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-h3-finite-output-guard-2026-09-22
+    backend: ai-toolkit
+    reason: >-
+      Tighten the existing post-save LoRA inspection so any non-finite lora_B
+      value fails the run, rather than accepting a tensor when it also contains
+      one finite non-zero value. The recorded MiniMax-H3 video command differs
+      only in this stricter validation branch, and its recovered artifact was
+      independently inspected with all 208/208 lora_B tensors finite and
+      non-zero. The pinned-image class-import probe is unaffected.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4a1b9d47b9ed9047fca96f937c0412b66e875544e2e77ce41caad0fff4196608
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 425d2ef5a1ee651969fae350122884b549aa285045cb480f7b495446f991d69a
+  - id: musubi-v035-entrypoint-probe-current-adapter-2026-09-22
+    backend: musubi-tuner
+    reason: >-
+      Carry only the pinned-image parser probe across the host-side MiniMax-H3
+      dataset, model-bundle, and command projection implementation. The image
+      digest and registered 39-entrypoint inventory are unchanged, so the
+      observation that every v0.3.5 entrypoint exists and accepts --help is
+      unaffected; no optimizer evidence is transferred by this record.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-v0.3.5-entrypoints-2026-09-21
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 65215250e75c44b2003df49c72f067ca596dd4397aca02824fb0995c529238ea
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d915865008a2c7043263878a080507c2356c77bbff2313c3024ff37136b8b9ff
+  - id: sd-scripts-musubi-hardlink-helper-2026-09-22
+    backend: sd-scripts
+    reason: >-
+      The shared Hugging Face download helper gained an opt-in hardlink mode
+      for backend roles whose native loader resolves symlinks before checking
+      filename suffixes. SD Scripts does not request that mode and continues
+      to publish every downloaded model through the same relative symlink
+      path, so its recorded command, optimizer updates, state, and outputs are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1c24a198d40fe260370a3b8b985aeef8d4499c09a537784e671ec4f84bab106c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7fe4296e12305828faf550f32ad898b94929b0419bea85a45d847afee337e5ff
+  - id: sd-scripts-resume-smoke-final-identity-2026-08-27
+    backend: sd-scripts
+    reason: >-
+      The final merge normalized an explicitly authored architecture and mode
+      through the existing selector helpers and added sd_scripts_state.py to
+      the source-identity inputs. The recorded SD 1.5 LoRA run authors both
+      selectors explicitly and already executed that state wrapper, so its
+      command, optimizer updates, persisted state, and output are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: bc25afd1025a69e3bf74de6ffd67b0f5716e1a70fc1cde6a2c96f06cc84e82e6
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1c24a198d40fe260370a3b8b985aeef8d4499c09a537784e671ec4f84bab106c
   - id: sd-scripts-nested-dataset-surface-existing-evidence-2026-08-26
     backend: sd-scripts
     reason: >-

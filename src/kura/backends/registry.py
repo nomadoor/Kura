@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, training_state_contract_ai_toolkit
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
-from kura.backends.musubi_datasets import validate_musubi_dataset_layout
+from kura.backends.musubi_datasets import MUSUBI_H3_DATASET_CAPABILITIES, validate_musubi_authored_config, validate_musubi_dataset_layout
 from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
@@ -95,34 +95,42 @@ def _compile_sd_scripts(run: dict[str, Any], resolved: Path, workspace: Path | N
 
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
-        "batch_size", "dataset_folder", "gradient_accumulation_steps", "gradient_checkpointing",
+        "batch_size", "dataset_config", "dataset_folder", "gradient_accumulation_steps", "gradient_checkpointing",
         "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch",
         "network_alpha", "network_dim", "optimizer_type", "quantize", "quantize_te", "resolution",
         "save_every_n_steps", "save_last_n_steps",
     }),
     escape_hatches=frozenset({"command", "native_config"}),
+    nested_config_fields={"dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS},
 )
 
 MUSUBI_SURFACE = BackendSurface(
     fields=frozenset({
-        "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "architecture", "batch_size", "blocks_to_swap", "discrete_flow_shift",
-        "dit_dtype", "env", "f1", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
-        "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing",
+        "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "architecture", "batch_size",
+        "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "discrete_flow_shift",
+        "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
+        "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing", "gradient_checkpointing_cpu_offload",
+        "h3_dataset_config", "h3_guidance_loss_scale", "h3_guidance_loss_sigma_min", "h3_loss_method",
+        "h3_teacher_condition_sigma_max", "h3_teacher_condition_sigma_min", "h3_teacher_conditions",
+        "h3_teacher_loss_dc_weight", "h3_teacher_loss_mag_weight", "h3_teacher_preservation_weight",
+        "h3_timestep_focus_max", "h3_timestep_focus_min", "h3_timestep_focus_prob",
         "include_turbo_dit", "learning_rate", "lr_scheduler", "max_data_loader_n_workers",
         "model_bundle", "model_downloads", "model_expectations", "model_paths", "model_type", "model_version",
         "network_alpha", "network_dim", "noise_clip_std", "noise_scale_end", "noise_scale_start", "one_frame",
         "one_frame_no_2x", "one_frame_no_4x", "optimizer_type", "output_compatibility",
         "pixel_cache_batch_size", "precache", "prune_checkpoints_before_step", "quantized_qwen", "resolution",
         "save_every_n_steps", "save_precision",
-        "task", "text_encoder_batch_size", "timestep_boundary", "timestep_sampling", "vae_chunk_size", "vae_dtype",
-        "vae_tiling", "validate_models", "weighting_scheme",
+        "task", "text_encoder_batch_size", "text_encoder_blocks_to_swap", "timestep_boundary", "timestep_sampling", "vae_chunk_size", "vae_dtype",
+        "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only", "weighting_scheme",
     }),
     escape_hatches=frozenset({"command", "dataset_config", "extra_args"}),
-    selector_defaults=(("precache", True), ("one_frame", False)),
+    selector_defaults=(("precache", True), ("one_frame", False), ("h3_loss_method", "guidance")),
     unavailable=(("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),),
     conditions=(
         _when("allow_a40_large_micro_batch", architecture=("flux2", "flux_2")),
         _when("allow_a40_uncheckpointed_9b", architecture=("flux2", "flux_2")),
+        _when("convrot_int8_bwd", architecture=("krea2", "krea_2"), convrot_int8=(True,)),
+        _when("convrot_int8", architecture=("krea2", "krea_2")),
         _when("discrete_flow_shift", architecture=("wan",)),
         _when("dit_dtype", architecture=("ideogram4", "ideogram_4")),
         _when("f1", architecture=("framepack", "frame_pack")),
@@ -134,27 +142,66 @@ MUSUBI_SURFACE = BackendSurface(
         _when("fp8_te", architecture=("hidream_o1", "hidream"), precache=(True,)),
         _when("fp8_text_encoder", architecture=("flux2", "flux_2"), precache=(True,)),
         _when("fp8_vl", architecture=("qwen_image", "qwen", "hunyuan_video_1_5")),
+        _when("gradient_checkpointing_cpu_offload", architecture=("krea2", "krea_2"), gradient_checkpointing=(True,)),
         _when("include_turbo_dit", architecture=("krea2", "krea_2")),
-        _when("model_bundle", architecture=("flux2", "flux_2", "krea2", "krea_2")),
+        _when("model_bundle", architecture=("flux2", "flux_2", "krea2", "krea_2", "minimax_h3", "minimaxh3")),
         _when("model_type", architecture=("hidream_o1", "hidream")),
         _when("model_version", architecture=("flux2", "flux_2", "qwen_image", "qwen")),
         _when("noise_clip_std", architecture=("hidream_o1", "hidream")),
         _when("noise_scale_end", architecture=("hidream_o1", "hidream")),
         _when("noise_scale_start", architecture=("hidream_o1", "hidream")),
-        _when_any("one_frame", {"architecture": ("wan",)}, {"architecture": ("framepack", "frame_pack")}),
+        _when_any(
+            "one_frame",
+            {"architecture": ("wan",)},
+            {"architecture": ("framepack", "frame_pack")},
+            {"architecture": ("minimax_h3", "minimaxh3")},
+        ),
         _when("one_frame_no_2x", architecture=("framepack", "frame_pack"), one_frame=(True,), precache=(True,)),
         _when("one_frame_no_4x", architecture=("framepack", "frame_pack"), one_frame=(True,), precache=(True,)),
         _when("pixel_cache_batch_size", architecture=("hidream_o1", "hidream"), precache=(True,)),
         _when("quantized_qwen", architecture=("kandinsky5", "kandinsky_5"), precache=(True,)),
-        _when("task", architecture=("wan", "hidream_o1", "hidream", "hunyuan_video_1_5", "kandinsky5", "kandinsky_5")),
+        _when("h3_dataset_config", architecture=("minimax_h3", "minimaxh3")),
+        _when(
+            "h3_guidance_loss_scale",
+            architecture=("minimax_h3", "minimaxh3"),
+            h3_loss_method=("guidance",),
+        ),
+        _when(
+            "h3_guidance_loss_sigma_min",
+            architecture=("minimax_h3", "minimaxh3"),
+            h3_loss_method=("guidance",),
+        ),
+        *(
+            _when(
+                field,
+                architecture=("minimax_h3", "minimaxh3"),
+                h3_loss_method=("teacher_matching",),
+            )
+            for field in (
+                "h3_teacher_conditions",
+                "h3_teacher_condition_sigma_min",
+                "h3_teacher_condition_sigma_max",
+                "h3_teacher_loss_dc_weight",
+                "h3_teacher_loss_mag_weight",
+                "h3_teacher_preservation_weight",
+                "h3_timestep_focus_min",
+                "h3_timestep_focus_max",
+                "h3_timestep_focus_prob",
+            )
+        ),
+        _when("h3_loss_method", architecture=("minimax_h3", "minimaxh3")),
+        _when("task", architecture=("wan", "hidream_o1", "hidream", "hunyuan_video_1_5", "kandinsky5", "kandinsky_5", "minimax_h3", "minimaxh3")),
         _when("text_encoder_batch_size", precache=(True,)),
+        _when("text_encoder_blocks_to_swap", architecture=("minimax_h3", "minimaxh3"), precache=(True,)),
         _when("timestep_boundary", architecture=("wan",)),
         _when("timestep_sampling", architecture=("flux2", "flux_2", "wan", "krea2", "krea_2", "hidream_o1", "hidream")),
         _when("vae_chunk_size", architecture=("hunyuan_video", "hunyuanvideo", "framepack", "frame_pack"), precache=(True,)),
         _when_any("vae_dtype", {"architecture": ("flux2", "flux_2")}, {"architecture": ("ideogram4", "ideogram_4"), "precache": (True,)}),
         _when("vae_tiling", architecture=("hunyuan_video", "hunyuanvideo"), precache=(True,)),
+        _when("video_only", architecture=("minimax_h3", "minimaxh3")),
         _when("weighting_scheme", architecture=("flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen", "hidream_o1", "hidream")),
     ),
+    nested_config_fields=MUSUBI_H3_DATASET_CAPABILITIES,
 )
 
 SD_SCRIPTS_SURFACE = BackendSurface(
@@ -203,12 +250,14 @@ BACKENDS: dict[str, BackendAdapter] = {
     "ai-toolkit": BackendAdapter(
         name="ai-toolkit", image_name="ai-toolkit", compile=_compile_ai, command=command_ai_toolkit,
         display=display_ai_toolkit, requirements=requirements_ai_toolkit, surface=AI_TOOLKIT_SURFACE,
+        validate_authored=validate_ai_toolkit_config,
         training_state=training_state_contract_ai_toolkit,
         default_ports=("8675/http", "22/tcp"),
     ),
     "musubi-tuner": BackendAdapter(
         name="musubi-tuner", image_name="musubi-tuner", compile=_compile_musubi, command=command_musubi_tuner,
         display=display_musubi_tuner, requirements=requirements_musubi, surface=MUSUBI_SURFACE,
+        validate_authored=validate_musubi_authored_config,
         download_specs=musubi_model_download_specs, validate_dataset=validate_musubi_dataset_layout,
         training_state=training_state_contract_musubi,
     ),

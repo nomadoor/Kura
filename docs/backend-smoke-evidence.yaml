@@ -2,7 +2,147 @@ schema_version: 1
 description: >-
   Historical execution observations. Records are evidence for the stated
   identity tuple, not declarations of backend capability.
+invalidations:
+  - id: sd-scripts-default-training-state-contract-2026-08-27
+    backend: sd-scripts
+    observed_at: 2026-08-27
+    reason: >-
+      Durable training state became part of the default execution contract.
+      Earlier optimizer-step observations remain valid history for their
+      recorded adapter identities, but do not establish the added save-state,
+      publication, or recovery behavior of the current contract.
 records:
+  - id: musubi-minimax-h3-image-runpod-2026-09-22
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: d915865008a2c7043263878a080507c2356c77bbff2313c3024ff37136b8b9ff
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      architecture: minimax_h3
+      mode: one-frame-text-to-image-guidance-loss
+      executor: runpod
+      target_frames: 1
+      block_swap: h2d-only-ring-1
+      optimizer_steps: 1
+      finite_nonzero_lora_b: 200/200
+      recovery: completed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-22
+    artifact: smoke-evidence/2026-09-22-musubi-minimax-h3-image-runpod.yaml
+  - id: ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 425d2ef5a1ee651969fae350122884b549aa285045cb480f7b495446f991d69a
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: minimax_h3
+      mode: image-lora
+      executor: runpod
+      gradient_checkpointing: false
+      optimizer_steps: 1
+      finite_nonzero_lora_b: 208/208
+      recovery: completed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-22
+    artifact: smoke-evidence/2026-09-22-ai-toolkit-minimax-h3-image-runpod.yaml
+  - id: musubi-minimax-h3-runpod-2026-09-22
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: d915865008a2c7043263878a080507c2356c77bbff2313c3024ff37136b8b9ff
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      architecture: minimax_h3
+      mode: t2va-guidance-loss
+      executor: runpod
+      target_frames: 124
+      block_swap: h2d-only-ring-1
+      optimizer_steps: 1
+      finite_nonzero_lora_b: 200/200
+      recovery: completed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-22
+    artifact: smoke-evidence/2026-09-22-musubi-minimax-h3-runpod.yaml
+  - id: ai-toolkit-0.13.18-class-import-2026-09-21
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 4a1b9d47b9ed9047fca96f937c0412b66e875544e2e77ce41caad0fff4196608
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      probe: registered-diffusion-class-imports
+      imported_classes: 8
+    evidence_kind: parser
+    outcome: passed
+    observed_at: 2026-09-21
+    artifact: smoke-evidence/2026-09-21-ai-toolkit-0.13.18-class-import.yaml
+  - id: musubi-v0.3.5-entrypoints-2026-09-21
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 65215250e75c44b2003df49c72f067ca596dd4397aca02824fb0995c529238ea
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      probe: registered-entrypoint-help
+      passed_entrypoints: 39/39
+    evidence_kind: parser
+    outcome: passed
+    observed_at: 2026-09-21
+    artifact: smoke-evidence/2026-09-21-musubi-v0.3.5-entrypoints.yaml
+  - id: ai-toolkit-minimax-h3-runpod-2026-09-21
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 4a1b9d47b9ed9047fca96f937c0412b66e875544e2e77ce41caad0fff4196608
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: minimax_h3
+      mode: lora
+      executor: runpod
+      gradient_checkpointing: false
+      optimizer_steps: 1
+      finite_nonzero_lora_b: 208/208
+      recovery: completed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-21
+    artifact: smoke-evidence/2026-09-21-ai-toolkit-minimax-h3-runpod.yaml
+  - id: sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: bc25afd1025a69e3bf74de6ffd67b0f5716e1a70fc1cde6a2c96f06cc84e82e6
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+    native_path:
+      architecture: sd15
+      mode: lora
+      executor: docker
+      control_optimizer_steps: 100
+      resumed_optimizer_steps: 50+50
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-08-27
+    artifact: smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml
   - id: sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26
     backend: sd-scripts
     adapter_source:
@@ -19,6 +159,7 @@ records:
       text_encoder_disk_cache: true
     evidence_kind: real-optimizer-step
     outcome: passed
+    invalidated_by: sd-scripts-default-training-state-contract-2026-08-27
     observed_at: 2026-08-26
     artifact: smoke-evidence/2026-08-26-sd-scripts-anima-lllite-caption-dropout-docker.yaml
   - id: sd-scripts-anima-checkpoint-publication-docker-2026-08-03
@@ -35,6 +176,7 @@ records:
       executor: docker
     evidence_kind: real-optimizer-step
     outcome: passed
+    invalidated_by: sd-scripts-default-training-state-contract-2026-08-27
     observed_at: 2026-08-03
     artifact: smoke-evidence/2026-08-03-sd-scripts-anima-checkpoint-publication-docker.yaml
   - id: sd-scripts-anima-lllite-docker-2026-08-03
@@ -51,6 +193,7 @@ records:
       executor: docker
     evidence_kind: real-optimizer-step
     outcome: passed
+    invalidated_by: sd-scripts-default-training-state-contract-2026-08-27
     observed_at: 2026-08-03
     artifact: smoke-evidence/2026-08-03-sd-scripts-anima-lllite-docker.yaml
   - id: sd-scripts-anima-lora-docker-2026-08-03
@@ -84,6 +227,7 @@ records:
       executor: docker
     evidence_kind: real-optimizer-step
     outcome: passed
+    invalidated_by: sd-scripts-default-training-state-contract-2026-08-27
     observed_at: 2026-08-01
     artifact: smoke-evidence/2026-08-01-sd-scripts-flux1-docker.yaml
   - id: sd-scripts-sdxl-docker-2026-08-01
@@ -100,6 +244,7 @@ records:
       executor: docker
     evidence_kind: real-optimizer-step
     outcome: passed
+    invalidated_by: sd-scripts-default-training-state-contract-2026-08-27
     observed_at: 2026-08-01
     artifact: smoke-evidence/2026-08-01-sd-scripts-sdxl-docker.yaml
   - id: sd-scripts-sd15-docker-v2-2026-08-01
@@ -116,6 +261,7 @@ records:
       executor: docker
     evidence_kind: real-optimizer-step
     outcome: passed
+    superseded_by: sd-scripts-sd15-resume-equivalence-docker-2026-08-27
     observed_at: 2026-08-01
     artifact: smoke-evidence/2026-08-01-sd-scripts-sd15-docker-v2.yaml
   - id: sd-scripts-sd15-docker-2026-08-01

@@ -1129,8 +1129,8 @@ def cmd_image_build(args: argparse.Namespace) -> int:
                 return 1
     ref_args = {"ai-toolkit": "AI_TOOLKIT_IMAGE", "musubi-tuner": "MUSUBI_TUNER_REF", "sd-scripts": "SD_SCRIPTS_REF", "comfyui": "COMFYUI_REF"}
     default_refs = {
-        "ai-toolkit": "ostris/aitoolkit:0.10.22@sha256:5a810f50de920aaa3439487959ae392bf0d1458345baddee24a7bf33787c0438",
-        "musubi-tuner": "v0.3.4",
+        "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
+        "musubi-tuner": "v0.3.5",
         "sd-scripts": "6721028c79ee85a78b3a06dfd8954dae310a1cce",
         "comfyui": "0f42ba51463174fb255f2c4605ae0e0b441fe6d7",
     }

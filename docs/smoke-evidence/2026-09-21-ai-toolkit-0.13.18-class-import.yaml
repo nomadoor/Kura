@@ -1,0 +1,26 @@
+schema_version: 1
+backend: ai-toolkit
+observed_at: 2026-09-21
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+  embedded_commit: 31ddc709c35d3d3b820c636745397561f806b246
+  finite_gradient_patch_commit: d1985f9bf380b6ce1c409b7875e2d367df486e19
+probe:
+  kind: registered-diffusion-class-imports
+  selectors:
+    - qwen_image_2
+    - ltx2.5
+    - anima
+    - mageflow
+    - mageflow_edit
+    - minimax_h3
+    - minimax_h3_ref2va
+    - minimax_h3_vsa
+observed:
+  imported: 8
+  expected: 8
+  exit_code: 0
+scope: >-
+  Proves that the immutable patched image contains and can import the eight
+  newly registered diffusion implementations. It is not compile, launch, or
+  optimizer-step evidence for any training mode.

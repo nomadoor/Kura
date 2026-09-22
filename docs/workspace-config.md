@@ -160,7 +160,7 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `runpod.default_image.ai-toolkit` | Default AI-Toolkit remote image/template image | `ostris/aitoolkit:0.10.22` |
+| `runpod.default_image.ai-toolkit` | Default patched AI-Toolkit remote image/template image | `nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a` |
 | `runpod.default_image.musubi-tuner` | Default Musubi remote image | `nomadoor/kura-musubi-tuner:dev` |
 | `runpod.default_image.sd-scripts` | Default sd-scripts remote image | `nomadoor/kura-sd-scripts:dev` |
 | `runpod.default_image.comfyui` | Default ComfyUI remote render image | `nomadoor/kura-comfyui:dev` |
