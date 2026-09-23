@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends import command_musubi_tuner
+from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import docker_command
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
 from kura.run_commands.common import _load_frozen_command
@@ -103,6 +104,61 @@ def _minimal_flux2_run() -> dict[str, Any]:
 
 
 class LaunchEnvironmentContractTests(unittest.TestCase):
+    def test_ai_toolkit_declares_its_backend_managed_model_write_root(self) -> None:
+        spec = command_ai_toolkit({
+            "id": "contract-run",
+            "backend": {"name": "ai-toolkit", "config": {}},
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+        })
+        self.assertEqual(spec["env"]["MODELS_PATH"], "/workspace/cache/ai-toolkit/models")
+        self.assertEqual(spec["write_roots"], [{
+            "role": "model-cache",
+            "path": "/workspace/cache/ai-toolkit/models",
+            "env": "MODELS_PATH",
+        }])
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "contract-run"
+            run_dir.mkdir(parents=True)
+            docker_argv, _, _ = docker_command(workspace, run_dir, spec, "example:image", [], True, "r1")
+        wrapper = docker_argv[docker_argv.index("kura-job") - 1]
+        self.assertIn('"/workspace/cache/ai-toolkit/models"', wrapper)
+        self.assertIn('test -w "/workspace/cache/ai-toolkit/models"', wrapper)
+
+        remote = _runpod_remote_job_script(
+            workspace="/workspace",
+            run_id="contract-run",
+            remote_secret_path="/tmp/contract.env",
+            archive_name="contract.tar.gz",
+            remote_archive="/workspace/contract.tar.gz",
+            cwd="/app/ai-toolkit",
+            command="python run.py config.yaml",
+            write_roots=spec["write_roots"],
+        )
+        self.assertIn('mkdir -p "/workspace/cache/ai-toolkit/models"', remote)
+        self.assertIn('test -w "/workspace/cache/ai-toolkit/models"', remote)
+
+    def test_musubi_builtin_command_requires_a_trained_adapter_output(self) -> None:
+        spec = command_musubi_tuner(_minimal_flux2_run())
+        self.assertEqual(spec["output_contract"], {
+            "required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}],
+        })
+
+    def test_ai_toolkit_explicit_command_keeps_model_cache_managed(self) -> None:
+        run = {
+            "id": "contract-run", "backend": {"name": "ai-toolkit", "config": {
+                "command": {"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
+            }},
+        }
+        spec = command_ai_toolkit(run)
+        self.assertEqual(spec["env"]["MODELS_PATH"], "/workspace/cache/ai-toolkit/models")
+        self.assertEqual(spec["write_roots"][0]["role"], "model-cache")
+        run["backend"]["config"]["command"]["env"]["MODELS_PATH"] = "/app/ai-toolkit/models"
+        with self.assertRaisesRegex(ValueError, "MODELS_PATH"):
+            command_ai_toolkit(run)
+
     def test_launch_requires_a_frozen_backend_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "recompile the run"):

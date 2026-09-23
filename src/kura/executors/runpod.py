@@ -23,6 +23,7 @@ import yaml
 from kura import __version__
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
+from kura.runtime_io import validated_write_roots
 from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
@@ -620,6 +621,7 @@ def launch_runpod(
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
+    write_paths = validated_write_roots(spec, workspace_path=workspace_path)
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_training_env(spec["env"], workspace_path=workspace_path, run_id=run_dir.name)
     secret_keys = [key for key in runtime_env if _is_secret(key)]
@@ -672,14 +674,13 @@ sleep infinity
             start_command = ["sh", "-lc", upload_script]
             workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
     else:
-        wrapper = (
-            'mkdir -p "$(dirname "$KURA_LOG_PATH")" '
-            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" '
-            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" '
-            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" '
-            '"$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics" && '
-            'exec "$@" >> "$KURA_LOG_PATH" 2>&1'
-        )
+        mkdir_targets = [
+            '"$(dirname "$KURA_LOG_PATH")"',
+            *(f'"$KURA_WORKSPACE/runs/$KURA_RUN_ID/{name}"' for name in ("outputs", "checkpoints", "samples", "metrics")),
+            *(shlex.quote(path) for path in write_paths),
+        ]
+        checks = [f"test -w {shlex.quote(path)}" for path in write_paths]
+        wrapper = " && ".join([f"mkdir -p {' '.join(mkdir_targets)}", *checks, 'exec "$@" >> "$KURA_LOG_PATH" 2>&1'])
         start_command = ["sh", "-lc", wrapper, "kura-job", *spec["argv"]]
         workspace_contract = "Container disk only; caller must ensure inputs exist in the container workspace"
     request_body = {
@@ -873,7 +874,7 @@ sleep infinity
         realization = {
             "id": realization_id, "executor": "runpod", "state": "launch_failed", "attempted_at": failed_at,
             "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": None, "request": failed_request,
-            "container_cwd": spec["cwd"], "backend_command": spec["argv"],
+            "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
             "logs_path": log_path,
             "workspace_contract": workspace_contract,
             "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
@@ -908,7 +909,7 @@ sleep infinity
     realization = {
         "id": realization_id, "executor": "runpod", "state": state, "launched_at": _now(),
         "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": _runpod_pod_snapshot(pod),
-        "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"],
+        "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
         "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer_codes,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, "kura_version": __version__,
     }

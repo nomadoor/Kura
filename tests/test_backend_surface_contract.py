@@ -433,7 +433,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertEqual(command["cwd"], expected_cwd)
                 self.assertEqual(command["argv"][:2], ["python", "-c"])
                 self.assertIn(f"/workspace/runs/{run_id}/resolved/ai-toolkit.yaml", command["argv"][3])
-                self.assertEqual(command["env"], {"SEED": "1"})
+                self.assertEqual(command["env"], {"SEED": "1", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
 
     def test_ai_toolkit_projects_typed_video_dataset_settings(self) -> None:
         run = {

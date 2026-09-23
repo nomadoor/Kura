@@ -24,6 +24,7 @@ from typing import Any
 
 import yaml
 
+from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.fsio import atomic_write_json
 from kura.workspace import load_yaml as _load_yaml
@@ -34,6 +35,7 @@ from kura.executors.common import _OperationBusy, _mutate_run_status, _run_opera
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
+from kura.runtime_io import validated_write_roots
 
 
 RUNPOD_TRANSFER_TIMEOUT_SEC = 600
@@ -560,6 +562,39 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     "keep the Pod until recovery files are inspected or downloaded"
                 )
             outputs = materialize_primary_outputs(output_dir)
+            publication_manifest: str | None = None
+            contract: dict[str, Any] | None = None
+            if exit_code == 0:
+                current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                realization_ref = current_status.get("last_realization")
+                realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else None
+                try:
+                    contract = output_contract(run_dir)
+                    if contract is not None:
+                        if realization_id is None:
+                            raise ValueError("cannot publish downloaded outputs without a realization")
+                        publication_manifest, outputs = publish_outputs(
+                            run_dir, realization_id, contract, candidate_paths=outputs
+                        )
+                except (OSError, ValueError) as exc:
+                    error = _safe_error(exc)
+                    attempt = record_publication_failure(run_dir, realization_id, error) if realization_id else None
+
+                    def record_blocked(current: dict[str, Any]) -> None:
+                        current.update({
+                            "state": "recovery_required", "execution_state": "completed",
+                            "exit_code": exit_code, "ended": remote_exit.get("timestamp"),
+                            "publication_state": "blocked", "publication_error": error,
+                            "recovery_required": True,
+                            "remote_state": "completed", "remote_exit_code": exit_code,
+                            "remote_exit": str(exits[-1].relative_to(run_dir)),
+                            "remote_ended": remote_exit.get("timestamp"),
+                        })
+                        if attempt:
+                            current["last_publication_attempt"] = attempt
+
+                    _mutate_run_status(run_dir, record_blocked)
+                    raise
             recovery_root = downloaded_run / "recovery"
             recovery_artifacts = [
                 str(path.relative_to(run_dir))
@@ -580,6 +615,11 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
 
             def mutate(status: dict[str, Any]) -> None:
                 status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
+                status["execution_state"] = "completed" if exit_code == 0 else "failed"
+                status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
+                status.pop("publication_error", None)
+                if publication_manifest:
+                    status["publication_manifest"] = publication_manifest
                 if published_states:
                     status["recoverable_training_states"] = [
                         {
@@ -1569,7 +1609,16 @@ def _runpod_remote_job_script(
     remote_archive: str,
     cwd: str,
     command: str,
+    write_roots: list[dict[str, str]] | None = None,
 ) -> str:
+    declared_roots = write_roots or []
+    paths = validated_write_roots(
+        {"env": {item["env"]: item["path"] for item in declared_roots}, "write_roots": declared_roots},
+        workspace_path=workspace,
+    )
+    prepare_write_roots = "\n".join(
+        f'mkdir -p "{path}" && test -w "{path}" || exit 1' for path in paths
+    )
     return f"""
 set -u
 secret_file={shlex.quote(remote_secret_path)}
@@ -1589,6 +1638,7 @@ export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
 mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"
+{prepare_write_roots}
 case "$HF_HOME" in "$KURA_WORKSPACE"/*) ;; *) echo "[kura] HF_HOME must be under KURA_WORKSPACE before remote job start: $HF_HOME" >&2; exit 1 ;; esac
 case "$HF_HUB_CACHE" in "$HF_HOME"/*) ;; *) echo "[kura] HF_HUB_CACHE must be under HF_HOME before remote job start: $HF_HUB_CACHE" >&2; exit 1 ;; esac
 touch "$KURA_LOG_PATH"
@@ -1781,6 +1831,7 @@ chmod 600 {shlex.quote(remote_secret_path)}
         remote_archive=remote_archive,
         cwd=cwd,
         command=command,
+        write_roots=realization.get("write_roots"),
     )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"

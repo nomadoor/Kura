@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from kura import __version__
+from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
@@ -35,6 +36,7 @@ from kura.executors.common import (
     _write_status,
 )
 from kura.paths import workspace_mount_mappings
+from kura.runtime_io import validated_write_roots
 
 
 def _docker_image_id(image: str) -> str | None:
@@ -172,6 +174,7 @@ def docker_command(
     runtime_env.setdefault("HF_HUB_CACHE", f"{runtime_env['HF_HOME'].rstrip('/')}/hub")
     if os.environ.get("HF_TOKEN"):
         runtime_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+    write_roots = validated_write_roots(spec, workspace_path=workspace_target)
     for key, value in sorted(runtime_env.items()):
         if _is_secret(key):
             command.extend(["--env", key])
@@ -180,14 +183,16 @@ def docker_command(
     # The wrapper runs inside the container, so Docker's detached stdout is never
     # the source of truth. The mounted run log survives Docker log rotation.
     quoted_root = workspace_target.rstrip("/")
-    wrapper = (
-        'mkdir -p "$HOME" "$(dirname "$KURA_LOG_PATH")" '
-        f'"{quoted_root}/runs/$KURA_RUN_ID/outputs" '
-        f'"{quoted_root}/runs/$KURA_RUN_ID/checkpoints" '
-        f'"{quoted_root}/runs/$KURA_RUN_ID/samples" '
-        f'"{quoted_root}/runs/$KURA_RUN_ID/metrics" && '
-        'exec "$@" >> "$KURA_LOG_PATH" 2>&1'
-    )
+    mkdir_targets = [
+        '"$HOME"', '"$(dirname "$KURA_LOG_PATH")"',
+        *(
+            f'"{quoted_root}/runs/$KURA_RUN_ID/{name}"'
+            for name in ("outputs", "checkpoints", "samples", "metrics")
+        ),
+        *(f'"{path}"' for path in write_roots),
+    ]
+    checks = [f'test -w "{path}"' for path in write_roots]
+    wrapper = " && ".join([f"mkdir -p {' '.join(mkdir_targets)}", *checks, 'exec "$@" >> "$KURA_LOG_PATH" 2>&1'])
     command.extend([image, "sh", "-lc", wrapper, "kura-job", *spec["argv"]])
     return command, runtime_env, name
 
@@ -198,6 +203,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
     effective_mounts = _effective_mounts(mounts, workspace_target)
     preflight = {} if dry_run else docker_preflight(workspace, effective_mounts, min_free_gb=min_free_gb)
     command, runtime_env, name = docker_command(workspace, run_dir, spec, image, effective_mounts, gpu, realization_id, workspace_target)
+    output_baseline = existing_output_snapshot(run_dir) if spec.get("output_contract") is not None else {}
     safe_command = _safe_command(command)
     image_id = _docker_image_id(image)
     if dry_run:
@@ -226,6 +232,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "docker_command": safe_command, "workspace_mount": {"source": str(workspace.resolve()), "target": workspace_target},
         "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in effective_mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
+        "output_baseline": output_baseline,
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
         "platform": platform.platform(), "host": platform.node(), "kura_version": __version__, "preflight": preflight,
@@ -324,12 +331,18 @@ def reconcile_docker(
                 latest["last_observation"] = str(observation_path.relative_to(run_dir))
                 recorded = True
             if latest.get("state") not in TERMINAL_STATES:
-                latest.update({"state": state, "exit_code": exit_code, "ended": ended})
+                visible_state = "publishing" if state == "completed" else state
+                latest.update({"state": visible_state, "exit_code": exit_code, "ended": ended})
+                if state in TERMINAL_STATES:
+                    latest["execution_state"] = state
+                    latest["publication_state"] = "pending"
             effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
             _materialize_stdout_progress(run_dir, latest, state=effective_state)
 
         status = _mutate_run_status(run_dir, mutate, blocking=blocking)
         if state in TERMINAL_STATES:
+            published: list[dict[str, Any]] = []
+            state_error: str | None = None
             try:
                 published = publish_completed_training_states(
                     run_dir.parent.parent,
@@ -337,35 +350,71 @@ def reconcile_docker(
                     allow_final_state=exit_code == 0,
                 )
             except (OSError, ValueError) as exc:
-                status = _mutate_run_status(
-                    run_dir,
-                    lambda latest: latest.__setitem__("training_state_sync_error", _redact_secret_text(str(exc))),
-                    blocking=blocking,
-                )
-            else:
+                state_error = _redact_secret_text(str(exc))
+            try:
                 capture_required = training_state_capture_required(run_dir)
-
-                def record_training_states(latest: dict[str, Any]) -> None:
-                    if published:
-                        latest.pop("training_state_sync_error", None)
-                        latest["recoverable_training_states"] = [
-                            {
-                                "artifact_id": item["id"],
-                                "manifest_sha256": item["manifest_sha256"],
-                                "observed_step": item["observed_step"],
-                                "restoration_level": item["restoration_contract"]["level"],
-                            }
-                            for item in published
-                        ]
-                    elif capture_required:
-                        latest["training_state_sync_error"] = (
-                            "terminal local run snapshot has no valid training-state artifact; "
-                            "inspect the backend state output before relying on Resume"
+            except (OSError, ValueError) as exc:
+                capture_required = (run_dir / "resolved" / "manifest.lock.yaml").is_file()
+                state_error = _redact_secret_text(str(exc))
+            output_error: str | None = None
+            publication_manifest: str | None = None
+            published_outputs: list[str] = []
+            contract: dict[str, Any] | None = None
+            if state == "completed":
+                try:
+                    contract = output_contract(run_dir)
+                    if contract is not None:
+                        publication_manifest, published_outputs = publish_outputs(
+                            run_dir, realization["id"], contract, baseline=realization.get("output_baseline")
                         )
-                    else:
-                        latest.pop("training_state_sync_error", None)
+                except (OSError, ValueError) as exc:
+                    output_error = _redact_secret_text(str(exc))
+            errors = [item for item in (state_error, output_error) if item]
+            if capture_required and not published and not state_error:
+                errors.append("required training-state artifact is not published")
+            publication_attempt = record_publication_failure(run_dir, realization["id"], "; ".join(errors)) if errors else None
 
-                status = _mutate_run_status(run_dir, record_training_states, blocking=blocking)
+            def record_publication(latest: dict[str, Any]) -> None:
+                if publication_attempt:
+                    latest["last_publication_attempt"] = publication_attempt
+                if published:
+                    latest.pop("training_state_sync_error", None)
+                    latest["recoverable_training_states"] = [
+                        {
+                            "artifact_id": item["id"],
+                            "manifest_sha256": item["manifest_sha256"],
+                            "observed_step": item["observed_step"],
+                            "restoration_level": item["restoration_contract"]["level"],
+                        }
+                        for item in published
+                    ]
+                elif state_error:
+                    latest["training_state_sync_error"] = state_error
+                elif capture_required:
+                    latest["training_state_sync_error"] = (
+                        "terminal local run snapshot has no valid training-state artifact; "
+                        "inspect the backend state output before relying on Resume"
+                    )
+                else:
+                    latest.pop("training_state_sync_error", None)
+                if state == "completed":
+                    if output_error:
+                        latest["publication_error"] = output_error
+                    else:
+                        latest.pop("publication_error", None)
+                    if publication_manifest:
+                        latest["publication_manifest"] = publication_manifest
+                        latest["outputs"] = published_outputs
+                    blocked = (capture_required and not published) or output_error is not None
+                    latest["state"] = "recovery_required" if blocked else "completed"
+                    latest["recovery_required"] = blocked
+                    latest["publication_state"] = "blocked" if blocked else "completed" if contract else "legacy-unverified"
+                    if not blocked:
+                        _materialize_stdout_progress(run_dir, latest, state="completed")
+                else:
+                    latest["publication_state"] = "blocked" if state_error else "not-required"
+
+            status = _mutate_run_status(run_dir, record_publication, blocking=blocking)
         if recorded:
             append_run_event(run_dir, {"event": "run_reconciled", **observation})
         return status

@@ -105,7 +105,7 @@ implementations; it is not compile or optimizer-step evidence.
 | Backend | Model family | Adapter | Status | Verified scope |
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |
-| AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Local one-step path verified |
+| AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Pinned-image local `sd1` path completed one optimizer step and Kura structural publication; non-root model-cache acquisition also passed. Evidence: `ai-toolkit-sd1-publication-docker-2026-09-23` |
 | AI-Toolkit | FLUX.1 / Kontext / Flex / Chroma | Generic native-config projection | 🧩 | Model-specific defaults not verified |
 | AI-Toolkit | Qwen Image | Generic native-config projection | ⚠️ | T2I expressible; edit/control needs explicit dataset config |
 | AI-Toolkit | Qwen-Image 2.1 | Generic projection plus typed control path | 🧪 | T2I and single-control Edit compile fixtures pass; pinned-image class import passes; no real smoke |
@@ -135,7 +135,7 @@ implementations; it is not compile or optimizer-step evidence.
 | Musubi Tuner | HunyuanVideo 1.5 | Built-in | 🧪 | T2V and I2V compile paths covered |
 | Musubi Tuner | FramePack | Built-in | 🔥 | Normal, F1, and Single Frame compile paths covered. Evidence: `musubi-framepack-video-docker-2026-07-12` |
 | Musubi Tuner | Kandinsky 5 | Built-in | ⚠️ | Lite real-smoked; Pro remains capacity-dependent |
-| sd-scripts | Stable Diffusion 1.5 LoRA | Built-in | 🔥 | Two uninterrupted 100-step controls and a 50+50 Resume run completed with identical learned weights, optimizer, scheduler, and normalized train state in the recorded one-item case. Evidence: `sd-scripts-sd15-resume-equivalence-docker-2026-08-27` |
+| sd-scripts | Stable Diffusion 1.5 LoRA | Built-in | 🔥 | Two uninterrupted 100-step controls and a 50+50 Resume run completed with identical learned weights, optimizer, scheduler, and normalized train state in the recorded one-item case. The newer Kura post-exit publication gate still needs a real container smoke. Evidence: `sd-scripts-sd15-resume-equivalence-docker-2026-08-27` |
 | sd-scripts | SDXL LoRA | Built-in | 🔧 | Compile coverage remains; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
 | sd-scripts | FLUX.1 LoRA | Built-in | 🔧 | Compile coverage remains; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
 | sd-scripts | Anima LoRA | Built-in | 🔧 | Compile and publication tests remain; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |

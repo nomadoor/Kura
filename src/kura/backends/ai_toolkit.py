@@ -312,8 +312,11 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     override = _ai_toolkit_backend_override(run)
     command = override.get("command")
     recipe = validated_recipe(run, required=command is None)
+    model_cache = "/workspace/cache/ai-toolkit/models"
+    write_roots = [{"role": "model-cache", "path": model_cache, "env": "MODELS_PATH"}]
     if command is None:
-        runner_env = {"SEED": str(recipe["seed"])}
+        runner_env = {"SEED": str(recipe["seed"]), "MODELS_PATH": model_cache}
+        output_contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
         compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
         cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
         config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"
@@ -325,7 +328,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
                 limitations = state_contract.get("restoration_contract", {}).get("limitations") or []
                 detail = "; ".join(limitations) if limitations else "training-state capture is disabled"
                 raise ValueError(f"AI-Toolkit Resume is unavailable: {detail}")
-            return {"cwd": cwd, "argv": ["python", "run.py", config_path], "env": runner_env}
+            return {"cwd": cwd, "argv": ["python", "run.py", config_path], "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
         spec: dict[str, Any] = {
             "config_path": config_path,
             "run_id": run["id"],
@@ -339,7 +342,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             spec["require_nonzero_lora_b"] = True
         runner = ["python", "-c", script_source("ai_toolkit_state.py"), json.dumps(spec, ensure_ascii=False, separators=(",", ":"))]
         if continuation is None:
-            return {"cwd": cwd, "argv": runner, "env": runner_env}
+            return {"cwd": cwd, "argv": runner, "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
         artifact_id = continuation["source"]["artifact_id"]
         spec["resume"] = {
             "payload": f"/workspace/artifacts/training-state/{artifact_id}/payload",
@@ -351,7 +354,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "python", "-c", script_source("training_state_verify.py"),
             f"/workspace/runs/{run['id']}/resolved/training-state-source.lock.json", "/workspace",
         ]
-        return {"cwd": cwd, "argv": _script_command([verifier, runner], step_name="ai-toolkit"), "env": runner_env}
+        return {"cwd": cwd, "argv": _script_command([verifier, runner], step_name="ai-toolkit"), "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
     combined = sorted(set(override) - {"command"})
     if combined:
         raise ValueError("AI-Toolkit explicit command cannot be combined with: " + ", ".join(combined))
@@ -367,4 +370,6 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("AI-Toolkit command env must be a string-to-string mapping.")
     if any(any(part in key.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY")) for key in env):
         raise ValueError("AI-Toolkit command env must not contain secrets; use the process environment instead.")
-    return {"cwd": cwd, "argv": argv, "env": env}
+    if env.get("MODELS_PATH", model_cache) != model_cache:
+        raise ValueError("AI-Toolkit MODELS_PATH must use Kura's managed model cache")
+    return {"cwd": cwd, "argv": argv, "env": {**env, "MODELS_PATH": model_cache}, "write_roots": write_roots}

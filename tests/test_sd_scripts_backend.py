@@ -71,6 +71,11 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
 
 
 class SdScriptsBackendTests(unittest.TestCase):
+    def test_builtin_command_requires_a_trained_adapter_output(self) -> None:
+        self.assertEqual(command_sd_scripts(base_run())["output_contract"], {
+            "required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}],
+        })
+
     def test_state_capture_rejects_epoch_save_escape_hatches(self) -> None:
         run = base_run("sd15", "lora")
         run["backend"]["config"]["extra_args"] = ["--save_every_n_epochs", "1"]

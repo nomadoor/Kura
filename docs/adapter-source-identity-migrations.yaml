@@ -7,6 +7,26 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-output-publication-contract-2026-09-23
+    backend: sd-scripts
+    reason: >-
+      The built-in command now declares a post-exit safetensors publication
+      requirement. The recorded SD 1.5 Resume equivalence run used the same
+      native training and validation argv and produced structurally valid
+      safetensors, so its observed optimizer updates and learned-weight
+      equivalence are unchanged. This migration does not claim that the new
+      Kura publication gate has passed a real container lifecycle smoke.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7fe4296e12305828faf550f32ad898b94929b0419bea85a45d847afee337e5ff
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 3b88a376dd4b2081c61d8a196422fce3f55f648b853a20dfdd7169528ed6e6c0
   - id: ai-toolkit-review-fixes-existing-evidence-2026-09-22
     backend: ai-toolkit
     reason: >-

@@ -461,7 +461,10 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
         commands.append(training_argv)
         kind = "anima-lllite" if mode == "controlnet_lllite" else "lora"
         commands.append(_validation_command(pattern=f"{final_output}/{output_name}.safetensors", kind=kind))
-    return {"cwd": "/opt/sd-scripts", "argv": _script_command(commands, step_name="sd-scripts"), "env": _validate_native_env(native)}
+    return {
+        "cwd": "/opt/sd-scripts", "argv": _script_command(commands, step_name="sd-scripts"), "env": _validate_native_env(native),
+        "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},
+    }
 
 
 def compile_sd_scripts(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:

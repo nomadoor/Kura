@@ -1,0 +1,46 @@
+schema_version: 1
+run_id: 20260923-1141_tiny-ai-real-train-sd1_4986
+executor: docker
+runtime:
+  image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  container_uid: 1000
+model_cache_probe:
+  run_id: 20260923-1125_model-path-nonroot_42dc
+  upstream_entrypoint: toolkit.models.v2.resolver.resolve_comfy_file
+  initial_cache: empty
+  models_path: /workspace/cache/ai-toolkit/models
+  acquired_file: unet/diffusion_pytorch_model.bin
+  acquired_bytes: 5824609
+  exit_code: 0
+training:
+  model: hf-internal-testing/tiny-stable-diffusion-pipe
+  architecture: sd1
+  dataset_items: 1
+  resolution: 256x256
+  rank: 1
+  optimizer_steps: 1
+  loss: 1.082
+  exit_code: 0
+publication:
+  execution_state: completed
+  publication_state: completed
+  final_state: completed
+  required_role: trained-adapter
+  safetensors_bytes: 55504
+  safetensors_sha256: f2d07ab159a46c6d469800a685dcce7f0469ec351de9f6a1efe8183c234c0157
+  tensor_count: 216
+  lora_down_tensors: 72
+  lora_up_tensors: 72
+  manifest: realizations/20260923-114815-767331.publication.json
+  active_docker_containers_afterward: 0
+negative_fixture:
+  test: tests.test_artifact_publication.LocalOutputPublicationTests.test_missing_required_adapter_is_not_completed
+  expected: exit 0 with missing required adapter never reaches completed
+scope: >-
+  Proves the pinned AI-Toolkit model resolver can write a real small weight
+  under Kura's managed MODELS_PATH as a non-root local Docker user, followed by
+  one real SD1 optimizer step and structural output publication. It does not
+  establish LoRA quality, arbitrary model-family compatibility, or RunPod
+  lifecycle behavior. The first training attempt used the obsolete sd15
+  selector and failed before model load; this completed run uses upstream sd1.
