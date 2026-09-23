@@ -87,6 +87,15 @@ classes: Qwen-Image 2.1, LTX-2.5, Anima, both Mage-Flow classes, and all three
 MiniMax-H3 classes. Import smoke proves that the pinned image contains the
 implementations; it is not compile or optimizer-step evidence.
 
+For the ordinary `backend.config.model_arch` field, Kura checks the selector
+against the registry observed in the pinned AI-Toolkit image before compiling.
+For Stable Diffusion 1.x the upstream selector is `sd1`, not `sd15`; Kura does
+not silently rewrite one to the other. This check establishes selector
+recognition only, not training support or output quality. An advanced custom
+image can use `backend.config.native_config.model.arch` as an explicitly
+unvalidated escape hatch; its selector and runtime compatibility remain the
+author's responsibility.
+
 ## Status
 
 | Mark | Meaning |
