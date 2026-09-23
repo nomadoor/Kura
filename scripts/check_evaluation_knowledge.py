@@ -13,7 +13,7 @@ SKILL_DIR = ROOT / ".agents" / "skills" / "lora-evaluation"
 # Model-family knowledge is shared by the training and evaluation skills and is
 # not specific to one agent, so it lives at the repository root.
 KNOWLEDGE_DIR = ROOT / "knowledge" / "model-families"
-ORDER = "dataset-prep -> training-parameter-planning -> backend skill -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
+ORDER = "dataset-prep -> training-parameter-planning -> training-backends -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
 REQUIRED_FIELDS = (
     "source_url",
     "source_revision",

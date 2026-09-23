@@ -34,14 +34,14 @@ evaluation:
   category: outfit_transfer
   fixed: [checkpoint, seed, workflow, lora_strength, prompt_prefix]
   varied: [outfit]
-  model_family: anima
-  model_variant: aesthetic
+  model_family: family-id
+  model_variant: variant-id
   knowledge:
-    card: knowledge/model-families/anima.md
-    card_verified_at: '2026-08-03'
-    source_url: https://huggingface.co/circlestone-labs/Anima
-    source_revision: main
-    applies_to_model_revision: 594c27fea35648b87c86a9b4d5436a6024c820b5
+    card: knowledge/model-families/family-id.md
+    card_verified_at: 'YYYY-MM-DD'
+    source_url: https://upstream.example/model-card
+    source_revision: <immutable revision>
+    applies_to_model_revision: <immutable revision>
     revision_match: unverified
   prompt_policy:
     prefix_origin: knowledge_card
@@ -60,14 +60,14 @@ evaluation:
   category: checkpoint_comparison
   fixed: [seed, workflow, lora_strength, prompt_policy]
   varied: [checkpoint]
-  model_family: anima
-  model_variant: aesthetic
+  model_family: family-id
+  model_variant: variant-id
   knowledge:
-    card: knowledge/model-families/anima.md
-    card_verified_at: '2026-08-03'
-    source_url: https://huggingface.co/circlestone-labs/Anima
-    source_revision: main
-    applies_to_model_revision: 594c27fea35648b87c86a9b4d5436a6024c820b5
+    card: knowledge/model-families/family-id.md
+    card_verified_at: 'YYYY-MM-DD'
+    source_url: https://upstream.example/model-card
+    source_revision: <immutable revision>
+    applies_to_model_revision: <immutable revision>
     revision_match: unverified
   prompt_policy:
     prefix_origin: knowledge_card

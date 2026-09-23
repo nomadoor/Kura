@@ -106,6 +106,13 @@ rendered images, not another Kura generation path. Kura owns raw generation and
 complete per-result metadata; the agent owns presentation layout. Preserve the
 source images and record their paths in `notes.md`.
 
+When producing a public or private experiment summary, derive it from the run
+artifacts and notes. Include the run identity, backend, dataset role/count,
+training settings, evaluated checkpoints and strengths, prompt/seed policy,
+hardware/runtime when relevant, and explicit limitations. Do not turn a
+qualitative preference into a benchmark or expose private paths, secrets,
+gated access details, or dataset payloads.
+
 ## Skill order
 
-`dataset-prep -> training-parameter-planning -> backend skill -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes`
+`dataset-prep -> training-parameter-planning -> training-backends -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes`
