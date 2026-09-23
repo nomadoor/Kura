@@ -7,6 +7,26 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
+    backend: ai-toolkit
+    reason: >-
+      The typed model_arch field now rejects selectors absent from the pinned
+      upstream registry before compilation. The recorded SD1 optimizer smoke
+      used the registered sd1 selector, and its generated native model.arch,
+      runtime command, optimizer step, and published output are unchanged.
+      This migration applies only to that evidence, not to unregistered or
+      custom-image selectors.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e6f483baebf583a16a38cfa3c149906ba819327602c268fc62aa484b30243263
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c95615c9c951b006bfa18ccc7c4324e3446ff2ea156a9b0026e24c01c5f267c0
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-
