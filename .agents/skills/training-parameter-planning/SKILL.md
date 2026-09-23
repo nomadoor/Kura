@@ -120,5 +120,7 @@ never authorizes relaunch.
 
 Record settings, hardware, observed behavior, and the user's judgment in the
 run's `notes.md` first. Promote only generalizable findings to the matching
-family card, citing the run. Record an actual owner-stated regret as one concise
-entry in `knowledge/regrets.md`; do not seed hypothetical regrets.
+family card, citing the run. Record an actual regret confirmed by a run or
+named by the owner as one concise entry in `knowledge/regrets.md`, citing
+`source: run <id>` or `source: owner (<date>)` respectively. Do not seed
+hypothetical regrets.
