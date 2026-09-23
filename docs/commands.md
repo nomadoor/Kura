@@ -106,6 +106,27 @@ available for evaluation and preserves the latest successfully mirrored weight
 if training later fails. The pull commands below remain available for an
 explicit immediate refresh or interrupted-controller recovery.
 
+For newly compiled built-in training commands, trainer exit code 0 is not by
+itself `completed`. Kura first checks that the realization produced a new,
+structurally valid safetensors output, records its size and SHA-256 in an immutable
+`realizations/*.publication.json` inventory, and publishes any required
+training state. A missing or corrupt required artifact leaves the run in
+`recovery_required` locally; `execution_state: completed` and
+`publication_state: blocked` keep the two facts distinct. `run execute` then
+returns failure without rerunning the trainer. On RunPod, snapshot-transfer
+integrity is checked separately from the adapter-content requirement, and a
+publication failure leaves `recovery_required: true` so the Pod is not stopped
+as a completed run. Runs compiled before this output contract remain
+`legacy-unverified` rather than acquiring retroactive verification.
+Backend-native output validators remain responsible for adapter-specific tensor
+keys and compatibility; this structural publication check does not judge LoRA
+quality or prove that the model is useful.
+
+AI-Toolkit still acquires its own base and companion models. Its backend-owned
+`MODELS_PATH` now points to a writable cache under the Kura workspace, checked
+before the training command starts. This does not copy the base model into each
+run or change model-acquisition ownership.
+
 Training-state capture is on by default at the backend's weight checkpoint
 cadence. Completed state directories are copied into the protected
 `artifacts/training-state/` store with a complete file inventory and SHA-256

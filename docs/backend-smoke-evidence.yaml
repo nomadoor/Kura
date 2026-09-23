@@ -12,6 +12,24 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-sd1-publication-docker-2026-09-23
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: e6f483baebf583a16a38cfa3c149906ba819327602c268fc62aa484b30243263
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      model_cache: managed-nonroot
+      optimizer_steps: 1
+      publication: completed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-23
+    artifact: smoke-evidence/2026-09-23-ai-toolkit-sd1-publication-docker.yaml
   - id: musubi-minimax-h3-image-runpod-2026-09-22
     backend: musubi-tuner
     adapter_source:

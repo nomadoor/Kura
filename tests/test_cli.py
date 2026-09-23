@@ -3890,7 +3890,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(command["argv"][:2], ["python", "-c"])
         self.assertIn("hook_before_train_loop", command["argv"][2])
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
-        self.assertEqual(command["env"], {"SEED": "42"})
+        self.assertEqual(command["env"], {"SEED": "42", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
 
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()
@@ -8392,6 +8392,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 "backend: {name: sd-scripts}\nrecipe: {steps: 100}\n",
                 encoding="utf-8",
             )
+            (run_dir / "resolved" / "backend-command.lock.json").write_text("{}", encoding="utf-8")
             header = json.dumps(
                 {"weight": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}},
                 separators=(",", ":"),
@@ -8721,6 +8722,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 "id: example\ntype: train\nbackend: {name: ai-toolkit}\nrecipe: {steps: 1, seed: 1}\n",
                 encoding="utf-8",
             )
+            (resolved_dir / "backend-command.lock.json").write_text("{}", encoding="utf-8")
             artifacts = {
                 "example.safetensors": "weight",
                 "config.yaml": "config",
@@ -8813,6 +8815,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     "id: example\ntype: train\nbackend: {name: ai-toolkit}\nrecipe: {steps: 1, seed: 1}\n",
                     encoding="utf-8",
                 )
+                (resolved_dir / "backend-command.lock.json").write_text("{}", encoding="utf-8")
                 (output_dir / "example.safetensors").write_text("native", encoding="utf-8")
                 legacy_content = "changed" if scenario == "modified" else "native"
                 (legacy_dir / "example.safetensors").write_text(legacy_content, encoding="utf-8")

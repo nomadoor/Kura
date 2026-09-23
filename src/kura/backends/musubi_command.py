@@ -1262,4 +1262,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     else:
         raise _unsupported_musubi_adapter_error(architecture)
 
-    return {"cwd": "/opt/musubi-tuner", "argv": argv, "env": _backend_env("Musubi Tuner", override)}
+    return {
+        "cwd": "/opt/musubi-tuner", "argv": argv, "env": _backend_env("Musubi Tuner", override),
+        "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},
+    }

@@ -298,6 +298,12 @@ def format_run_completion(workspace: Path, run_dir: Path, status: dict[str, Any]
         headline += f"  {duration}"
     intent = " ".join(str(run.get("intent") or "").split()) or "(not recorded)"
     lines = [headline, f"intent     {intent}", *_output_lines(status.get("outputs"))]
+    if status.get("execution_state") == "completed" and state != "completed":
+        lines.append("trainer completed; required artifact publication is not complete")
+    if status.get("publication_state") == "blocked":
+        reason = status.get("publication_error") or status.get("training_state_sync_error")
+        if isinstance(reason, str) and reason:
+            lines.append(f"publication blocked: {reason}")
     context = experiment_context(workspace, run_dir.name, run=run)
     formatted_context = format_experiment_context(context)
     if formatted_context:

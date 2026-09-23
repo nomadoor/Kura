@@ -220,7 +220,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
         }
         command = command_ai_toolkit(run)
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
-        self.assertEqual(command["env"], {"SEED": "1"})
+        self.assertEqual(command["env"], {"SEED": "1", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
 
     def test_ai_toolkit_accumulated_training_does_not_capture_mislabeled_optimizer_updates(self) -> None:
         run = {
@@ -1753,6 +1753,7 @@ class ResumeRunTests(unittest.TestCase):
                 },
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text("{}", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
             os.chdir(root)
             try:
@@ -1999,7 +2000,9 @@ class ResumeRunTests(unittest.TestCase):
             with patch("kura.executors.docker.subprocess.run", return_value=result):
                 status = reconcile_docker(run_dir)
 
-            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["state"], "recovery_required")
+            self.assertEqual(status["execution_state"], "completed")
+            self.assertEqual(status["publication_state"], "blocked")
             self.assertIn("no valid training-state artifact", status["training_state_sync_error"])
 
 

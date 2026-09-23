@@ -244,7 +244,7 @@ def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state
         status["last_step"] = max(existing_step, candidate) if isinstance(existing_step, int) else candidate
     if seconds_per_iter is not None:
         status["seconds_per_iter"] = seconds_per_iter
-    if state == "completed":
+    if state == "completed" and status.get("publication_state") != "completed":
         outputs_dir = run_dir / "outputs"
         if outputs_dir.is_dir():
             outputs = [
