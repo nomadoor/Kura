@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
 
 from kura.provenance import adapter_source_identity
 
-from scripts.check_smoke_evidence import _historical_record_is_retired, _support_evidence_claims
+from scripts.check_smoke_evidence import _historical_record_is_retired, _identity_reaches_current, _support_evidence_claims
 
 
 class SmokeEvidenceCheckTests(unittest.TestCase):
@@ -20,8 +21,18 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         record = next(item for item in evidence["records"] if item["id"] == "ai-toolkit-sd1-publication-docker-2026-09-23")
         migration = next(item for item in migrations["records"] if item["id"] == "ai-toolkit-registered-selector-validation-sd1-2026-09-23")
 
+        self.assertEqual(migration["backend"], record["backend"])
+        self.assertIs(migration["behavior_changed"], False)
+        self.assertEqual(migration["evidence_ids"], [record["id"]])
         self.assertEqual(migration["previous"]["value"], record["adapter_source"]["value"])
         self.assertEqual(migration["replacement"]["value"], adapter_source_identity("ai-toolkit")["value"])
+        self.assertTrue(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], migrations["records"]))
+        for field, invalid in (("backend", "musubi-tuner"), ("behavior_changed", True), ("evidence_ids", [])):
+            with self.subTest(field=field):
+                altered = deepcopy(migrations["records"])
+                item = next(entry for entry in altered if entry["id"] == migration["id"])
+                item[field] = invalid
+                self.assertFalse(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], altered))
 
     def test_verified_support_without_evidence_is_returned_for_validation(self) -> None:
         claims = _support_evidence_claims(
