@@ -169,6 +169,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "num_frames": {"type": "integer", "minimum": 1},
             },
         )
+        model_arch_choices = backend_capabilities("ai-toolkit")["config_value_choices"]["model_arch"]
+        self.assertIn("sd1", model_arch_choices)
+        self.assertIn("qwen_image_2", model_arch_choices)
+        self.assertNotIn("sd15", model_arch_choices)
 
     def test_musubi_rejects_declared_fields_on_the_wrong_architecture(self) -> None:
         for field, value in (("timestep_boundary", 900), ("noise_scale_start", 0.5)):
@@ -376,6 +380,88 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "duplicates backend.config.model_arch"):
                 BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+
+    def test_ai_toolkit_rejects_sd15_before_compiling_native_config(self) -> None:
+        run = {
+            "id": "invalid-sd15", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd15"}},
+            "model": {"base": "hf-internal-testing/tiny-stable-diffusion-pipe"},
+            "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            with self.assertRaisesRegex(ValueError, "sd15.*sd1"):
+                BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            self.assertFalse((destination / "ai-toolkit.yaml").exists())
+
+    def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
+        defaults = (repository / "src" / "kura" / "init_templates.py").read_text(encoding="utf-8")
+        self.assertIn("ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc", dockerfile)
+        self.assertIn("nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a", defaults)
+
+    def test_ai_toolkit_accepts_registered_sd1_without_rewriting_it(self) -> None:
+        run = {
+            "id": "registered-sd1", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd1"}},
+            "model": {"base": "hf-internal-testing/tiny-stable-diffusion-pipe"},
+            "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+            self.assertEqual(process["model"]["arch"], "sd1")
+
+    def test_ai_toolkit_preserves_upstream_arch_tag_and_flex1_alias(self) -> None:
+        for arch in ("sd1:portrait", "flex1"):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
+                destination = Path(directory)
+                run = {
+                    "id": "upstream-alias", "backend": {"name": "ai-toolkit", "config": {"model_arch": arch}},
+                    "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}],
+                    "recipe": {"steps": 1, "seed": 1},
+                }
+                BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+                process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+                self.assertEqual(process["model"]["arch"], arch)
+
+    def test_ai_toolkit_cli_reports_sd15_correction_before_dataset_resolution(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "invalid-sd15"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(yaml.safe_dump({
+                "schema_version": 2, "id": "invalid-sd15", "type": "train",
+                "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd15"}},
+                "model": {"base": "hf-internal-testing/tiny-stable-diffusion-pipe"},
+                "recipe": {"steps": 1, "seed": 1}, "datasets": [{"id": "tiny"}],
+            }), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            os.chdir(root)
+            try:
+                error = io.StringIO()
+                with contextlib.redirect_stderr(error):
+                    self.assertEqual(cmd_run_compile(argparse.Namespace(run_id="invalid-sd15")), 1)
+            finally:
+                os.chdir(previous)
+            self.assertRegex(error.getvalue(), "sd15.*sd1")
+            self.assertFalse((run_dir / "resolved" / "backend-command.lock.json").exists())
+
+    def test_ai_toolkit_native_model_arch_remains_an_unvalidated_escape_hatch(self) -> None:
+        run = {
+            "id": "custom-arch", "backend": {"name": "ai-toolkit", "config": {
+                "native_config": {"model": {"arch": "custom_extension_arch"}},
+            }},
+            "model": {"base": "custom/model"}, "datasets": [{"id": "tiny"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+            self.assertEqual(process["model"]["arch"], "custom_extension_arch")
 
     def test_ai_toolkit_minimax_h3_rejects_gradient_checkpointing_for_pinned_runtime(self) -> None:
         run = {

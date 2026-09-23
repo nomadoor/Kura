@@ -413,6 +413,10 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
                 if "maximum" in contract:
                     constraints.append(f"max={contract['maximum']}")
                 print(f"    {field} (" + ", ".join(constraints) + ")")
+    if payload["config_value_choices"]:
+        print("backend.config recognized upstream values (not Kura support claims):")
+        for field, choices in payload["config_value_choices"].items():
+            print(f"  {field}: " + ", ".join(choices))
     if payload["unsupported_fields"]:
         print("unsupported fields:")
         for field, reason in payload["unsupported_fields"].items():

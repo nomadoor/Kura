@@ -21,9 +21,41 @@ AI_TOOLKIT_DATASET_FIELD_SPECS = {
     "do_audio": {"type": "boolean"},
 }
 
+# Registry snapshot from Kura image sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+# (AI-Toolkit 0.13.18, embedded commit 31ddc709c35d3d3b820c636745397561f806b246).
+# It is the union of
+# toolkit.util.get_model.LEGACY_ARCHS and the imported AI_TOOLKIT_MODELS archs.
+# Keep this backend-local and refresh it whenever the pinned image changes.
+AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
+    "ace_step_15", "ace_step_15_xl", "anima", "auraflow", "boogu_image", "boogu_image_edit",
+    "chroma", "chroma_radiance", "cogview4", "ernie_image", "f-lite", "flex2", "flux",
+    "flux2", "flux2_klein_4b", "flux2_klein_9b", "flux_kontext", "hidream", "hidream_e1",
+    "hidream_o1", "ideogram4", "krea2", "ltx2", "ltx2.3", "ltx2.5", "lumina2",
+    "mageflow", "mageflow_edit", "minimax_h3", "minimax_h3_ref2va", "minimax_h3_vsa",
+    "nucleus_image", "omnigen2", "pixart", "pixart_sigma", "prx_pixel", "qwen25_omni",
+    "qwen_image", "qwen_image_2", "qwen_image_edit", "qwen_image_edit_plus", "sd1", "sd2",
+    "sd3", "sdxl", "ssd", "vega", "wan21", "wan21_i2v", "wan22_14b",
+    "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
+})
+
 
 def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
     native = backend_config(run, "ai-toolkit")
+    authored_arch = native.get("model_arch")
+    if authored_arch is not None:
+        if not isinstance(authored_arch, str) or not authored_arch:
+            raise ValueError("AI-Toolkit backend.config.model_arch must be a nonempty upstream selector")
+        # ModelConfig strips a display tag and maps flex1 to the legacy flux
+        # implementation before get_model_class consults the model registry.
+        resolved_arch = authored_arch.split(":", 1)[0]
+        if resolved_arch == "flex1":
+            resolved_arch = "flux"
+        if resolved_arch not in AI_TOOLKIT_PINNED_MODEL_ARCHS:
+            correction = "; use 'sd1' for Stable Diffusion 1.x" if authored_arch == "sd15" else ""
+            raise ValueError(
+                f"AI-Toolkit backend.config.model_arch {authored_arch!r} is not registered in the pinned image"
+                f"{correction}; use backend.config.native_config.model.arch for a reviewed custom-image selector"
+            )
     native_config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
     native_train = native_config.get("train") if isinstance(native_config.get("train"), dict) else {}

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
@@ -47,6 +47,7 @@ class BackendSurface:
     selector_defaults: tuple[tuple[str, Any], ...] = ()
     unavailable: tuple[tuple[str, str], ...] = ()
     nested_config_fields: dict[str, dict[str, dict[str, Any]]] | None = None
+    config_value_choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         overlap = self.fields & self.escape_hatches
@@ -58,6 +59,9 @@ class BackendSurface:
             raise ValueError("conditional backend fields are not declared: " + ", ".join(sorted(unknown)))
         if len(conditional) != len(set(conditional)):
             raise ValueError("conditional backend fields must be declared exactly once")
+        choice_fields = [field for field, _ in self.config_value_choices]
+        if len(choice_fields) != len(set(choice_fields)) or set(choice_fields) - self.fields:
+            raise ValueError("backend config value choices must name distinct declared fields")
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
     }),
     escape_hatches=frozenset({"command", "native_config"}),
     nested_config_fields={"dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS},
+    config_value_choices=(("model_arch", tuple(sorted(AI_TOOLKIT_PINNED_MODEL_ARCHS))),),
 )
 
 MUSUBI_SURFACE = BackendSurface(
@@ -375,4 +380,5 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
             for key in sorted(adapter.surface.escape_hatches)
         },
         "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
+        "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
     }
