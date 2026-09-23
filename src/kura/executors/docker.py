@@ -364,9 +364,21 @@ def reconcile_docker(
                 try:
                     contract = output_contract(run_dir)
                     if contract is not None:
-                        publication_manifest, published_outputs = publish_outputs(
-                            run_dir, realization["id"], contract, baseline=realization.get("output_baseline")
+                        manifest_ref = f"realizations/{realization['id']}.publication.json"
+                        current = _load_status(run_dir)
+                        already_published = (
+                            current.get("last_realization") == realization_ref
+                            and current.get("publication_state") == "completed"
+                            and current.get("publication_manifest") == manifest_ref
+                            and (run_dir / manifest_ref).is_file()
                         )
+                        if already_published:
+                            publication_manifest = manifest_ref
+                            published_outputs = list(current.get("outputs") or [])
+                        else:
+                            publication_manifest, published_outputs = publish_outputs(
+                                run_dir, realization["id"], contract, baseline=realization.get("output_baseline")
+                            )
                 except (OSError, ValueError) as exc:
                     output_error = _redact_secret_text(str(exc))
             errors = [item for item in (state_error, output_error) if item]
@@ -375,6 +387,8 @@ def reconcile_docker(
             publication_attempt = record_publication_failure(run_dir, realization["id"], "; ".join(errors)) if errors else None
 
             def record_publication(latest: dict[str, Any]) -> None:
+                if latest.get("last_realization") != realization_ref:
+                    return
                 if publication_attempt:
                     latest["last_publication_attempt"] = publication_attempt
                 if published:

@@ -87,6 +87,53 @@ class LocalOutputPublicationTests(unittest.TestCase):
                 "sha256": hashlib.sha256(_safetensors_bytes()).hexdigest(),
             }])
 
+    def test_reconcile_preserves_completed_publication_after_outputs_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            first = self._reconcile(run_dir)
+            self.assertEqual(first["state"], "completed")
+            (run_dir / "outputs" / "later.txt").write_text("later", encoding="utf-8")
+
+            second = self._reconcile(run_dir)
+
+            self.assertEqual(second["state"], "completed")
+            self.assertEqual(second["publication_state"], "completed")
+            self.assertEqual(second["publication_manifest"], first["publication_manifest"])
+            self.assertEqual(second["outputs"], first["outputs"])
+            self.assertNotIn("last_publication_attempt", second)
+
+    def test_reconcile_does_not_publish_into_a_newer_realization_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            next_ref = "realizations/next.json"
+
+            def replace_latest_run(_run_dir: Path) -> bool:
+                status_path = run_dir / "status.json"
+                status = json.loads(status_path.read_text(encoding="utf-8"))
+                status.update({"state": "running", "last_realization": next_ref})
+                for key in ("exit_code", "ended", "execution_state", "publication_state", "last_observation"):
+                    status.pop(key, None)
+                status_path.write_text(json.dumps(status), encoding="utf-8")
+                return False
+
+            observed = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}', "")
+            with patch("kura.executors.docker.subprocess.run", return_value=observed), patch(
+                "kura.executors.docker.training_state_capture_required", side_effect=replace_latest_run
+            ):
+                result = reconcile_docker(run_dir)
+
+            self.assertEqual(result["last_realization"], next_ref)
+            self.assertEqual(result["state"], "running")
+            self.assertNotIn("publication_state", result)
+            self.assertNotIn("publication_manifest", result)
+            self.assertNotIn("outputs", result)
+
     def test_truncated_adapter_is_not_completed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run(Path(directory))
