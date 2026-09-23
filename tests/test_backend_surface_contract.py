@@ -19,6 +19,7 @@ import unittest
 from kura.backends import BACKENDS, BackendAdapter, backend_capabilities, validate_backend_config
 from kura.backends.musubi_command import _script_command as musubi_script_command
 from kura.cli import cmd_run_capabilities, cmd_run_compile, cmd_run_plan
+from kura.init_templates import cmd_init
 
 
 class BackendSurfaceContractTests(unittest.TestCase):
@@ -395,10 +396,24 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
         repository = Path(__file__).resolve().parents[1]
+        base_pin = "ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc"
+        runtime_pin = "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a"
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
-        defaults = (repository / "src" / "kura" / "init_templates.py").read_text(encoding="utf-8")
-        self.assertIn("ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc", dockerfile)
-        self.assertIn("nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a", defaults)
+        self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
+
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            os.chdir(root)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(cmd_init(argparse.Namespace()), 0)
+            finally:
+                os.chdir(previous)
+            workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(workspace["runpod"]["default_image"]["ai-toolkit"], runtime_pin)
+            generated_dockerfile = (root / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
+            self.assertEqual(generated_dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={runtime_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
     def test_ai_toolkit_accepts_registered_sd1_without_rewriting_it(self) -> None:
         run = {
