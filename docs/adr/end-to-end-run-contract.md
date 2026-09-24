@@ -97,6 +97,15 @@ environment. These are measurement moments, not additional approval gates. A
 fact has one owner; Kura duplicates a trainer check only when its native failure
 would be expensive-late or cryptic.
 
+For first-class training, compile requires an authored, versioned dataset
+manifest and freezes the run's selected inputs and backend projection before
+acquisition. Launch checks source change detectors and materialized-view
+readability, containment, and isolated write roots before a backend-managed
+model download where those facts are knowable. A stat match is recorded as a
+stat check, not a new content hash. RunPod transfer completeness and integrity
+are recorded separately from semantic input identity. Output publication is
+a later, separate condition of completion.
+
 RunPod capacity is measured before approval. The plan shows stock and price for
 ordered GPU/cloud candidates and may freeze a bounded foreground wait policy.
 Waiting probes stock with bounded backoff, then treats Pod creation as
@@ -107,9 +116,11 @@ billing Pod after the controller exits.
 
 ## File roles
 
+- `dataset.yaml` and `items.jsonl`: the author's versioned dataset inventory,
+  independent of a particular trainer or run.
 - `run.yaml`: human and agent intent, recipe, and approved contingency envelope.
-- `resolved/`: immutable backend input, requirements, workflow input, and
-  environment intent.
+- `resolved/`: immutable run-selected manifest content, effective input lock
+  and backend projection, requirements, workflow input, and environment intent.
 - `realizations/`: append-only launch, provider/container/image identity,
   runtime measurements, model observations, exit, and recovery facts.
 - `status.json`: latest materialized state only.

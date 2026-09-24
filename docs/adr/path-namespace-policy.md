@@ -20,7 +20,10 @@ Path namespace is defined by the artifact consumer:
 
 | Artifact | Consumer | Persisted form |
 | --- | --- | --- |
+| `dataset.yaml`, `items.jsonl` | host CLI / agent / human | dataset-relative typed file references; `dataset.yaml` declares the items schema version |
+| `resolved/dataset-input.lock.json` | host CLI / executor | workspace-relative source identities and explicitly namespaced native destinations |
 | `resolved/backend-command.lock.json`, dataset TOML, training argv | container | container absolute paths, normally `/workspace/...` |
+| run-scoped dataset views | trainer in container / executor | materialized relative links to frozen sources, or an explicitly approved copy |
 | `status.json`, model lock files, indexes, workspace symlinks | host CLI / agent / human | workspace-relative paths, or host-resolvable symlinks |
 | realization mounts | host CLI and executor | explicit source/target pairs |
 | RunPod remote facts | host CLI, as remote facts | fields must make the remote namespace explicit |
@@ -31,6 +34,15 @@ No Kura-owned workspace artifact may persist a container-private path such as
 explicitly a container command/runtime fact. If Kura cannot map a path through
 the workspace mount table, it must fail or treat the fact as unavailable. It
 must not invent a mapping.
+
+The authored dataset and its frozen run-selected projection have different
+path consumers. A container-private native path in a command or dataset TOML
+must not be mistaken for a host-resolvable source in the input lock. Dataset
+sources are read-only to the trainer; run-scoped views do not grant writes
+through their links. Executors must provide an actual mount/permission
+boundary and separate Kura-managed write roots for trainer caches. A relative
+symlink is preferred only when its target resolves safely in the trainer's
+namespace. Hardlinks are not a dataset-view fallback.
 
 `model-bundle.lock.yaml` is the source of truth for Musubi model provenance.
 `cache/models/` is a convenience layer for container paths and may contain
