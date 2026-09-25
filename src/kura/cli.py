@@ -21,7 +21,8 @@ import yaml
 
 from kura import __version__
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
-from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
+from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
+from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, observe_run, reconcile_docker, reconcile_runpod
@@ -153,66 +154,47 @@ def _now() -> datetime:
 
 
 def cmd_dataset_validate(args: argparse.Namespace) -> int:
-    directory = Path(args.dataset_dir)
-    errors: list[str] = []
-    warnings: list[str] = []
-    manifest = directory / "dataset.yaml"
-    items = directory / "items.jsonl"
-    if not manifest.exists():
-        errors.append("missing dataset.yaml")
-    if not items.exists():
-        errors.append("missing items.jsonl")
-    if errors:
-        print("dataset validation failed: " + "; ".join(errors), file=sys.stderr)
-        return 1
     try:
-        metadata = _load_yaml(manifest)
+        measured = measure_manifest(resolve_dataset_path(args.dataset_dir, workspace=_workspace()))
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"dataset validation failed: invalid dataset.yaml: {_safe_error(exc)}", file=sys.stderr)
+        print(f"dataset validation failed: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    count = 0
-    for number, line in enumerate(items.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            errors.append(f"items.jsonl:{number}: invalid JSON ({exc.msg})")
-            continue
-        if not isinstance(item, dict) or not item.get("id") or not item.get("path"):
-            errors.append(f"items.jsonl:{number}: item requires id and path")
-            count += 1
-            continue
-        item_path = Path(str(item["path"]))
-        if item_path.is_absolute():
-            errors.append(f"items.jsonl:{number}: path must be relative to the dataset directory")
-        else:
-            candidate = (directory / item_path).resolve(strict=False)
-            try:
-                candidate.relative_to(directory.resolve())
-            except ValueError:
-                errors.append(f"items.jsonl:{number}: path must stay inside the dataset directory")
-            else:
-                if not candidate.is_file():
-                    errors.append(f"items.jsonl:{number}: referenced file does not exist: {item['path']}")
-        if not item.get("caption"):
-            warnings.append(f"items.jsonl:{number}: missing caption")
-        if not item.get("hash"):
-            warnings.append(f"items.jsonl:{number}: missing hash")
-        count += 1
-    if count == 0:
-        errors.append("items.jsonl contains no items")
-    declared = metadata.get("stats", {}).get("count")
-    if declared != count:
-        warnings.append(f"stats.count is {declared!r}, but items.jsonl contains {count} items")
-    for warning in warnings:
+    for warning in measured["warnings"]:
         print(f"warning: {warning}", file=sys.stderr)
-    if errors:
-        for error in errors:
-            print(f"error: {error}", file=sys.stderr)
-        return 1
-    print(f"dataset valid: {count} items")
+    print(f"dataset valid: {measured['count']} items")
+    if measured["excluded_files"]:
+        print(f"excluded files ({len(measured['excluded_files'])}): " + ", ".join(measured["excluded_files"]))
+    if measured["excluded_directories"]:
+        print(
+            f"excluded directories ({len(measured['excluded_directories'])}): "
+            + ", ".join(measured["excluded_directories"])
+        )
     return 0
+
+
+def cmd_dataset_draft(args: argparse.Namespace) -> int:
+    directory = resolve_dataset_path(args.dataset_dir, workspace=_workspace())
+    try:
+        proposal = draft_manifest(directory)
+        if not args.write:
+            print(json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        metadata_path = directory / "dataset.v2.candidate.yaml"
+        items_path = directory / "items.v2.candidate.jsonl"
+        if metadata_path.exists() or items_path.exists():
+            raise ValueError("v2 candidate already exists; review it before replacing")
+        with metadata_path.open("x", encoding="utf-8") as stream:
+            yaml.safe_dump(proposal["dataset_yaml"], stream, allow_unicode=True, sort_keys=False)
+        with items_path.open("x", encoding="utf-8") as stream:
+            for item in proposal["items"]:
+                stream.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+        print(f"wrote review candidates: {metadata_path}, {items_path}")
+        for issue in proposal["issues"]:
+            print(f"review required: {issue}", file=sys.stderr)
+        return 0
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot draft dataset: {_safe_error(exc)}", file=sys.stderr)
+        return 1
 
 
 def cmd_dataset_inspect(args: argparse.Namespace) -> int:
@@ -1265,8 +1247,12 @@ def main() -> None:
     dataset = sub.add_parser("dataset", help="Dataset utilities")
     dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
     validate = dataset_sub.add_parser("validate", help="Validate a dataset manifest")
-    validate.add_argument("dataset_dir")
+    validate.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
     validate.set_defaults(func=cmd_dataset_validate)
+    draft = dataset_sub.add_parser("draft", help="Preview or create reviewable v2 candidate files")
+    draft.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
+    draft.add_argument("--write", action="store_true", help="Write candidate files without replacing authored manifests")
+    draft.set_defaults(func=cmd_dataset_draft)
     inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")
     inspect.add_argument("dataset", help="Dataset ID under datasets/ or a dataset directory path")
     inspect.add_argument("--json", action="store_true", help="Print machine-readable inspection facts")

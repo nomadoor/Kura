@@ -265,8 +265,8 @@ class InitCommandTests(unittest.TestCase):
             root = Path(directory)
             dataset = root / "datasets" / "tiny"
             dataset.mkdir(parents=True)
-            (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
-            (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+            (dataset / "dataset.yaml").write_text("id: tiny\nitems_schema_version: 2\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text('{"id":"1","files":[{"type":"file","role":"target","path":"images/001.png"}],"caption":{"text":"ok"}}\n', encoding="utf-8")
             stderr = io.StringIO()
             with patch("sys.stderr", stderr):
                 self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 1)
@@ -282,8 +282,8 @@ class InitCommandTests(unittest.TestCase):
             dataset.mkdir(parents=True)
             outside = root / "outside.png"
             outside.write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
-            (dataset / "items.jsonl").write_text('{"id":"1","path":"../../outside.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+            (dataset / "dataset.yaml").write_text("id: tiny\nitems_schema_version: 2\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text('{"id":"1","files":[{"type":"file","role":"target","path":"../../outside.png"}],"caption":{"text":"ok"}}\n', encoding="utf-8")
 
             stderr = io.StringIO()
             with patch("sys.stderr", stderr):
