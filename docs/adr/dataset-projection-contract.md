@@ -119,37 +119,56 @@ those IDs in backend configuration; core checks that referenced IDs exist and
 that every selected sample is accounted for, while the adapter interprets
 concepts and repeat counts. A single sample has at most one group in the
 initial manifest schema; a simple dataset need not declare groups.
+If a backend has no group-specific native meaning for this run, flattening
+groups into one selection requires explicit run intent and is shown in the
+plan; the adapter cannot silently ignore them. A backend that supports
+per-group behavior must report the exact mapping and repeat effect.
 
-### Read-only input and materialized views
+### Run-owned native views and source protection
 
-Source datasets are read-only training inputs. Trainer caches and other
-backend-specific writes must go to separate Kura-managed write roots, not
-through the source dataset or a linked view. The projected view is run-scoped
-and reproducible from the immutable compiled plan. Relative symlinks are the
-preferred materialization; hardlinks are forbidden because writes through a
-hardlink mutate the same inode as the authored source. A symlink by itself is
-not a write barrier: the actual mount/permission arrangement must prevent
-trainer writes to authored inputs, including when launched as a non-root UID.
+Backend projections create a run-owned native view containing symlinks to
+selected source files and real files for generated captions or native
+configuration. They do not make a local per-run media copy or snapshot.
+The view is writable: a trainer may create adjacent caches and metadata
+there without an upstream image patch. Hardlinks are forbidden because they
+share source inodes. Local Docker exposes the authored dataset through a
+read-only mount, rather than host file permissions, as insurance against
+trainer writes to the original data. This protection is separate from the
+primary contract that the view means what the compiled projection says.
 
-If symlinks cannot safely express a projection in an execution environment,
-Kura either shows the required copy size and destination in the plan for the
-single normal approval, or refuses the run. It must not silently copy large
-media or change a previously approved storage cost. The exact capability
-test and copy policy remain open below. Local Docker, WSL-hosted filesystems,
-RunPod, and later storage providers follow the same contract; no WSL-specific
-semantic path is introduced.
+Before any Kura-managed or backend-managed model acquisition, launch compares
+every selected source's stat and the view's exact source-link inventory and
+link targets against the compiled input lock. A mismatch stops before model
+acquisition. This stat-and-link check is not fresh content verification or a
+guarantee that a host process cannot edit the source during training. Kura
+repeats the check after training. Detected change does not retroactively fail
+the run or discard published output, but the realization records it and
+status and plan clearly warn that inputs may have changed during training.
+After terminal state and a recorded publication decision, Kura automatically
+removes the disposable view and its caches, records the removal, and retains
+`resolved/`, logs, published outputs, and Resume training state. It does not
+remove the view during execution or unresolved recovery.
+
+RunPod's selected-file upload is a necessary transfer copy, not a local
+per-run snapshot policy. The Pod verifies each uploaded file against the
+compiled content hash before use. Its inputs are disposable copies, so
+preventing trainer writes to them is not a requirement for protecting the
+authored dataset. Local Docker, WSL-hosted filesystems, RunPod, and later
+storage providers follow the same semantic handoff boundary without a
+WSL-specific path.
 
 ### One approval and bounded preflight
 
 Manifest drafting and agent assistance are preparation, not a mandatory
 second approval gate. The plan displays selected inputs, generated native
-sources/views, write roots, and materialization cost. The user approves the
+sources/views, and write roots. The user approves the
 run once before launch. Compilation and launch stop on structural or frozen
 input contradictions before backend-managed model acquisition whenever Kura
-can know them. Source stat checks at launch are recorded as stat checks, not
-as fresh content-hash proof. RunPod transfer-integrity checks remain distinct
-from input semantic identity. Publication of required output artifacts remains
-the separate completion contract.
+can know them. Source stat checks before acquisition and after training are
+recorded with their distinct timing and meaning, not as content-hash proof.
+RunPod transport completeness and content integrity are recorded separately
+from local source change detection and semantic input identity. Publication
+of required output artifacts remains the separate completion contract.
 
 This ADR defines the target contract, not an assertion that any backend or
 executor already implements it. First-class support for each path requires
@@ -165,6 +184,5 @@ boundary; it does not gain a verified dataset-handoff claim from this ADR.
 | Dataset-prep skill example | The current `.agents/skills/dataset-prep/SKILL.md` minimal `items.jsonl` example uses `id` and an untyped `path`. Update its explanation and example in the follow-on schema specification and skill synchronization work, once typed-reference syntax is fixed; do not imply that the legacy row is a formal version-2 input. |
 | Existing dataset migration interface | Make draft/validate dry-run-first; report ambiguous pairs, duplicate stems, unlisted candidate media, and unclassified files. Never rewrite media or silently turn a draft into approved run intent. Permit manual authoring for complex datasets. |
 | Resume from a run without the new lock | Preserve an explicit legacy path only where the existing digest and training-state contract allow it; display and record “media identity unverified.” Both new-lock runs compare semantic input identity, not host stat or sampler order. Never silently equate old digest with the new lock. |
-| RunPod selected-file transfer | Transfer only the frozen selected sources and generated native inputs, with a checked remote inventory and per-file integrity proof, then materialize the view in the Pod. Decide the archive/stream format and relative-link reconstruction before replacing the current whole-dataset upload; do not create a Pod when a required source cannot be transferred. |
-| Environments without usable symlinks | Probe the actual destination filesystem and container/remote path mapping with create/read/remove operations before launch. Check that a relative link resolves to the selected source from the trainer's namespace and does not make the source writable. If not, show copy bytes and available space in the plan or fail. Do not infer capability solely from OS or WSL detection. |
+| RunPod selected-file transfer | Transfer only the frozen selected sources and generated native inputs, with a checked remote inventory and per-file content proof against the lock. Do not create a Pod when a required source cannot be transferred. Decide the archive/stream format before replacing the current whole-dataset upload. |
 | Candidate-media inventory scope | Inspect only declared dataset roots and explicit media conventions, report possible omissions, and require owner resolution when the candidate could affect this run. Do not treat every unrelated dataset file as a training sample. |
