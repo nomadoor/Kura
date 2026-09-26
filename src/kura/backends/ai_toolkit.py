@@ -153,10 +153,26 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             "consumed": consumed,
             "unrepresentable": unrepresentable,
             "semantic": semantic,
-            "bindings": bindings,
             "native_runtime": native_runtime,
             "native": {**semantic, **native_runtime},
-            "view": {"root": view_root, "links": links, "files": files},
+            "native_string_fields": ["/caption_ext"],
+            "views": [{
+                "id": f"ai-toolkit-{dataset_id}",
+                "root": view_root,
+                "links": links,
+                "files": files,
+                "native_files": [],
+                "write_roots": [{"path": view_root, "native_pointer": "/folder_path"}],
+                "consumers": [{
+                    "id": "dataset",
+                    "kind": "recursive-directory",
+                    "native_pointer": "/folder_path",
+                    "path": view_root,
+                    "input_ids": list(consumed),
+                }],
+                "repeat": 1,
+                "bindings": bindings,
+            }],
         })
     return {"schema_version": 1, "backend": "ai-toolkit", "datasets": projected}
 
@@ -390,9 +406,18 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
             native_dataset = projected_dataset.get("native")
             if not isinstance(native_dataset, dict):
                 raise ValueError(f"AI-Toolkit frozen projection for dataset {dataset_id!r} has no native handoff")
-            view = projected_dataset.get("view")
+            views = projected_dataset.get("views")
+            view = views[0] if isinstance(views, list) and len(views) == 1 and isinstance(views[0], dict) else None
             view_root = view.get("root") if isinstance(view, dict) else None
-            if native_dataset.get("folder_path") != f"/workspace/{view_root}":
+            consumers = view.get("consumers") if isinstance(view, dict) else None
+            consumer = consumers[0] if isinstance(consumers, list) and len(consumers) == 1 else None
+            if (
+                not isinstance(consumer, dict)
+                or consumer.get("kind") != "recursive-directory"
+                or consumer.get("native_pointer") != "/folder_path"
+                or consumer.get("path") != view_root
+                or native_dataset.get("folder_path") != f"/workspace/{view_root}"
+            ):
                 raise ValueError(
                     f"AI-Toolkit frozen projection for dataset {dataset_id!r} bypasses its run-owned view"
                 )

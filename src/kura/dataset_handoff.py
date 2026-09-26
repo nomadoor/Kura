@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 from typing import Any, Callable
 
@@ -21,9 +22,7 @@ _TRAINER_MEDIA_SUFFIXES = frozenset({
     ".avif", ".avi", ".bmp", ".flac", ".gif", ".jpeg", ".jpg", ".m4v", ".mkv",
     ".mov", ".mp3", ".mp4", ".ogg", ".png", ".wav", ".webm", ".webp",
 })
-_PATH_LIKE_SUFFIXES = _TRAINER_MEDIA_SUFFIXES | frozenset({
-    ".csv", ".json", ".jsonl", ".toml", ".txt", ".yaml", ".yml",
-})
+_EXTENSION_LITERAL = re.compile(r"^\.[A-Za-z0-9]+$")
 
 
 def _digest(value: Any) -> str:
@@ -132,7 +131,7 @@ def _validate_bindings(
     bindings: Any,
     placements: dict[str, str],
     input_index: dict[str, dict[str, Any]],
-) -> None:
+) -> set[str]:
     if not isinstance(bindings, list):
         raise ValueError(f"backend projection for dataset {dataset_id!r} has no input bindings")
     bound: list[str] = []
@@ -208,6 +207,7 @@ def _validate_bindings(
         bound.extend(input_ids)
     if Counter(bound) != Counter(placements.keys()):
         raise ValueError(f"projection bindings do not cover the exact dataset {dataset_id!r} view inputs")
+    return set(roots_by_kind.values())
 
 
 def _pointer_escape(value: str) -> str:
@@ -276,12 +276,65 @@ def _string_leaf_pointers(value: Any, pointer: str = "") -> set[str]:
 
 
 def _looks_like_path(value: str) -> bool:
-    return (
-        "/" in value
-        or "\\" in value
-        or value.startswith((".", "~"))
-        or PurePosixPath(value).suffix.lower() in _PATH_LIKE_SUFFIXES
-    )
+    if "/" in value or "\\" in value or value.startswith("~"):
+        return True
+    if value.startswith(".") and _EXTENSION_LITERAL.fullmatch(value) is None:
+        return True
+    return PurePosixPath(value).suffix.lower() in _TRAINER_MEDIA_SUFFIXES
+
+
+def _validate_native_string_classification(
+    dataset_id: str,
+    projected: dict[str, Any],
+    native: dict[str, Any],
+    views: list[dict[str, Any]],
+) -> list[str]:
+    declared = projected.get("native_string_fields")
+    if not isinstance(declared, list) or not all(isinstance(item, str) for item in declared):
+        raise ValueError(
+            f"backend projection for dataset {dataset_id!r} must declare native string fields"
+        )
+    if len(set(declared)) != len(declared):
+        raise ValueError(f"backend projection for dataset {dataset_id!r} has duplicate native string fields")
+
+    structural: set[str] = set()
+    for view in views:
+        structural.update(consumer["native_pointer"] for consumer in view["consumers"])
+        structural.update(write_root["native_pointer"] for write_root in view["write_roots"])
+        if "repeat_pointer" in view:
+            structural.add(view["repeat_pointer"])
+
+    overlap = structural & set(declared)
+    if overlap:
+        raise ValueError(
+            f"backend projection for dataset {dataset_id!r} classifies native pointer "
+            f"{sorted(overlap)[0]!r} as both structural and other string"
+        )
+    for pointer in declared:
+        value = _pointer_value(
+            native, pointer, context=f"projection dataset {dataset_id!r} declared native string",
+        )
+        if not isinstance(value, str):
+            raise ValueError(
+                f"backend projection for dataset {dataset_id!r} native string field {pointer!r} is not a string"
+            )
+        if _looks_like_path(value):
+            raise ValueError(
+                f"backend projection for dataset {dataset_id!r} native string field {pointer!r} "
+                "classifies a path-like value as another string"
+            )
+
+    string_pointers = _string_leaf_pointers(native)
+    classified_strings = (structural & string_pointers) | set(declared)
+    unclassified = sorted(string_pointers - classified_strings)
+    if unclassified:
+        pointer = unclassified[0]
+        value = _pointer_value(native, pointer, context="unclassified native string")
+        kind = "path-like string" if _looks_like_path(value) else "string"
+        raise ValueError(
+            f"backend projection for dataset {dataset_id!r} native {kind} {pointer!r} is not classified"
+        )
+    return list(declared)
 
 
 def _jsonl_rows(text: str, *, context: str) -> list[str]:
@@ -304,11 +357,16 @@ def _validate_native_jsonl_files(
     input_index: dict[str, dict[str, Any]],
     seen_paths: set[str],
 ) -> tuple[list[dict[str, Any]], set[str]]:
-    if native_files is None:
+    if native_files is None or native_files == []:
         return [], set()
     if not isinstance(native_files, list):
         raise ValueError(f"backend projection for dataset {dataset['id']!r} native files must be a list")
     sample_ids = {item["id"] for item in dataset["samples"]}
+    view_sample_ids = {
+        input_index[input_id]["sample"]
+        for input_id in placements
+        if input_id in input_index and input_index[input_id].get("dataset") == dataset["id"]
+    }
     inputs_by_sample = {
         sample["id"]: [
             *[reference["input_id"] for reference in sample["files"]],
@@ -317,7 +375,7 @@ def _validate_native_jsonl_files(
         for sample in dataset["samples"]
     }
     row_ids: set[str] = set()
-    rows_by_sample: dict[str, list[Any]] = {sample_id: [] for sample_id in sample_ids}
+    rows_by_sample: dict[str, list[Any]] = {sample_id: [] for sample_id in view_sample_ids}
     all_referenced: Counter[str] = Counter()
     path_referenced: Counter[str] = Counter()
     verified: list[dict[str, Any]] = []
@@ -365,6 +423,8 @@ def _validate_native_jsonl_files(
             row_ids.add(row_id)
             if not isinstance(sample_id, str) or sample_id not in sample_ids:
                 raise ValueError(f"{context} names an unknown sample {sample_id!r}")
+            if sample_id not in view_sample_ids:
+                raise ValueError(f"{context} names a sample outside its native view")
             repeat = reported.get("repeat")
             if repeat is not None and (
                 not isinstance(repeat, dict)
@@ -503,15 +563,75 @@ def _native_jsonl_semantic(view: dict[str, Any]) -> list[dict[str, Any]]:
     return semantic
 
 
-def _validate_view(run_id: str, dataset: dict[str, Any], projected: dict[str, Any],
-                   input_index: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, str], set[str]]:
-    view = projected.get("view")
+def _validate_view(
+    run_id: str,
+    dataset: dict[str, Any],
+    view: Any,
+    native: dict[str, Any],
+    input_index: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, str], set[str]]:
     if not isinstance(view, dict):
-        raise ValueError(f"backend projection for dataset {dataset['id']!r} has no run view")
+        raise ValueError(f"backend projection for dataset {dataset['id']!r} has an invalid run view")
+    allowed_view_keys = {
+        "id", "root", "links", "files", "native_files", "write_roots", "consumers", "repeat",
+        "repeat_pointer", "bindings",
+    }
+    required_view_keys = allowed_view_keys - {"bindings", "repeat_pointer"}
+    if set(view) - allowed_view_keys or not required_view_keys <= set(view):
+        raise ValueError(f"backend projection for dataset {dataset['id']!r} view has an invalid shape")
+    view_id = view.get("id")
+    if (
+        not isinstance(view_id, str)
+        or not view_id
+        or _safe_workspace_relative(view_id, context="projection view id") != view_id
+        or "/" in view_id
+    ):
+        raise ValueError(f"backend projection for dataset {dataset['id']!r} has an invalid view id")
     root = _safe_workspace_relative(view.get("root"), context="projection view root")
     expected_prefix = f"runs/{run_id}/cache/dataset-view/"
     if not root.startswith(expected_prefix):
         raise ValueError("projection view root must be under the run-owned cache/dataset-view directory")
+    repeat = view.get("repeat")
+    if not isinstance(repeat, int) or isinstance(repeat, bool) or repeat < 1:
+        raise ValueError(f"projection view {view_id!r} repeat must be a positive integer")
+    repeat_pointer = view.get("repeat_pointer")
+    if repeat > 1 and not isinstance(repeat_pointer, str):
+        raise ValueError(f"projection view {view_id!r} repeat has no native pointer")
+    if repeat_pointer is not None:
+        if not isinstance(repeat_pointer, str):
+            raise ValueError(f"projection view {view_id!r} repeat pointer is invalid")
+        actual_repeat = _pointer_value(
+            native, repeat_pointer, context=f"projection view {view_id!r} native repeat",
+        )
+        if actual_repeat != repeat:
+            raise ValueError(f"projection view {view_id!r} native repeat differs from its declared repeat")
+    write_roots = view.get("write_roots")
+    if not isinstance(write_roots, list) or not write_roots:
+        raise ValueError(f"projection view {view_id!r} must declare write roots")
+    verified_write_roots: list[dict[str, str]] = []
+    seen_write_root_paths: set[str] = set()
+    for index, value in enumerate(write_roots):
+        if not isinstance(value, dict) or set(value) != {"path", "native_pointer"}:
+            raise ValueError(f"projection view {view_id!r} write root {index} has an invalid shape")
+        write_root = _safe_workspace_relative(
+            value.get("path"), context=f"projection view {view_id!r} write root {index}",
+        )
+        pointer = value.get("native_pointer")
+        if not isinstance(pointer, str):
+            raise ValueError(f"projection view {view_id!r} write root {index} has no native pointer")
+        if write_root != root and not write_root.startswith(root + "/"):
+            raise ValueError(f"projection view {view_id!r} write root is outside its view")
+        actual = _pointer_value(
+            native, pointer, context=f"projection view {view_id!r} native write root {index}",
+        )
+        expected = "/workspace/" + write_root
+        if not isinstance(actual, str) or (actual != expected and not actual.startswith(expected + "/")):
+            raise ValueError(f"projection view {view_id!r} native write root does not match its declared path")
+        verified = {"path": write_root, "native_pointer": pointer}
+        if write_root in seen_write_root_paths:
+            raise ValueError(f"projection view {view_id!r} has a duplicate write root")
+        seen_write_root_paths.add(write_root)
+        verified_write_roots.append(verified)
     links: list[dict[str, str]] = []
     seen_paths: set[str] = set()
     placements: dict[str, str] = {}
@@ -552,14 +672,176 @@ def _validate_view(run_id: str, dataset: dict[str, Any], projected: dict[str, An
         seen_paths.add(path)
         placements[input_id] = path
         files.append({"path": path, "text": text, "input_id": input_id})
-    _validate_bindings(dataset["id"], root, projected.get("bindings"), placements, input_index)
     native_files, native_inputs = _validate_native_jsonl_files(
         dataset, root, view.get("native_files"), placements, input_index, seen_paths,
     )
-    return {
-        "dataset": dataset["id"], "root": root, "links": links, "files": files,
+    consumers = view.get("consumers")
+    if not isinstance(consumers, list) or not consumers:
+        raise ValueError(f"projection view {view_id!r} has no native consumers")
+    kinds = {item.get("kind") for item in consumers if isinstance(item, dict)}
+    if len(kinds) != 1:
+        raise ValueError(f"projection view {view_id!r} mixes native consumer kinds")
+    kind = next(iter(kinds)) if kinds else None
+    verified_bindings: list[dict[str, Any]] | None = None
+    if kind == "recursive-directory":
+        if native_files:
+            raise ValueError(f"projection view {view_id!r} recursive consumer cannot use native JSONL rows")
+        bindings = view.get("bindings")
+        role_roots = _validate_bindings(dataset["id"], root, bindings, placements, input_index)
+        ordered_roots = sorted(PurePosixPath(item) for item in role_roots)
+        for index, left in enumerate(ordered_roots):
+            for right in ordered_roots[index + 1:]:
+                if left in right.parents or right in left.parents:
+                    raise ValueError(
+                        f"projection view {view_id!r} has nested role roots for a recursive consumer"
+                    )
+        consumed_by_directories: list[str] = []
+        consumer_paths: list[PurePosixPath] = []
+        seen_consumer_ids: set[str] = set()
+        for index, consumer in enumerate(consumers):
+            if not isinstance(consumer, dict) or set(consumer) != {
+                "id", "kind", "native_pointer", "path", "input_ids",
+            }:
+                raise ValueError(f"projection view {view_id!r} recursive consumer {index} has an invalid shape")
+            consumer_id = consumer.get("id")
+            if not isinstance(consumer_id, str) or not consumer_id or consumer_id in seen_consumer_ids:
+                raise ValueError(f"projection view {view_id!r} has a missing or duplicate consumer id")
+            seen_consumer_ids.add(consumer_id)
+            pointer = consumer.get("native_pointer")
+            consumer_path = _safe_workspace_relative(
+                consumer.get("path"), context=f"projection view {view_id!r} consumer {consumer_id!r} path",
+            )
+            input_ids = consumer.get("input_ids")
+            if not isinstance(pointer, str) or not isinstance(input_ids, list) or not input_ids:
+                raise ValueError(f"projection view {view_id!r} consumer {consumer_id!r} is incomplete")
+            if consumer_path != root and not consumer_path.startswith(root + "/"):
+                raise ValueError(f"projection view {view_id!r} consumer {consumer_id!r} is outside its view")
+            actual = _pointer_value(
+                native, pointer, context=f"projection view {view_id!r} consumer {consumer_id!r}",
+            )
+            if actual != "/workspace/" + consumer_path:
+                raise ValueError(f"projection view {view_id!r} native consumer does not point at its view path")
+            path_object = PurePosixPath(consumer_path)
+            if any(path_object == other or path_object in other.parents or other in path_object.parents
+                   for other in consumer_paths):
+                raise ValueError(f"projection view {view_id!r} has overlapping recursive consumers")
+            consumer_paths.append(path_object)
+            for input_id in input_ids:
+                placement = placements.get(input_id) if isinstance(input_id, str) else None
+                if placement is None or not placement.startswith(consumer_path + "/"):
+                    raise ValueError(
+                        f"projection view {view_id!r} consumer {consumer_id!r} names an input outside its path"
+                    )
+                consumed_by_directories.append(input_id)
+        if Counter(consumed_by_directories) != Counter(placements.keys()):
+            raise ValueError(f"projection view {view_id!r} consumers do not cover every view input exactly once")
+        verified_bindings = deepcopy(bindings)
+        represented = set(placements)
+    elif kind == "jsonl":
+        if "bindings" in view:
+            raise ValueError(f"projection view {view_id!r} JSONL consumer must not declare directory bindings")
+        consumed_native_files: list[str] = []
+        seen_consumer_ids: set[str] = set()
+        for index, consumer in enumerate(consumers):
+            if not isinstance(consumer, dict) or set(consumer) != {
+                "id", "kind", "native_pointer", "native_file",
+            }:
+                raise ValueError(f"projection view {view_id!r} JSONL consumer {index} has an invalid shape")
+            consumer_id = consumer.get("id")
+            pointer = consumer.get("native_pointer")
+            if (
+                not isinstance(consumer_id, str)
+                or not consumer_id
+                or consumer_id in seen_consumer_ids
+                or not isinstance(pointer, str)
+            ):
+                raise ValueError(f"projection view {view_id!r} has an invalid JSONL consumer identity")
+            seen_consumer_ids.add(consumer_id)
+            native_file = _safe_workspace_relative(
+                consumer.get("native_file"), context=f"projection view {view_id!r} native JSONL file",
+            )
+            if native_file not in {item["path"] for item in native_files}:
+                raise ValueError(f"projection view {view_id!r} JSONL consumer names an unverified native file")
+            actual = _pointer_value(
+                native, pointer, context=f"projection view {view_id!r} consumer {consumer_id!r}",
+            )
+            if actual != "/workspace/" + native_file:
+                raise ValueError(f"projection view {view_id!r} native consumer does not point at its JSONL file")
+            consumed_native_files.append(native_file)
+        if Counter(consumed_native_files) != Counter(item["path"] for item in native_files):
+            raise ValueError(f"projection view {view_id!r} consumers do not cover every native JSONL file")
+        represented = native_inputs
+    else:
+        raise ValueError(f"projection view {view_id!r} has an unsupported native consumer")
+    verified_view: dict[str, Any] = {
+        "id": view_id,
+        "dataset": dataset["id"],
+        "root": root,
+        "links": links,
+        "files": files,
         "native_files": native_files,
-    }, placements, native_inputs or set(placements)
+        "write_roots": verified_write_roots,
+        "consumers": deepcopy(consumers),
+        "repeat": repeat,
+    }
+    if repeat_pointer is not None:
+        verified_view["repeat_pointer"] = repeat_pointer
+    if verified_bindings is not None:
+        verified_view["bindings"] = verified_bindings
+    return {
+        **verified_view,
+    }, placements, represented
+
+
+def _view_semantic(view: dict[str, Any]) -> dict[str, Any]:
+    root = PurePosixPath(view["root"])
+    consumers = deepcopy(view["consumers"])
+    for consumer in consumers:
+        if consumer.get("kind") == "jsonl":
+            consumer["native_file"] = PurePosixPath(consumer["native_file"]).relative_to(root).as_posix()
+        elif consumer.get("kind") == "recursive-directory":
+            consumer["path"] = PurePosixPath(consumer["path"]).relative_to(root).as_posix()
+    stable: dict[str, Any] = {
+        "id": view["id"],
+        "repeat": view["repeat"],
+        "consumers": consumers,
+        "write_roots": [
+            {
+                "path": PurePosixPath(item["path"]).relative_to(root).as_posix(),
+                "native_pointer": item["native_pointer"],
+            }
+            for item in view["write_roots"]
+        ],
+        "entries": [
+            {
+                "input_id": item["input_id"],
+                "path": PurePosixPath(item["path"]).relative_to(root).as_posix(),
+                "kind": "link" if "target" in item else "generated",
+            }
+            for item in [*view.get("links", []), *view.get("files", [])]
+        ],
+    }
+    if "repeat_pointer" in view:
+        stable["repeat_pointer"] = view["repeat_pointer"]
+    if "bindings" in view:
+        stable["bindings"] = [
+            {
+                "rule": binding["rule"],
+                "key": binding["key"],
+                "members": [
+                    {
+                        "input_id": member["input_id"],
+                        "root": PurePosixPath(member["root"]).relative_to(root).as_posix(),
+                    }
+                    for member in binding["members"]
+                ],
+            }
+            for binding in view["bindings"]
+        ]
+    native_jsonl = _native_jsonl_semantic(view)
+    if native_jsonl:
+        stable["native_jsonl"] = native_jsonl
+    return stable
 
 
 def freeze_dataset_handoff(
@@ -584,7 +866,9 @@ def freeze_dataset_handoff(
         raise ValueError(f"{backend} projection dataset selection differs from run datasets")
     consumed: list[str] = []
     views: list[dict[str, Any]] = []
-    views_by_dataset: dict[str, dict[str, Any]] = {}
+    views_by_dataset: dict[str, list[dict[str, Any]]] = {}
+    seen_view_ids: set[tuple[str, str]] = set()
+    seen_view_roots: set[str] = set()
     for dataset in selection["datasets"]:
         projected = by_id[dataset["id"]]
         failures = projected.get("unrepresentable", [])
@@ -597,14 +881,55 @@ def freeze_dataset_handoff(
         dataset_consumed = projected.get("consumed")
         if not isinstance(dataset_consumed, list) or not all(isinstance(item, str) for item in dataset_consumed):
             raise ValueError(f"{backend} projection consumed inputs must be a list of IDs")
+        projection_semantic = projected.get("semantic")
+        if not isinstance(projection_semantic, dict):
+            raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has no stable semantic identity")
+        native_runtime = projected.get("native_runtime")
+        native = projected.get("native")
+        if not isinstance(native_runtime, dict) or not isinstance(native, dict):
+            raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has an invalid native handoff")
+        overlap = set(projection_semantic) & set(native_runtime)
+        if overlap or native != {**projection_semantic, **native_runtime}:
+            raise ValueError(
+                f"{backend} projection for dataset {dataset['id']!r} native handoff must be derived "
+                "exactly from semantic and runtime-only fields"
+            )
+        projected_views = projected.get("views")
+        if not isinstance(projected_views, list) or not projected_views:
+            raise ValueError(f"backend projection for dataset {dataset['id']!r} has no run views")
         consumed.extend(dataset_consumed)
-        view, placements, represented = _validate_view(str(run.get("id")), dataset, projected, input_index)
-        if Counter(dataset_consumed) != Counter(represented):
+        dataset_views: list[dict[str, Any]] = []
+        dataset_represented: list[str] = []
+        for projected_view in projected_views:
+            view, _placements, represented = _validate_view(
+                str(run.get("id")), dataset, projected_view, native, input_index,
+            )
+            view_identity = (dataset["id"], view["id"])
+            if view_identity in seen_view_ids:
+                raise ValueError(f"{backend} projection has a duplicate native view id {view['id']!r}")
+            if view["root"] in seen_view_roots:
+                raise ValueError(f"{backend} projection has a duplicate native view root {view['root']!r}")
+            view_root_path = PurePosixPath(view["root"])
+            if any(
+                view_root_path in PurePosixPath(existing).parents
+                or PurePosixPath(existing) in view_root_path.parents
+                for existing in seen_view_roots
+            ):
+                raise ValueError(f"{backend} projection has overlapping native view roots")
+            seen_view_ids.add(view_identity)
+            seen_view_roots.add(view["root"])
+            dataset_represented.extend(represented)
+            dataset_views.append(view)
+            views.append(view)
+        if Counter(dataset_consumed) != Counter(dataset_represented):
             raise ValueError(
                 f"{backend} projection consumed inputs differ from verified native inputs for dataset {dataset['id']!r}"
             )
-        views.append(view)
-        views_by_dataset[dataset["id"]] = view
+        native_string_fields = _validate_native_string_classification(
+            dataset["id"], projected, native, dataset_views,
+        )
+        projected["native_string_fields"] = native_string_fields
+        views_by_dataset[dataset["id"]] = dataset_views
     duplicates = sorted(item for item, count in Counter(consumed).items() if count > 1)
     unknown = sorted(set(consumed) - set(input_index))
     missing = sorted(set(input_index) - set(consumed))
@@ -628,23 +953,12 @@ def freeze_dataset_handoff(
     for dataset_id in selected_ids:
         projected = by_id[dataset_id]
         projection_semantic = projected.get("semantic")
-        if not isinstance(projection_semantic, dict):
-            raise ValueError(f"{backend} projection for dataset {dataset_id!r} has no stable semantic identity")
-        native_runtime = projected.get("native_runtime")
-        native = projected.get("native")
-        if not isinstance(native_runtime, dict) or not isinstance(native, dict):
-            raise ValueError(f"{backend} projection for dataset {dataset_id!r} has an invalid native handoff")
-        overlap = set(projection_semantic) & set(native_runtime)
-        if overlap or native != {**projection_semantic, **native_runtime}:
-            raise ValueError(
-                f"{backend} projection for dataset {dataset_id!r} native handoff must be derived "
-                "exactly from semantic and runtime-only fields"
-            )
-        stable_item: dict[str, Any] = {"id": dataset_id, "semantic": projection_semantic}
-        view = views_by_dataset[dataset_id]
-        native_jsonl = _native_jsonl_semantic(view)
-        if native_jsonl:
-            stable_item["native_jsonl"] = native_jsonl
+        stable_item: dict[str, Any] = {
+            "id": dataset_id,
+            "semantic": projection_semantic,
+            "native_string_fields": projected["native_string_fields"],
+            "views": [_view_semantic(view) for view in views_by_dataset[dataset_id]],
+        }
         stable_projection.append(stable_item)
     semantic = {
         "schema_version": 1,
@@ -852,7 +1166,7 @@ def remove_dataset_views(workspace: Path, run_dir: Path, lock: dict[str, Any]) -
 
 
 def materialize_dataset_view(workspace: Path, lock: dict[str, Any]) -> Path:
-    """Create the frozen links/generated files after source stat passes."""
+    """Create every frozen view after source stat passes; return the first root for compatibility."""
     source_changes = _source_changes(workspace, lock)
     if source_changes:
         raise ValueError("compiled dataset input changed: " + "; ".join(source_changes))
@@ -887,8 +1201,8 @@ def materialize_dataset_view(workspace: Path, lock: dict[str, Any]) -> Path:
     changes = inspect_dataset_handoff(workspace, lock)
     if changes:
         raise ValueError("dataset view verification failed: " + "; ".join(changes))
-    if len(roots) != 1:
-        raise ValueError("materialized dataset handoff must currently contain exactly one view")
+    if not roots:
+        raise ValueError("materialized dataset handoff has no views")
     return roots[0]
 
 

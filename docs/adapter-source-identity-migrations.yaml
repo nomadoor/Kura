@@ -21,7 +21,13 @@ records:
       likewise outside that staging path. The generated-JSONL verifier is
       opt-in through a projection report field that the current sd-scripts
       staging path does not emit, so this increment also leaves the recorded
-      native TOML, staged files, command, and training behavior unchanged.
+      native TOML, staged files, command, and training behavior unchanged. The
+      multi-view consumer validator is likewise not called by the current
+      sd-scripts staging path. Closed classification of native strings and
+      write-root pointers is also confined to projection reports, which this
+      staging path does not yet emit. Tightening the shared path-like string
+      predicate for declared projection literals is therefore also outside
+      the recorded staging path.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
@@ -32,7 +38,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 605401e0a5c27408d3a9c5bf0a11927ceb8c9736edf8b5f02c8eb05aafcdd33a
+      value: ccb395d86a2185043bfe22cd5f6cbbfbe83f3658ce132a2284fcb3fc238e0240
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -52,7 +58,15 @@ records:
       one-image, one-caption projection already satisfies those invariants.
       The generated-JSONL verifier is not exercised when the projection has
       no native JSONL files, so it does not change this recorded image-caption
-      view, native configuration, command, or training behavior.
+      view, native configuration, command, or training behavior. The view is
+      now reported through the generalized multi-view envelope, whose native
+      consumer check still resolves to the same folder_path; generated paths,
+      command, and trainer behavior remain unchanged. The closed native-string
+      classification now proves that folder_path is the declared consumer and
+      write-root pointer and that caption_ext is an adapter-declared string;
+      it does not change either native value or the emitted configuration.
+      Declared strings that look like paths are now rejected, while the
+      caption_ext value `.txt` remains an explicitly allowed extension token.
       This migration applies only to that evidence, not to unregistered or
       custom-image selectors.
     behavior_changed: false
@@ -65,7 +79,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 1562076a4e5b016b4464217a88e769cc936772559c30897b0a29400d96e5ab47
+      value: 08bb6ff1a32252b8d12044ceb3b54c23867b73a0b338765c373f6cc216cbdd62
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

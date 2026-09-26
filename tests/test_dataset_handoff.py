@@ -79,17 +79,11 @@ class DatasetHandoffTests(unittest.TestCase):
                 "consumed": [target["input_id"], caption["input_id"]],
                 "unrepresentable": [],
                 "semantic": {"caption_ext": ".txt"},
-                "bindings": [{
-                    "rule": "same-relative-stem",
-                    "key": "000000",
-                    "members": [
-                        {"input_id": target["input_id"], "root": view_root},
-                        {"input_id": caption["input_id"], "root": view_root},
-                    ],
-                }],
                 "native_runtime": {"folder_path": "/workspace/" + view_root},
                 "native": {"caption_ext": ".txt", "folder_path": "/workspace/" + view_root},
-                "view": {
+                "native_string_fields": ["/caption_ext"],
+                "views": [{
+                    "id": "primary",
                     "root": view_root,
                     "links": [{
                         "path": view_root + "/000000.png",
@@ -101,7 +95,25 @@ class DatasetHandoffTests(unittest.TestCase):
                         "text": caption["text"],
                         "input_id": caption["input_id"],
                     }],
-                },
+                    "native_files": [],
+                    "write_roots": [{"path": view_root, "native_pointer": "/folder_path"}],
+                    "consumers": [{
+                        "id": "dataset",
+                        "kind": "recursive-directory",
+                        "native_pointer": "/folder_path",
+                        "path": view_root,
+                        "input_ids": [target["input_id"], caption["input_id"]],
+                    }],
+                    "repeat": 1,
+                    "bindings": [{
+                        "rule": "same-relative-stem",
+                        "key": "000000",
+                        "members": [
+                            {"input_id": target["input_id"], "root": view_root},
+                            {"input_id": caption["input_id"], "root": view_root},
+                        ],
+                    }],
+                }],
             }],
         }
 
@@ -109,7 +121,7 @@ class DatasetHandoffTests(unittest.TestCase):
     def jsonl_projection(cls, selection: dict) -> dict:
         projection = cls.image_projection(selection)
         dataset = projection["datasets"][0]
-        view = dataset["view"]
+        view = dataset["views"][0]
         target = view["links"][0]
         caption = view["files"][0]
         row = {
@@ -143,6 +155,17 @@ class DatasetHandoffTests(unittest.TestCase):
                 "literal_strings": [{"pointer": "/kind", "value": "image"}],
             }],
         }]
+        native_file = view["native_files"][0]["path"]
+        dataset["native_runtime"] = {"image_jsonl_file": "/workspace/" + native_file}
+        dataset["native"] = {**dataset["semantic"], **dataset["native_runtime"]}
+        view["write_roots"][0]["native_pointer"] = "/image_jsonl_file"
+        view["consumers"] = [{
+            "id": "items",
+            "kind": "jsonl",
+            "native_pointer": "/image_jsonl_file",
+            "native_file": native_file,
+        }]
+        view.pop("bindings")
         return projection
 
     @classmethod
@@ -152,9 +175,8 @@ class DatasetHandoffTests(unittest.TestCase):
         sample = selection["datasets"][0]["samples"][0]
         target = sample["files"][0]
         caption = sample["caption"]
-        view = dataset["view"]
+        view = dataset["views"][0]
         view["files"] = []
-        dataset["bindings"][0]["members"] = [dataset["bindings"][0]["members"][0]]
         native = view["native_files"][0]
         row = json.loads(native["text"])
         row.pop("caption_path")
@@ -168,6 +190,14 @@ class DatasetHandoffTests(unittest.TestCase):
         self_reference = native["rows"][0]["references"][0]
         assert self_reference["input_id"] == target["input_id"]
         return projection
+
+    @classmethod
+    def c3_image_projection(cls, selection: dict) -> dict:
+        return cls.image_projection(selection)
+
+    @classmethod
+    def c3_jsonl_projection(cls, selection: dict) -> dict:
+        return cls.jsonl_projection(selection)
 
     def test_complete_projection_freezes_lock_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -212,7 +242,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def omits_caption(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 row.pop("caption_path")
                 native["text"] = json.dumps(row) + "\n"
@@ -231,7 +261,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def undeclared_repeat(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["text"] += native["text"]
                 second = json.loads(json.dumps(native["rows"][0]))
                 second["row_id"] = "row-a-second"
@@ -250,7 +280,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def explicit_repeat(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["text"] += native["text"]
                 second = json.loads(json.dumps(native["rows"][0]))
                 second["row_id"] = "row-a-second"
@@ -293,7 +323,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def unicode_line_separator(selection: dict) -> dict:
                 projection = self.inline_caption_jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 native["text"] = json.dumps(row, ensure_ascii=False) + "\n"
                 return projection
@@ -320,7 +350,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def changed_caption(selection: dict) -> dict:
                 projection = self.inline_caption_jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 row["caption"] = "different"
                 native["text"] = json.dumps(row) + "\n"
@@ -353,7 +383,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def with_fps(selection: dict, fps: int) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 row["fps"] = fps
                 native["text"] = json.dumps(row) + "\n"
@@ -385,7 +415,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def unreported(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 row["other_path"] = row["image_path"]
                 native["text"] = json.dumps(row) + "\n"
@@ -403,7 +433,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def wrong_entry(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["rows"][0]["references"][0]["input_id"] = (
                     native["rows"][0]["references"][1]["input_id"]
                 )
@@ -421,7 +451,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def extra_row(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["text"] += native["text"]
                 return projection
 
@@ -437,7 +467,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def reordered(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 first_value = json.loads(native["text"])
                 first_value["variant"] = "first"
                 second_value = {**first_value, "variant": "second"}
@@ -462,7 +492,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def unknown_sample(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["rows"][0]["sample_id"] = "missing"
                 return projection
 
@@ -473,7 +503,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def duplicate_row(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["text"] += native["text"]
                 native["rows"].append(json.loads(json.dumps(native["rows"][0])))
                 return projection
@@ -490,7 +520,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def disguised_path(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 row["kind"] = row["image_path"]
                 native["text"] = json.dumps(row) + "\n"
@@ -509,7 +539,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def crlf(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 native["text"] = native["text"].replace("\n", "\r\n")
                 return projection
 
@@ -525,7 +555,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def undeclared_literal(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
                 row["note"] = "ordinary"
                 native["text"] = json.dumps(row) + "\n"
@@ -544,13 +574,13 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def path_literal(selection: dict) -> dict:
                 projection = self.jsonl_projection(selection)
-                native = projection["datasets"][0]["view"]["native_files"][0]
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
                 row = json.loads(native["text"])
-                row["note"] = "relative/image.png"
+                row["note"] = "image.png"
                 native["text"] = json.dumps(row) + "\n"
                 native["literal_string_fields"].append("/note")
                 native["rows"][0]["literal_strings"].append({
-                    "pointer": "/note", "value": "relative/image.png",
+                    "pointer": "/note", "value": "image.png",
                 })
                 return projection
 
@@ -594,7 +624,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def missing_link(selection: dict) -> dict:
                 projection = self.image_projection(selection)
-                projection["datasets"][0]["view"]["links"] = []
+                projection["datasets"][0]["views"][0]["links"] = []
                 return projection
 
             with self.assertRaisesRegex(ValueError, "binding.*absent from the view"):
@@ -609,7 +639,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def shifted(selection: dict) -> dict:
                 projection = self.image_projection(selection)
-                projection["datasets"][0]["view"]["files"][0]["path"] = (
+                projection["datasets"][0]["views"][0]["files"][0]["path"] = (
                     "runs/example/cache/dataset-view/ai-toolkit/tiny/000001.txt"
                 )
                 return projection
@@ -626,7 +656,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def shifted_directory(selection: dict) -> dict:
                 projection = self.image_projection(selection)
-                projection["datasets"][0]["view"]["files"][0]["path"] = (
+                projection["datasets"][0]["views"][0]["files"][0]["path"] = (
                     "runs/example/cache/dataset-view/ai-toolkit/tiny/other/000000.txt"
                 )
                 return projection
@@ -644,12 +674,13 @@ class DatasetHandoffTests(unittest.TestCase):
             def cross_folder(selection: dict) -> dict:
                 projection = self.image_projection(selection)
                 dataset = projection["datasets"][0]
-                view_root = dataset["view"]["root"]
-                target = dataset["view"]["links"][0]
-                caption = dataset["view"]["files"][0]
+                view = dataset["views"][0]
+                view_root = view["root"]
+                target = view["links"][0]
+                caption = view["files"][0]
                 target["path"] = view_root + "/targets/000000.png"
                 caption["path"] = view_root + "/captions/000000.txt"
-                dataset["bindings"] = [{
+                view["bindings"] = [{
                     "rule": "same-relative-stem",
                     "key": "000000",
                     "members": [
@@ -676,12 +707,13 @@ class DatasetHandoffTests(unittest.TestCase):
             def unrelated_nested_paths(selection: dict) -> dict:
                 projection = self.image_projection(selection)
                 dataset = projection["datasets"][0]
-                view_root = dataset["view"]["root"]
-                target = dataset["view"]["links"][0]
-                caption = dataset["view"]["files"][0]
+                view = dataset["views"][0]
+                view_root = view["root"]
+                target = view["links"][0]
+                caption = view["files"][0]
                 target["path"] = view_root + "/targets/a/000000.png"
                 caption["path"] = view_root + "/captions/b/000000.txt"
-                dataset["bindings"] = [{
+                view["bindings"] = [{
                     "rule": "same-relative-stem",
                     "key": "a/000000",
                     "members": [
@@ -712,18 +744,20 @@ class DatasetHandoffTests(unittest.TestCase):
                 selected = selection["datasets"][0]["samples"][0]
                 control = next(item for item in selected["files"] if item["role"] == "control")
                 projected = projection["datasets"][0]
-                view_root = projected["view"]["root"]
-                target = projected["view"]["links"][0]
-                caption = projected["view"]["files"][0]
+                view = projected["views"][0]
+                view_root = view["root"]
+                target = view["links"][0]
+                caption = view["files"][0]
                 target["path"] = view_root + "/targets/000000.png"
                 caption["path"] = view_root + "/captions/000000.txt"
-                projected["view"]["links"].append({
+                view["links"].append({
                     "path": view_root + "/controls/000000.png",
                     "target": "/workspace/datasets/tiny/control/a.png",
                     "input_id": control["input_id"],
                 })
+                view["consumers"][0]["input_ids"].append(control["input_id"])
                 projected["consumed"].append(control["input_id"])
-                projected["bindings"] = [{
+                view["bindings"] = [{
                     "rule": "same-relative-stem",
                     "key": "000000",
                     "members": [
@@ -748,8 +782,9 @@ class DatasetHandoffTests(unittest.TestCase):
             def legacy_binding(selection: dict) -> dict:
                 projection = self.image_projection(selection)
                 dataset = projection["datasets"][0]
-                member_ids = [member["input_id"] for member in dataset["bindings"][0]["members"]]
-                dataset["bindings"] = [{"rule": "same-stem", "inputs": member_ids}]
+                view = dataset["views"][0]
+                member_ids = [member["input_id"] for member in view["bindings"][0]["members"]]
+                view["bindings"] = [{"rule": "same-stem", "inputs": member_ids}]
                 return projection
 
             with self.assertRaisesRegex(ValueError, "unsupported rule"):
@@ -779,19 +814,9 @@ class DatasetHandoffTests(unittest.TestCase):
                         "semantic": semantic,
                         "native_runtime": runtime,
                         "native": {**semantic, **runtime},
-                        "bindings": [
-                            {
-                                "rule": "same-relative-stem",
-                                "key": "000000",
-                                "members": [{"input_id": first["input_id"], "root": view_root}],
-                            },
-                            {
-                                "rule": "same-relative-stem",
-                                "key": "000000",
-                                "members": [{"input_id": second["input_id"], "root": view_root}],
-                            },
-                        ],
-                        "view": {
+                        "native_string_fields": ["/format"],
+                        "views": [{
+                            "id": "primary",
                             "root": view_root,
                             "links": [
                                 {
@@ -806,7 +831,29 @@ class DatasetHandoffTests(unittest.TestCase):
                                 },
                             ],
                             "files": [],
-                        },
+                            "native_files": [],
+                            "write_roots": [{"path": view_root, "native_pointer": "/folder_path"}],
+                            "consumers": [{
+                                "id": "dataset",
+                                "kind": "recursive-directory",
+                                "native_pointer": "/folder_path",
+                                "path": view_root,
+                                "input_ids": [first["input_id"], second["input_id"]],
+                            }],
+                            "repeat": 1,
+                            "bindings": [
+                                {
+                                    "rule": "same-relative-stem",
+                                    "key": "000000",
+                                    "members": [{"input_id": first["input_id"], "root": view_root}],
+                                },
+                                {
+                                    "rule": "same-relative-stem",
+                                    "key": "000000",
+                                    "members": [{"input_id": second["input_id"], "root": view_root}],
+                                },
+                            ],
+                        }],
                     }],
                 }
 
@@ -823,11 +870,12 @@ class DatasetHandoffTests(unittest.TestCase):
             def split_sample(selection: dict) -> dict:
                 projection = self.image_projection(selection)
                 dataset = projection["datasets"][0]
-                view_root = dataset["view"]["root"]
-                target = dataset["view"]["links"][0]
-                caption = dataset["view"]["files"][0]
+                view = dataset["views"][0]
+                view_root = view["root"]
+                target = view["links"][0]
+                caption = view["files"][0]
                 caption["path"] = view_root + "/000001.txt"
-                dataset["bindings"] = [
+                view["bindings"] = [
                     {
                         "rule": "same-relative-stem",
                         "key": "000000",
@@ -870,19 +918,9 @@ class DatasetHandoffTests(unittest.TestCase):
                         "semantic": semantic,
                         "native_runtime": runtime,
                         "native": {**semantic, **runtime},
-                        "bindings": [
-                            {
-                                "rule": "same-relative-stem",
-                                "key": "000000",
-                                "members": [{"input_id": first["input_id"], "root": first_root}],
-                            },
-                            {
-                                "rule": "same-relative-stem",
-                                "key": "000001",
-                                "members": [{"input_id": second["input_id"], "root": second_root}],
-                            },
-                        ],
-                        "view": {
+                        "native_string_fields": ["/format"],
+                        "views": [{
+                            "id": "primary",
                             "root": view_root,
                             "links": [
                                 {
@@ -897,7 +935,29 @@ class DatasetHandoffTests(unittest.TestCase):
                                 },
                             ],
                             "files": [],
-                        },
+                            "native_files": [],
+                            "write_roots": [{"path": view_root, "native_pointer": "/folder_path"}],
+                            "consumers": [{
+                                "id": "dataset",
+                                "kind": "recursive-directory",
+                                "native_pointer": "/folder_path",
+                                "path": view_root,
+                                "input_ids": [first["input_id"], second["input_id"]],
+                            }],
+                            "repeat": 1,
+                            "bindings": [
+                                {
+                                    "rule": "same-relative-stem",
+                                    "key": "000000",
+                                    "members": [{"input_id": first["input_id"], "root": first_root}],
+                                },
+                                {
+                                    "rule": "same-relative-stem",
+                                    "key": "000001",
+                                    "members": [{"input_id": second["input_id"], "root": second_root}],
+                                },
+                            ],
+                        }],
                     }],
                 }
 
@@ -931,12 +991,9 @@ class DatasetHandoffTests(unittest.TestCase):
                         "semantic": semantic,
                         "native_runtime": runtime,
                         "native": {**semantic, **runtime},
-                        "bindings": [{
-                            "rule": "same-relative-stem",
-                            "key": "000000",
-                            "members": [{"input_id": target["input_id"], "root": view_root}],
-                        }],
-                        "view": {
+                        "native_string_fields": ["/caption_ext"],
+                        "views": [{
+                            "id": "primary",
                             "root": view_root,
                             "links": [{
                                 "path": view_root + "/000000.png",
@@ -944,7 +1001,22 @@ class DatasetHandoffTests(unittest.TestCase):
                                 "input_id": target["input_id"],
                             }],
                             "files": [],
-                        },
+                            "native_files": [],
+                            "write_roots": [{"path": view_root, "native_pointer": "/folder_path"}],
+                            "consumers": [{
+                                "id": "dataset",
+                                "kind": "recursive-directory",
+                                "native_pointer": "/folder_path",
+                                "path": view_root,
+                                "input_ids": [target["input_id"]],
+                            }],
+                            "repeat": 1,
+                            "bindings": [{
+                                "rule": "same-relative-stem",
+                                "key": "000000",
+                                "members": [{"input_id": target["input_id"], "root": view_root}],
+                            }],
+                        }],
                     }],
                 }
 
@@ -952,6 +1024,195 @@ class DatasetHandoffTests(unittest.TestCase):
                 run, workspace, resolved, backend="ai-toolkit", project=singleton,
             )
             self.assertEqual(len(lock["files"]), 1)
+
+    def test_projection_accepts_multiple_uniquely_identified_native_views(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_two_captionless_samples(workspace)
+
+            def multiple_views(selection: dict) -> dict:
+                samples = selection["datasets"][0]["samples"]
+                view_base = "runs/example/cache/dataset-view/test/tiny"
+                views = []
+                native_paths = []
+                consumed = []
+                for index, sample in enumerate(samples):
+                    input_item = sample["files"][0]
+                    root = f"{view_base}/sample-{index}"
+                    native_paths.append({"folder_path": "/workspace/" + root})
+                    consumed.append(input_item["input_id"])
+                    views.append({
+                        "id": f"sample-{index}",
+                        "root": root,
+                        "links": [{
+                            "path": f"{root}/000000{Path(input_item['path']).suffix}",
+                            "target": f"/workspace/datasets/tiny/{input_item['path']}",
+                            "input_id": input_item["input_id"],
+                        }],
+                        "files": [],
+                        "native_files": [],
+                        "write_roots": [{
+                            "path": root,
+                            "native_pointer": f"/datasets/{index}/folder_path",
+                        }],
+                        "consumers": [{
+                            "id": "dataset",
+                            "kind": "recursive-directory",
+                            "native_pointer": f"/datasets/{index}/folder_path",
+                            "path": root,
+                            "input_ids": [input_item["input_id"]],
+                        }],
+                        "repeat": 1,
+                        "bindings": [{
+                            "rule": "same-relative-stem",
+                            "key": "000000",
+                            "members": [{"input_id": input_item["input_id"], "root": root}],
+                        }],
+                    })
+                semantic = {"format": "test"}
+                runtime = {"datasets": native_paths}
+                return {
+                    "schema_version": 1,
+                    "backend": "ai-toolkit",
+                    "datasets": [{
+                        "id": "tiny",
+                        "consumed": consumed,
+                        "unrepresentable": [],
+                        "semantic": semantic,
+                        "native_runtime": runtime,
+                        "native": {**semantic, **runtime},
+                        "native_string_fields": ["/format"],
+                        "views": views,
+                    }],
+                }
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=multiple_views,
+            )
+            materialize_dataset_view(workspace, lock)
+
+            self.assertEqual([view["id"] for view in lock["views"]], ["sample-0", "sample-1"])
+            self.assertEqual(inspect_dataset_handoff(workspace, lock), [])
+            for view in lock["views"]:
+                self.assertTrue((workspace / view["links"][0]["path"]).is_symlink())
+
+    def test_projection_rejects_duplicate_native_view_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def duplicate_view(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                duplicate = json.loads(json.dumps(projection["datasets"][0]["views"][0]))
+                projection["datasets"][0]["views"].append(duplicate)
+                projection["datasets"][0]["consumed"] *= 2
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "duplicate.*view"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=duplicate_view,
+                )
+
+    def test_projection_rejects_native_consumer_path_that_differs_from_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def mismatched_consumer(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                projection["datasets"][0]["native_runtime"]["folder_path"] = "/workspace/elsewhere"
+                projection["datasets"][0]["native"]["folder_path"] = "/workspace/elsewhere"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "native (?:consumer|write root).*(?:view|declared path)"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=mismatched_consumer,
+                )
+
+    def test_recursive_consumer_rejects_nested_role_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def nested_roles(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                view = projection["datasets"][0]["views"][0]
+                caption = view["files"][0]
+                caption["path"] = view["root"] + "/captions/000000.txt"
+                view["bindings"][0]["members"][1]["root"] = view["root"] + "/captions"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "nested role roots"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=nested_roles,
+                )
+
+    def test_jsonl_consumer_uses_row_references_instead_of_directory_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=self.c3_jsonl_projection,
+            )
+
+            self.assertEqual(lock["views"][0]["consumers"][0]["kind"], "jsonl")
+            self.assertNotIn("bindings", lock["views"][0])
+
+    def test_jsonl_consumer_rejects_a_second_directory_binding_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def duplicate_contract(selection: dict) -> dict:
+                projection = self.c3_jsonl_projection(selection)
+                projection["datasets"][0]["views"][0]["bindings"] = []
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "JSONL consumer.*bindings"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=duplicate_contract,
+                )
+
+    def test_view_repeat_is_part_of_input_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            first = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=self.c3_image_projection,
+            )
+            other = {**run, "id": "other"}
+            other_resolved = workspace / "runs" / "other" / "resolved"
+
+            def repeated(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                dataset = projection["datasets"][0]
+                dataset["views"][0]["repeat"] = 2
+                dataset["views"][0]["repeat_pointer"] = "/num_repeats"
+                dataset["native_runtime"]["num_repeats"] = 2
+                dataset["native"]["num_repeats"] = 2
+                return projection
+
+            second = freeze_dataset_handoff(
+                other, workspace, other_resolved, backend="ai-toolkit", project=repeated,
+            )
+
+            self.assertNotEqual(first["input_sha256"], second["input_sha256"])
+
+    def test_repeated_view_requires_a_matching_native_repeat_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def unbound_repeat(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                projection["datasets"][0]["views"][0]["repeat"] = 2
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "repeat has no native pointer"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=unbound_repeat,
+                )
 
     def test_projection_native_must_be_derived_from_semantic_and_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -966,6 +1227,75 @@ class DatasetHandoffTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "derived exactly from semantic"):
                 freeze_dataset_handoff(
                     run, workspace, resolved, backend="ai-toolkit", project=divergent,
+                )
+
+    def test_projection_rejects_unclassified_native_path_string(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def undeclared_path(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                dataset = projection["datasets"][0]
+                dataset["native_runtime"]["control_directory"] = "/workspace/unreported-control"
+                dataset["native"]["control_directory"] = "/workspace/unreported-control"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "native path-like string.*control_directory.*not classified"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=undeclared_path,
+                )
+
+    def test_projection_rejects_path_disguised_as_declared_native_string(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def disguised_path(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                dataset = projection["datasets"][0]
+                dataset["native_runtime"]["control_directory"] = "/workspace/datasets/Vivi/control"
+                dataset["native"]["control_directory"] = "/workspace/datasets/Vivi/control"
+                dataset["native_string_fields"].append("/control_directory")
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "native string field.*control_directory.*path-like"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=disguised_path,
+                )
+
+    def test_projection_rejects_unclassified_native_non_path_string(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def undeclared_string(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                dataset = projection["datasets"][0]
+                dataset["semantic"]["mode"] = "ordinary"
+                dataset["native"]["mode"] = "ordinary"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "native string.*mode.*not classified"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=undeclared_string,
+                )
+
+    def test_projection_write_root_must_match_its_native_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def mismatched_write_root(selection: dict) -> dict:
+                projection = self.c3_image_projection(selection)
+                dataset = projection["datasets"][0]
+                view = dataset["views"][0]
+                view["write_roots"][0]["path"] = view["root"] + "/cache"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "native write root.*declared path"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=mismatched_write_root,
                 )
 
     def test_projection_reports_unrepresentable_input_with_sample_identity(self) -> None:
@@ -993,7 +1323,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def dishonest(selection: dict) -> dict:
                 projection = self.image_projection(selection)
-                projection["datasets"][0]["view"]["links"][0]["target"] = (
+                projection["datasets"][0]["views"][0]["links"][0]["target"] = (
                     "/workspace/datasets/tiny/other.png"
                 )
                 return projection
@@ -1010,7 +1340,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             def dishonest(selection: dict) -> dict:
                 projection = self.image_projection(selection)
-                projection["datasets"][0]["view"]["files"][0]["text"] = "different caption"
+                projection["datasets"][0]["views"][0]["files"][0]["text"] = "different caption"
                 return projection
 
             with self.assertRaisesRegex(ValueError, "does not preserve its caption input"):
