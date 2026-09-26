@@ -118,20 +118,28 @@ dataset settings; it does not add a model taxonomy to core.
 | `flux-kontext-control` | `image-control-jsonl` | Same explicit `strip` rule. | `unsupported`; any selected audio input is unrepresentable. |
 | `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
 | `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
-| Audio-capable MiniMax-H3 video (later codec slice) | Named H3 record codec | Same explicit `strip` rule. | Freeze the choice per row: an authored `audio` reference becomes explicit `audio_path`; embedded audio is selected only when the codec reports that choice and proves no selected same-stem sidecar can take precedence. No implicit sidecar choice. |
+| `h3-one-frame-plain` | `plain-image-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
+| `h3-video-t2va`, `h3-video-fl2va`, video teacher profiles | `h3-video-jsonl` | Same explicit `strip` rule. H3 target videos are measured through the pinned timestamp-to-24fps loader; `source_fps` is not an H3 option. Plans warn outside the released 124-345 frame range. | An authored target `audio` role becomes explicit `audio_path`. Without one, preflight rejects a same-stem sidecar beside the resolved source path before allowing embedded audio or silence; pinned Musubi resolves the JSONL path before sidecar lookup. |
+| `h3-video-ref2va` | `h3-reference-jsonl` | Same explicit `strip` rule. | Preserve manifest order. Target audio follows the H3 video rule. A video reference defaults to embedded audio; `reference-muted` writes `audio_path: null`; an immediately following `reference-audio` writes an explicit path. |
+| `h3-one-frame-ref2va`, subject-reference teacher | `h3-one-frame-reference-jsonl` | Same explicit `strip` rule. | Target audio and standalone audio references are unsupported. Ordered image/video references use the same explicit embedded/muted/external choice; subject-reference teacher accepts images only. |
 
 Custom-command escape hatches remain unverified. They are not fallback paths
 for an incomplete built-in converter and cannot prove that first-class support
 survived the atomic switch.
+
+Pinned H3 reference loading rejects video references outside 2-15 seconds with
+an explicit error; it does not silently omit them. The source contract is
+`musubi_tuner/minimax_h3/media.py`, lines 231-237 at `4e7c714`.
 
 The support inventory may temporarily mark a contract as `migration: pending`
 only when its old compile evidence was deleted with `h3_dataset_config` and the
 named H3 codec has not yet restored that path. Such a contract has no current
 compile evidence; stale symbols must be removed rather than reassigned to an
 unrelated test. This state is visible in the generated support table and is not
-a support-completion claim. The current pending set covers Ref2VA, teacher
-matching, audio, timed control, ordered references, and the remaining H3 image
-and video forms recorded in the backend-validation inventory.
+a support-completion claim. The named H3 codecs now restore Ref2VA, teacher
+matching, audio, timed control, ordered references, and the remaining claimed
+H3 image and video forms with contract-specific compile tests, so this slice
+must leave no H3 contract in that temporary state.
 
 ## Open migration decision
 

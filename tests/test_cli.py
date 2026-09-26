@@ -4425,7 +4425,8 @@ class MusubiBackendTests(unittest.TestCase):
             "gradient_checkpointing": True,
         }}
 
-        script = command_musubi_tuner(run)["argv"][2]
+        spec = command_musubi_tuner(run)
+        script = spec["argv"][2]
 
         self.assertIn("minimax_h3_cache_latents.py", script)
         self.assertIn("--video_vae /models/minimax-h3-video-vae.safetensors", script)
@@ -4441,6 +4442,8 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--text_encoder_blocks_to_swap 50", script)
         self.assertIn("--video_only", script)
         self.assertIn("--gradient_checkpointing", script)
+        self.assertEqual(spec["env"]["KURA_MUSUBI_ARCHITECTURE"], "minimax_h3")
+        self.assertEqual(spec["env"]["KURA_MUSUBI_TARGET_FPS"], "24.0")
 
     def test_command_musubi_minimax_h3_guidance_requires_precache(self) -> None:
         run = self._run()

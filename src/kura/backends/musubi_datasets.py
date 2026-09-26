@@ -17,6 +17,7 @@ from kura.fsio import atomic_write_text
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
+AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
 MUSUBI_CAPTION_TRANSFORM = "strip"
 
 
@@ -62,6 +63,100 @@ def _h3_one_frame_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, 
     return _image_control_jsonl_row(context)
 
 
+def _h3_target_audio(row: dict[str, Any], references: list[dict[str, Any]], context: dict[str, Any]) -> None:
+    audio = context["role_entries"].get("audio", [])
+    if audio:
+        item = audio[0]
+        row["audio_path"] = f"/workspace/{item['view_path']}"
+        references.append({
+            "kind": "path", "pointer": "/audio_path",
+            "input_id": item["input_id"], "path": item["view_path"],
+        })
+
+
+def _h3_video_jsonl_row(
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, str]]]:
+    row, references = _plain_video_jsonl_row(context)
+    _h3_target_audio(row, references, context)
+    return row, references, []
+
+
+def _h3_reference_jsonl_row(
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, str]]]:
+    target_suffix = Path(context["target_path"]).suffix.lower()
+    if target_suffix in IMAGE_SUFFIXES:
+        row, reported = _plain_image_jsonl_row(context)
+    else:
+        row, reported = _plain_video_jsonl_row(context)
+        _h3_target_audio(row, reported, context)
+    references: list[dict[str, Any]] = []
+    literal_strings: list[dict[str, str]] = []
+    ordered = [
+        item for item in context["ordered_entries"]
+        if item["role"] in {"reference", "reference-muted", "reference-audio"}
+    ]
+    for item in ordered:
+        role = item["role"]
+        suffix = Path(item["view_path"]).suffix.lower()
+        if role == "reference-audio":
+            if not references or references[-1]["type"] != "video" or "audio_path" in references[-1]:
+                raise ValueError(
+                    "Musubi H3 reference-audio must immediately follow one video reference "
+                    "that has no prior audio choice"
+                )
+            index = len(references) - 1
+            references[index]["audio_path"] = f"/workspace/{item['view_path']}"
+            reported.append({
+                "kind": "path", "pointer": f"/references/{index}/audio_path",
+                "input_id": item["input_id"], "path": item["view_path"],
+            })
+            continue
+        if suffix in IMAGE_SUFFIXES:
+            kind = "image"
+        elif suffix in VIDEO_SUFFIXES:
+            kind = "video"
+        elif suffix in AUDIO_SUFFIXES:
+            kind = "audio"
+        else:
+            raise ValueError(f"Musubi H3 reference has unsupported extension {suffix!r}")
+        if role == "reference-muted" and kind != "video":
+            raise ValueError("Musubi H3 reference-muted accepts only a video reference")
+        reference: dict[str, Any] = {"type": kind, "path": f"/workspace/{item['view_path']}"}
+        if role == "reference-muted":
+            reference["audio_path"] = None
+        index = len(references)
+        references.append(reference)
+        reported.append({
+            "kind": "path", "pointer": f"/references/{index}/path",
+            "input_id": item["input_id"], "path": item["view_path"],
+        })
+        literal_strings.append({"pointer": f"/references/{index}/type", "value": kind})
+    image_count = sum(item["type"] == "image" for item in references)
+    video_count = sum(item["type"] == "video" for item in references)
+    audio_bearing = sum(
+        item["type"] == "audio"
+        or item["type"] == "video" and item.get("audio_path", "embedded") is not None
+        for item in references
+    )
+    if not references or len(references) > 12 or image_count > 9 or video_count > 3 or audio_bearing > 3:
+        raise ValueError(
+            "Musubi H3 Ref2VA requires 1..12 ordered references with at most "
+            "9 images, 3 videos, and 3 audio-bearing references"
+        )
+    if image_count + video_count == 0:
+        raise ValueError("Musubi H3 Ref2VA requires at least one visual reference")
+    if context["one_frame"] and any(item["type"] == "audio" for item in references):
+        raise ValueError("Musubi H3 one-frame targets do not accept standalone audio references")
+    if context["teacher_conditions"] == "subject_ref" and any(
+        item["type"] != "image" for item in references
+    ):
+        raise ValueError("Musubi H3 subject-reference teacher accepts image references only")
+    row["references"] = references
+    return row, reported, literal_strings
+
+
 MUSUBI_JSONL_CODECS = {
     "plain-image-jsonl": {
         "build_row": _plain_image_jsonl_row,
@@ -83,11 +178,42 @@ MUSUBI_JSONL_CODECS = {
         "transport": "image_jsonl_file",
         "audio_selection": "unsupported",
     },
+    "h3-video-jsonl": {
+        "build_row": _h3_video_jsonl_row,
+        "transport": "video_jsonl_file",
+        "audio_selection": (
+            "explicit-role-else-preflight-rejects-resolved-sidecar-then-embedded-or-silence"
+        ),
+    },
+    "h3-reference-jsonl": {
+        "build_row": _h3_reference_jsonl_row,
+        "transport": "video_jsonl_file",
+        "audio_selection": (
+            "explicit-role-else-preflight-rejects-resolved-sidecar-then-embedded-or-silence; "
+            "ordered video references default to embedded, reference-muted suppresses it, "
+            "and reference-audio overrides it"
+        ),
+    },
+    "h3-one-frame-reference-jsonl": {
+        "build_row": _h3_reference_jsonl_row,
+        "transport": "image_jsonl_file",
+        "audio_selection": "target audio unsupported; ordered video references default to embedded and reference-audio overrides it; standalone audio references unsupported",
+    },
 }
 _ORDINARY_IMAGE_ARCHITECTURES = (
     "flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen",
     "zimage", "z_image", "ideogram4", "ideogram_4", "hidream_o1", "hidream",
 )
+_H3_VIDEO_PROFILE_COMMON = {
+    "architectures": ("minimax_h3", "minimaxh3"),
+    "shape": ("video", "video-audio"),
+    "control_count": 0,
+    "allowed_options": ("target_frames", "frame_extraction"),
+    "required_options": ("target_frames",),
+    "native_options": {"target_frames": None, "frame_extraction": "head"},
+    "native_string_fields": ("/frame_extraction",),
+    "target_frames_grid": (5, 17),
+}
 MUSUBI_PROJECTION_PROFILES = {
     "ordinary-image": {
         "codec": "plain-image-jsonl",
@@ -99,6 +225,7 @@ MUSUBI_PROJECTION_PROFILES = {
         "required_options": (),
         "native_options": {},
         "native_string_fields": (),
+        "role_limits": {"target": (1, 1)},
     },
     "flux-kontext-control": {
         "codec": "image-control-jsonl",
@@ -110,6 +237,7 @@ MUSUBI_PROJECTION_PROFILES = {
         "required_options": (),
         "native_options": {"no_resize_control": False, "control_resolution": None},
         "native_string_fields": (),
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
     },
     "wan-video": {
         "codec": "plain-video-jsonl",
@@ -121,6 +249,8 @@ MUSUBI_PROJECTION_PROFILES = {
         "required_options": ("target_frames",),
         "native_options": {"target_frames": None, "frame_extraction": "head", "source_fps": None},
         "native_string_fields": ("/frame_extraction",),
+        "role_limits": {"target": (1, 1)},
+        "target_frames_grid": (1, 4),
     },
     "h3-one-frame-fl2va": {
         "codec": "h3-one-frame-control-jsonl",
@@ -133,6 +263,72 @@ MUSUBI_PROJECTION_PROFILES = {
         "native_options": {"fp_1f_clean_indices": None, "fp_1f_target_index": None},
         "native_string_fields": (),
         "control_index_option": "fp_1f_clean_indices",
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+    },
+    "h3-one-frame-plain": {
+        "codec": "plain-image-jsonl",
+        "architectures": ("minimax_h3", "minimaxh3"),
+        "shape": "image",
+        "mode": {"one_frame": True, "effective_task": "t2va", "teacher_conditions": None},
+        "control_count": 0,
+        "allowed_options": (), "required_options": (), "native_options": {},
+        "native_string_fields": (), "role_limits": {"target": (1, 1)},
+    },
+    "h3-video-t2va": {
+        **_H3_VIDEO_PROFILE_COMMON,
+        "codec": "h3-video-jsonl",
+        "mode": {"one_frame": False, "effective_task": "t2va", "teacher_conditions": None},
+        "role_limits": {"target": (1, 1), "audio": (0, 1)},
+    },
+    "h3-video-fl2va": {
+        **_H3_VIDEO_PROFILE_COMMON,
+        "codec": "h3-video-jsonl",
+        "mode": {"one_frame": False, "effective_task": "fl2va", "teacher_conditions": None},
+        "role_limits": {"target": (1, 1), "audio": (0, 1)},
+    },
+    "h3-video-ref2va": {
+        **_H3_VIDEO_PROFILE_COMMON,
+        "codec": "h3-reference-jsonl",
+        "shape": "video-references",
+        "mode": {"one_frame": False, "effective_task": "ref2va", "teacher_conditions": None},
+        "role_limits": {
+            "target": (1, 1), "audio": (0, 1), "reference": (0, 12),
+            "reference-muted": (0, 3), "reference-audio": (0, 3),
+        },
+    },
+    "h3-one-frame-ref2va": {
+        "codec": "h3-one-frame-reference-jsonl",
+        "architectures": ("minimax_h3", "minimaxh3"),
+        "shape": "image-references",
+        "mode": {"one_frame": True, "effective_task": "ref2va", "teacher_conditions": None},
+        "control_count": 0,
+        "allowed_options": (), "required_options": (), "native_options": {},
+        "native_string_fields": (),
+        "role_limits": {
+            "target": (1, 1), "reference": (0, 12),
+            "reference-muted": (0, 3), "reference-audio": (0, 3),
+        },
+    },
+    "h3-video-teacher-endpoints": {
+        **_H3_VIDEO_PROFILE_COMMON,
+        "codec": "h3-video-jsonl",
+        "mode": {"one_frame": False, "effective_task": "fl2va", "teacher_conditions": "first,last"},
+        "role_limits": {"target": (1, 1), "audio": (0, 1)},
+    },
+    "h3-video-teacher-ref": {
+        **_H3_VIDEO_PROFILE_COMMON,
+        "codec": "h3-video-jsonl",
+        "mode": {"one_frame": False, "effective_task": "t2va", "teacher_conditions": "ref"},
+        "role_limits": {"target": (1, 1), "audio": (0, 1)},
+    },
+    "h3-one-frame-teacher-subject-ref": {
+        "codec": "h3-one-frame-reference-jsonl", "architectures": ("minimax_h3", "minimaxh3"),
+        "shape": "image-references",
+        "mode": {"one_frame": True, "effective_task": "ref2va", "teacher_conditions": "subject_ref"},
+        "control_count": 0,
+        "allowed_options": (), "required_options": (), "native_options": {},
+        "native_string_fields": (),
+        "role_limits": {"target": (1, 1), "reference": (1, 9)},
     },
 }
 MUSUBI_DATASET_OPTION_CAPABILITIES = {
@@ -144,8 +340,8 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
         "target_frames": {
             "type": "integer-list",
             "minimum": 1,
-            "grid": "1+4n",
-            "required_for": "Wan generated-video-JSONL manifest projection",
+            "grid": "profile-specific: Wan 1+4n; MiniMax-H3 5+17n",
+            "required_for": "verified generated-video-JSONL manifest projection",
         },
         "frame_extraction": {"type": "enum:head", "default": "head"},
         "source_fps": {"type": "number", "exclusive_minimum": 0},
@@ -205,13 +401,12 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 isinstance(frame, bool)
                 or not isinstance(frame, int)
                 or frame <= 0
-                or (frame - 1) % 4
                 for frame in target_frames
             )
         ):
             raise ValueError(
                 f"Musubi backend.config.dataset_options.{dataset_id}.target_frames "
-                "must be a non-empty list on the Wan 1+4n frame grid"
+                "must be a non-empty list of positive integers"
             )
         control_resolution = value.get("control_resolution")
         if (
@@ -290,6 +485,11 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     mode = {
         "one_frame": _truthy(override.get("one_frame")),
         "effective_task": _musubi_h3_effective_task(override),
+        "teacher_conditions": (
+            str(override.get("h3_teacher_conditions"))
+            if str(override.get("h3_loss_method") or "guidance") == "teacher_matching"
+            else None
+        ),
     }
     dataset_options = _musubi_dataset_options(run)
     projected: list[dict[str, Any]] = []
@@ -319,19 +519,24 @@ def _musubi_dataset_shape(dataset: dict[str, Any]) -> tuple[str, dict[str, list[
         references = sample.get("files", [])
         targets = [item for item in references if item.get("role") == "target"]
         controls = [item for item in references if item.get("role") == "control"]
-        other_roles = sorted({str(item.get("role")) for item in references if item.get("role") not in {"target", "control"}})
+        ordered_roles = [str(item.get("role")) for item in references]
+        other_roles = [role for role in ordered_roles if role not in {"target", "control"}]
         if len(targets) != 1:
             sample_shape = f"target-count-{len(targets)}"
             shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
             continue
-        if other_roles:
-            sample_shape = "roles:" + ",".join(other_roles)
-            shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
-            continue
         suffix = Path(str(targets[0].get("path"))).suffix.lower()
         media_kind = "image" if suffix in IMAGE_SUFFIXES else "video" if suffix in VIDEO_SUFFIXES else f"extension:{suffix}"
-        control_suffix = "" if not controls else "-control" if len(controls) == 1 else f"-controls-{len(controls)}"
-        sample_shape = media_kind + control_suffix
+        if any(role in {"reference", "reference-muted", "reference-audio"} for role in other_roles):
+            unknown = sorted(set(other_roles) - {"audio", "reference", "reference-muted", "reference-audio"})
+            sample_shape = "roles:" + ",".join(unknown) if unknown else media_kind + "-references"
+        elif other_roles == ["audio"]:
+            sample_shape = media_kind + "-audio"
+        elif other_roles:
+            sample_shape = "roles:" + ",".join(other_roles)
+        else:
+            control_suffix = "" if not controls else "-control" if len(controls) == 1 else f"-controls-{len(controls)}"
+            sample_shape = media_kind + control_suffix
         shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
     if not shape_samples:
         return "empty", {}
@@ -347,7 +552,7 @@ def _select_musubi_projection_profile(
         (name, profile)
         for name, profile in MUSUBI_PROJECTION_PROFILES.items()
         if architecture in profile["architectures"]
-        and shape == profile["shape"]
+        and (shape in profile["shape"] if isinstance(profile["shape"], tuple) else shape == profile["shape"])
         and all(mode.get(key) == value for key, value in profile["mode"].items())
     ]
     if len(matches) != 1:
@@ -391,6 +596,16 @@ def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options
         value = options.get(key, default)
         if value is not None:
             semantic[key] = deepcopy(value)
+    grid = profile.get("target_frames_grid")
+    target_frames = semantic.get("target_frames")
+    if isinstance(grid, tuple) and isinstance(target_frames, list):
+        first, step = grid
+        invalid = [frame for frame in target_frames if frame < first or (frame - first) % step]
+        if invalid:
+            raise ValueError(
+                f"Musubi profile {profile_name} target_frames must use the {first}+{step}n grid; "
+                f"invalid value(s): {invalid}"
+            )
     control_index_option = profile.get("control_index_option")
     if isinstance(control_index_option, str):
         indices = semantic.get(control_index_option)
@@ -420,23 +635,34 @@ def _project_musubi_jsonl_dataset(
     links: list[dict[str, str]] = []
     rows: list[dict[str, Any]] = []
     row_reports: list[dict[str, Any]] = []
+    literal_field_pointers: set[str] = set()
     semantic = _musubi_profile_semantic(profile_name, profile, options)
     for index, sample in enumerate(dataset.get("samples", [])):
         references = sample.get("files", [])
-        targets = [item for item in references if item.get("role") == "target"]
-        controls = [item for item in references if item.get("role") == "control"]
-        other = [item for item in references if item.get("role") not in {"target", "control"}]
+        role_entries: dict[str, list[dict[str, Any]]] = {}
+        for item in references:
+            role_entries.setdefault(str(item.get("role")), []).append(item)
+        invalid_roles = []
+        for role, items in role_entries.items():
+            limits = profile["role_limits"].get(role)
+            if limits is None or not limits[0] <= len(items) <= limits[1]:
+                invalid_roles.append(f"{role}={len(items)}")
+        for role, (minimum, _maximum) in profile["role_limits"].items():
+            if minimum and role not in role_entries:
+                invalid_roles.append(f"{role}=0")
         caption = sample.get("caption")
         fallback = references[0].get("input_id") if references else None
-        if sample.get("group") is not None or len(targets) != 1 or len(controls) != profile["control_count"] or other:
+        if sample.get("group") is not None or invalid_roles:
             unrepresentable.append({
                 "input_id": fallback,
                 "reason": (
-                    f"Musubi profile {profile_name} requires one target, "
-                    f"{profile['control_count']} control input(s), and no other roles per ungrouped sample"
+                    f"Musubi profile {profile_name} rejects sample role cardinality: "
+                    + ", ".join(invalid_roles or ["grouped sample"])
                 ),
             })
             continue
+        targets = role_entries["target"]
+        controls = role_entries.get("control", [])
         if not isinstance(caption, dict):
             unrepresentable.append({
                 "input_id": targets[0].get("input_id"),
@@ -463,45 +689,70 @@ def _project_musubi_jsonl_dataset(
             caption, MUSUBI_CAPTION_TRANSFORM,
         )
         tag = hashlib.sha256(json.dumps({
-            "target": target.get("sha256"),
-            "controls": [control.get("sha256") for control in controls],
+            "files": [
+                {"role": item.get("role"), "sha256": item.get("sha256")} for item in references
+            ],
             "caption": caption.get("text"),
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
         stem = f"{index:06d}-{tag}"
         target_path = f"{source_root}/{stem}{target_suffix}"
-        control_paths = [f"{control_root}/{stem}{suffix}" for suffix in control_suffixes]
-        links.append({
-            "path": target_path,
-            "target": f"/workspace/datasets/{dataset_id}/{target['path']}",
-            "input_id": target["input_id"],
-        })
-        links.extend({
-            "path": path,
-            "target": f"/workspace/datasets/{dataset_id}/{control['path']}",
-            "input_id": control["input_id"],
-        } for path, control in zip(control_paths, controls, strict=True))
-        row, row_references = codec["build_row"]({
+        projected_entries: list[dict[str, Any]] = []
+        role_ordinals: dict[str, int] = {}
+        for item in references:
+            role = str(item["role"])
+            ordinal = role_ordinals.get(role, 0)
+            role_ordinals[role] = ordinal + 1
+            suffix = Path(str(item["path"])).suffix.lower()
+            if role == "target":
+                view_path = target_path
+            elif role == "control":
+                view_path = (
+                    f"{control_root}/{stem}{suffix}"
+                    if len(role_entries[role]) == 1
+                    else f"{control_root}/{stem}-{ordinal:03d}{suffix}"
+                )
+            else:
+                view_path = f"{view_root}/inputs/{role}/{stem}-{ordinal:03d}{suffix}"
+            entry = {**item, "role": role, "view_path": view_path}
+            projected_entries.append(entry)
+            links.append({
+                "path": view_path,
+                "target": f"/workspace/datasets/{dataset_id}/{item['path']}",
+                "input_id": item["input_id"],
+            })
+        projected_by_role: dict[str, list[dict[str, Any]]] = {}
+        for entry in projected_entries:
+            projected_by_role.setdefault(entry["role"], []).append(entry)
+        control_entries = projected_by_role.get("control", [])
+        built = codec["build_row"]({
             "target_path": target_path,
             "target_input_id": target["input_id"],
-            "control_paths": control_paths,
-            "control_input_ids": [control["input_id"] for control in controls],
+            "control_paths": [entry["view_path"] for entry in control_entries],
+            "control_input_ids": [entry["input_id"] for entry in control_entries],
             "caption_text": caption_text,
             "caption_input_id": caption["input_id"],
             "caption_reference_kind": caption_reference_kind,
+            "role_entries": projected_by_role,
+            "ordered_entries": projected_entries,
+            "one_frame": bool(profile["mode"].get("one_frame")),
+            "teacher_conditions": profile["mode"].get("teacher_conditions"),
         })
+        if len(built) == 2:
+            row, row_references = built
+            literal_strings: list[dict[str, str]] = []
+        else:
+            row, row_references, literal_strings = built
+        literal_field_pointers.update(item["pointer"] for item in literal_strings)
         rows.append(row)
         row_reports.append({
             "row_id": f"row-{index:06d}",
             "sample_id": sample["id"],
             "repeat": None,
             "references": row_references,
-            "literal_strings": [],
+            "literal_strings": literal_strings,
         })
-        consumed.extend([
-            target["input_id"],
-            *[control["input_id"] for control in controls],
-            caption["input_id"],
-        ])
+        consumed.extend([item["input_id"] for item in references])
+        consumed.append(caption["input_id"])
     policy = {
         "profile": profile_name,
         "codec": codec_name,
@@ -530,7 +781,7 @@ def _project_musubi_jsonl_dataset(
                 "path": native_file_path,
                 "text": "".join(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows),
                 "format": "jsonl",
-                "literal_string_fields": [],
+                "literal_string_fields": sorted(literal_field_pointers),
                 "rows": row_reports,
             }],
             "write_roots": [{"path": cache_root, "native_pointer": "/cache_directory"}],

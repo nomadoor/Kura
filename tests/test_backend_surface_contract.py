@@ -265,7 +265,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
         self.assertIn("dataset_options", capabilities["config_fields"])
         options = capabilities["nested_config_fields"]["dataset_options.<dataset-id>"]
-        self.assertEqual(options["target_frames"]["grid"], "1+4n")
+        self.assertEqual(
+            options["target_frames"]["grid"],
+            "profile-specific: Wan 1+4n; MiniMax-H3 5+17n",
+        )
         self.assertEqual(options["frame_extraction"]["default"], "head")
         self.assertEqual(options["control_resolution"], {"type": "integer-pair", "minimum": 1})
         self.assertEqual(options["fp_1f_clean_indices"], {"type": "integer-list", "minimum": 0})

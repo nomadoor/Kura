@@ -304,6 +304,104 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertEqual(record["status"], "passed")
             self.assertEqual(record["videos"][0]["effective_frames"], 25)
 
+    def test_musubi_h3_video_preflight_uses_the_pinned_timestamp_resampling_path(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            video = workspace / "clip.mp4"
+            video.write_bytes(b"video")
+            jsonl = workspace / "items.jsonl"
+            jsonl.write_text(json.dumps({"video_path": str(video), "caption": "caption"}) + "\n", encoding="utf-8")
+            config = workspace / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nvideo_jsonl_file = "' + jsonl.as_posix() + '"\n'
+                'target_frames = [124]\n',
+                encoding="utf-8",
+            )
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            calls = []
+
+            def fake_load_video(path, start_frame, end_frame, **kwargs):
+                calls.append((path, start_frame, end_frame, kwargs))
+                return [object()] * 124
+
+            media_utils.load_video = fake_load_video  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+            }
+            env = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "h3-realization",
+                "KURA_MUSUBI_ARCHITECTURE": "minimax_h3",
+                "KURA_MUSUBI_TARGET_FPS": "24.0",
+            }
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]),
+            ):
+                namespace["main"]()
+
+            self.assertEqual(calls[0][1:3], (0, 124))
+            self.assertEqual(calls[0][3]["target_fps"], 24.0)
+            self.assertEqual(calls[0][3]["fps_resample_mode"], "timestamps")
+            self.assertNotIn("source_fps", calls[0][3])
+            self.assertEqual(calls[0][3]["bucket_reso"], (64, 64))
+
+    def test_musubi_h3_preflight_rejects_an_implicit_sidecar_beside_the_symlink_target(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            source = workspace / "datasets" / "clips"
+            source.mkdir(parents=True)
+            source_video = source / "clip.mp4"
+            source_video.write_bytes(b"video")
+            (source / "clip.wav").write_bytes(b"audio")
+            view = workspace / "view"
+            view.mkdir()
+            view_video = view / "000000-hash.mp4"
+            view_video.symlink_to(source_video)
+            jsonl = view / "items.jsonl"
+            jsonl.write_text(json.dumps({"video_path": str(view_video), "caption": "caption"}) + "\n", encoding="utf-8")
+            config = workspace / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nvideo_jsonl_file = "' + jsonl.as_posix() + '"\n'
+                'target_frames = [124]\n',
+                encoding="utf-8",
+            )
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            media_utils.load_video = lambda *_args, **_kwargs: [object()] * 124  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+            }
+            env = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "h3-sidecar",
+                "KURA_MUSUBI_ARCHITECTURE": "minimax_h3",
+                "KURA_MUSUBI_TARGET_FPS": "24.0",
+            }
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]),
+                self.assertRaisesRegex(SystemExit, "implicit same-stem audio sidecar.*clip.wav"),
+            ):
+                namespace["main"]()
+
+            record = json.loads(
+                (workspace / "runs" / "video-run" / "realizations" / "h3-sidecar.musubi-video-preflight.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["status"], "failed")
+            self.assertIn("clip.wav", record["errors"][0]["error"])
+
     def test_musubi_dataset_assert_counts_symlinked_image_view(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("musubi_dataset_assert.py"), namespace)

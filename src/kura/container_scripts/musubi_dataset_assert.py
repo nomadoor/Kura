@@ -15,6 +15,7 @@ import tomllib
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
+AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
 
 
 def die(message):
@@ -36,18 +37,21 @@ def jsonl_count(path):
         die(f"cannot read Musubi image_jsonl_file {path}: {exc}")
 
 
-def video_jsonl_paths(path):
+def video_jsonl_inputs(path):
     try:
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line]
     except (OSError, json.JSONDecodeError) as exc:
         die(f"cannot read Musubi video_jsonl_file {path}: {exc}")
-    videos = []
+    inputs = []
     for index, row in enumerate(rows, start=1):
         value = row.get("video_path") if isinstance(row, dict) else None
         if not isinstance(value, str) or not value:
             die(f"Musubi video_jsonl_file {path} row {index} has no video_path")
-        videos.append(Path(value))
-    return videos
+        inputs.append({
+            "video": Path(value),
+            "explicit_audio": isinstance(row.get("audio_path"), str) and bool(row["audio_path"]),
+        })
+    return inputs
 
 
 def realization_record_path():
@@ -114,6 +118,7 @@ def video_frame_preflight(entries, config_path):
     except (ImportError, ModuleNotFoundError) as exc:
         die(f"pinned Musubi video loader is unavailable: {exc}")
     architecture = os.environ.get("KURA_MUSUBI_ARCHITECTURE")
+    strict_timestamp_fps = architecture in {"minimax_h3", "minimaxh3"}
     try:
         architecture_target_fps = float(os.environ["KURA_MUSUBI_TARGET_FPS"])
     except (KeyError, ValueError) as exc:
@@ -124,18 +129,34 @@ def video_frame_preflight(entries, config_path):
     for entry in entries:
         required = max(entry["target_frames"])
         source_fps = entry.get("source_fps")
-        target_fps = architecture_target_fps if source_fps is not None else None
-        for video in entry["videos"]:
+        target_fps = architecture_target_fps if strict_timestamp_fps or source_fps is not None else None
+        video_inputs = entry.get("video_inputs")
+        if not isinstance(video_inputs, list):
+            video_inputs = [{"video": video, "explicit_audio": False} for video in entry["videos"]]
+        for video_input in video_inputs:
+            video = video_input["video"]
             context = contexts.get(str(video), {})
             try:
-                frames = load_video(
-                    str(video),
-                    0,
-                    required,
-                    source_fps=source_fps,
-                    target_fps=target_fps,
-                    bucket_reso=(64, 64),
-                )
+                if strict_timestamp_fps and not video_input.get("explicit_audio"):
+                    resolved_video = video.resolve()
+                    sidecars = sorted(
+                        candidate for candidate in resolved_video.parent.iterdir()
+                        if candidate.is_file()
+                        and candidate.stem == resolved_video.stem
+                        and candidate.suffix.lower() in AUDIO_SUFFIXES
+                    )
+                    if sidecars:
+                        raise ValueError(
+                            "implicit same-stem audio sidecar beside the resolved JSONL video path: "
+                            + ", ".join(str(path) for path in sidecars)
+                            + "; declare the selected audio as the sample's audio role"
+                        )
+                kwargs = {"target_fps": target_fps, "bucket_reso": (64, 64)}
+                if strict_timestamp_fps:
+                    kwargs["fps_resample_mode"] = "timestamps"
+                else:
+                    kwargs["source_fps"] = source_fps
+                frames = load_video(str(video), 0, required, **kwargs)
                 effective_frames = len(frames)
                 item = {
                     "dataset_index": entry["index"],
@@ -146,6 +167,12 @@ def video_frame_preflight(entries, config_path):
                     "required_frames": required,
                     "source_fps": source_fps,
                     "target_fps": target_fps,
+                    "fps_resample_mode": "timestamps" if strict_timestamp_fps else None,
+                    "audio_selection": (
+                        "explicit-jsonl-path"
+                        if video_input.get("explicit_audio")
+                        else "verified-no-sidecar; embedded-or-silence"
+                    ),
                     "passed": effective_frames >= required,
                 }
                 measured.append(item)
@@ -245,8 +272,9 @@ def main():
             summary.append({"index": index, "image_jsonl_file": image_jsonl_file, "rows": count})
             continue
         if isinstance(video_jsonl_file, str) and video_jsonl_file:
-            videos = video_jsonl_paths(Path(video_jsonl_file))
-            count = len(videos)
+            video_inputs = video_jsonl_inputs(Path(video_jsonl_file))
+            videos = [item["video"] for item in video_inputs]
+            count = len(video_inputs)
             if count <= 0:
                 die(f"Musubi dataset entry #{index} has no rows in video_jsonl_file: {video_jsonl_file}")
             target_frames = item.get("target_frames")
@@ -260,6 +288,7 @@ def main():
                 "index": index,
                 "video_jsonl_file": video_jsonl_file,
                 "videos": videos,
+                "video_inputs": video_inputs,
                 "target_frames": target_frames,
                 "source_fps": item.get("source_fps"),
             })

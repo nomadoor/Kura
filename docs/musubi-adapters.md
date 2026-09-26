@@ -103,12 +103,39 @@ backend:
         fp_1f_target_index: 24
 ```
 
-The current verified H3 profile covers manifest samples with one image target,
-one control, and a caption for one-frame FL2VA. The profile table owns accepted
-shapes and required options; the named codec owns the generated JSONL row.
+The verified H3 profile table covers video T2VA/FL2VA, ordered Ref2VA inputs,
+plain and timed-control one-frame inputs, one-frame ordered references, and the
+three teacher-matching conditions. Video profiles require `target_frames` on
+the H3 `5+17n` grid. The profile table owns accepted shapes, role limits, frame
+rules, and required options; the named codec owns each generated JSONL row.
+
+Every JSONL caption applies the pinned directory loader's `str.strip()` rule.
+Target video audio is either an explicit manifest `audio` role or embedded
+audio. The pinned `resolve_audio_source` first resolves the JSONL video path
+before looking for a same-stem sidecar (`musubi_tuner/dataset/audio_utils.py`,
+lines 71-101 at `4e7c714`), so a local symlink view would otherwise expose an
+undeclared sidecar beside the original video. Kura's container preflight rejects
+that case and requires the sidecar to be selected as the manifest `audio` role.
+Ordered references preserve manifest order: video references use embedded audio
+by default, `reference-muted` explicitly suppresses it, and an immediately
+following `reference-audio` supplies an external audio path.
+One-frame inputs reject target audio and standalone audio references;
+subject-reference teacher matching accepts image references only. A separate
+authored teacher caption is not yet a manifest input, so the pinned trainer's
+derived default remains in effect.
+
 Unmatched architecture/shape/mode combinations stop instead of falling back to
-folder inference. `uv run kura run capabilities musubi-tuner` lists the
-complete authored field surface.
+folder inference. Before model acquisition, H3 video JSONL targets are measured
+with the pinned loader's timestamp-resampling path: `load_video(...,
+target_fps=24, fps_resample_mode="timestamps")`, which delegates to
+`_load_video_timestamp_resampled` (`dataset/datasources.py`, lines 520-528, and
+`dataset/media_utils.py`, lines 181-246 at `4e7c714`). H3 therefore does not
+accept `source_fps`; the measured result must satisfy `max(target_frames)`.
+Plans warn when requested frames are outside the released 124-345 frame range.
+Pinned H3 reference loading raises an error, rather than silently skipping, for
+video references outside 2-15 seconds (`minimax_h3/media.py`, lines 231-237 at
+`4e7c714`). `uv run kura run capabilities musubi-tuner` lists the complete
+authored field surface.
 
 Krea 2 exposes `convrot_int8` and `convrot_int8_bwd` (`bf16` or `int8`) as
 typed v0.3.5 memory accommodations. ConvRot cannot be combined with FP8 or the

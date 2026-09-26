@@ -73,6 +73,20 @@ class DatasetHandoffTests(unittest.TestCase):
         return run, resolved
 
     @staticmethod
+    def write_tiny_manifest(root: Path, rows: list[dict], payloads: dict[str, bytes]) -> None:
+        dataset = root / "datasets" / "tiny"
+        for path in dataset.iterdir():
+            if path.name not in {"dataset.yaml", "items.jsonl"} and path.is_file():
+                path.unlink()
+        for relative, content in payloads.items():
+            path = dataset / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        (dataset / "items.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+        )
+
+    @staticmethod
     def image_projection(selection: dict) -> dict:
         dataset = selection["datasets"][0]
         sample = dataset["samples"][0]
@@ -1649,6 +1663,339 @@ class DatasetHandoffTests(unittest.TestCase):
                     project=lambda selection: project_musubi_dataset(run, selection),
                 )
 
+    def test_musubi_h3_video_codecs_restore_t2va_fl2va_and_explicit_target_audio(self) -> None:
+        for task in ("t2va", "fl2va"):
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                self.write_tiny_manifest(
+                    workspace,
+                    [{
+                        "id": "video-audio",
+                        "files": [
+                            {"type": "file", "role": "target", "path": "clip.mp4"},
+                            {"type": "file", "role": "audio", "path": "clip.wav"},
+                        ],
+                        "caption": {"text": "  caption  "},
+                    }],
+                    {"clip.mp4": b"video", "clip.wav": b"audio"},
+                )
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "minimax_h3",
+                    "task": task,
+                    "dataset_options": {"tiny": {"target_frames": [22]}},
+                }}
+
+                lock = freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+                materialize_dataset_view(workspace, lock)
+                _write_musubi_dataset_config(
+                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                )
+
+                projection = lock["semantic"]["projection"][0]
+                row = projection["views"][0]["native_jsonl"][0]["rows"][0]["value"]
+                self.assertEqual(row["caption"]["$kura_kind"], "caption-text-strip")
+                self.assertIn("inputs/audio/", row["audio_path"]["$kura_view_path"])
+                self.assertEqual(
+                    projection["policy"]["audio_selection"],
+                    "explicit-role-else-preflight-rejects-resolved-sidecar-then-embedded-or-silence",
+                )
+                self.assertEqual(projection["policy"]["profile"], f"h3-video-{task}")
+                parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+                frozen = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))["datasets"][0]
+                self.assertEqual(parsed["datasets"], [frozen["native"]])
+
+    def test_musubi_h3_ref2va_codec_preserves_ordered_references_and_audio_choices(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(
+                workspace,
+                [
+                    {
+                        "id": "ordered",
+                        "files": [
+                            {"type": "file", "role": "target", "path": "target.mp4"},
+                            {"type": "file", "role": "reference", "path": "face.png"},
+                            {"type": "file", "role": "reference", "path": "motion.mp4"},
+                            {"type": "file", "role": "reference-audio", "path": "motion.wav"},
+                            {"type": "file", "role": "reference-muted", "path": "silent.mp4"},
+                            {"type": "file", "role": "reference", "path": "voice.wav"},
+                        ],
+                        "caption": {"text": "subject"},
+                    },
+                    {
+                        "id": "shorter-reference-list",
+                        "files": [
+                            {"type": "file", "role": "target", "path": "other.mp4"},
+                            {"type": "file", "role": "reference", "path": "other.png"},
+                        ],
+                        "caption": {"text": "other"},
+                    },
+                ],
+                {
+                    "target.mp4": b"target", "face.png": b"image", "motion.mp4": b"motion",
+                    "motion.wav": b"motion audio", "silent.mp4": b"silent", "voice.wav": b"voice",
+                    "other.mp4": b"other target", "other.png": b"other reference",
+                },
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "ref2va",
+                "dataset_options": {"tiny": {"target_frames": [22]}},
+            }}
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            materialize_dataset_view(workspace, lock)
+            _write_musubi_dataset_config(
+                run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+            )
+
+            projection = lock["semantic"]["projection"][0]
+            row = projection["views"][0]["native_jsonl"][0]["rows"][0]["value"]
+            references = row["references"]
+            self.assertEqual([item["type"] for item in references], ["image", "video", "video", "audio"])
+            self.assertIn("audio_path", references[1])
+            self.assertIsNone(references[2]["audio_path"])
+            self.assertIn("inputs/reference/", references[3]["path"]["$kura_view_path"])
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            frozen = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))["datasets"][0]
+            self.assertEqual(parsed["datasets"], [frozen["native"]])
+
+    def test_musubi_h3_one_frame_codecs_restore_plain_timed_and_ordered_reference_inputs(self) -> None:
+        cases = (
+            ("plain", "t2va", [{"type": "file", "role": "target", "path": "target.png"}], {}, "h3-one-frame-plain"),
+            (
+                "timed", "fl2va",
+                [
+                    {"type": "file", "role": "target", "path": "target.png"},
+                    {"type": "file", "role": "control", "path": "control.png"},
+                ],
+                {"fp_1f_clean_indices": [0], "fp_1f_target_index": 24},
+                "h3-one-frame-fl2va",
+            ),
+            (
+                "reference", "ref2va",
+                [
+                    {"type": "file", "role": "target", "path": "target.png"},
+                    {"type": "file", "role": "reference", "path": "reference.png"},
+                ],
+                {},
+                "h3-one-frame-ref2va",
+            ),
+        )
+        for name, task, files, options, expected_profile in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                payloads = {str(item["path"]): b"media" for item in files}
+                self.write_tiny_manifest(
+                    workspace,
+                    [{"id": name, "files": files, "caption": {"text": "caption"}}],
+                    payloads,
+                )
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "minimax_h3", "task": task, "one_frame": True,
+                    "dataset_options": {"tiny": options},
+                }}
+
+                lock = freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+                materialize_dataset_view(workspace, lock)
+                _write_musubi_dataset_config(
+                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                )
+
+                projection = lock["semantic"]["projection"][0]
+                self.assertEqual(projection["policy"]["profile"], expected_profile)
+                parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+                frozen = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))["datasets"][0]
+                self.assertEqual(parsed["datasets"], [frozen["native"]])
+
+    def test_musubi_h3_teacher_matching_selects_the_profile_for_each_teacher_condition(self) -> None:
+        cases = (
+            ("first,last", False, "video", "h3-video-teacher-endpoints"),
+            ("ref", False, "video", "h3-video-teacher-ref"),
+            ("subject_ref", True, "image-reference", "h3-one-frame-teacher-subject-ref"),
+        )
+        for teacher_conditions, one_frame, shape, expected_profile in cases:
+            with self.subTest(teacher_conditions=teacher_conditions), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                suffix = ".png" if one_frame else ".mp4"
+                files = [{"type": "file", "role": "target", "path": "target" + suffix}]
+                payloads = {"target" + suffix: b"target"}
+                options = {} if one_frame else {"target_frames": [22]}
+                if shape == "image-reference":
+                    files.append({"type": "file", "role": "reference", "path": "reference.png"})
+                    payloads["reference.png"] = b"reference"
+                self.write_tiny_manifest(
+                    workspace,
+                    [{"id": "teacher", "files": files, "caption": {"text": "caption"}}],
+                    payloads,
+                )
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "minimax_h3", "task": "t2va", "one_frame": one_frame,
+                    "h3_loss_method": "teacher_matching", "h3_teacher_conditions": teacher_conditions,
+                    "dataset_options": {"tiny": options},
+                }}
+
+                lock = freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+                materialize_dataset_view(workspace, lock)
+                _write_musubi_dataset_config(
+                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                )
+                projection = lock["semantic"]["projection"][0]
+                self.assertEqual(projection["policy"]["profile"], expected_profile)
+                parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+                frozen = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))["datasets"][0]
+                self.assertEqual(parsed["datasets"], [frozen["native"]])
+
+    def test_musubi_h3_video_rejects_frames_outside_the_5_plus_17n_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "video",
+                    "files": [{"type": "file", "role": "target", "path": "clip.mp4"}],
+                    "caption": {"text": "caption"},
+                }],
+                {"clip.mp4": b"video"},
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3", "task": "t2va",
+                "dataset_options": {"tiny": {"target_frames": [21]}},
+            }}
+
+            with self.assertRaisesRegex(ValueError, r"5\+17n grid.*21"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_h3_video_rejects_source_fps_that_the_pinned_loader_ignores(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "video",
+                    "files": [{"type": "file", "role": "target", "path": "clip.mp4"}],
+                    "caption": {"text": "caption"},
+                }],
+                {"clip.mp4": b"video"},
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3", "task": "t2va",
+                "dataset_options": {"tiny": {"target_frames": [124], "source_fps": 60.0}},
+            }}
+
+            with self.assertRaisesRegex(ValueError, "h3-video-t2va does not accept.*source_fps"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_h3_ref2va_accepts_a_muted_video_as_the_only_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "muted",
+                    "files": [
+                        {"type": "file", "role": "target", "path": "target.mp4"},
+                        {"type": "file", "role": "reference-muted", "path": "reference.mp4"},
+                    ],
+                    "caption": {"text": "caption"},
+                }],
+                {"target.mp4": b"target", "reference.mp4": b"reference"},
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3", "task": "ref2va",
+                "dataset_options": {"tiny": {"target_frames": [22]}},
+            }}
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            row = lock["semantic"]["projection"][0]["views"][0]["native_jsonl"][0]["rows"][0]["value"]
+            self.assertEqual(row["references"][0]["type"], "video")
+            self.assertIsNone(row["references"][0]["audio_path"])
+
+    def test_musubi_h3_reference_audio_must_follow_an_unmuted_video_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "bad-order",
+                    "files": [
+                        {"type": "file", "role": "target", "path": "target.mp4"},
+                        {"type": "file", "role": "reference-audio", "path": "reference.wav"},
+                        {"type": "file", "role": "reference", "path": "reference.mp4"},
+                    ],
+                    "caption": {"text": "caption"},
+                }],
+                {"target.mp4": b"target", "reference.mp4": b"reference", "reference.wav": b"audio"},
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3", "task": "ref2va",
+                "dataset_options": {"tiny": {"target_frames": [22]}},
+            }}
+
+            with self.assertRaisesRegex(ValueError, "reference-audio must immediately follow"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_h3_subject_reference_teacher_rejects_video_references(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "subject",
+                    "files": [
+                        {"type": "file", "role": "target", "path": "target.png"},
+                        {"type": "file", "role": "reference", "path": "reference.mp4"},
+                    ],
+                    "caption": {"text": "caption"},
+                }],
+                {"target.png": b"target", "reference.mp4": b"reference"},
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3", "task": "t2va", "one_frame": True,
+                "h3_loss_method": "teacher_matching", "h3_teacher_conditions": "subject_ref",
+            }}
+
+            with self.assertRaisesRegex(ValueError, "subject-reference teacher accepts image references only"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
     def test_musubi_dataset_toml_accepts_only_a_verified_jsonl_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -2192,7 +2539,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "no verified Musubi projection profile matches.*minimax_h3.*effective_task.*t2va",
+                "profile h3-one-frame-plain does not accept dataset option.*fp_1f_target_index",
             ):
                 freeze_dataset_handoff(
                     run,
@@ -2380,9 +2727,18 @@ class DatasetHandoffTests(unittest.TestCase):
                 "architecture": "wan",
                 "dataset_options": {"tiny": {"target_frames": [24]}},
             }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, r"1\+4n frame grid"):
-                project_musubi_dataset(run, {"datasets": []})
+            with self.assertRaisesRegex(ValueError, r"1\+4n grid"):
+                freeze_dataset_handoff(
+                    run, workspace, _resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
 
             run["backend"]["config"]["dataset_options"]["tiny"] = {
                 "target_frames": [25],
@@ -2475,6 +2831,28 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertIn("caption_transform strip", output)
             self.assertIn("audio_selection unsupported", output)
             self.assertIn("profile      wan-video", output)
+
+    def test_musubi_h3_video_plan_warns_outside_the_released_frame_range(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            (resolved / "dataset-projection.lock.json").write_text(json.dumps({
+                "backend": "musubi-tuner",
+                "datasets": [{
+                    "id": "clips",
+                    "policy": {"profile": "h3-video-t2va"},
+                    "native": {
+                        "video_jsonl_file": "/workspace/runs/example/cache/dataset-view/musubi/clips/native/items.jsonl",
+                        "target_frames": [22, 362],
+                    },
+                }],
+            }), encoding="utf-8")
+
+            checks = _dataset_runtime_checks(run_dir)
+
+            self.assertEqual(checks[0]["released_frame_range"], [124, 345])
+            self.assertEqual(checks[0]["released_range_warning"], [22, 362])
 
     def test_input_identity_is_stable_across_run_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

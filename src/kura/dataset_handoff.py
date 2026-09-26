@@ -408,6 +408,7 @@ def _validate_native_jsonl_files(
             raise ValueError(f"projection native JSONL {path!r} is invalid on line {exc.lineno}") from exc
         if len(parsed_rows) != len(rows):
             raise ValueError(f"projection native JSONL {path!r} row count differs from its report")
+        used_literal_fields: set[str] = set()
         for row_index, (parsed, reported) in enumerate(zip(parsed_rows, rows, strict=True)):
             context = f"projection native JSONL {path!r} row {row_index}"
             if not isinstance(parsed, dict):
@@ -499,15 +500,19 @@ def _validate_native_jsonl_files(
                 if _looks_like_path(actual):
                     raise ValueError(f"{literal_context} classifies a path-like value as a literal")
                 classified.add(pointer)
-            missing_literals = sorted(set(literal_fields) - {item.get("pointer") for item in literals})
-            if missing_literals:
-                raise ValueError(f"{context} omits declared literal field {missing_literals[0]!r}")
+                used_literal_fields.add(pointer)
             unclassified = sorted(_string_leaf_pointers(parsed) - classified)
             if unclassified:
                 raise ValueError(f"{context} has an unclassified string field {unclassified[0]!r}")
             extra = sorted(classified - _string_leaf_pointers(parsed))
             if extra:
                 raise ValueError(f"{context} reports a non-string field {extra[0]!r}")
+        unused_literal_fields = sorted(set(literal_fields) - used_literal_fields)
+        if unused_literal_fields:
+            raise ValueError(
+                f"projection native JSONL {path!r} declares unused literal field "
+                f"{unused_literal_fields[0]!r}"
+            )
         seen_paths.add(path)
         verified.append(deepcopy(native))
     missing_samples = sorted(sample_id for sample_id, repeats in rows_by_sample.items() if not repeats)

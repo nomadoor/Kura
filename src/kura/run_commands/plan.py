@@ -921,13 +921,20 @@ def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
         target_frames = native.get("target_frames")
         if not isinstance(target_frames, list) or not target_frames:
             continue
-        checks.append({
+        check = {
             "kind": "musubi-video-effective-frame-count",
             "dataset": dataset.get("id"),
             "required_frames": max(target_frames),
             "timing": "immediately after container launch, before model acquisition",
             "host_verification": "unavailable; measured by the pinned Musubi loader inside the container",
-        })
+        }
+        policy = dataset.get("policy")
+        profile = policy.get("profile") if isinstance(policy, dict) else None
+        if isinstance(profile, str) and profile.startswith("h3-video-"):
+            outside = sorted({frame for frame in target_frames if frame < 124 or frame > 345})
+            check["released_frame_range"] = [124, 345]
+            check["released_range_warning"] = outside
+        checks.append(check)
     return checks
 
 
@@ -1384,6 +1391,15 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             _append_kv(lines, "required_frames", check.get("required_frames"), indent=4)
             _append_kv(lines, "timing", check.get("timing"), indent=4)
             _append_kv(lines, "host_verification", check.get("host_verification"), indent=4)
+            _append_kv(lines, "released_frame_range", check.get("released_frame_range"), indent=4)
+            outside = check.get("released_range_warning")
+            if isinstance(outside, list) and outside:
+                _append_kv(
+                    lines,
+                    "warning",
+                    f"target_frames {outside} are outside the public MiniMax-H3 range 124..345",
+                    indent=4,
+                )
         for change in dataset_input.get("changes", []):
             lines.append(f"  - {_format_plan_value(change)}; recompile before launch")
         postflight = dataset_input.get("postflight")

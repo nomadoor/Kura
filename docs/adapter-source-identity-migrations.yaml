@@ -29,7 +29,10 @@ records:
       predicate for declared projection literals is therefore also outside
       the recorded staging path. The optional projection-policy envelope and
       Musubi-only stripped-caption reference kind are likewise absent from the
-      sd-scripts report, native TOML, staged files, and command.
+      sd-scripts report, native TOML, staged files, and command. Allowing a
+      declared generated-JSONL literal field to be absent from some rows is
+      also confined to reports with native JSONL and cannot affect this
+      directory/TOML-based SD1.5 observation.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
@@ -40,7 +43,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 4a2a81a7991fc0a48844c384830db63806c96eaac4e454a5d3598d6c0a8fb85c
+      value: 607c98ded3ddb21fddf55cf13953e7f0b82d7e9edbd2546791aa67a0cb7b9937
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -72,6 +75,9 @@ records:
       The optional projection-policy envelope and Musubi-only stripped-caption
       reference kind are not emitted by AI-Toolkit and do not alter its view,
       caption bytes, native configuration, command, or publication behavior.
+      Allowing a declared generated-JSONL literal field to be absent from some
+      rows is likewise confined to native JSONL verification; AI-Toolkit's
+      directory view emits no native JSONL and remains byte-for-byte unchanged.
       This migration applies only to that evidence, not to unregistered or
       custom-image selectors.
     behavior_changed: false
@@ -84,7 +90,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: c89ebc1dfbc7f6bea03b39eaa259b100013304aba827bcec408eeb0c47a51b86
+      value: a0cb00bc1d050dd0cba992ac1f363d145287778aa55ffffc14ba1bda89512d97
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

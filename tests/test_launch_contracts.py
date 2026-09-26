@@ -255,6 +255,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
 
     def test_musubi_wan_command_declares_architecture_frame_rate_for_preflight(self) -> None:
         self.assertEqual(_musubi_video_target_fps("wan"), 16.0)
+        self.assertEqual(_musubi_video_target_fps("minimax_h3"), 24.0)
         self.assertIsNone(_musubi_video_target_fps("flux2"))
 
 

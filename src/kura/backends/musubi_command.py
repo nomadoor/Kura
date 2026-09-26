@@ -179,7 +179,7 @@ def _musubi_start_commands(dataset_config: str, download_commands: list[list[str
 
 
 def _musubi_video_target_fps(architecture: str) -> float | None:
-    return {"wan": 16.0}.get(architecture)
+    return {"wan": 16.0, "minimax_h3": 24.0, "minimaxh3": 24.0}.get(architecture)
 
 
 def _musubi_save_precision(override: dict[str, Any]) -> str:
