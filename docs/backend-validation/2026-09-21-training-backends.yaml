@@ -307,8 +307,9 @@ contracts:
     dataset: {kind: video, conditioning: first-and-last-frame}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed first/last-frame dataset and native command path compile; a real optimizer step remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current manifest codec has no compile evidence and a real optimizer step remains unverified.
   - id: musubi-h3-ref2va
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -318,8 +319,9 @@ contracts:
     dataset: {kind: video-jsonl, conditioning: ordered-image-video-audio-references}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed ordered-reference JSONL, Ref2VA transformer selection, and native command path compile; a real optimizer step remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current Ref2VA manifest codec has no compile evidence and a real optimizer step remains unverified.
   - id: musubi-h3-image-plain
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -329,7 +331,8 @@ contracts:
     dataset: {kind: image, conditioning: none}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [musubi-minimax-h3-image-runpod-2026-09-22], lifecycle: [musubi-minimax-h3-image-runpod-2026-09-22]}
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [musubi-minimax-h3-image-runpod-2026-09-22], lifecycle: [musubi-minimax-h3-image-runpod-2026-09-22]}
   - id: musubi-h3-image-edit
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -339,8 +342,9 @@ contracts:
     dataset: {kind: image, conditioning: timed-controls}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed timed-control dataset and FL2VA one-frame command path compile; a real optimizer step remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current timed-control manifest codec has no compile evidence and a real optimizer step remains unverified.
   - id: musubi-h3-image-reference
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -350,8 +354,9 @@ contracts:
     dataset: {kind: image, conditioning: ordered-untimed-references}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed ordered-reference image dataset and Ref2VA one-frame command path compile; a real optimizer step remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current ordered-reference manifest codec has no compile evidence and a real optimizer step remains unverified.
   - id: musubi-h3-training-adapter
     change_ids: [musubi-minimax-h3-loss-recipes]
     backend: musubi-tuner
@@ -372,8 +377,9 @@ contracts:
     dataset: {kind: video, conditioning: endpoint-or-reference-teacher}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [condition-specific-latents, teacher-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed teacher datasets, teacher fields, and asymmetric task projection compile; a real optimizer step remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current teacher-video manifest codec has no compile evidence and a real optimizer step remains unverified.
   - id: musubi-h3-teacher-image
     change_ids: [musubi-minimax-h3-loss-recipes]
     backend: musubi-tuner
@@ -383,8 +389,9 @@ contracts:
     dataset: {kind: image, conditioning: subject-reference-teacher}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-subject-reference-latents, teacher-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed subject-reference image dataset and one-frame teacher path compile; a real optimizer step remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current teacher-image manifest codec has no compile evidence and a real optimizer step remains unverified.
   - id: musubi-h3-mixed-image-video
     change_ids: [musubi-minimax-h3-mixed]
     backend: musubi-tuner
@@ -446,5 +453,6 @@ contracts:
     dataset: {kind: video-jsonl, conditioning: audio-sidecars-and-relative-references}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [audio-video-reference-latents, text-encoder], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-dataset-source-audit], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records, tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_reference_jsonl_rejects_one_frame_audio_and_reference_overflow], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: Target and reference audio paths and limits are typed and validated for MiniMax-H3; a real optimizer step with explicit sidecars remains unverified.
+    migration: {status: pending, note: "Migration pending: deleted with legacy h3_dataset_config; restore with the H3 codec; no current compile evidence."}
+    evidence: {source: [v0.3.5-dataset-source-audit], compile: [], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Historical pinned-image parser evidence remains; the current audio/reference manifest codec has no compile evidence and a real optimizer step with explicit sidecars remains unverified.

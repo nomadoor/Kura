@@ -27,7 +27,9 @@ records:
       write-root pointers is also confined to projection reports, which this
       staging path does not yet emit. Tightening the shared path-like string
       predicate for declared projection literals is therefore also outside
-      the recorded staging path.
+      the recorded staging path. The optional projection-policy envelope and
+      Musubi-only stripped-caption reference kind are likewise absent from the
+      sd-scripts report, native TOML, staged files, and command.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
@@ -38,7 +40,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: ccb395d86a2185043bfe22cd5f6cbbfbe83f3658ce132a2284fcb3fc238e0240
+      value: 4a2a81a7991fc0a48844c384830db63806c96eaac4e454a5d3598d6c0a8fb85c
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -67,6 +69,9 @@ records:
       it does not change either native value or the emitted configuration.
       Declared strings that look like paths are now rejected, while the
       caption_ext value `.txt` remains an explicitly allowed extension token.
+      The optional projection-policy envelope and Musubi-only stripped-caption
+      reference kind are not emitted by AI-Toolkit and do not alter its view,
+      caption bytes, native configuration, command, or publication behavior.
       This migration applies only to that evidence, not to unregistered or
       custom-image selectors.
     behavior_changed: false
@@ -79,7 +84,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 08bb6ff1a32252b8d12044ceb3b54c23867b73a0b338765c373f6cc216cbdd62
+      value: c89ebc1dfbc7f6bea03b39eaa259b100013304aba827bcec408eeb0c47a51b86
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

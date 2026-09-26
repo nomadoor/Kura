@@ -153,9 +153,12 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
 def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
     """Write Musubi Tuner native dataset TOML and a readable command manifest."""
     destination.mkdir(parents=True, exist_ok=True)
-    _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
+    explicit_command = _musubi_backend_override(run).get("command") is not None
     command = command_musubi_tuner(run)
-    atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
+    if not explicit_command:
+        _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
+    if not explicit_command:
+        atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
     return command
 
 
@@ -187,50 +190,19 @@ def _musubi_save_precision(override: dict[str, Any]) -> str:
 
 
 def _musubi_micro_batch(run: dict[str, Any], override: dict[str, Any]) -> int | None:
+    del run
     direct = _int_or_none(override.get("batch_size"))
-    if direct is not None:
-        return direct
-    dataset_config = override.get("dataset_config")
-    if isinstance(dataset_config, dict):
-        general = dataset_config.get("general")
-        if isinstance(general, dict):
-            batch_size = _int_or_none(general.get("batch_size"))
-            if batch_size is not None:
-                return batch_size
-        datasets = dataset_config.get("datasets")
-        if isinstance(datasets, list):
-            for item in datasets:
-                if not isinstance(item, dict):
-                    continue
-                batch_size = _int_or_none(item.get("batch_size"))
-                if batch_size is not None:
-                    return batch_size
-    return None
+    return direct
 
 
 def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int | None:
+    del run
     values: list[int] = []
     direct = override.get("resolution")
     if isinstance(direct, list):
         values.extend(value for item in direct if (value := _int_or_none(item)) is not None)
     elif (value := _int_or_none(direct)) is not None:
         values.append(value)
-    dataset_config = override.get("dataset_config")
-    if isinstance(dataset_config, dict):
-        general = dataset_config.get("general")
-        if isinstance(general, dict):
-            resolution = general.get("resolution")
-            if isinstance(resolution, list):
-                values.extend(value for item in resolution if (value := _int_or_none(item)) is not None)
-        datasets = dataset_config.get("datasets")
-        if isinstance(datasets, list):
-            for item in datasets:
-                if not isinstance(item, dict):
-                    continue
-                for key in ("resolution", "control_resolution"):
-                    resolution = item.get(key)
-                    if isinstance(resolution, list):
-                        values.extend(value for part in resolution if (value := _int_or_none(part)) is not None)
     dataset_options = override.get("dataset_options")
     if isinstance(dataset_options, dict):
         for options in dataset_options.values():
@@ -312,8 +284,6 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
 def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display and safety."""
     native = _musubi_backend_override(run)
-    dataset_config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
-    general = dataset_config.get("general") if isinstance(dataset_config.get("general"), dict) else {}
     extra_args = _extra_args(native)
     gradient_accumulation = native.get("gradient_accumulation_steps") or _extra_arg_value(extra_args, "--gradient_accumulation_steps") or 1
     memory = {
@@ -338,9 +308,9 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         "alpha": native.get("network_alpha"),
         "learning_rate": native.get("learning_rate"),
         "scheduler": native.get("lr_scheduler"),
-        "batch_size": native.get("batch_size") or general.get("batch_size"),
+        "batch_size": native.get("batch_size"),
         "gradient_accumulation_steps": gradient_accumulation,
-        "resolution": native.get("resolution") or general.get("resolution"),
+        "resolution": native.get("resolution"),
         "optimizer": native.get("optimizer_type"),
         "precision": native.get("save_precision"),
         "memory": memory,
@@ -373,19 +343,6 @@ def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], out
         "--output_name", output_name,
     ])
     return args
-
-
-def _validate_krea2_dataset_shape(override: dict[str, Any]) -> None:
-    dataset_config = override.get("dataset_config")
-    if not isinstance(dataset_config, dict):
-        return
-    datasets = dataset_config.get("datasets")
-    if not isinstance(datasets, list):
-        return
-    forbidden = {"paired_jsonl", "control_directory", "control_resolution", "conditioning_data_dir"}
-    for item in datasets:
-        if isinstance(item, dict) and any(key in item for key in forbidden):
-            raise ValueError("Musubi Krea2 supports plain image/caption datasets only; remove paired/control dataset fields")
 
 
 def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
@@ -737,7 +694,6 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture in ("krea2", "krea_2"):
-        _validate_krea2_dataset_shape(override)
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         extra_args = _extra_args(override)
         convrot_int8 = _truthy(override.get("convrot_int8"))

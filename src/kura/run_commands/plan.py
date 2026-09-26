@@ -914,7 +914,9 @@ def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
         if not isinstance(dataset, dict):
             continue
         native = dataset.get("native")
-        if not isinstance(native, dict) or not isinstance(native.get("video_directory"), str):
+        if not isinstance(native, dict) or not any(
+            isinstance(native.get(key), str) for key in ("video_directory", "video_jsonl_file")
+        ):
             continue
         target_frames = native.get("target_frames")
         if not isinstance(target_frames, list) or not target_frames:
@@ -1020,6 +1022,14 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
                 "declared_differences": input_lock.get("declared_differences") or [],
                 "selection": selection,
                 "views": views,
+                "projection_rules": [
+                    {
+                        "dataset": item.get("id"),
+                        **item["policy"],
+                    }
+                    for item in semantic.get("projection", [])
+                    if isinstance(item, dict) and isinstance(item.get("policy"), dict)
+                ],
                 "postflight": postflight,
                 "runtime_checks": _dataset_runtime_checks(run_dir),
             }
@@ -1356,6 +1366,14 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 lines.append(f"  - trainer view: {_format_plan_value(view.get('root'))}")
                 _append_kv(lines, "source_links", view.get("links"), indent=4)
                 _append_kv(lines, "generated_files", view.get("generated_files"), indent=4)
+        for rule in dataset_input.get("projection_rules", []):
+            if not isinstance(rule, dict):
+                continue
+            lines.append(f"  - projection rule for {_format_plan_value(rule.get('dataset'))}:")
+            _append_kv(lines, "profile", rule.get("profile"), indent=4)
+            _append_kv(lines, "codec", rule.get("codec"), indent=4)
+            _append_kv(lines, "caption_transform", rule.get("caption_transform"), indent=4)
+            _append_kv(lines, "audio_selection", rule.get("audio_selection"), indent=4)
         for check in dataset_input.get("runtime_checks", []):
             if not isinstance(check, dict):
                 continue

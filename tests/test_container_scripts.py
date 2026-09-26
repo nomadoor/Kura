@@ -334,16 +334,41 @@ class ContainerScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             video_jsonl = root / "videos.jsonl"
-            video_jsonl.write_text('{}\n', encoding="utf-8")
+            video = root / "selected.mp4"
+            video.write_bytes(b"video")
+            video_jsonl.write_text(json.dumps({"video_path": str(video), "caption": "caption"}) + "\n", encoding="utf-8")
             config = root / "dataset.toml"
             config.write_text(
                 '[[datasets]]\nvideo_jsonl_file = "' + video_jsonl.as_posix() + '"\n'
+                'target_frames = [1, 25]\n'
                 '[[datasets]]\nfuture_native_source = "opaque"\n',
                 encoding="utf-8",
             )
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            calls = []
 
-            with patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]):
+            def fake_load_video(path, start_frame, end_frame, **kwargs):
+                calls.append(path)
+                return [object()] * 25
+
+            media_utils.load_video = fake_load_video  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+            }
+            env = {
+                "KURA_WORKSPACE": str(root),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "jsonl-realization",
+                "KURA_MUSUBI_ARCHITECTURE": "wan",
+                "KURA_MUSUBI_TARGET_FPS": "16.0",
+            }
+            with patch.dict(sys.modules, modules), patch.dict(os.environ, env, clear=True), patch.object(
+                sys, "argv", ["musubi_dataset_assert.py", str(config)],
+            ):
                 namespace["main"]()
+            self.assertEqual(calls, [str(video)])
 
     def test_hf_download_child_script_compiles(self) -> None:
         module = importlib.import_module("kura.container_scripts.hf_download")

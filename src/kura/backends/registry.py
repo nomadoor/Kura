@@ -11,7 +11,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
-from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, MUSUBI_H3_DATASET_CAPABILITIES, project_musubi_dataset, validate_musubi_authored_config, validate_musubi_dataset_layout
+from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, project_musubi_dataset, validate_musubi_authored_config
 from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
@@ -116,7 +116,7 @@ MUSUBI_SURFACE = BackendSurface(
         "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "dataset_options", "discrete_flow_shift",
         "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
         "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing", "gradient_checkpointing_cpu_offload",
-        "h3_dataset_config", "h3_guidance_loss_scale", "h3_guidance_loss_sigma_min", "h3_loss_method",
+        "h3_guidance_loss_scale", "h3_guidance_loss_sigma_min", "h3_loss_method",
         "h3_teacher_condition_sigma_max", "h3_teacher_condition_sigma_min", "h3_teacher_conditions",
         "h3_teacher_loss_dc_weight", "h3_teacher_loss_mag_weight", "h3_teacher_preservation_weight",
         "h3_timestep_focus_max", "h3_timestep_focus_min", "h3_timestep_focus_prob",
@@ -129,7 +129,7 @@ MUSUBI_SURFACE = BackendSurface(
         "task", "text_encoder_batch_size", "text_encoder_blocks_to_swap", "timestep_boundary", "timestep_sampling", "vae_chunk_size", "vae_dtype",
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only", "weighting_scheme",
     }),
-    escape_hatches=frozenset({"command", "dataset_config", "extra_args"}),
+    escape_hatches=frozenset({"command", "extra_args"}),
     selector_defaults=(("precache", True), ("one_frame", False), ("h3_loss_method", "guidance")),
     unavailable=(("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),),
     conditions=(
@@ -166,7 +166,6 @@ MUSUBI_SURFACE = BackendSurface(
         _when("one_frame_no_4x", architecture=("framepack", "frame_pack"), one_frame=(True,), precache=(True,)),
         _when("pixel_cache_batch_size", architecture=("hidream_o1", "hidream"), precache=(True,)),
         _when("quantized_qwen", architecture=("kandinsky5", "kandinsky_5"), precache=(True,)),
-        _when("h3_dataset_config", architecture=("minimax_h3", "minimaxh3")),
         _when(
             "h3_guidance_loss_scale",
             architecture=("minimax_h3", "minimaxh3"),
@@ -207,7 +206,7 @@ MUSUBI_SURFACE = BackendSurface(
         _when("video_only", architecture=("minimax_h3", "minimaxh3")),
         _when("weighting_scheme", architecture=("flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen", "hidream_o1", "hidream")),
     ),
-    nested_config_fields={**MUSUBI_H3_DATASET_CAPABILITIES, **MUSUBI_DATASET_OPTION_CAPABILITIES},
+    nested_config_fields=MUSUBI_DATASET_OPTION_CAPABILITIES,
 )
 
 SD_SCRIPTS_SURFACE = BackendSurface(
@@ -266,7 +265,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         display=display_musubi_tuner, requirements=requirements_musubi, surface=MUSUBI_SURFACE,
         validate_authored=validate_musubi_authored_config,
         project_dataset=project_musubi_dataset,
-        download_specs=musubi_model_download_specs, validate_dataset=validate_musubi_dataset_layout,
+        download_specs=musubi_model_download_specs,
         training_state=training_state_contract_musubi,
     ),
     "sd-scripts": BackendAdapter(

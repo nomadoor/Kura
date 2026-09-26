@@ -11,34 +11,128 @@ import tomllib
 from typing import Any
 
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
-from kura.backends.shared import _datasets, _int_or_none, _toml_scalar, _truthy
+from kura.backends.shared import _datasets, _toml_scalar, _truthy
 from kura.fsio import atomic_write_text
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
-NATIVE_SOURCE_KEYS = {"image_directory", "image_jsonl_file", "video_directory", "video_jsonl_file", "paired_jsonl"}
-H3_SOURCE_KEYS = {
-    "image_directory": "image_directory",
-    "image_jsonl": "image_jsonl_file",
-    "video_directory": "video_directory",
-    "video_jsonl": "video_jsonl_file",
-}
-MUSUBI_H3_DATASET_CAPABILITIES = {
-    "h3_dataset_config.general": {
-        "resolution": {"type": "integer-pair"},
-        "batch_size": {"type": "integer", "minimum": 1, "maximum": 1},
-        "caption_extension": {"type": "string"},
-        "enable_bucket": {"type": "boolean"},
-        "bucket_no_upscale": {"type": "boolean"},
+MUSUBI_CAPTION_TRANSFORM = "strip"
+
+
+def _musubi_caption_projection(caption: dict[str, Any], transform: str) -> tuple[str, str]:
+    """Apply the one declared caption compatibility transform for Musubi JSONL."""
+    text = caption.get("text")
+    if not isinstance(text, str):
+        raise ValueError("Musubi JSONL projection caption must contain text")
+    if transform != "strip":
+        raise ValueError(f"unsupported Musubi caption transform: {transform!r}")
+    return text.strip(), "caption-text-strip"
+
+
+def _plain_image_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    row = {"image_path": f"/workspace/{context['target_path']}", "caption": context["caption_text"]}
+    return row, [
+        {"kind": "path", "pointer": "/image_path", "input_id": context["target_input_id"], "path": context["target_path"]},
+        {"kind": context["caption_reference_kind"], "pointer": "/caption", "input_id": context["caption_input_id"]},
+    ]
+
+
+def _plain_video_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    row = {"video_path": f"/workspace/{context['target_path']}", "caption": context["caption_text"]}
+    return row, [
+        {"kind": "path", "pointer": "/video_path", "input_id": context["target_input_id"], "path": context["target_path"]},
+        {"kind": context["caption_reference_kind"], "pointer": "/caption", "input_id": context["caption_input_id"]},
+    ]
+
+
+def _image_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    row, references = _plain_image_jsonl_row(context)
+    control_path = context["control_paths"][0]
+    control_input_id = context["control_input_ids"][0]
+    row["control_path"] = f"/workspace/{control_path}"
+    references.insert(1, {
+        "kind": "path", "pointer": "/control_path",
+        "input_id": control_input_id, "path": control_path,
+    })
+    return row, references
+
+
+def _h3_one_frame_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    return _image_control_jsonl_row(context)
+
+
+MUSUBI_JSONL_CODECS = {
+    "plain-image-jsonl": {
+        "build_row": _plain_image_jsonl_row,
+        "transport": "image_jsonl_file",
+        "audio_selection": "unsupported",
     },
-    "h3_dataset_config.datasets[]": {
-        "source": {"type": "enum:image_directory|image_jsonl|video_directory|video_jsonl"},
-        "path": {"type": "relative-path"},
-        "target_frames": {"type": "integer-list", "minimum": 5, "grid": "5+17n", "required_for": "video sources"},
-        "control_subdir": {"type": "relative-path"},
-        "fp_1f_clean_indices": {"type": "integer-list"},
-        "fp_1f_target_index": {"type": "integer", "minimum": 0},
+    "image-control-jsonl": {
+        "build_row": _image_control_jsonl_row,
+        "transport": "image_jsonl_file",
+        "audio_selection": "unsupported",
+    },
+    "plain-video-jsonl": {
+        "build_row": _plain_video_jsonl_row,
+        "transport": "video_jsonl_file",
+        "audio_selection": "unsupported",
+    },
+    "h3-one-frame-control-jsonl": {
+        "build_row": _h3_one_frame_control_jsonl_row,
+        "transport": "image_jsonl_file",
+        "audio_selection": "unsupported",
+    },
+}
+_ORDINARY_IMAGE_ARCHITECTURES = (
+    "flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen",
+    "zimage", "z_image", "ideogram4", "ideogram_4", "hidream_o1", "hidream",
+)
+MUSUBI_PROJECTION_PROFILES = {
+    "ordinary-image": {
+        "codec": "plain-image-jsonl",
+        "architectures": _ORDINARY_IMAGE_ARCHITECTURES,
+        "shape": "image",
+        "mode": {"one_frame": False},
+        "control_count": 0,
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "native_string_fields": (),
+    },
+    "flux-kontext-control": {
+        "codec": "image-control-jsonl",
+        "architectures": ("flux_kontext", "flux1_kontext"),
+        "shape": "image-control",
+        "mode": {"one_frame": False},
+        "control_count": 1,
+        "allowed_options": ("control_resolution", "no_resize_control"),
+        "required_options": (),
+        "native_options": {"no_resize_control": False, "control_resolution": None},
+        "native_string_fields": (),
+    },
+    "wan-video": {
+        "codec": "plain-video-jsonl",
+        "architectures": ("wan",),
+        "shape": "video",
+        "mode": {"one_frame": False},
+        "control_count": 0,
+        "allowed_options": ("target_frames", "frame_extraction", "source_fps"),
+        "required_options": ("target_frames",),
+        "native_options": {"target_frames": None, "frame_extraction": "head", "source_fps": None},
+        "native_string_fields": ("/frame_extraction",),
+    },
+    "h3-one-frame-fl2va": {
+        "codec": "h3-one-frame-control-jsonl",
+        "architectures": ("minimax_h3", "minimaxh3"),
+        "shape": "image-control",
+        "mode": {"one_frame": True, "effective_task": "fl2va"},
+        "control_count": 1,
+        "allowed_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "required_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "native_options": {"fp_1f_clean_indices": None, "fp_1f_target_index": None},
+        "native_string_fields": (),
+        "control_index_option": "fp_1f_clean_indices",
     },
 }
 MUSUBI_DATASET_OPTION_CAPABILITIES = {
@@ -51,14 +145,12 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
             "type": "integer-list",
             "minimum": 1,
             "grid": "1+4n",
-            "required_for": "Wan video-directory manifest projection",
+            "required_for": "Wan generated-video-JSONL manifest projection",
         },
         "frame_extraction": {"type": "enum:head", "default": "head"},
         "source_fps": {"type": "number", "exclusive_minimum": 0},
     },
 }
-_H3_GENERAL_FIELDS = set(MUSUBI_H3_DATASET_CAPABILITIES["h3_dataset_config.general"])
-_H3_DATASET_FIELDS = set(MUSUBI_H3_DATASET_CAPABILITIES["h3_dataset_config.datasets[]"])
 _MUSUBI_DATASET_OPTION_FIELDS = {
     "control_resolution", "fp_1f_clean_indices", "fp_1f_target_index", "no_resize_control",
     "target_frames", "frame_extraction", "source_fps",
@@ -187,391 +279,237 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
-    """Project lossless Musubi image or initial Wan video directory inputs."""
+    """Project first-class Musubi inputs through generated, verified JSONL."""
     override = _musubi_backend_override(run)
     if override.get("dataset_config") is not None:
         raise ValueError(
             "Musubi backend.config.dataset_config is replaced by manifest projection for first-class runs"
         )
-    if override.get("h3_dataset_config") is not None:
-        raise ValueError(
-            "Musubi backend.config.h3_dataset_config is replaced by manifest projection for first-class runs"
-        )
 
+    architecture = _musubi_architecture(run)
+    mode = {
+        "one_frame": _truthy(override.get("one_frame")),
+        "effective_task": _musubi_h3_effective_task(override),
+    }
     dataset_options = _musubi_dataset_options(run)
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
-        dataset_id = dataset.get("id")
-        view_root = f"runs/{run['id']}/cache/dataset-view/musubi/{dataset_id}"
-        samples = dataset.get("samples", [])
-        target_suffixes = {
-            Path(str(item.get("path"))).suffix.lower()
-            for sample in samples
-            for item in sample.get("files", [])
-            if item.get("role") == "target"
-        }
-        has_images = bool(target_suffixes & IMAGE_SUFFIXES)
-        has_videos = bool(target_suffixes & VIDEO_SUFFIXES)
-        media_kind = "video" if has_videos and not has_images else "image"
-        has_control_inputs = any(
-            item.get("role") == "control"
-            for sample in samples
-            for item in sample.get("files", [])
+        dataset_id = str(dataset.get("id"))
+        shape, shape_examples = _musubi_dataset_shape(dataset)
+        profile_name, profile = _select_musubi_projection_profile(
+            architecture=architecture,
+            shape=shape,
+            mode=mode,
+            shape_examples=shape_examples,
         )
-        selector_declared = any(override.get(key) is not None for key in ("architecture", "model_arch"))
-        architecture = _musubi_architecture(run) if has_videos or has_control_inputs or selector_declared else None
-        requires_control = architecture in {"flux_kontext", "flux1_kontext"}
-        source_root = f"{view_root}/{'videos' if media_kind == 'video' else 'images'}"
-        control_root = f"{view_root}/controls"
-        cache_root = f"{view_root}/cache"
-        consumed: list[str] = []
-        source_consumed: list[str] = []
-        control_consumed: list[str] = []
-        unrepresentable: list[dict[str, str | None]] = []
-        links: list[dict[str, str]] = []
-        files: list[dict[str, str]] = []
-        bindings: list[dict[str, Any]] = []
-        options = dataset_options.get(str(dataset_id), {})
-        h3_one_frame_fl2va = (
-            architecture in {"minimax_h3", "minimaxh3"}
-            and _musubi_h3_effective_task(override) == "fl2va"
-            and _truthy(override.get("one_frame"))
-        )
-        has_h3_timing_options = any(key in options for key in ("fp_1f_clean_indices", "fp_1f_target_index"))
-        if h3_one_frame_fl2va:
-            projected.append(_project_musubi_h3_one_frame_control_dataset(
-                run=run,
-                dataset=dataset,
-                view_root=view_root,
-                options=options,
-            ))
-            continue
-        has_control_options = any(key in options for key in ("control_resolution", "no_resize_control"))
-        for index, sample in enumerate(samples):
-            references = sample.get("files", [])
-            targets = [item for item in references if item.get("role") == "target"]
-            controls = [item for item in references if item.get("role") == "control"]
-            other_references = [item for item in references if item.get("role") not in {"target", "control"}]
-            caption = sample.get("caption")
-            fallback_input = (
-                references[0].get("input_id") if references
-                else caption.get("input_id") if isinstance(caption, dict)
-                else None
-            )
-            if sample.get("group") is not None:
-                unrepresentable.append({
-                    "input_id": fallback_input,
-                    "reason": "Musubi directory projection does not yet support manifest groups",
-                })
-                continue
-            if has_h3_timing_options:
-                unrepresentable.append({
-                    "input_id": fallback_input,
-                    "reason": (
-                        "fp_1f_clean_indices and fp_1f_target_index are currently projected only for "
-                        "MiniMax-H3 task=fl2va with one_frame=true"
-                    ),
-                })
-                continue
-            if len(targets) != 1 or other_references or len(controls) > 1:
-                unrepresentable.append({
-                    "input_id": fallback_input,
-                    "reason": "Musubi directory projection requires one target and at most one verified control input",
-                })
-                continue
-            if (has_control_inputs or requires_control or has_control_options) and len(controls) != 1:
-                unrepresentable.append({
-                    "input_id": targets[0].get("input_id") if targets else fallback_input,
-                    "reason": (
-                        "Musubi FLUX.1 Kontext control_directory projection requires exactly one control "
-                        "for every target sample"
-                    ),
-                })
-                continue
-            if controls and architecture not in {"flux_kontext", "flux1_kontext"}:
-                unrepresentable.append({
-                    "input_id": controls[0].get("input_id"),
-                    "reason": "separate control directory projection is currently verified only for flux_kontext",
-                })
-                continue
-            target = targets[0]
-            suffix = Path(str(target.get("path"))).suffix.lower()
-            if has_images and has_videos:
-                unrepresentable.append({
-                    "input_id": target.get("input_id"),
-                    "reason": "Musubi directory projection does not support mixed image and video targets in one dataset",
-                })
-                continue
-            if media_kind == "image" and suffix not in IMAGE_SUFFIXES:
-                unrepresentable.append({
-                    "input_id": target.get("input_id"),
-                    "reason": f"ordinary image Musubi projection does not yet support target extension {suffix!r}",
-                })
-                continue
-            if controls:
-                control_suffix = Path(str(controls[0].get("path"))).suffix.lower()
-                if control_suffix not in IMAGE_SUFFIXES:
-                    unrepresentable.append({
-                        "input_id": controls[0].get("input_id"),
-                        "reason": f"Musubi control directory projection does not support extension {control_suffix!r}",
-                    })
-                    continue
-            if media_kind == "video":
-                if suffix not in VIDEO_SUFFIXES:
-                    unrepresentable.append({
-                        "input_id": target.get("input_id"),
-                        "reason": f"Wan video Musubi projection does not support target extension {suffix!r}",
-                    })
-                    continue
-                if architecture != "wan" or _truthy(override.get("one_frame")):
-                    unrepresentable.append({
-                        "input_id": target.get("input_id"),
-                        "reason": "initial Musubi video projection supports only Wan directory video training",
-                    })
-                    continue
-                if not isinstance(options.get("target_frames"), list):
-                    unrepresentable.append({
-                        "input_id": target.get("input_id"),
-                        "reason": (
-                            f"sample requires backend.config.dataset_options.{dataset_id}.target_frames "
-                            "for Wan video projection"
-                        ),
-                    })
-                    continue
-            elif any(key in options for key in ("target_frames", "frame_extraction", "source_fps")):
-                unrepresentable.append({
-                    "input_id": target.get("input_id"),
-                    "reason": "Musubi video dataset options cannot be applied to an image dataset",
-                })
-                continue
-            if not isinstance(caption, dict):
-                unrepresentable.append({
-                    "input_id": target.get("input_id"),
-                    "reason": "Musubi directory projection caption cannot be absent",
-                })
-                continue
-            sample_tag = hashlib.sha256(json.dumps(
-                {
-                    "target": target.get("sha256"),
-                    "control": controls[0].get("sha256") if controls else None,
-                    "caption": caption.get("text") if isinstance(caption, dict) else None,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")).hexdigest()[:12]
-            stem = f"{index:06d}-{sample_tag}"
-            links.append({
-                "path": f"{source_root}/{stem}{suffix}",
-                "target": f"/workspace/datasets/{dataset_id}/{target['path']}",
-                "input_id": target["input_id"],
-            })
-            members = [{"input_id": target["input_id"], "root": source_root}]
-            consumed.append(target["input_id"])
-            source_consumed.append(target["input_id"])
-            if controls:
-                control = controls[0]
-                control_suffix = Path(str(control.get("path"))).suffix.lower()
-                links.append({
-                    "path": f"{control_root}/{stem}{control_suffix}",
-                    "target": f"/workspace/datasets/{dataset_id}/{control['path']}",
-                    "input_id": control["input_id"],
-                })
-                members.append({"input_id": control["input_id"], "root": control_root})
-                consumed.append(control["input_id"])
-                control_consumed.append(control["input_id"])
-            if isinstance(caption, dict):
-                files.append({
-                    "path": f"{source_root}/{stem}.txt",
-                    "text": caption["text"],
-                    "input_id": caption["input_id"],
-                })
-                members.append({"input_id": caption["input_id"], "root": source_root})
-                consumed.append(caption["input_id"])
-                source_consumed.append(caption["input_id"])
-            bindings.append({"rule": "same-relative-stem", "key": stem, "members": members})
-
-        semantic: dict[str, Any] = {"num_repeats": 1, "caption_extension": ".txt"}
-        native_runtime = {"cache_directory": f"/workspace/{cache_root}"}
-        native_string_fields = ["/caption_extension"]
-        if media_kind == "video":
-            semantic.update({
-                "target_frames": deepcopy(options.get("target_frames")),
-                "frame_extraction": options.get("frame_extraction", "head"),
-            })
-            if options.get("source_fps") is not None:
-                semantic["source_fps"] = options["source_fps"]
-            native_runtime["video_directory"] = f"/workspace/{source_root}"
-            native_string_fields.append("/frame_extraction")
-            consumer_id = "videos"
-            consumer_pointer = "/video_directory"
-        else:
-            native_runtime["image_directory"] = f"/workspace/{source_root}"
-            consumer_id = "images"
-            consumer_pointer = "/image_directory"
-        consumers = [{
-            "id": consumer_id,
-            "kind": "recursive-directory",
-            "native_pointer": consumer_pointer,
-            "path": source_root,
-            "input_ids": source_consumed,
-        }]
-        if control_consumed:
-            semantic["no_resize_control"] = options.get("no_resize_control", False)
-            if options.get("control_resolution") is not None:
-                semantic["control_resolution"] = deepcopy(options["control_resolution"])
-            native_runtime["control_directory"] = f"/workspace/{control_root}"
-            consumers.append({
-                "id": "controls",
-                "kind": "recursive-directory",
-                "native_pointer": "/control_directory",
-                "path": control_root,
-                "input_ids": control_consumed,
-            })
-        projected.append({
-            "id": dataset_id,
-            "consumed": consumed,
-            "unrepresentable": unrepresentable,
-            "semantic": semantic,
-            "native_runtime": native_runtime,
-            "native": {**semantic, **native_runtime},
-            "native_string_fields": native_string_fields,
-            "views": [{
-                "id": f"musubi-{dataset_id}",
-                "root": view_root,
-                "links": links,
-                "files": files,
-                "native_files": [],
-                "write_roots": [{"path": cache_root, "native_pointer": "/cache_directory"}],
-                "consumers": consumers,
-                "repeat": 1,
-                "repeat_pointer": "/num_repeats",
-                "bindings": bindings,
-            }],
-        })
+        projected.append(_project_musubi_jsonl_dataset(
+            run=run,
+            dataset=dataset,
+            view_root=f"runs/{run['id']}/cache/dataset-view/musubi/{dataset_id}",
+            options=dataset_options.get(dataset_id, {}),
+            profile_name=profile_name,
+            profile=profile,
+        ))
     return {"schema_version": 1, "backend": "musubi-tuner", "datasets": projected}
 
 
-def _project_musubi_h3_one_frame_control_dataset(
-    *, run: dict[str, Any], dataset: dict[str, Any], view_root: str, options: dict[str, Any],
+def _musubi_dataset_shape(dataset: dict[str, Any]) -> tuple[str, dict[str, list[str]]]:
+    shape_samples: dict[str, list[str]] = {}
+    for sample in dataset.get("samples", []):
+        references = sample.get("files", [])
+        targets = [item for item in references if item.get("role") == "target"]
+        controls = [item for item in references if item.get("role") == "control"]
+        other_roles = sorted({str(item.get("role")) for item in references if item.get("role") not in {"target", "control"}})
+        if len(targets) != 1:
+            sample_shape = f"target-count-{len(targets)}"
+            shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
+            continue
+        if other_roles:
+            sample_shape = "roles:" + ",".join(other_roles)
+            shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
+            continue
+        suffix = Path(str(targets[0].get("path"))).suffix.lower()
+        media_kind = "image" if suffix in IMAGE_SUFFIXES else "video" if suffix in VIDEO_SUFFIXES else f"extension:{suffix}"
+        control_suffix = "" if not controls else "-control" if len(controls) == 1 else f"-controls-{len(controls)}"
+        sample_shape = media_kind + control_suffix
+        shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
+    if not shape_samples:
+        return "empty", {}
+    if len(shape_samples) != 1:
+        return "mixed:" + ",".join(sorted(shape_samples)), shape_samples
+    return next(iter(shape_samples)), shape_samples
+
+
+def _select_musubi_projection_profile(
+    *, architecture: str, shape: str, mode: dict[str, Any], shape_examples: dict[str, list[str]],
+) -> tuple[str, dict[str, Any]]:
+    matches = [
+        (name, profile)
+        for name, profile in MUSUBI_PROJECTION_PROFILES.items()
+        if architecture in profile["architectures"]
+        and shape == profile["shape"]
+        and all(mode.get(key) == value for key, value in profile["mode"].items())
+    ]
+    if len(matches) != 1:
+        if matches:
+            raise ValueError(
+                f"Musubi projection profile table is ambiguous for architecture={architecture!r}, "
+                f"shape={shape!r}, mode={mode!r}"
+            )
+        counts = {sample_shape: len(ids) for sample_shape, ids in shape_examples.items()}
+        largest = max(counts.values(), default=0)
+        minority_shapes = [
+            sample_shape for sample_shape, count in sorted(counts.items()) if count < largest
+        ]
+        if len(counts) > 1 and not minority_shapes:
+            minority_shapes = sorted(counts)
+        minority = {
+            sample_shape: shape_examples[sample_shape][:3] for sample_shape in minority_shapes
+        }
+        detail = f"; minority sample IDs={minority!r}" if minority else ""
+        raise ValueError(
+            "no verified Musubi projection profile matches "
+            f"architecture={architecture!r}, shape={shape!r}, mode={mode!r}{detail}"
+        )
+    return matches[0]
+
+
+def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    allowed = set(profile["allowed_options"])
+    unexpected = sorted(set(options) - allowed)
+    if unexpected:
+        raise ValueError(
+            f"Musubi profile {profile_name} does not accept dataset option(s): " + ", ".join(unexpected)
+        )
+    missing = [key for key in profile["required_options"] if options.get(key) is None]
+    if missing:
+        raise ValueError(
+            f"Musubi profile {profile_name} requires dataset option(s): " + ", ".join(missing)
+        )
+    semantic: dict[str, Any] = {"num_repeats": 1}
+    for key, default in profile["native_options"].items():
+        value = options.get(key, default)
+        if value is not None:
+            semantic[key] = deepcopy(value)
+    control_index_option = profile.get("control_index_option")
+    if isinstance(control_index_option, str):
+        indices = semantic.get(control_index_option)
+        if not isinstance(indices, list) or len(indices) != profile["control_count"]:
+            raise ValueError(
+                f"Musubi profile {profile_name} requires {control_index_option} to contain "
+                f"one index per control input"
+            )
+    return semantic
+
+
+def _project_musubi_jsonl_dataset(
+    *, run: dict[str, Any], dataset: dict[str, Any], view_root: str,
+    options: dict[str, Any], profile_name: str, profile: dict[str, Any],
 ) -> dict[str, Any]:
-    """Project the first verified MiniMax-H3 one-frame FL2VA control path."""
-    override = _musubi_backend_override(run)
     dataset_id = str(dataset.get("id"))
-    samples = dataset.get("samples", [])
-    source_root = f"{view_root}/images"
+    codec_name = str(profile["codec"])
+    codec = MUSUBI_JSONL_CODECS[codec_name]
+    transport = str(codec["transport"])
+    source_root = f"{view_root}/{'videos' if transport == 'video_jsonl_file' else 'images'}"
     control_root = f"{view_root}/controls"
     native_root = f"{view_root}/native"
     native_file_path = f"{native_root}/items.jsonl"
     cache_root = f"{view_root}/cache"
     consumed: list[str] = []
+    unrepresentable: list[dict[str, str | None]] = []
     links: list[dict[str, str]] = []
     rows: list[dict[str, Any]] = []
     row_reports: list[dict[str, Any]] = []
-    unrepresentable: list[dict[str, str | None]] = []
-    clean_indices = options.get("fp_1f_clean_indices")
-    target_index = options.get("fp_1f_target_index")
-    mode_valid = (
-        _musubi_h3_effective_task(override) == "fl2va"
-        and _truthy(override.get("one_frame"))
-        and isinstance(clean_indices, list)
-        and isinstance(target_index, int)
-        and not isinstance(target_index, bool)
-    )
-    for index, sample in enumerate(samples):
+    semantic = _musubi_profile_semantic(profile_name, profile, options)
+    for index, sample in enumerate(dataset.get("samples", [])):
         references = sample.get("files", [])
         targets = [item for item in references if item.get("role") == "target"]
         controls = [item for item in references if item.get("role") == "control"]
         other = [item for item in references if item.get("role") not in {"target", "control"}]
         caption = sample.get("caption")
         fallback = references[0].get("input_id") if references else None
-        if not mode_valid:
-            unrepresentable.append({
-                "input_id": controls[0].get("input_id") if controls else fallback,
-                "reason": (
-                    "MiniMax-H3 one-frame FL2VA controls require task=fl2va, one_frame=true, "
-                    "and explicit fp_1f_clean_indices plus fp_1f_target_index"
-                ),
-            })
-            continue
-        if options.get("control_resolution") is not None or options.get("no_resize_control") is not None:
-            unrepresentable.append({
-                "input_id": controls[0].get("input_id") if controls else fallback,
-                "reason": "MiniMax-H3 controls do not support control_resolution or no_resize_control",
-            })
-            continue
-        if sample.get("group") is not None or len(targets) != 1 or len(controls) != 1 or other:
+        if sample.get("group") is not None or len(targets) != 1 or len(controls) != profile["control_count"] or other:
             unrepresentable.append({
                 "input_id": fallback,
-                "reason": "initial MiniMax-H3 FL2VA projection requires one target and one control per ungrouped sample",
-            })
-            continue
-        if len(clean_indices) != len(controls):
-            unrepresentable.append({
-                "input_id": controls[0].get("input_id"),
-                "reason": "fp_1f_clean_indices must contain one index for each ordered control input",
+                "reason": (
+                    f"Musubi profile {profile_name} requires one target, "
+                    f"{profile['control_count']} control input(s), and no other roles per ungrouped sample"
+                ),
             })
             continue
         if not isinstance(caption, dict):
             unrepresentable.append({
                 "input_id": targets[0].get("input_id"),
-                "reason": "MiniMax-H3 FL2VA JSONL projection caption cannot be absent",
+                "reason": f"Musubi profile {profile_name} caption cannot be absent",
             })
             continue
-        target, control = targets[0], controls[0]
+        target = targets[0]
         target_suffix = Path(str(target.get("path"))).suffix.lower()
-        control_suffix = Path(str(control.get("path"))).suffix.lower()
-        if target_suffix not in IMAGE_SUFFIXES or control_suffix not in IMAGE_SUFFIXES:
+        expected_target_suffixes = VIDEO_SUFFIXES if transport == "video_jsonl_file" else IMAGE_SUFFIXES
+        if target_suffix not in expected_target_suffixes:
+            unrepresentable.append({
+                "input_id": target.get("input_id"),
+                "reason": f"Musubi profile {profile_name} does not support target extension {target_suffix!r}",
+            })
+            continue
+        control_suffixes = [Path(str(control.get("path"))).suffix.lower() for control in controls]
+        if any(suffix not in IMAGE_SUFFIXES for suffix in control_suffixes):
             unrepresentable.append({
                 "input_id": fallback,
-                "reason": "MiniMax-H3 one-frame FL2VA target and control inputs must both be images",
+                "reason": f"Musubi profile {profile_name} control inputs must be images",
             })
             continue
+        caption_text, caption_reference_kind = _musubi_caption_projection(
+            caption, MUSUBI_CAPTION_TRANSFORM,
+        )
         tag = hashlib.sha256(json.dumps({
             "target": target.get("sha256"),
-            "control": control.get("sha256"),
+            "controls": [control.get("sha256") for control in controls],
             "caption": caption.get("text"),
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
         stem = f"{index:06d}-{tag}"
         target_path = f"{source_root}/{stem}{target_suffix}"
-        control_path = f"{control_root}/{stem}{control_suffix}"
-        links.extend([
-            {
-                "path": target_path,
-                "target": f"/workspace/datasets/{dataset_id}/{target['path']}",
-                "input_id": target["input_id"],
-            },
-            {
-                "path": control_path,
-                "target": f"/workspace/datasets/{dataset_id}/{control['path']}",
-                "input_id": control["input_id"],
-            },
-        ])
-        row = {
-            "image_path": f"/workspace/{target_path}",
-            "control_path": f"/workspace/{control_path}",
-            "caption": caption["text"],
-        }
+        control_paths = [f"{control_root}/{stem}{suffix}" for suffix in control_suffixes]
+        links.append({
+            "path": target_path,
+            "target": f"/workspace/datasets/{dataset_id}/{target['path']}",
+            "input_id": target["input_id"],
+        })
+        links.extend({
+            "path": path,
+            "target": f"/workspace/datasets/{dataset_id}/{control['path']}",
+            "input_id": control["input_id"],
+        } for path, control in zip(control_paths, controls, strict=True))
+        row, row_references = codec["build_row"]({
+            "target_path": target_path,
+            "target_input_id": target["input_id"],
+            "control_paths": control_paths,
+            "control_input_ids": [control["input_id"] for control in controls],
+            "caption_text": caption_text,
+            "caption_input_id": caption["input_id"],
+            "caption_reference_kind": caption_reference_kind,
+        })
         rows.append(row)
         row_reports.append({
             "row_id": f"row-{index:06d}",
             "sample_id": sample["id"],
             "repeat": None,
-            "references": [
-                {"kind": "path", "pointer": "/image_path", "input_id": target["input_id"], "path": target_path},
-                {"kind": "path", "pointer": "/control_path", "input_id": control["input_id"], "path": control_path},
-                {"kind": "caption-text", "pointer": "/caption", "input_id": caption["input_id"]},
-            ],
+            "references": row_references,
             "literal_strings": [],
         })
-        consumed.extend([target["input_id"], control["input_id"], caption["input_id"]])
-    semantic = {
-        "num_repeats": 1,
-        "fp_1f_clean_indices": deepcopy(clean_indices),
-        "fp_1f_target_index": target_index,
+        consumed.extend([
+            target["input_id"],
+            *[control["input_id"] for control in controls],
+            caption["input_id"],
+        ])
+    policy = {
+        "profile": profile_name,
+        "codec": codec_name,
+        "caption_transform": MUSUBI_CAPTION_TRANSFORM,
+        **{key: value for key, value in codec.items() if key != "build_row"},
     }
     native_runtime = {
-        "image_jsonl_file": f"/workspace/{native_file_path}",
+        transport: f"/workspace/{native_file_path}",
         "cache_directory": f"/workspace/{cache_root}",
     }
     return {
@@ -580,8 +518,9 @@ def _project_musubi_h3_one_frame_control_dataset(
         "unrepresentable": unrepresentable,
         "semantic": semantic,
         "native_runtime": native_runtime,
+        "policy": policy,
         "native": {**semantic, **native_runtime},
-        "native_string_fields": [],
+        "native_string_fields": list(profile["native_string_fields"]),
         "views": [{
             "id": f"musubi-{dataset_id}",
             "root": view_root,
@@ -598,7 +537,7 @@ def _project_musubi_h3_one_frame_control_dataset(
             "consumers": [{
                 "id": "items",
                 "kind": "jsonl",
-                "native_pointer": "/image_jsonl_file",
+                "native_pointer": f"/{transport}",
                 "native_file": native_file_path,
             }],
             "repeat": 1,
@@ -607,153 +546,20 @@ def _project_musubi_h3_one_frame_control_dataset(
     }
 
 
-def _relative_h3_dataset_path(value: Any, label: str) -> PurePosixPath:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Musubi MiniMax-H3 {label} must be a non-empty relative path")
-    path = PurePosixPath(value)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-        raise ValueError(f"Musubi MiniMax-H3 {label} must be a relative path inside its dataset")
-    return path
-
-
-def _validate_h3_dataset_config(run: dict[str, Any]) -> dict[str, Any] | None:
-    override = _musubi_backend_override(run)
-    typed = override.get("h3_dataset_config")
-    if typed is None:
-        return None
-    if override.get("dataset_config") is not None:
-        raise ValueError("Musubi backend.config.h3_dataset_config cannot be combined with dataset_config")
-    if not isinstance(typed, dict):
-        raise ValueError("Musubi backend.config.h3_dataset_config must be a mapping")
-    unknown_top = sorted(set(typed) - {"general", "datasets"})
-    if unknown_top:
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config contains unsupported key(s): " + ", ".join(unknown_top))
-    general = typed.get("general", {})
-    if not isinstance(general, dict):
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config.general must be a mapping")
-    unknown_general = sorted(set(general) - _H3_GENERAL_FIELDS)
-    if unknown_general:
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config.general contains unsupported key(s): " + ", ".join(unknown_general))
-    resolution = general.get("resolution")
-    if resolution is not None and (
-        not isinstance(resolution, list)
-        or len(resolution) != 2
-        or any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value % 32 for value in resolution)
-    ):
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config.general.resolution must contain two positive multiples of 32")
-    batch_size = general.get("batch_size")
-    if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size != 1):
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config.general.batch_size must be 1")
-    for field in ("enable_bucket", "bucket_no_upscale"):
-        if field in general and not isinstance(general[field], bool):
-            raise ValueError(f"Musubi MiniMax-H3 h3_dataset_config.general.{field} must be true or false")
-    if "caption_extension" in general and (
-        not isinstance(general["caption_extension"], str) or not general["caption_extension"]
-    ):
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config.general.caption_extension must be a non-empty string")
-    datasets = typed.get("datasets")
-    declared = _datasets(run)
-    if not isinstance(datasets, list) or len(datasets) != len(declared):
-        raise ValueError("Musubi MiniMax-H3 h3_dataset_config.datasets must contain one entry per datasets[] item")
-    one_frame = _truthy(override.get("one_frame"))
-    effective_task = _musubi_h3_effective_task(override)
-    projected: list[dict[str, Any]] = []
-    for index, entry in enumerate(datasets):
-        label = f"h3_dataset_config.datasets[{index}]"
-        if not isinstance(entry, dict):
-            raise ValueError(f"Musubi MiniMax-H3 {label} must be a mapping")
-        unknown = sorted(set(entry) - _H3_DATASET_FIELDS)
-        if unknown:
-            raise ValueError(f"Musubi MiniMax-H3 {label} contains unsupported key(s): " + ", ".join(unknown))
-        source = entry.get("source")
-        if source not in H3_SOURCE_KEYS:
-            raise ValueError(f"Musubi MiniMax-H3 {label}.source must be one of: " + ", ".join(H3_SOURCE_KEYS))
-        source_is_image = str(source).startswith("image_")
-        if source_is_image != one_frame:
-            expected = "image" if one_frame else "video"
-            raise ValueError(f"Musubi MiniMax-H3 {label}.source must be an {expected} source for one_frame={one_frame}")
-        relative = _relative_h3_dataset_path(entry.get("path"), f"{label}.path")
-        dataset_id = declared[index].get("id")
-        if not isinstance(dataset_id, str) or not dataset_id:
-            raise ValueError(f"Musubi MiniMax-H3 datasets[{index}].id must be a non-empty string")
-        native: dict[str, Any] = {
-            H3_SOURCE_KEYS[str(source)]: f"/workspace/datasets/{dataset_id}/" + "/".join(relative.parts)
-        }
-        target_frames = entry.get("target_frames")
-        if source_is_image:
-            if target_frames is not None:
-                raise ValueError(f"Musubi MiniMax-H3 {label}.target_frames applies only to video sources")
-        elif target_frames is None:
-            raise ValueError(f"Musubi MiniMax-H3 {label}.target_frames is required for video sources")
-        elif (
-            not isinstance(target_frames, list)
-            or not target_frames
-            or any(
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value < 5
-                or (value - 5) % 17 != 0
-                for value in target_frames
-            )
-        ):
-            raise ValueError(
-                f"Musubi MiniMax-H3 {label}.target_frames must be a non-empty list on the 5+17n frame grid"
-            )
-        else:
-            native["target_frames"] = target_frames
-        control = entry.get("control_subdir")
-        if control is not None:
-            control_path = _relative_h3_dataset_path(control, f"{label}.control_subdir")
-            native["control_directory"] = f"/workspace/datasets/{dataset_id}/" + "/".join(control_path.parts)
-        clean_indices = entry.get("fp_1f_clean_indices")
-        target_index = entry.get("fp_1f_target_index")
-        if clean_indices is not None:
-            if not isinstance(clean_indices, list) or not clean_indices or any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in clean_indices
-            ):
-                raise ValueError(f"Musubi MiniMax-H3 {label}.fp_1f_clean_indices must be a non-empty list of nonnegative integers")
-            native["fp_1f_clean_indices"] = clean_indices
-        if target_index is not None:
-            if isinstance(target_index, bool) or not isinstance(target_index, int) or target_index < 0:
-                raise ValueError(f"Musubi MiniMax-H3 {label}.fp_1f_target_index must be a nonnegative integer")
-            native["fp_1f_target_index"] = target_index
-        if control is not None and not (one_frame and effective_task in {"fl2va", "ref2va"}):
-            raise ValueError(
-                f"Musubi MiniMax-H3 {label}.control_subdir applies only to one-frame FL2VA or Ref2VA"
-            )
-        if one_frame and effective_task == "fl2va":
-            if control is None and source != "image_jsonl":
-                raise ValueError(
-                    f"Musubi MiniMax-H3 {label}.control_subdir or image_jsonl control paths are required for one-frame FL2VA"
-                )
-            if clean_indices is None or target_index is None:
-                raise ValueError(
-                    f"Musubi MiniMax-H3 {label} requires fp_1f_clean_indices and fp_1f_target_index for one-frame FL2VA"
-                )
-        elif clean_indices is not None:
-            raise ValueError(f"Musubi MiniMax-H3 {label}.fp_1f_clean_indices applies only to one-frame FL2VA")
-        elif target_index is not None:
-            raise ValueError(f"Musubi MiniMax-H3 {label}.fp_1f_target_index applies only to one-frame FL2VA")
-        if one_frame and effective_task == "ref2va" and control is None and source != "image_jsonl":
-            raise ValueError(f"Musubi MiniMax-H3 {label} Ref2VA requires control_subdir or image_jsonl references")
-        if not one_frame and effective_task == "ref2va" and source != "video_jsonl":
-            raise ValueError(f"Musubi MiniMax-H3 {label} Ref2VA video requires source=video_jsonl with references")
-        projected.append(native)
-    return {"general": dict(general), "datasets": projected}
-
-
 def validate_musubi_authored_config(run: dict[str, Any]) -> None:
     """Validate typed Musubi configuration before writing compile artifacts."""
 
-    _validate_h3_dataset_config(run)
     _musubi_dataset_options(run)
 
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
+    del workspace, strict
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
     if not datasets:
         raise ValueError("Musubi Tuner requires datasets[]")
+    if override.get("dataset_config") is not None:
+        raise ValueError("Musubi first-class manifest compile cannot use an authored dataset config")
     general = {
         "resolution": [960, 544],
         "caption_extension": ".txt",
@@ -761,40 +567,23 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, work
         "enable_bucket": True,
         "bucket_no_upscale": False,
     }
-    dataset_config = _validate_h3_dataset_config(run) or override.get("dataset_config")
-    if isinstance(dataset_config, dict):
-        general.update({key: value for key, value in dataset_config.get("general", {}).items() if isinstance(key, str)})
-    raw_general = dataset_config.get("general") if isinstance(dataset_config, dict) and isinstance(dataset_config.get("general"), dict) else {}
     for key in ("batch_size", "resolution"):
-        if key not in override:
-            continue
-        if key in raw_general:
-            raise ValueError(f"Musubi backend.config.{key} duplicates backend.config.dataset_config.general.{key}")
-        general[key] = override[key]
+        if key in override:
+            general[key] = override[key]
     lines = ["# Generated by Kura for Musubi Tuner.", "[general]"]
     for key, value in general.items():
         if value is not None:
             lines.append(f"{key} = {_toml_scalar(value)}")
-    if strict:
-        if dataset_config is not None:
-            raise ValueError("Musubi first-class manifest compile cannot use an authored dataset_config")
-        items = _frozen_musubi_dataset_items(run, destination, datasets)
-    else:
-        items = _musubi_dataset_items(run, destination, datasets, dataset_config, workspace=workspace, strict=False)
+    items = _frozen_musubi_dataset_items(run, destination, datasets)
     for item in items:
         lines.extend(["", "[[datasets]]"])
         for key, value in item.items():
             if value is not None:
                 lines.append(f"{key} = {_toml_scalar(value)}")
     atomic_write_text(destination, "\n".join(lines) + "\n")
-    if strict:
-        parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
-        if parsed.get("datasets") != items:
-            raise ValueError("Musubi generated dataset TOML differs from the verified native projection")
-    referenced_jsonl = {Path(value).name for item in items for key, value in item.items() if key == "image_jsonl_file" and isinstance(value, str)}
-    for path in destination.parent.glob("*.jsonl"):
-        if path.name not in referenced_jsonl:
-            path.unlink()
+    parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+    if parsed.get("datasets") != items:
+        raise ValueError("Musubi generated dataset TOML differs from the verified native projection")
 
 
 def _frozen_musubi_dataset_items(
@@ -826,31 +615,20 @@ def _frozen_musubi_dataset_items(
         if not isinstance(native, dict):
             raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} has no native handoff")
         pointer_keys = {
-            "/image_directory": "image_directory",
             "/image_jsonl_file": "image_jsonl_file",
-            "/video_directory": "video_directory",
-            "/control_directory": "control_directory",
+            "/video_jsonl_file": "video_jsonl_file",
         }
         verified_consumers = {
             consumer.get("native_pointer"): consumer
             for consumer in consumers if isinstance(consumer, dict)
         } if isinstance(consumers, list) else {}
-        primary = [
-            pointer for pointer in ("/image_directory", "/image_jsonl_file", "/video_directory")
-            if pointer in verified_consumers
-        ]
+        primary = [pointer for pointer in pointer_keys if pointer in verified_consumers]
         consumers_match = (
             len(primary) == 1
-            and set(verified_consumers) <= set(pointer_keys)
+            and set(verified_consumers) == {primary[0]}
             and all(
-                (
-                    consumer.get("kind") == "recursive-directory"
-                    and native.get(pointer_keys[pointer]) == f"/workspace/{consumer.get('path')}"
-                )
-                or (
-                    consumer.get("kind") == "jsonl"
-                    and native.get(pointer_keys[pointer]) == f"/workspace/{consumer.get('native_file')}"
-                )
+                consumer.get("kind") == "jsonl"
+                and native.get(pointer_keys[pointer]) == f"/workspace/{consumer.get('native_file')}"
                 for pointer, consumer in verified_consumers.items()
             )
         )
@@ -864,397 +642,11 @@ def _frozen_musubi_dataset_items(
                 f"Musubi frozen projection for dataset {dataset_id!r} bypasses its verified source or cache view"
             )
         primary_consumer = verified_consumers[primary[0]]
-        source_path = PurePosixPath(str(
-            primary_consumer.get("path") or primary_consumer.get("native_file")
-        ))
-        if primary_consumer.get("kind") == "jsonl":
-            source_path = source_path.parent
+        source_path = PurePosixPath(str(primary_consumer.get("native_file"))).parent
         cache_path = PurePosixPath(str(write_root["path"]))
         if source_path.parent != cache_path.parent or source_path == cache_path:
             raise ValueError(
                 f"Musubi frozen projection for dataset {dataset_id!r} must keep cache_directory beside its source directory"
             )
-        control = verified_consumers.get("/control_directory")
-        if isinstance(control, dict):
-            control_path = PurePosixPath(str(control["path"]))
-            if control_path.parent != source_path.parent or control_path in (source_path, cache_path):
-                raise ValueError(
-                    f"Musubi frozen projection for dataset {dataset_id!r} must keep control_directory beside its source directory"
-                )
         items.append(deepcopy(native))
     return items
-
-
-def _musubi_dataset_items(
-    run: dict[str, Any],
-    destination: Path,
-    datasets: list[dict[str, Any]],
-    dataset_config: Any,
-    *,
-    workspace: Path | None = None,
-    strict: bool = False,
-) -> list[dict[str, Any]]:
-    raw_items: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for index, dataset in enumerate(datasets):
-        dataset_id = dataset.get("id", "")
-        if not isinstance(dataset_id, str) or not dataset_id:
-            raise ValueError("Musubi Tuner datasets[].id must name a dataset directory")
-        override_item: dict[str, Any] = {}
-        if isinstance(dataset_config, dict):
-            overrides = dataset_config.get("datasets")
-            if isinstance(overrides, list) and index < len(overrides) and isinstance(overrides[index], dict):
-                override_item = {key: value for key, value in overrides[index].items() if isinstance(key, str)}
-        has_native_source = any(key in override_item for key in NATIVE_SOURCE_KEYS)
-        item = {
-            "cache_directory": f"/workspace/runs/{run['id']}/cache/musubi/{dataset_id}",
-            "num_repeats": dataset.get("num_repeats") or dataset.get("repeats") or 1,
-        }
-        if not has_native_source:
-            item["image_directory"] = _default_image_directory(destination, dataset_id, workspace=workspace, strict=strict)
-        if "paired_jsonl" in override_item:
-            paired = override_item.pop("paired_jsonl")
-            if isinstance(paired, dict):
-                item["_kura_paired_key"] = _paired_dataset_key(dataset_id, paired)
-            item["image_jsonl_file"] = _write_musubi_paired_jsonl(run, destination, dataset_id, paired, workspace=workspace)
-        item.update(override_item)
-        if strict and isinstance(item.get("image_directory"), str):
-            _validate_image_directory(workspace or _workspace_from_resolved_path(destination), dataset_id, item["image_directory"])
-        raw_items.append((dataset, item))
-    return _collapse_duplicate_musubi_bucket_items(raw_items)
-
-
-def _default_image_directory(destination: Path, dataset_id: str, *, workspace: Path | None = None, strict: bool = False) -> str:
-    workspace_root = workspace or _workspace_from_resolved_path(destination)
-    dataset_root = workspace_root / "datasets" / dataset_id
-    images_dir = dataset_root / "images"
-    if images_dir.is_dir():
-        return f"/workspace/datasets/{dataset_id}/images"
-    if _has_direct_images(dataset_root):
-        return f"/workspace/datasets/{dataset_id}"
-    if strict:
-        raise ValueError(f"dataset {dataset_id} has no images/ directory and no image files at its root")
-    return f"/workspace/datasets/{dataset_id}/images"
-
-
-def validate_musubi_dataset_layout(run: dict[str, Any], workspace: Path) -> None:
-    override = _musubi_backend_override(run)
-    typed = _validate_h3_dataset_config(run)
-    items = _musubi_dataset_items(
-        run,
-        workspace / "runs" / str(run.get("id") or "_unknown") / "resolved" / "musubi" / "dataset.toml",
-        _datasets(run),
-        typed or override.get("dataset_config"),
-        workspace=workspace,
-        strict=True,
-    )
-    if typed is not None:
-        _validate_h3_typed_sources(run, workspace, items)
-        _validate_h3_jsonl_records(run, workspace, items)
-
-
-def _validate_h3_typed_sources(run: dict[str, Any], workspace: Path, items: list[dict[str, Any]]) -> None:
-    datasets = _datasets(run)
-    for index, item in enumerate(items):
-        dataset_id = str(datasets[index]["id"])
-        dataset_root = workspace / "datasets" / dataset_id
-        for key in ("image_directory", "image_jsonl_file", "video_directory", "video_jsonl_file", "control_directory"):
-            value = item.get(key)
-            if isinstance(value, str):
-                host = _host_path_for_container_path(workspace, value)
-                if host is not None:
-                    _validate_h3_host_containment(host, dataset_root, f"dataset {dataset_id!r} {key}")
-        video_directory = item.get("video_directory")
-        if isinstance(video_directory, str):
-            host = _host_path_for_container_path(workspace, video_directory)
-            if host is None or not host.is_dir():
-                raise ValueError(f"Musubi MiniMax-H3 dataset {dataset_id!r} video_directory does not exist: {video_directory}")
-            if not _has_direct_media(host, VIDEO_SUFFIXES):
-                raise ValueError(f"Musubi MiniMax-H3 dataset {dataset_id!r} video_directory has no video files: {video_directory}")
-        control_directory = item.get("control_directory")
-        if isinstance(control_directory, str):
-            host = _host_path_for_container_path(workspace, control_directory)
-            if host is None or not host.is_dir():
-                raise ValueError(f"Musubi MiniMax-H3 dataset {dataset_id!r} control_directory does not exist: {control_directory}")
-            if not _has_direct_media(host, IMAGE_SUFFIXES):
-                raise ValueError(f"Musubi MiniMax-H3 dataset {dataset_id!r} control_directory has no image files: {control_directory}")
-
-
-def _validate_h3_host_containment(path: Path, dataset_root: Path, label: str) -> None:
-    try:
-        resolved_root = dataset_root.resolve()
-        resolved_path = path.resolve()
-    except OSError as exc:
-        raise ValueError(f"Musubi MiniMax-H3 {label} cannot be resolved: {exc}") from exc
-    if not resolved_path.is_relative_to(resolved_root):
-        raise ValueError(f"Musubi MiniMax-H3 {label} escapes dataset through a symlink")
-
-
-def _validate_h3_jsonl_records(run: dict[str, Any], workspace: Path, items: list[dict[str, Any]]) -> None:
-    override = _musubi_backend_override(run)
-    one_frame = _truthy(override.get("one_frame"))
-    effective_task = _musubi_h3_effective_task(override)
-    references_required = effective_task == "ref2va"
-    controls_allowed = one_frame and effective_task in {"fl2va", "ref2va"}
-    controls_required = one_frame and effective_task == "fl2va"
-    datasets = _datasets(run)
-    for index, item in enumerate(items):
-        jsonl_value = item.get("image_jsonl_file") or item.get("video_jsonl_file")
-        if not isinstance(jsonl_value, str):
-            continue
-        host_jsonl = _host_path_for_container_path(workspace, jsonl_value)
-        if host_jsonl is None or not host_jsonl.is_file():
-            raise ValueError(f"Musubi MiniMax-H3 dataset {datasets[index]['id']!r} JSONL does not exist: {jsonl_value}")
-        row_count = 0
-        for line_number, line in enumerate(host_jsonl.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            row_count += 1
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} is invalid JSON: {exc}") from exc
-            if not isinstance(record, dict):
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} must be an object")
-            target_key = "image_path" if "image_jsonl_file" in item else "video_path"
-            _validate_h3_jsonl_path(record.get(target_key), host_jsonl, f"{jsonl_value}:{line_number}.{target_key}")
-            if not isinstance(record.get("caption"), str):
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number}.caption must be a string")
-            if "teacher_caption" in record and not isinstance(record["teacher_caption"], str):
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number}.teacher_caption must be a string")
-            if "audio_path" in record and record["audio_path"] is not None:
-                if one_frame:
-                    raise ValueError(
-                        f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number}.audio_path is not allowed in one-frame mode"
-                    )
-                _validate_h3_jsonl_path(record["audio_path"], host_jsonl, f"{jsonl_value}:{line_number}.audio_path")
-            references = record.get("references")
-            control_keys = sorted(key for key in record if key == "control_path" or key.startswith("control_path_"))
-            if control_keys and not controls_allowed:
-                raise ValueError(
-                    f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} control paths apply only to one-frame FL2VA or Ref2VA"
-                )
-            if references is not None and effective_task != "ref2va":
-                raise ValueError(
-                    f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} references apply only to Ref2VA or reference-teacher modes"
-                )
-            if references is not None and control_keys:
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} cannot combine references and control paths")
-            if references_required and references is None and not control_keys and not item.get("control_directory"):
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} requires references")
-            if controls_required and not control_keys and not item.get("control_directory"):
-                raise ValueError(f"Musubi MiniMax-H3 JSONL {jsonl_value}:{line_number} requires control paths")
-            for key in control_keys:
-                _validate_h3_jsonl_path(record[key], host_jsonl, f"{jsonl_value}:{line_number}.{key}")
-            if references is not None:
-                _validate_h3_references(references, host_jsonl, line_number, one_frame=one_frame)
-        if row_count == 0:
-            raise ValueError(f"Musubi MiniMax-H3 dataset {datasets[index]['id']!r} JSONL has no records: {jsonl_value}")
-
-
-def _validate_h3_jsonl_path(value: Any, jsonl_path: Path, label: str) -> None:
-    relative = _relative_h3_dataset_path(value, label)
-    candidate = jsonl_path.parent.joinpath(*relative.parts)
-    _validate_h3_host_containment(candidate, jsonl_path.parent, label)
-    if not candidate.exists():
-        raise ValueError(f"Musubi MiniMax-H3 {label} does not exist: {value}")
-
-
-def _validate_h3_references(value: Any, jsonl_path: Path, line_number: int, *, one_frame: bool) -> None:
-    label = f"{jsonl_path}:{line_number}.references"
-    if not isinstance(value, list) or not value or len(value) > 12:
-        raise ValueError(f"Musubi MiniMax-H3 {label} must contain 1 to 12 references")
-    counts = {"image": 0, "video": 0, "audio": 0}
-    audio_bearing = 0
-    for index, reference in enumerate(value):
-        if not isinstance(reference, dict) or set(reference) - {"type", "path", "audio_path"}:
-            raise ValueError(f"Musubi MiniMax-H3 {label}[{index}] has an invalid reference shape")
-        kind = reference.get("type")
-        if kind not in counts:
-            raise ValueError(f"Musubi MiniMax-H3 {label}[{index}].type must be image, video, or audio")
-        if one_frame and kind == "audio":
-            raise ValueError(f"Musubi MiniMax-H3 {label}[{index}] standalone audio is not allowed in one-frame mode")
-        counts[str(kind)] += 1
-        _validate_h3_jsonl_path(reference.get("path"), jsonl_path, f"{label}[{index}].path")
-        if "audio_path" in reference and reference["audio_path"] is not None:
-            if kind != "video":
-                raise ValueError(f"Musubi MiniMax-H3 {label}[{index}].audio_path applies only to video references")
-            _validate_h3_jsonl_path(reference["audio_path"], jsonl_path, f"{label}[{index}].audio_path")
-            audio_bearing += 1
-    if counts["image"] > 9 or counts["video"] > 3 or counts["audio"] + audio_bearing > 3:
-        raise ValueError(f"Musubi MiniMax-H3 {label} exceeds image/video/audio reference limits")
-    if counts["image"] + counts["video"] == 0:
-        raise ValueError(f"Musubi MiniMax-H3 {label} requires at least one image or video reference")
-
-
-def _validate_image_directory(workspace: Path, dataset_id: str, image_directory: str) -> None:
-    host_path = _host_path_for_container_path(workspace, image_directory)
-    if host_path is None:
-        return
-    if not host_path.is_dir():
-        raise ValueError(f"Musubi dataset {dataset_id!r} image_directory does not exist: {image_directory}")
-    if not _has_direct_images(host_path):
-        raise ValueError(f"Musubi dataset {dataset_id!r} image_directory has no image files: {image_directory}")
-
-
-def _host_path_for_container_path(workspace: Path, value: str) -> Path | None:
-    if value == "/workspace":
-        return workspace
-    prefix = "/workspace/"
-    if value.startswith(prefix):
-        return workspace / value[len(prefix):]
-    return None
-
-
-def _has_direct_images(path: Path) -> bool:
-    return _has_direct_media(path, IMAGE_SUFFIXES)
-
-
-def _has_direct_media(path: Path, suffixes: set[str]) -> bool:
-    try:
-        return any(item.is_file() and item.suffix.lower() in suffixes for item in path.iterdir())
-    except OSError:
-        return False
-
-
-def _workspace_from_resolved_path(path: Path) -> Path:
-    for parent in path.parents:
-        if parent.name == "runs":
-            return parent.parent
-    return path.parent
-
-
-def _collapse_duplicate_musubi_bucket_items(raw_items: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Reject ambiguous duplicate Musubi bucket definitions.
-
-    Musubi's `resolution` is a dataset-block maximum, not a list of choices.
-    Defining the same paired dataset twice at 768 and 1024 would either double
-    the sample pool or, if silently collapsed, erase the lower-resolution block.
-    Kura must not choose either behavior implicitly.  If a run wants mixed
-    resolution blocks for the same dataset, the paired JSONL specs must select
-    disjoint subsets so the blocks are unambiguous.
-    """
-
-    collapsed: list[dict[str, Any]] = []
-    by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for dataset, item in raw_items:
-        paired_key = item.get("_kura_paired_key")
-        key = (
-            dataset.get("id"),
-            paired_key,
-            None if paired_key is not None else item.get("image_jsonl_file") or item.get("image_directory"),
-            item.get("video_jsonl_file"),
-            item.get("video_directory"),
-            tuple(item["target_frames"]) if isinstance(item.get("target_frames"), list) else item.get("target_frames"),
-            item.get("control_directory"),
-            item.get("num_repeats"),
-            item.get("batch_size"),
-        )
-        existing = by_key.get(key)
-        if existing is None:
-            clean = dict(item)
-            by_key[key] = clean
-            collapsed.append(clean)
-            continue
-        raise ValueError(
-            "refusing ambiguous Musubi duplicate dataset blocks for "
-            f"{dataset.get('id')!r}; split the paired_jsonl inputs into disjoint subsets "
-            "instead of repeating the same images at multiple resolutions"
-        )
-    for item in collapsed:
-        item.pop("_kura_paired_key", None)
-    return collapsed
-
-
-def _paired_dataset_key(dataset_id: str, spec: dict[str, Any]) -> tuple[Any, ...]:
-    return (
-        dataset_id,
-        str(_relative_dataset_path(spec.get("target_dir") or spec.get("image_dir") or "target")),
-        str(_relative_dataset_path(spec.get("control_dir") or "cond")),
-        str(_relative_dataset_path(spec.get("caption_dir") or "caption")),
-        _selection_key(spec.get("select")),
-    )
-
-
-def _selection_key(value: Any) -> tuple[Any, ...] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError("paired_jsonl select must be a mapping")
-    if "modulo" in value or "remainder" in value:
-        modulo = _int_or_none(value.get("modulo"))
-        remainder = _int_or_none(value.get("remainder"))
-        if modulo is None or modulo <= 0:
-            raise ValueError("paired_jsonl select.modulo must be a positive integer")
-        if remainder is None or remainder < 0 or remainder >= modulo:
-            raise ValueError("paired_jsonl select.remainder must be between 0 and modulo-1")
-        return ("modulo", modulo, remainder)
-    raise ValueError("unsupported paired_jsonl select; supported: {modulo, remainder}")
-
-
-def _write_musubi_paired_jsonl(run: dict[str, Any], destination: Path, dataset_id: str, spec: Any, *, workspace: Path | None = None) -> str:
-    if not isinstance(spec, dict):
-        raise ValueError("Musubi paired_jsonl must be a mapping")
-    target_dir = _relative_dataset_path(spec.get("target_dir") or spec.get("image_dir") or "target")
-    control_dir = _relative_dataset_path(spec.get("control_dir") or "cond")
-    caption_dir = _relative_dataset_path(spec.get("caption_dir") or "caption")
-    filename = str(spec.get("filename") or f"{dataset_id}-{target_dir.name}.jsonl")
-    if not filename.endswith(".jsonl") or "/" in filename or "\\" in filename or filename in (".jsonl",):
-        raise ValueError(f"invalid paired_jsonl filename: {filename!r}")
-    output_dir = destination.parent
-    workspace_root = workspace or _workspace_from_resolved_path(destination)
-    dataset_root = workspace_root / "datasets" / dataset_id
-    host_target = dataset_root / target_dir
-    host_control = dataset_root / control_dir
-    host_caption = dataset_root / caption_dir
-    for role, path in (("target_dir", host_target), ("control_dir", host_control), ("caption_dir", host_caption)):
-        if not path.is_dir():
-            raise ValueError(f"paired_jsonl {role} does not exist: {path}")
-    target_files = sorted(path for path in host_target.iterdir() if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"})
-    selector = _selection_key(spec.get("select"))
-    if selector is not None:
-        _, modulo, remainder = selector
-        target_files = [path for index, path in enumerate(target_files) if index % modulo == remainder]
-    if not target_files:
-        raise ValueError(f"paired_jsonl target_dir contains no images: {host_target}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    jsonl_path = output_dir / filename
-    with jsonl_path.open("w", encoding="utf-8") as handle:
-        for target in target_files:
-            stem = target.stem
-            control = _paired_existing_file(host_control, stem, target.suffix)
-            caption = host_caption / f"{stem}.txt"
-            if control is None:
-                raise ValueError(f"paired_jsonl missing control image for {stem!r}")
-            if not caption.is_file():
-                raise ValueError(f"paired_jsonl missing caption for {stem!r}")
-            payload = {
-                "image_path": _container_dataset_path(dataset_id, target_dir / target.name),
-                "control_path": _container_dataset_path(dataset_id, control_dir / control.name),
-                "caption": caption.read_text(encoding="utf-8", errors="replace").strip(),
-            }
-            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    return f"/workspace/runs/{run['id']}/resolved/musubi/{filename}"
-
-
-def _relative_dataset_path(value: Any) -> Path:
-    if not isinstance(value, str) or not value:
-        raise ValueError("paired_jsonl paths must be non-empty relative strings")
-    path = Path(value)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-        raise ValueError(f"paired_jsonl path must stay inside the dataset: {value!r}")
-    return path
-
-
-def _paired_existing_file(directory: Path, stem: str, preferred_suffix: str) -> Path | None:
-    preferred = directory / f"{stem}{preferred_suffix}"
-    if preferred.is_file():
-        return preferred
-    for suffix in (".png", ".jpg", ".jpeg", ".webp"):
-        candidate = directory / f"{stem}{suffix}"
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def _container_dataset_path(dataset_id: str, relative: Path) -> str:
-    return "/workspace/datasets/" + dataset_id + "/" + "/".join(relative.parts)

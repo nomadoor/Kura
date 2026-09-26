@@ -36,6 +36,20 @@ def jsonl_count(path):
         die(f"cannot read Musubi image_jsonl_file {path}: {exc}")
 
 
+def video_jsonl_paths(path):
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line]
+    except (OSError, json.JSONDecodeError) as exc:
+        die(f"cannot read Musubi video_jsonl_file {path}: {exc}")
+    videos = []
+    for index, row in enumerate(rows, start=1):
+        value = row.get("video_path") if isinstance(row, dict) else None
+        if not isinstance(value, str) or not value:
+            die(f"Musubi video_jsonl_file {path} row {index} has no video_path")
+        videos.append(Path(value))
+    return videos
+
+
 def realization_record_path():
     workspace = os.environ.get("KURA_WORKSPACE")
     run_id = os.environ.get("KURA_RUN_ID")
@@ -111,9 +125,7 @@ def video_frame_preflight(entries, config_path):
         required = max(entry["target_frames"])
         source_fps = entry.get("source_fps")
         target_fps = architecture_target_fps if source_fps is not None else None
-        for video in sorted(Path(entry["video_directory"]).iterdir()):
-            if not video.is_file() or video.suffix.lower() not in VIDEO_SUFFIXES:
-                continue
+        for video in entry["videos"]:
             context = contexts.get(str(video), {})
             try:
                 frames = load_video(
@@ -217,6 +229,10 @@ def main():
             video_entries.append({
                 "index": index,
                 "video_directory": video_directory,
+                "videos": sorted(
+                    video for video in Path(video_directory).iterdir()
+                    if video.is_file() and video.suffix.lower() in VIDEO_SUFFIXES
+                ),
                 "target_frames": target_frames,
                 "source_fps": item.get("source_fps"),
             })
@@ -229,9 +245,24 @@ def main():
             summary.append({"index": index, "image_jsonl_file": image_jsonl_file, "rows": count})
             continue
         if isinstance(video_jsonl_file, str) and video_jsonl_file:
-            count = jsonl_count(Path(video_jsonl_file))
+            videos = video_jsonl_paths(Path(video_jsonl_file))
+            count = len(videos)
             if count <= 0:
                 die(f"Musubi dataset entry #{index} has no rows in video_jsonl_file: {video_jsonl_file}")
+            target_frames = item.get("target_frames")
+            if (
+                not isinstance(target_frames, list)
+                or not target_frames
+                or not all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in target_frames)
+            ):
+                die(f"Musubi dataset entry #{index} video_jsonl_file requires positive target_frames")
+            video_entries.append({
+                "index": index,
+                "video_jsonl_file": video_jsonl_file,
+                "videos": videos,
+                "target_frames": target_frames,
+                "source_fps": item.get("source_fps"),
+            })
             summary.append({"index": index, "video_jsonl_file": video_jsonl_file, "rows": count})
             continue
         summary.append({"index": index, "source": "unknown; deferred to Musubi"})

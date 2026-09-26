@@ -80,11 +80,14 @@ MiniMax-H3 `training_adapter` requires a BF16 DiT because upstream must merge
 `base_weights` before any ConvRot quantization. Kura rejects its known
 pre-quantized ConvRot INT8 bundles for this loss method at compile time.
 
-### Typed MiniMax-H3 datasets
+### Manifest-projected MiniMax-H3 datasets
 
-Use `backend.config.h3_dataset_config` for MiniMax-H3 rather than the reviewed
-native `dataset_config` escape hatch. It contains one entry for each run
-`datasets[]` item and uses dataset-relative paths:
+Musubi dataset inputs come from the versioned dataset manifest. Kura selects a
+verified projection profile from the architecture, manifest shape, and mode,
+then emits the native JSONL and `dataset.toml`. Native `dataset_config`,
+`h3_dataset_config`, and `paired_jsonl` authoring paths are not first-class
+inputs and are not fallback paths. One-frame FL2VA timing remains an explicit,
+typed per-dataset option:
 
 ```yaml
 backend:
@@ -94,27 +97,18 @@ backend:
     task: fl2va
     one_frame: true
     video_only: true
-    h3_dataset_config:
-      general:
-        resolution: [1024, 1024]
-        batch_size: 1
-      datasets:
-        - source: image_directory
-          path: targets
-          control_subdir: controls
-          fp_1f_clean_indices: [0]
-          fp_1f_target_index: 24
+    dataset_options:
+      example-dataset:
+        fp_1f_clean_indices: [0]
+        fp_1f_target_index: 24
 ```
 
-The typed contract supports image/video directories and image/video JSONL.
-Kura projects paths into the selected dataset, validates one-frame source and
-task compatibility, checks timed FL2VA controls, validates Ref2VA reference
-records and limits, and rejects paths that escape the dataset. JSONL target,
-control, reference, and explicit audio paths are checked against the workspace
-before launch. Video sources must declare `target_frames` on MiniMax-H3's
-`5+17n` frame grid (for example `[124]`); Kura refuses to fall through to the
-upstream one-frame default. `uv run kura run capabilities musubi-tuner` lists
-the complete authored field surface.
+The current verified H3 profile covers manifest samples with one image target,
+one control, and a caption for one-frame FL2VA. The profile table owns accepted
+shapes and required options; the named codec owns the generated JSONL row.
+Unmatched architecture/shape/mode combinations stop instead of falling back to
+folder inference. `uv run kura run capabilities musubi-tuner` lists the
+complete authored field surface.
 
 Krea 2 exposes `convrot_int8` and `convrot_int8_bwd` (`bf16` or `int8`) as
 typed v0.3.5 memory accommodations. ConvRot cannot be combined with FP8 or the

@@ -46,9 +46,9 @@ does not mean retaining the old directory-selection syntax.
 | AI-Toolkit: grouped manifest flattened once | **B** | Explicit `flatten_groups: true`; consume every row once and record the choice in identity. | New explicit behavior; no inferred repeats. |
 | AI-Toolkit: multiple controls/references or unsupported role/multiplicity | **C** until proven | Name row, role, and unsupported multiplicity in the compile error. | No generic current claim is intentionally removed. If inventory finds one, move it to B before implementation. |
 | AI-Toolkit: custom `command` | **C: retained escape hatch** | Record an unverified native boundary; no manifest-equivalence claim. | Retained, not promoted. |
-| Musubi: ordinary image target plus optional caption, one dataset block | **A**, after C1 | Generate an exact image directory or JSONL over projected entries; cache is run-owned. | Preserve built-in image-family paths. |
-| Musubi: ordinary video target plus caption, one dataset block | **B** | Generate the exact directory/JSONL required by the pinned entrypoint; freeze frame-related choices. Before model acquisition, the pinned Musubi container must measure the effective post-conversion frame count of every selected video and fail with every video below `max(target_frames)` listed. | **Mandatory preservation:** built-in video-family paths are current claims. **Not implemented yet:** the current projection slice is not an implemented/supported path until this container preflight, realization evidence, and plan disclosure are complete. |
-| Musubi: target/control/caption in separate role folders with one logical name | **B**, after C1 | Declare one cross-folder association; generate the required directory form or row references. FLUX.1 Kontext requires exactly one control for every target; a control-free Kontext dataset stops at compile because the pinned cache path dereferences and validates one control per item. Typed `control_resolution` and `no_resize_control` enter semantic identity and native config. One resolution block per selected dataset is supported in this slice; multiple differently sized blocks remain a later C3-enabled multi-view converter item. | **Mandatory preservation:** FLUX.1 Kontext paired/control and MiniMax-H3 one-frame control paths. |
+| Musubi: ordinary image target plus optional caption, one dataset block | **A**, after C1+C2 | Generate image JSONL over projected entries; cache is run-owned. Musubi first-class projection does not retain a directory transport. | Preserve built-in image-family paths. |
+| Musubi: ordinary video target plus caption, one dataset block | **B**, after C2 | Generate video JSONL and freeze frame-related choices. Before model acquisition, the pinned Musubi container parses those verified rows, measures the effective post-conversion frame count of every selected video, and fails with every video below `max(target_frames)` listed. | **Mandatory preservation:** built-in video-family paths are current claims. |
+| Musubi: target/control/caption in separate manifest roles | **B**, after C1+C2 | Generate one JSONL row with explicit target/control references. FLUX.1 Kontext requires exactly one control for every target; a control-free Kontext dataset stops at compile because the pinned cache path dereferences and validates one control per item. Typed `control_resolution` and `no_resize_control` enter semantic identity and native config. One resolution block per selected dataset is supported in this slice; multiple differently sized blocks remain a later C3-enabled multi-view converter item. | **Mandatory preservation:** FLUX.1 Kontext paired/control and MiniMax-H3 one-frame control paths. |
 | Musubi: generated image/video JSONL with target, control, audio, timed control, or ordered references | **B**, after C1+C2 | Report every generated row and path field; core reparses and verifies references; adapter verifies architecture-specific vocabulary and limits. | **Mandatory preservation:** current MiniMax-H3 typed JSONL, timed-control, audio-path, and ordered-reference compile claims. |
 | Musubi: multiple blocks/views from one manifest dataset | **B**, after C3 | Give each block a view ID, exact row coverage, repeats, cache root, and consumer; detect omissions and accidental duplicates globally. | Preserve reviewed multi-block capability; ambiguous duplicates remain errors. |
 | Musubi: group-specific repeats | **B**, after C3 | Typed group-to-repeat mapping; every group maps to a view/block and repeat enters identity. Otherwise require explicit flattening. | Preserve existing authored repeat semantics through migration; infer nothing from paths. |
@@ -101,14 +101,37 @@ These are explicit compatibility changes, not silent capability drops:
 | --- | --- | --- |
 | AI-Toolkit `dataset_config.control_subdir` | Typed per-sample control reference | Existing run files migrate; single-control support remains mandatory. |
 | AI-Toolkit directory-derived video/audio selection | Typed video/audio references plus frozen frame/audio choices | Existing datasets/runs migrate; claimed LTX-2.5 and MiniMax-H3 paths cannot be omitted. |
-| Musubi `dataset_config`, H3 source path/JSONL | Manifest rows plus generated directory/JSONL and typed architecture options | Existing native configs migrate; claimed directory/JSONL/control/reference/audio semantics remain mandatory. |
+| Musubi `dataset_config`, H3 source path/JSONL | Manifest rows plus generated JSONL and typed architecture options | Existing native configs migrate; claimed directory/JSONL/control/reference/audio semantics remain mandatory, but Kura's resulting first-class transport is JSONL only. |
 | Musubi `paired_jsonl` directory scan and modulo selection | Explicit manifest rows and generated JSONL | Hidden directory inference and modulo selection are removed. A future run-subset contract needs a separate owner decision. |
 | sd-scripts `image_subdir`, `caption_subdir`, `conditioning_subdir` | Manifest target/caption/condition references | Existing runs migrate; the training capabilities remain. |
 | sd-scripts `10_concept`-style names and path-selected subsets | Manifest `group` plus explicit group-to-subset/repeat mapping | No folder-name repeat inference; existing concepts receive one-time migration. |
 
+## Musubi projection profiles and codecs
+
+All first-class Musubi projections use generated JSONL. A profile chooses one
+of the named codecs and supplies architecture-specific cardinality and native
+dataset settings; it does not add a model taxonomy to core.
+
+| Profile | Codec | Caption rule | Audio rule |
+|---|---|---|---|
+| `ordinary-image` | `plain-image-jsonl` | Apply Python `str.strip()` explicitly before writing the JSONL caption, matching pinned Musubi directory-caption behavior. Record the profile and `caption_transform: strip` in plan and input identity. | `unsupported`; any selected audio input is unrepresentable. |
+| `flux-kontext-control` | `image-control-jsonl` | Same explicit `strip` rule. | `unsupported`; any selected audio input is unrepresentable. |
+| `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
+| `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
+| Audio-capable MiniMax-H3 video (later codec slice) | Named H3 record codec | Same explicit `strip` rule. | Freeze the choice per row: an authored `audio` reference becomes explicit `audio_path`; embedded audio is selected only when the codec reports that choice and proves no selected same-stem sidecar can take precedence. No implicit sidecar choice. |
+
 Custom-command escape hatches remain unverified. They are not fallback paths
 for an incomplete built-in converter and cannot prove that first-class support
 survived the atomic switch.
+
+The support inventory may temporarily mark a contract as `migration: pending`
+only when its old compile evidence was deleted with `h3_dataset_config` and the
+named H3 codec has not yet restored that path. Such a contract has no current
+compile evidence; stale symbols must be removed rather than reassigned to an
+unrelated test. This state is visible in the generated support table and is not
+a support-completion claim. The current pending set covers Ref2VA, teacher
+matching, audio, timed control, ordered references, and the remaining H3 image
+and video forms recorded in the backend-validation inventory.
 
 ## Open migration decision
 
@@ -132,3 +155,6 @@ The owner approved:
 After approval the order is C1, C2, C3, focused core tests, then backend
 converters. A newly discovered current claim that does not fit an approved row
 stops implementation and returns to this table for an owner decision.
+The atomic manifest handoff is not merge-ready while even one support contract
+is marked `migration: pending`; merge readiness must run
+`uv run python scripts/check_backend_validation.py --require-no-migration-pending`.

@@ -19,6 +19,7 @@ CHANGE_KINDS = {"execution-contract", "enhancement", "outside-contract"}
 DISPOSITIONS = {"support", "unsupported", "not_applicable"}
 ADAPTER_KINDS = {"built-in", "generic", "escape-hatch"}
 EXECUTION_LIST_KEYS = ("entrypoints", "model_roles", "cache_stages")
+MIGRATION_STATUSES = {"pending"}
 
 
 def _markdown_cell(value: object) -> str:
@@ -32,6 +33,9 @@ def _contract_status(contract: dict[str, Any], evidence: dict[str, Any]) -> str:
         return "⛔ unsupported"
     if disposition == "not_applicable":
         return "➖ not applicable"
+    migration = contract.get("migration")
+    if isinstance(migration, dict) and migration.get("status") == "pending":
+        return "🟡 migration pending"
     optimizer = evidence.get("optimizer")
     lifecycle = evidence.get("lifecycle")
     execution = contract.get("execution") if isinstance(contract.get("execution"), dict) else {}
@@ -78,8 +82,10 @@ def render_backend_validation_markdown(plan: dict[str, Any], source: str) -> str
         )
         if contract.get("covered_by"):
             evidence_summary += f"; covered by: {contract['covered_by']}"
+        migration = contract.get("migration") if isinstance(contract.get("migration"), dict) else {}
         explanation = (
-            contract.get("gap")
+            migration.get("note")
+            or contract.get("gap")
             or contract.get("runtime_note")
             or contract.get("missing_capability")
             or contract.get("rationale")
@@ -123,6 +129,21 @@ def _contract_signature(contract: dict[str, Any]) -> tuple[object, ...]:
         tuple(execution.get("cache_stages", [])) if isinstance(execution.get("cache_stages"), list) else None,
         execution.get("output"),
         execution.get("lifecycle_changed"),
+    )
+
+
+def migration_pending_contract_ids(plan: object) -> list[str]:
+    """Return explicitly pending support-contract migrations in stable order."""
+
+    if not isinstance(plan, dict) or not isinstance(plan.get("contracts"), list):
+        return []
+    return sorted(
+        str(contract.get("id"))
+        for contract in plan["contracts"]
+        if isinstance(contract, dict)
+        and isinstance(contract.get("migration"), dict)
+        and contract["migration"].get("status") == "pending"
+        and _nonempty_string(contract.get("id"))
     )
 
 
@@ -273,6 +294,28 @@ def validate_backend_validation_plan(
         if status == "complete" and gap is not None:
             failures.append(f"{label}: a complete upgrade cannot retain a gap")
 
+        migration = contract.get("migration")
+        migration_pending = False
+        if migration is not None:
+            if not isinstance(migration, dict):
+                failures.append(f"{label}.migration must be a mapping when present")
+                migration = {}
+            unknown_migration_keys = sorted(set(migration) - {"status", "note"})
+            if unknown_migration_keys:
+                failures.append(
+                    f"{label}.migration contains unknown key(s): {', '.join(unknown_migration_keys)}"
+                )
+            if migration.get("status") not in MIGRATION_STATUSES:
+                failures.append(
+                    f"{label}.migration.status must be one of {sorted(MIGRATION_STATUSES)}"
+                )
+            else:
+                migration_pending = True
+            if not _nonempty_string(migration.get("note")):
+                failures.append(f"{label}.migration.note must be a non-empty string")
+            if disposition != "support":
+                failures.append(f"{label}: migration pending applies only to support contracts")
+
         if disposition == "support":
             execution = contract.get("execution")
             if not isinstance(execution, dict):
@@ -292,6 +335,8 @@ def validate_backend_validation_plan(
             for level in ("compile", "image"):
                 if not _nonempty_string_list(evidence.get(level)):
                     missing_levels.append(f"{level} evidence")
+            if migration_pending and evidence.get("compile") != []:
+                failures.append(f"{label}: migration-pending compile evidence must be empty")
             covered_by = contract.get("covered_by")
             if (
                 covered_by is None
@@ -301,8 +346,10 @@ def validate_backend_validation_plan(
                 failures.append(f"{label}.runtime_note is required until real optimizer evidence exists")
             if execution.get("lifecycle_changed") is True and not _nonempty_string_list(evidence.get("lifecycle")):
                 missing_levels.append("lifecycle evidence")
-            if missing_levels and not (status == "in_progress" and _nonempty_string(gap)):
-                failures.append(f"{label} missing {', '.join(missing_levels)}")
+            allowed_missing = {"compile evidence"} if migration_pending else set()
+            blocking_missing = [level for level in missing_levels if level not in allowed_missing]
+            if blocking_missing and not (status == "in_progress" and _nonempty_string(gap)):
+                failures.append(f"{label} missing {', '.join(blocking_missing)}")
             compile_refs = evidence.get("compile", [])
             if isinstance(compile_refs, list):
                 for reference in compile_refs:
@@ -401,6 +448,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="regenerate the human-readable Markdown tables after validating their YAML sources",
     )
+    parser.add_argument(
+        "--require-no-migration-pending",
+        action="store_true",
+        help="fail the merge-readiness check while any support contract awaits migration",
+    )
     args = parser.parse_args(argv)
     smoke_payload = yaml.safe_load(SMOKE_PATH.read_text(encoding="utf-8"))
     smoke_records = smoke_payload.get("records", []) if isinstance(smoke_payload, dict) else []
@@ -417,6 +469,13 @@ def main(argv: list[str] | None = None) -> int:
                 source=str(path.relative_to(ROOT)),
             )
         )
+        if args.require_no_migration_pending:
+            pending = migration_pending_contract_ids(payload)
+            if pending:
+                failures.append(
+                    f"{path.relative_to(ROOT)}: merge blocked by migration-pending contract(s): "
+                    + ", ".join(pending)
+                )
         if isinstance(payload, dict):
             rendered = render_backend_validation_markdown(payload, str(path.relative_to(ROOT)))
             rendered_path = path.with_suffix(".md")

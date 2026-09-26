@@ -445,7 +445,9 @@ def _validate_native_jsonl_files(
             row_inputs: list[str] = []
             for reference_index, reference in enumerate(references):
                 reference_context = f"{context} reference {reference_index}"
-                if not isinstance(reference, dict) or reference.get("kind") not in {"path", "caption-text"}:
+                if not isinstance(reference, dict) or reference.get("kind") not in {
+                    "path", "caption-text", "caption-text-strip",
+                }:
                     raise ValueError(f"{reference_context} has an invalid shape")
                 kind = reference["kind"]
                 expected_shape = {"kind", "pointer", "input_id", "path"} if kind == "path" else {
@@ -471,8 +473,12 @@ def _validate_native_jsonl_files(
                     if actual != "/workspace/" + target:
                         raise ValueError(f"{reference_context} value does not resolve to its projected view entry")
                     path_referenced[input_id] += 1
-                elif identity.get("kind") != "caption" or identity.get("text") != actual:
-                    raise ValueError(f"{reference_context} does not preserve its caption input")
+                else:
+                    expected_caption = identity.get("text") if identity.get("kind") == "caption" else None
+                    if kind == "caption-text-strip" and isinstance(expected_caption, str):
+                        expected_caption = expected_caption.strip()
+                    if expected_caption != actual:
+                        raise ValueError(f"{reference_context} does not preserve its caption input")
                 row_inputs.append(input_id)
                 all_referenced[input_id] += 1
                 classified.add(pointer)
@@ -884,6 +890,9 @@ def freeze_dataset_handoff(
         projection_semantic = projected.get("semantic")
         if not isinstance(projection_semantic, dict):
             raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has no stable semantic identity")
+        projection_policy = projected.get("policy")
+        if projection_policy is not None and not isinstance(projection_policy, dict):
+            raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has an invalid projection policy")
         native_runtime = projected.get("native_runtime")
         native = projected.get("native")
         if not isinstance(native_runtime, dict) or not isinstance(native, dict):
@@ -959,6 +968,8 @@ def freeze_dataset_handoff(
             "native_string_fields": projected["native_string_fields"],
             "views": [_view_semantic(view) for view in views_by_dataset[dataset_id]],
         }
+        if projected.get("policy") is not None:
+            stable_item["policy"] = deepcopy(projected["policy"])
         stable_projection.append(stable_item)
     semantic = {
         "schema_version": 1,

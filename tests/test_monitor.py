@@ -831,8 +831,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "    extra_args:",
                         "      - --gradient_accumulation_steps",
                         "      - '2'",
-                        "    dataset_config:",
-                        "      general: {batch_size: 1}",
+                        "    batch_size: 1",
                     ]
                 ),
                 encoding="utf-8",

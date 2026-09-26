@@ -23,6 +23,32 @@ from kura.init_templates import cmd_init
 
 
 class BackendSurfaceContractTests(unittest.TestCase):
+    def _write_musubi_projection(self, run: dict[str, object], resolved: Path) -> None:
+        dataset_id = str(run["datasets"][0]["id"])
+        source = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/source/items.jsonl"
+        cache = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/cache"
+        lock = {
+            "backend": "musubi-tuner",
+            "datasets": [{
+                "id": dataset_id,
+                "native": {
+                    "image_jsonl_file": f"/workspace/{source}",
+                    "cache_directory": f"/workspace/{cache}",
+                    "num_repeats": 1,
+                },
+                "views": [{
+                    "consumers": [{
+                        "kind": "jsonl",
+                        "native_pointer": "/image_jsonl_file",
+                        "native_file": source,
+                    }],
+                    "write_roots": [{"native_pointer": "/cache_directory", "path": cache}],
+                }],
+            }],
+        }
+        resolved.mkdir(parents=True, exist_ok=True)
+        (resolved / "dataset-projection.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for name, adapter in BACKENDS.items():
@@ -222,24 +248,16 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, rf"{expected}.*not applicable"):
                     validate_backend_config(run)
 
-    def test_musubi_capabilities_expose_typed_minimax_h3_dataset_contract(self) -> None:
+    def test_musubi_capabilities_expose_manifest_projection_options_only(self) -> None:
         capabilities = backend_capabilities("musubi-tuner")
 
+        self.assertNotIn("dataset_config", capabilities["config_fields"])
+        self.assertNotIn("dataset_config", capabilities["escape_hatches"])
+        self.assertNotIn("h3_dataset_config", capabilities["config_fields"])
+        self.assertNotIn("h3_dataset_config", capabilities["conditional_fields"])
         self.assertEqual(
-            capabilities["conditional_fields"]["h3_dataset_config"]["when_any"],
-            [{"architecture": ["minimax_h3", "minimaxh3"]}],
-        )
-        self.assertEqual(
-            capabilities["nested_config_fields"]["h3_dataset_config.datasets[]"]["source"]["type"],
-            "enum:image_directory|image_jsonl|video_directory|video_jsonl",
-        )
-        self.assertEqual(
-            capabilities["nested_config_fields"]["h3_dataset_config.datasets[]"]["fp_1f_target_index"]["minimum"],
+            capabilities["nested_config_fields"]["dataset_options.<dataset-id>"]["fp_1f_target_index"]["minimum"],
             0,
-        )
-        self.assertEqual(
-            capabilities["nested_config_fields"]["h3_dataset_config.general"]["batch_size"],
-            {"type": "integer", "minimum": 1, "maximum": 1},
         )
 
     def test_musubi_video_dataset_options_are_discoverable(self) -> None:
@@ -722,11 +740,6 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicates backend.config.extra_args"):
                 BACKENDS["musubi-tuner"].compile(run, root / "h2d", root, False)
 
-            run = json.loads(json.dumps(base))
-            run["backend"]["config"].update({"batch_size": 1, "dataset_config": {"general": {"batch_size": 2}}})
-            with self.assertRaisesRegex(ValueError, "duplicates backend.config.dataset_config.general.batch_size"):
-                BACKENDS["musubi-tuner"].compile(run, root / "dataset", root, False)
-
     def test_declared_ordinary_values_reach_each_adapter_artifact(self) -> None:
         runs = {
             "ai-toolkit": {
@@ -754,6 +767,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
             (images / "1.txt").write_text("caption\n", encoding="utf-8")
             for name, run in runs.items():
                 with self.subTest(backend=name):
+                    if name == "musubi-tuner":
+                        self._write_musubi_projection(run, root / name)
                     spec = BACKENDS[name].compile(run, root / name, root, False)
                     if name == "ai-toolkit":
                         compiled = yaml.safe_load((root / "ai-toolkit" / "ai-toolkit.yaml").read_text(encoding="utf-8"))

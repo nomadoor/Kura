@@ -369,6 +369,38 @@ class DatasetHandoffTests(unittest.TestCase):
                     run, workspace, resolved, backend="ai-toolkit", project=changed_caption,
                 )
 
+    def test_generated_jsonl_strip_caption_reference_allows_only_the_declared_transform(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            (workspace / "datasets" / "tiny" / "a.txt").write_text("  caption\n", encoding="utf-8")
+
+            def stripped_caption(selection: dict) -> dict:
+                projection = self.inline_caption_jsonl_projection(selection)
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
+                row = json.loads(native["text"])
+                row["caption"] = row["caption"].strip()
+                native["text"] = json.dumps(row) + "\n"
+                native["rows"][0]["references"][1]["kind"] = "caption-text-strip"
+                return projection
+
+            freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=stripped_caption,
+            )
+
+            def changed_after_strip(selection: dict) -> dict:
+                projection = stripped_caption(selection)
+                native = projection["datasets"][0]["views"][0]["native_files"][0]
+                row = json.loads(native["text"])
+                row["caption"] = "different"
+                native["text"] = json.dumps(row) + "\n"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "does not preserve its caption input"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=changed_after_strip,
+                )
+
     def test_generated_jsonl_identity_is_stable_across_run_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -1520,7 +1552,7 @@ class DatasetHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
-            run["backend"] = {"name": "musubi-tuner", "config": {}}
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
 
             lock = freeze_dataset_handoff(
                 run,
@@ -1540,18 +1572,138 @@ class DatasetHandoffTests(unittest.TestCase):
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
             projected = report["datasets"][0]
             view = lock["views"][0]
-            image_directory = Path(projected["native"]["image_directory"])
+            image_jsonl = Path(projected["native"]["image_jsonl_file"])
             cache_directory = Path(projected["native"]["cache_directory"])
-            self.assertEqual(image_directory.parent, cache_directory.parent)
-            self.assertNotEqual(image_directory, cache_directory)
-            self.assertFalse(image_directory.is_relative_to(cache_directory))
-            self.assertFalse(cache_directory.is_relative_to(image_directory))
-            self.assertEqual(view["consumers"][0]["native_pointer"], "/image_directory")
+            self.assertEqual(image_jsonl.parent.parent, cache_directory.parent)
+            self.assertNotEqual(image_jsonl.parent, cache_directory)
+            self.assertEqual(view["consumers"][0]["native_pointer"], "/image_jsonl_file")
+            self.assertEqual(view["consumers"][0]["kind"], "jsonl")
             self.assertEqual(view["write_roots"][0]["native_pointer"], "/cache_directory")
-            self.assertEqual(projected["native"]["caption_extension"], ".txt")
-            self.assertEqual(projected["native_string_fields"], ["/caption_extension"])
+            self.assertNotIn("caption_extension", projected["native"])
+            self.assertEqual(projected["policy"]["profile"], "ordinary-image")
+            self.assertEqual(projected["policy"]["codec"], "plain-image-jsonl")
+            self.assertEqual(projected["policy"]["caption_transform"], "strip")
+            self.assertEqual(projected["policy"]["audio_selection"], "unsupported")
+            self.assertEqual(lock["semantic"]["projection"][0]["policy"], projected["policy"])
+            generated = json.loads(view["native_files"][0]["text"])
+            self.assertEqual(generated["caption"], "caption")
             parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
             self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_profile_table_rejects_an_unlisted_ordinary_image_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "flux2",
+                "one_frame": True,
+            }}
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*flux2.*shape='image'.*one_frame.*True",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_profile_mismatch_names_minority_shape_sample_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "b.png").write_bytes(b"second image")
+            (dataset / "b.txt").write_text("second caption\n", encoding="utf-8")
+            (dataset / "minority.mp4").write_bytes(b"video")
+            (dataset / "minority.txt").write_text("video caption\n", encoding="utf-8")
+            rows = [
+                {
+                    "id": name,
+                    "files": [{"type": "file", "role": "target", "path": path}],
+                    "caption": {"file": {"type": "file", "path": caption}},
+                }
+                for name, path, caption in (
+                    ("a", "a.png", "a.txt"),
+                    ("b", "b.png", "b.txt"),
+                    ("minority-video", "minority.mp4", "minority.txt"),
+                )
+            ]
+            (dataset / "items.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+            )
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*minority sample IDs.*minority-video",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_dataset_toml_accepts_only_a_verified_jsonl_consumer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            projection_path = resolved / "dataset-projection.lock.json"
+            projection = json.loads(projection_path.read_text(encoding="utf-8"))
+            dataset = projection["datasets"][0]
+            dataset["native"].pop("image_jsonl_file")
+            dataset["native"]["image_directory"] = "/workspace/datasets/tiny"
+            consumer = dataset["views"][0]["consumers"][0]
+            consumer.update({"kind": "directory", "native_pointer": "/image_directory"})
+            projection_path.write_text(json.dumps(projection), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "bypasses its verified source"):
+                _write_musubi_dataset_config(
+                    run,
+                    resolved / "musubi" / "dataset.toml",
+                    workspace=workspace,
+                    strict=True,
+                )
+
+    def test_musubi_caption_strip_is_visible_and_manifest_text_remains_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first_run, first_resolved = self.make_run(workspace)
+            first_run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
+            caption = workspace / "datasets" / "tiny" / "a.txt"
+            caption.write_text("  caption\r\n", encoding="utf-8", newline="")
+            first = freeze_dataset_handoff(
+                first_run, workspace, first_resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(first_run, selection),
+            )
+            first_row = json.loads(first["views"][0]["native_files"][0]["text"])
+            self.assertEqual(first_row["caption"], "caption")
+            self.assertEqual(first["semantic"]["projection"][0]["policy"]["caption_transform"], "strip")
+
+            caption.write_text("caption\n", encoding="utf-8")
+            second_run = deepcopy(first_run)
+            second_run["id"] = "caption-without-padding"
+            second_resolved = workspace / "runs" / second_run["id"] / "resolved"
+            second = freeze_dataset_handoff(
+                second_run, workspace, second_resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(second_run, selection),
+            )
+            second_row = json.loads(second["views"][0]["native_files"][0]["text"])
+            self.assertEqual(second_row["caption"], "caption")
+            self.assertNotEqual(first["input_sha256"], second["input_sha256"])
 
     def test_musubi_projects_flux_kontext_control_to_a_separate_bound_view(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1584,18 +1736,16 @@ class DatasetHandoffTests(unittest.TestCase):
             projected = report["datasets"][0]
             native = projected["native"]
             view = lock["views"][0]
-            self.assertEqual(native["image_directory"], "/workspace/" + view["root"] + "/images")
-            self.assertEqual(native["control_directory"], "/workspace/" + view["root"] + "/controls")
-            self.assertEqual(
-                {item["native_pointer"] for item in view["consumers"]},
-                {"/image_directory", "/control_directory"},
-            )
+            self.assertEqual(native["image_jsonl_file"], "/workspace/" + view["native_files"][0]["path"])
+            self.assertEqual({item["native_pointer"] for item in view["consumers"]}, {"/image_jsonl_file"})
             image_link = next(item for item in view["links"] if "/images/" in item["path"])
             control_link = next(item for item in view["links"] if "/controls/" in item["path"])
-            caption_file = view["files"][0]
-            self.assertEqual(Path(image_link["path"]).stem, Path(control_link["path"]).stem)
-            self.assertEqual(Path(image_link["path"]).stem, Path(caption_file["path"]).stem)
-            self.assertEqual(len(view["bindings"][0]["members"]), 3)
+            generated = json.loads(view["native_files"][0]["text"])
+            self.assertEqual(generated["image_path"], "/workspace/" + image_link["path"])
+            self.assertEqual(generated["control_path"], "/workspace/" + control_link["path"])
+            self.assertEqual(projected["policy"]["codec"], "image-control-jsonl")
+            self.assertEqual(projected["policy"]["profile"], "flux-kontext-control")
+            self.assertNotIn("bindings", view)
             parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
             self.assertEqual(parsed["datasets"], [native])
 
@@ -1610,7 +1760,10 @@ class DatasetHandoffTests(unittest.TestCase):
             row["files"].append({"type": "file", "role": "control", "path": "control.png"})
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*control.*flux_kontext"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*qwen_image.*image-control",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1679,7 +1832,10 @@ class DatasetHandoffTests(unittest.TestCase):
             ])
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*at most one verified control"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*flux1_kontext.*image-controls-2",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1709,7 +1865,10 @@ class DatasetHandoffTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "sample 'b'.*exactly one control for every target"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*flux_kontext.*mixed:image,image-control",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1724,7 +1883,10 @@ class DatasetHandoffTests(unittest.TestCase):
             run, resolved = self.make_run(workspace)
             run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux_kontext"}}
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*Kontext.*exactly one control"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*flux_kontext.*shape='image'",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1872,7 +2034,11 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["semantic"]["fp_1f_clean_indices"], [0])
             self.assertEqual(projected["semantic"]["fp_1f_target_index"], 24)
             self.assertEqual(projected["native"]["image_jsonl_file"], "/workspace/" + native_file["path"])
-            self.assertEqual(row_value["caption"], "caption\n")
+            self.assertEqual(row_value["caption"], "caption")
+            self.assertEqual(projected["policy"]["profile"], "h3-one-frame-fl2va")
+            self.assertEqual(projected["policy"]["codec"], "h3-one-frame-control-jsonl")
+            self.assertEqual(projected["policy"]["caption_transform"], "strip")
+            self.assertEqual(projected["policy"]["audio_selection"], "unsupported")
             self.assertIn("image_path", row_value)
             self.assertIn("control_path", row_value)
             self.assertEqual(view["consumers"][0]["kind"], "jsonl")
@@ -1920,7 +2086,10 @@ class DatasetHandoffTests(unittest.TestCase):
             row["files"].append({"type": "file", "role": "control", "path": "source.png"})
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*fp_1f_clean_indices.*fp_1f_target_index"):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"profile h3-one-frame-fl2va requires dataset option\(s\).*fp_1f_clean_indices.*fp_1f_target_index",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1973,7 +2142,10 @@ class DatasetHandoffTests(unittest.TestCase):
             row["files"].append({"type": "file", "role": "control", "path": "source.png"})
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "MiniMax-H3 controls do not support control_resolution"):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"profile h3-one-frame-fl2va does not accept dataset option\(s\): control_resolution",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1995,7 +2167,10 @@ class DatasetHandoffTests(unittest.TestCase):
                 },
             }}
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*requires one target and one control"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*minimax_h3.*shape='image'.*effective_task.*fl2va",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -2015,7 +2190,10 @@ class DatasetHandoffTests(unittest.TestCase):
                 "dataset_options": {"tiny": {"fp_1f_target_index": 24}},
             }}
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*currently projected only.*task=fl2va"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*minimax_h3.*effective_task.*t2va",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -2036,7 +2214,10 @@ class DatasetHandoffTests(unittest.TestCase):
             row["files"][0]["path"] = "a.mp4"
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "initial Musubi video projection supports only Wan"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no verified Musubi projection profile matches.*flux2.*shape='video'",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -2053,7 +2234,7 @@ class DatasetHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
-            run["backend"] = {"name": "musubi-tuner", "config": {}}
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
             dataset = workspace / "datasets" / "tiny"
             row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
             row["caption"] = None
@@ -2105,8 +2286,12 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(native["target_frames"], [1, 25])
             self.assertEqual(native["frame_extraction"], "head")
             self.assertEqual(native["source_fps"], 16.0)
-            self.assertIn("/video_directory", lock["views"][0]["consumers"][0]["native_pointer"])
+            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/video_jsonl_file")
             self.assertTrue(lock["views"][0]["links"][0]["path"].endswith(".mp4"))
+            self.assertEqual(report["datasets"][0]["policy"]["codec"], "plain-video-jsonl")
+            self.assertEqual(report["datasets"][0]["policy"]["profile"], "wan-video")
+            self.assertEqual(report["datasets"][0]["policy"]["caption_transform"], "strip")
+            self.assertEqual(report["datasets"][0]["policy"]["audio_selection"], "unsupported")
             parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
             self.assertEqual(parsed["datasets"], [native])
 
@@ -2133,7 +2318,35 @@ class DatasetHandoffTests(unittest.TestCase):
                 project=lambda selection: project_musubi_dataset(run, selection),
             )
 
-            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/video_directory")
+            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/video_jsonl_file")
+
+    def test_musubi_wan_frame_settings_change_input_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "wan",
+                "dataset_options": {"tiny": {"target_frames": [25]}},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+            first = freeze_dataset_handoff(
+                run, workspace, resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            changed = deepcopy(run)
+            changed["id"] = "wan-49-frames"
+            changed["backend"]["config"]["dataset_options"]["tiny"]["target_frames"] = [49]
+            second = freeze_dataset_handoff(
+                changed, workspace, workspace / "runs" / changed["id"] / "resolved",
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(changed, selection),
+            )
+            self.assertNotEqual(first["input_sha256"], second["input_sha256"])
 
     def test_musubi_video_projection_requires_explicit_frame_options(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2147,7 +2360,10 @@ class DatasetHandoffTests(unittest.TestCase):
             row["files"][0]["path"] = "a.mp4"
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*dataset_options.*target_frames"):
+            with self.assertRaisesRegex(
+                ValueError,
+                r"profile wan-video requires dataset option\(s\): target_frames",
+            ):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -2192,11 +2408,7 @@ class DatasetHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, _resolved = self.make_run(workspace)
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "dataset_config": {"datasets": [{
-                    "image_directory": "/workspace/datasets/tiny/missing",
-                }]},
-            }}
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
 
             records = _dataset_layout_preflight_report(run, workspace)
 
@@ -2214,7 +2426,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 "datasets": [{
                     "id": "clips",
                     "native": {
-                        "video_directory": "/workspace/runs/example/cache/dataset-view/musubi/clips",
+                        "video_jsonl_file": "/workspace/runs/example/cache/dataset-view/musubi/clips/native/items.jsonl",
                         "target_frames": [1, 25, 49],
                     },
                 }],
@@ -2235,6 +2447,13 @@ class DatasetHandoffTests(unittest.TestCase):
                     "views": [],
                     "changes": [],
                     "runtime_checks": checks,
+                    "projection_rules": [{
+                        "dataset": "clips",
+                        "profile": "wan-video",
+                        "codec": "plain-video-jsonl",
+                        "caption_transform": "strip",
+                        "audio_selection": "unsupported",
+                    }],
                 },
                 "write_roots": [],
                 "recipe": {},
@@ -2252,6 +2471,10 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(checks[0]["required_frames"], 49)
             self.assertIn("immediately after container launch, before model acquisition", output)
             self.assertIn("host_verification unavailable", output)
+            self.assertIn("codec        plain-video-jsonl", output)
+            self.assertIn("caption_transform strip", output)
+            self.assertIn("audio_selection unsupported", output)
+            self.assertIn("profile      wan-video", output)
 
     def test_input_identity_is_stable_across_run_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
