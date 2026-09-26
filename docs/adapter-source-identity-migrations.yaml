@@ -18,7 +18,10 @@ records:
       current sd-scripts staging path and therefore does not change that
       observation's native TOML, staged files, command, or training behavior.
       Its subsequent binding-key, sample, and role-root uniqueness checks are
-      likewise outside that staging path.
+      likewise outside that staging path. The generated-JSONL verifier is
+      opt-in through a projection report field that the current sd-scripts
+      staging path does not emit, so this increment also leaves the recorded
+      native TOML, staged files, command, and training behavior unchanged.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
@@ -29,7 +32,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 09de2a164b13ea64ab1f8715106b5a10a19f0d21bcca1a83431c0a8dcaee8406
+      value: 605401e0a5c27408d3a9c5bf0a11927ceb8c9736edf8b5f02c8eb05aafcdd33a
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -47,6 +50,9 @@ records:
       remain unchanged. Requiring one unique binding key per sample and one
       role root per input kind only rejects ambiguous reports; the recorded
       one-image, one-caption projection already satisfies those invariants.
+      The generated-JSONL verifier is not exercised when the projection has
+      no native JSONL files, so it does not change this recorded image-caption
+      view, native configuration, command, or training behavior.
       This migration applies only to that evidence, not to unregistered or
       custom-image selectors.
     behavior_changed: false
@@ -59,7 +65,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 778b1886caaecceaf89b275d73b5ece96ab34cdfee75e156fa37145496de96ed
+      value: 1562076a4e5b016b4464217a88e769cc936772559c30897b0a29400d96e5ab47
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

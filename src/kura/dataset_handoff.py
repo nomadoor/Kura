@@ -21,6 +21,9 @@ _TRAINER_MEDIA_SUFFIXES = frozenset({
     ".avif", ".avi", ".bmp", ".flac", ".gif", ".jpeg", ".jpg", ".m4v", ".mkv",
     ".mov", ".mp3", ".mp4", ".ogg", ".png", ".wav", ".webm", ".webp",
 })
+_PATH_LIKE_SUFFIXES = _TRAINER_MEDIA_SUFFIXES | frozenset({
+    ".csv", ".json", ".jsonl", ".toml", ".txt", ".yaml", ".yml",
+})
 
 
 def _digest(value: Any) -> str:
@@ -207,8 +210,301 @@ def _validate_bindings(
         raise ValueError(f"projection bindings do not cover the exact dataset {dataset_id!r} view inputs")
 
 
+def _pointer_escape(value: str) -> str:
+    return value.replace("~", "~0").replace("/", "~1")
+
+
+def _pointer_tokens(pointer: Any, *, context: str) -> list[str]:
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise ValueError(f"{context} must be a non-root JSON Pointer")
+    tokens: list[str] = []
+    for raw in pointer[1:].split("/"):
+        index = 0
+        while index < len(raw):
+            if raw[index] == "~" and (index + 1 >= len(raw) or raw[index + 1] not in {"0", "1"}):
+                raise ValueError(f"{context} has an invalid JSON Pointer escape")
+            index += 2 if raw[index] == "~" else 1
+        tokens.append(raw.replace("~1", "/").replace("~0", "~"))
+    return tokens
+
+
+def _pointer_value(value: Any, pointer: Any, *, context: str) -> Any:
+    current = value
+    for token in _pointer_tokens(pointer, context=context):
+        if isinstance(current, dict) and token in current:
+            current = current[token]
+        elif isinstance(current, list) and token.isdecimal() and int(token) < len(current):
+            current = current[int(token)]
+        else:
+            raise ValueError(f"{context} does not exist in the generated row")
+    return current
+
+
+def _pointer_replace(value: Any, pointer: Any, replacement: Any, *, context: str) -> None:
+    tokens = _pointer_tokens(pointer, context=context)
+    current = value
+    for token in tokens[:-1]:
+        if isinstance(current, dict) and token in current:
+            current = current[token]
+        elif isinstance(current, list) and token.isdecimal() and int(token) < len(current):
+            current = current[int(token)]
+        else:
+            raise ValueError(f"{context} does not exist in the generated row")
+    leaf = tokens[-1]
+    if isinstance(current, dict) and leaf in current:
+        current[leaf] = replacement
+    elif isinstance(current, list) and leaf.isdecimal() and int(leaf) < len(current):
+        current[int(leaf)] = replacement
+    else:
+        raise ValueError(f"{context} does not exist in the generated row")
+
+
+def _string_leaf_pointers(value: Any, pointer: str = "") -> set[str]:
+    if isinstance(value, str):
+        return {pointer}
+    if isinstance(value, dict):
+        found: set[str] = set()
+        for key, child in value.items():
+            found.update(_string_leaf_pointers(child, pointer + "/" + _pointer_escape(str(key))))
+        return found
+    if isinstance(value, list):
+        found = set()
+        for index, child in enumerate(value):
+            found.update(_string_leaf_pointers(child, pointer + f"/{index}"))
+        return found
+    return set()
+
+
+def _looks_like_path(value: str) -> bool:
+    return (
+        "/" in value
+        or "\\" in value
+        or value.startswith((".", "~"))
+        or PurePosixPath(value).suffix.lower() in _PATH_LIKE_SUFFIXES
+    )
+
+
+def _jsonl_rows(text: str, *, context: str) -> list[str]:
+    """Split JSONL only at LF row separators, never at Unicode line characters."""
+    if "\r" in text:
+        raise ValueError(f"{context} must use LF row separators")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if any(not line.strip() for line in lines):
+        raise ValueError(f"{context} contains a blank row")
+    return lines
+
+
+def _validate_native_jsonl_files(
+    dataset: dict[str, Any],
+    root: str,
+    native_files: Any,
+    placements: dict[str, str],
+    input_index: dict[str, dict[str, Any]],
+    seen_paths: set[str],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    if native_files is None:
+        return [], set()
+    if not isinstance(native_files, list):
+        raise ValueError(f"backend projection for dataset {dataset['id']!r} native files must be a list")
+    sample_ids = {item["id"] for item in dataset["samples"]}
+    inputs_by_sample = {
+        sample["id"]: [
+            *[reference["input_id"] for reference in sample["files"]],
+            *([sample["caption"]["input_id"]] if sample["caption"] is not None else []),
+        ]
+        for sample in dataset["samples"]
+    }
+    row_ids: set[str] = set()
+    rows_by_sample: dict[str, list[Any]] = {sample_id: [] for sample_id in sample_ids}
+    all_referenced: Counter[str] = Counter()
+    path_referenced: Counter[str] = Counter()
+    verified: list[dict[str, Any]] = []
+    for file_index, native in enumerate(native_files):
+        if (
+            not isinstance(native, dict)
+            or set(native) != {"path", "text", "format", "literal_string_fields", "rows"}
+        ):
+            raise ValueError(f"projection native file {file_index} has an invalid shape")
+        path = _safe_workspace_relative(native.get("path"), context=f"projection native file {file_index}")
+        text = native.get("text")
+        rows = native.get("rows")
+        literal_fields = native.get("literal_string_fields")
+        if not path.startswith(root + "/") or path in seen_paths or not isinstance(text, str):
+            raise ValueError(f"projection native file {path!r} is outside its view, duplicated, or non-text")
+        if (
+            native.get("format") != "jsonl"
+            or not isinstance(rows, list)
+            or not isinstance(literal_fields, list)
+            or not all(isinstance(pointer, str) for pointer in literal_fields)
+            or len(set(literal_fields)) != len(literal_fields)
+        ):
+            raise ValueError(f"projection native file {path!r} must declare JSONL rows")
+        for pointer in literal_fields:
+            _pointer_tokens(pointer, context=f"projection native JSONL {path!r} literal field")
+        lines = _jsonl_rows(text, context=f"projection native JSONL {path!r}")
+        try:
+            parsed_rows = [json.loads(line) for line in lines]
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"projection native JSONL {path!r} is invalid on line {exc.lineno}") from exc
+        if len(parsed_rows) != len(rows):
+            raise ValueError(f"projection native JSONL {path!r} row count differs from its report")
+        for row_index, (parsed, reported) in enumerate(zip(parsed_rows, rows, strict=True)):
+            context = f"projection native JSONL {path!r} row {row_index}"
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{context} must be a JSON object")
+            if (
+                not isinstance(reported, dict)
+                or set(reported) != {"row_id", "sample_id", "repeat", "references", "literal_strings"}
+            ):
+                raise ValueError(f"{context} report has an invalid shape")
+            row_id, sample_id = reported.get("row_id"), reported.get("sample_id")
+            if not isinstance(row_id, str) or not row_id or row_id in row_ids:
+                raise ValueError(f"{context} has a missing or duplicate row identity")
+            row_ids.add(row_id)
+            if not isinstance(sample_id, str) or sample_id not in sample_ids:
+                raise ValueError(f"{context} names an unknown sample {sample_id!r}")
+            repeat = reported.get("repeat")
+            if repeat is not None and (
+                not isinstance(repeat, dict)
+                or set(repeat) != {"index", "count"}
+                or not isinstance(repeat.get("index"), int)
+                or isinstance(repeat.get("index"), bool)
+                or not isinstance(repeat.get("count"), int)
+                or isinstance(repeat.get("count"), bool)
+                or repeat["index"] < 0
+                or repeat["count"] < 1
+            ):
+                raise ValueError(f"{context} has an invalid repeat declaration")
+            rows_by_sample[sample_id].append(repeat)
+            references, literals = reported.get("references"), reported.get("literal_strings")
+            if not isinstance(references, list) or not references or not isinstance(literals, list):
+                raise ValueError(f"{context} must report references and literal strings")
+            classified: set[str] = set()
+            row_inputs: list[str] = []
+            for reference_index, reference in enumerate(references):
+                reference_context = f"{context} reference {reference_index}"
+                if not isinstance(reference, dict) or reference.get("kind") not in {"path", "caption-text"}:
+                    raise ValueError(f"{reference_context} has an invalid shape")
+                kind = reference["kind"]
+                expected_shape = {"kind", "pointer", "input_id", "path"} if kind == "path" else {
+                    "kind", "pointer", "input_id",
+                }
+                if set(reference) != expected_shape:
+                    raise ValueError(f"{reference_context} has an invalid shape")
+                pointer, input_id = reference.get("pointer"), reference.get("input_id")
+                if not isinstance(pointer, str) or pointer in classified:
+                    raise ValueError(f"{reference_context} has a missing or duplicate pointer")
+                identity = input_index.get(input_id) if isinstance(input_id, str) else None
+                if (
+                    not isinstance(identity, dict)
+                    or identity.get("dataset") != dataset["id"]
+                    or identity.get("sample") != sample_id
+                ):
+                    raise ValueError(f"{reference_context} does not match its manifest sample input")
+                actual = _pointer_value(parsed, pointer, context=reference_context + " pointer")
+                if kind == "path":
+                    target = _safe_workspace_relative(reference.get("path"), context=reference_context + " path")
+                    if placements.get(input_id) != target:
+                        raise ValueError(f"{reference_context} does not match its projected view entry")
+                    if actual != "/workspace/" + target:
+                        raise ValueError(f"{reference_context} value does not resolve to its projected view entry")
+                    path_referenced[input_id] += 1
+                elif identity.get("kind") != "caption" or identity.get("text") != actual:
+                    raise ValueError(f"{reference_context} does not preserve its caption input")
+                row_inputs.append(input_id)
+                all_referenced[input_id] += 1
+                classified.add(pointer)
+            if Counter(row_inputs) != Counter(inputs_by_sample[sample_id]):
+                raise ValueError(f"{context} does not include every sample input exactly once")
+            for literal_index, literal in enumerate(literals):
+                literal_context = f"{context} literal string {literal_index}"
+                if not isinstance(literal, dict) or set(literal) != {"pointer", "value"}:
+                    raise ValueError(f"{literal_context} has an invalid shape")
+                pointer, expected = literal.get("pointer"), literal.get("value")
+                if not isinstance(pointer, str) or pointer in classified or not isinstance(expected, str):
+                    raise ValueError(f"{literal_context} has an invalid or duplicate pointer")
+                actual = _pointer_value(parsed, pointer, context=literal_context + " pointer")
+                if actual != expected:
+                    raise ValueError(f"{literal_context} differs from the generated row")
+                if pointer not in literal_fields:
+                    raise ValueError(f"{literal_context} literal field is not declared by the adapter")
+                if _looks_like_path(actual):
+                    raise ValueError(f"{literal_context} classifies a path-like value as a literal")
+                classified.add(pointer)
+            missing_literals = sorted(set(literal_fields) - {item.get("pointer") for item in literals})
+            if missing_literals:
+                raise ValueError(f"{context} omits declared literal field {missing_literals[0]!r}")
+            unclassified = sorted(_string_leaf_pointers(parsed) - classified)
+            if unclassified:
+                raise ValueError(f"{context} has an unclassified string field {unclassified[0]!r}")
+            extra = sorted(classified - _string_leaf_pointers(parsed))
+            if extra:
+                raise ValueError(f"{context} reports a non-string field {extra[0]!r}")
+        seen_paths.add(path)
+        verified.append(deepcopy(native))
+    missing_samples = sorted(sample_id for sample_id, repeats in rows_by_sample.items() if not repeats)
+    if missing_samples:
+        raise ValueError(f"projection native JSONL has no row for sample {missing_samples[0]!r}")
+    for sample_id, repeats in rows_by_sample.items():
+        if len(repeats) == 1:
+            if repeats[0] not in (None, {"index": 0, "count": 1}):
+                raise ValueError(f"sample {sample_id!r} repeat declaration is incomplete")
+            continue
+        if any(repeat is None for repeat in repeats):
+            raise ValueError(f"sample {sample_id!r} repeat must be declared for every generated row")
+        counts = {repeat["count"] for repeat in repeats}
+        indices = {repeat["index"] for repeat in repeats}
+        if counts != {len(repeats)} or indices != set(range(len(repeats))):
+            raise ValueError(f"sample {sample_id!r} repeat declaration is incomplete")
+    expected_path_counts = Counter({
+        input_id: len(rows_by_sample[identity["sample"]])
+        for input_id, identity in input_index.items()
+        if input_id in placements and identity.get("dataset") == dataset["id"]
+    })
+    if path_referenced != expected_path_counts:
+        raise ValueError(f"projection native JSONL does not reference every view input exactly once per row")
+    return verified, set(all_referenced)
+
+
+def _native_jsonl_semantic(view: dict[str, Any]) -> list[dict[str, Any]]:
+    root = PurePosixPath(view["root"])
+    semantic: list[dict[str, Any]] = []
+    for native in view.get("native_files", []):
+        lines = _jsonl_rows(native["text"], context=f"projection native JSONL {native['path']!r}")
+        parsed_rows = [json.loads(line) for line in lines]
+        stable_rows: list[dict[str, Any]] = []
+        for parsed, reported in zip(parsed_rows, native["rows"], strict=True):
+            canonical = deepcopy(parsed)
+            for reference in reported["references"]:
+                replacement = {"$kura_input_id": reference["input_id"], "$kura_kind": reference["kind"]}
+                if reference["kind"] == "path":
+                    replacement["$kura_view_path"] = (
+                        PurePosixPath(reference["path"]).relative_to(root).as_posix()
+                    )
+                _pointer_replace(
+                    canonical,
+                    reference["pointer"],
+                    replacement,
+                    context=f"native JSONL row {reported['row_id']!r} reference",
+                )
+            stable_rows.append({
+                "row_id": reported["row_id"],
+                "sample_id": reported["sample_id"],
+                "repeat": reported["repeat"],
+                "value": canonical,
+            })
+        semantic.append({
+            "path": PurePosixPath(native["path"]).relative_to(root).as_posix(),
+            "format": native["format"],
+            "rows": stable_rows,
+        })
+    return semantic
+
+
 def _validate_view(run_id: str, dataset: dict[str, Any], projected: dict[str, Any],
-                   input_index: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, str]]:
+                   input_index: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[str, str], set[str]]:
     view = projected.get("view")
     if not isinstance(view, dict):
         raise ValueError(f"backend projection for dataset {dataset['id']!r} has no run view")
@@ -257,7 +553,13 @@ def _validate_view(run_id: str, dataset: dict[str, Any], projected: dict[str, An
         placements[input_id] = path
         files.append({"path": path, "text": text, "input_id": input_id})
     _validate_bindings(dataset["id"], root, projected.get("bindings"), placements, input_index)
-    return {"dataset": dataset["id"], "root": root, "links": links, "files": files}, placements
+    native_files, native_inputs = _validate_native_jsonl_files(
+        dataset, root, view.get("native_files"), placements, input_index, seen_paths,
+    )
+    return {
+        "dataset": dataset["id"], "root": root, "links": links, "files": files,
+        "native_files": native_files,
+    }, placements, native_inputs or set(placements)
 
 
 def freeze_dataset_handoff(
@@ -282,6 +584,7 @@ def freeze_dataset_handoff(
         raise ValueError(f"{backend} projection dataset selection differs from run datasets")
     consumed: list[str] = []
     views: list[dict[str, Any]] = []
+    views_by_dataset: dict[str, dict[str, Any]] = {}
     for dataset in selection["datasets"]:
         projected = by_id[dataset["id"]]
         failures = projected.get("unrepresentable", [])
@@ -295,12 +598,13 @@ def freeze_dataset_handoff(
         if not isinstance(dataset_consumed, list) or not all(isinstance(item, str) for item in dataset_consumed):
             raise ValueError(f"{backend} projection consumed inputs must be a list of IDs")
         consumed.extend(dataset_consumed)
-        view, placements = _validate_view(str(run.get("id")), dataset, projected, input_index)
-        if Counter(dataset_consumed) != Counter(placements.keys()):
+        view, placements, represented = _validate_view(str(run.get("id")), dataset, projected, input_index)
+        if Counter(dataset_consumed) != Counter(represented):
             raise ValueError(
-                f"{backend} projection consumed inputs differ from materialized view inputs for dataset {dataset['id']!r}"
+                f"{backend} projection consumed inputs differ from verified native inputs for dataset {dataset['id']!r}"
             )
         views.append(view)
+        views_by_dataset[dataset["id"]] = view
     duplicates = sorted(item for item, count in Counter(consumed).items() if count > 1)
     unknown = sorted(set(consumed) - set(input_index))
     missing = sorted(set(input_index) - set(consumed))
@@ -336,7 +640,12 @@ def freeze_dataset_handoff(
                 f"{backend} projection for dataset {dataset_id!r} native handoff must be derived "
                 "exactly from semantic and runtime-only fields"
             )
-        stable_projection.append({"id": dataset_id, "semantic": projection_semantic})
+        stable_item: dict[str, Any] = {"id": dataset_id, "semantic": projection_semantic}
+        view = views_by_dataset[dataset_id]
+        native_jsonl = _native_jsonl_semantic(view)
+        if native_jsonl:
+            stable_item["native_jsonl"] = native_jsonl
+        stable_projection.append(stable_item)
     semantic = {
         "schema_version": 1,
         "datasets": [dataset["identity"] for dataset in selection["datasets"]],
@@ -420,6 +729,13 @@ def _view_path(workspace: Path, relative: str, root: str) -> Path:
     return workspace / logical
 
 
+def _generated_view_files(view: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item for key in ("files", "native_files") for item in view.get(key, [])
+        if isinstance(item, dict)
+    ]
+
+
 def _view_requires_rebuild(workspace: Path, view: dict[str, Any]) -> bool:
     root_relative = view["root"]
     root = workspace / root_relative
@@ -439,7 +755,7 @@ def _view_requires_rebuild(workspace: Path, view: dict[str, Any]) -> bool:
         return True
     expected_generated = {
         item["path"]: str(item.get("text")).encode("utf-8")
-        for item in view.get("files", []) if isinstance(item, dict) and isinstance(item.get("path"), str)
+        for item in _generated_view_files(view) if isinstance(item.get("path"), str)
     }
     for relative, content in expected_generated.items():
         path = workspace / relative
@@ -483,7 +799,7 @@ def inspect_dataset_view(workspace: Path, lock: dict[str, Any]) -> list[str]:
         for path in sorted(set(actual_links) - set(expected_links)):
             changes.append(f"unexpected view link: {path}")
         expected_generated = {
-            item["path"] for item in view.get("files", [])
+            item["path"] for item in _generated_view_files(view)
             if isinstance(item, dict) and isinstance(item.get("path"), str)
         }
         if root.is_dir():
@@ -496,7 +812,7 @@ def inspect_dataset_view(workspace: Path, lock: dict[str, Any]) -> list[str]:
                     and relative not in expected_generated
                 ):
                     changes.append(f"unexpected regular media in view: {relative}")
-        for generated in view.get("files", []):
+        for generated in _generated_view_files(view):
             if not isinstance(generated, dict) or not isinstance(generated.get("path"), str):
                 changes.append("invalid generated view file")
                 continue
@@ -560,7 +876,7 @@ def materialize_dataset_view(workspace: Path, lock: dict[str, Any]) -> Path:
                 raise ValueError(f"view link destination already exists: {link['path']}")
             else:
                 path.symlink_to(link["target"])
-        for generated in view.get("files", []):
+        for generated in _generated_view_files(view):
             path = _view_path(workspace, generated["path"], root_relative)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():

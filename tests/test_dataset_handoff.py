@@ -70,7 +70,7 @@ class DatasetHandoffTests(unittest.TestCase):
         sample = dataset["samples"][0]
         target = sample["files"][0]
         caption = sample["caption"]
-        view_root = "runs/example/cache/dataset-view/ai-toolkit/tiny"
+        view_root = f"runs/{selection['run_id']}/cache/dataset-view/ai-toolkit/tiny"
         return {
             "schema_version": 1,
             "backend": "ai-toolkit",
@@ -105,6 +105,70 @@ class DatasetHandoffTests(unittest.TestCase):
             }],
         }
 
+    @classmethod
+    def jsonl_projection(cls, selection: dict) -> dict:
+        projection = cls.image_projection(selection)
+        dataset = projection["datasets"][0]
+        view = dataset["view"]
+        target = view["links"][0]
+        caption = view["files"][0]
+        row = {
+            "image_path": "/workspace/" + target["path"],
+            "caption_path": "/workspace/" + caption["path"],
+            "kind": "image",
+        }
+        view["native_files"] = [{
+            "path": view["root"] + "/native/items.jsonl",
+            "text": json.dumps(row) + "\n",
+            "format": "jsonl",
+            "literal_string_fields": ["/kind"],
+            "rows": [{
+                "row_id": "row-a",
+                "sample_id": "a",
+                "repeat": None,
+                "references": [
+                    {
+                        "kind": "path",
+                        "pointer": "/image_path",
+                        "input_id": target["input_id"],
+                        "path": target["path"],
+                    },
+                    {
+                        "kind": "path",
+                        "pointer": "/caption_path",
+                        "input_id": caption["input_id"],
+                        "path": caption["path"],
+                    },
+                ],
+                "literal_strings": [{"pointer": "/kind", "value": "image"}],
+            }],
+        }]
+        return projection
+
+    @classmethod
+    def inline_caption_jsonl_projection(cls, selection: dict) -> dict:
+        projection = cls.jsonl_projection(selection)
+        dataset = projection["datasets"][0]
+        sample = selection["datasets"][0]["samples"][0]
+        target = sample["files"][0]
+        caption = sample["caption"]
+        view = dataset["view"]
+        view["files"] = []
+        dataset["bindings"][0]["members"] = [dataset["bindings"][0]["members"][0]]
+        native = view["native_files"][0]
+        row = json.loads(native["text"])
+        row.pop("caption_path")
+        row["caption"] = caption["text"]
+        native["text"] = json.dumps(row) + "\n"
+        native["rows"][0]["references"][1] = {
+            "kind": "caption-text",
+            "pointer": "/caption",
+            "input_id": caption["input_id"],
+        }
+        self_reference = native["rows"][0]["references"][0]
+        assert self_reference["input_id"] == target["input_id"]
+        return projection
+
     def test_complete_projection_freezes_lock_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -125,6 +189,388 @@ class DatasetHandoffTests(unittest.TestCase):
                              "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny")
             self.assertTrue((resolved / "dataset-input.lock.json").is_file())
 
+    def test_generated_jsonl_rows_are_verified_and_materialized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=self.jsonl_projection,
+            )
+            view = materialize_dataset_view(workspace, lock)
+
+            native = lock["views"][0]["native_files"][0]
+            self.assertEqual(native["rows"][0]["row_id"], "row-a")
+            self.assertEqual(native["rows"][0]["sample_id"], "a")
+            self.assertEqual((view / "native" / "items.jsonl").read_text(encoding="utf-8"), native["text"])
+            self.assertEqual(inspect_dataset_handoff(workspace, lock), [])
+
+    def test_generated_jsonl_row_must_reference_every_sample_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def omits_caption(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row.pop("caption_path")
+                native["text"] = json.dumps(row) + "\n"
+                native["rows"][0]["references"].pop()
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "does not include every sample input exactly once"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=omits_caption,
+                )
+
+    def test_generated_jsonl_repeat_requires_an_explicit_complete_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def undeclared_repeat(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["text"] += native["text"]
+                second = json.loads(json.dumps(native["rows"][0]))
+                second["row_id"] = "row-a-second"
+                native["rows"].append(second)
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "repeat.*must be declared"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=undeclared_repeat,
+                )
+
+    def test_generated_jsonl_explicit_repeat_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def explicit_repeat(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["text"] += native["text"]
+                second = json.loads(json.dumps(native["rows"][0]))
+                second["row_id"] = "row-a-second"
+                native["rows"][0]["repeat"] = {"index": 0, "count": 2}
+                second["repeat"] = {"index": 1, "count": 2}
+                native["rows"].append(second)
+                return projection
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=explicit_repeat,
+            )
+            self.assertEqual(
+                [row["repeat"]["index"] for row in lock["views"][0]["native_files"][0]["rows"]],
+                [0, 1],
+            )
+
+    def test_generated_jsonl_can_consume_exact_manifest_caption_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=self.inline_caption_jsonl_projection,
+            )
+
+            native = lock["views"][0]["native_files"][0]
+            self.assertEqual(native["rows"][0]["references"][1]["kind"], "caption-text")
+            self.assertEqual(lock["semantic"]["datasets"][0]["samples"][0]["caption"], "caption\n")
+
+    def test_generated_jsonl_preserves_unicode_line_separator_inside_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            caption = "first\u2028second"
+            (workspace / "datasets" / "tiny" / "a.txt").write_text(caption, encoding="utf-8")
+
+            def unicode_line_separator(selection: dict) -> dict:
+                projection = self.inline_caption_jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                native["text"] = json.dumps(row, ensure_ascii=False) + "\n"
+                return projection
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=unicode_line_separator,
+            )
+
+            native = lock["views"][0]["native_files"][0]
+            self.assertIn(caption, native["text"])
+            self.assertEqual(
+                lock["semantic"]["datasets"][0]["samples"][0]["caption"],
+                caption,
+            )
+
+    def test_generated_jsonl_rejects_changed_manifest_caption_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def changed_caption(selection: dict) -> dict:
+                projection = self.inline_caption_jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row["caption"] = "different"
+                native["text"] = json.dumps(row) + "\n"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "does not preserve its caption input"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=changed_caption,
+                )
+
+    def test_generated_jsonl_identity_is_stable_across_run_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first_run, first_resolved = self.make_run(workspace)
+            first = freeze_dataset_handoff(
+                first_run, workspace, first_resolved, backend="ai-toolkit", project=self.jsonl_projection,
+            )
+            second_run = {**first_run, "id": "other"}
+            second_resolved = workspace / "runs" / "other" / "resolved"
+            second = freeze_dataset_handoff(
+                second_run, workspace, second_resolved, backend="ai-toolkit", project=self.jsonl_projection,
+            )
+
+            self.assertEqual(first["input_sha256"], second["input_sha256"])
+
+    def test_generated_jsonl_non_path_values_are_part_of_input_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first_run, first_resolved = self.make_run(workspace)
+
+            def with_fps(selection: dict, fps: int) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row["fps"] = fps
+                native["text"] = json.dumps(row) + "\n"
+                return projection
+
+            first = freeze_dataset_handoff(
+                first_run,
+                workspace,
+                first_resolved,
+                backend="ai-toolkit",
+                project=lambda selection: with_fps(selection, 24),
+            )
+            second_run = {**first_run, "id": "other"}
+            second_resolved = workspace / "runs" / "other" / "resolved"
+            second = freeze_dataset_handoff(
+                second_run,
+                workspace,
+                second_resolved,
+                backend="ai-toolkit",
+                project=lambda selection: with_fps(selection, 25),
+            )
+
+            self.assertNotEqual(first["input_sha256"], second["input_sha256"])
+
+    def test_generated_jsonl_rejects_an_unreported_string_field(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def unreported(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row["other_path"] = row["image_path"]
+                native["text"] = json.dumps(row) + "\n"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "unclassified string field.*other_path"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=unreported,
+                )
+
+    def test_generated_jsonl_rejects_a_reference_to_the_wrong_view_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def wrong_entry(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["rows"][0]["references"][0]["input_id"] = (
+                    native["rows"][0]["references"][1]["input_id"]
+                )
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "does not match its projected view entry"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=wrong_entry,
+                )
+
+    def test_generated_jsonl_rejects_unreported_row_multiplicity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def extra_row(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["text"] += native["text"]
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "row count"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=extra_row,
+                )
+
+    def test_generated_jsonl_rejects_rows_in_a_different_order_than_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def reordered(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                first_value = json.loads(native["text"])
+                first_value["variant"] = "first"
+                second_value = {**first_value, "variant": "second"}
+                first_report = native["rows"][0]
+                first_report["literal_strings"].append({"pointer": "/variant", "value": "first"})
+                second_report = json.loads(json.dumps(first_report))
+                second_report["row_id"] = "row-a-second"
+                second_report["literal_strings"][-1]["value"] = "second"
+                native["rows"] = [first_report, second_report]
+                native["text"] = json.dumps(second_value) + "\n" + json.dumps(first_value) + "\n"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "differs from the generated row"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=reordered,
+                )
+
+    def test_generated_jsonl_rejects_unknown_or_duplicate_row_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def unknown_sample(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["rows"][0]["sample_id"] = "missing"
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "unknown sample"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=unknown_sample,
+                )
+
+            def duplicate_row(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["text"] += native["text"]
+                native["rows"].append(json.loads(json.dumps(native["rows"][0])))
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "duplicate row identity"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=duplicate_row,
+                )
+
+    def test_generated_jsonl_rejects_a_workspace_path_classified_as_literal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def disguised_path(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row["kind"] = row["image_path"]
+                native["text"] = json.dumps(row) + "\n"
+                native["rows"][0]["literal_strings"][0]["value"] = row["kind"]
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "classifies a path-like value as a literal"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=disguised_path,
+                )
+
+    def test_generated_jsonl_rejects_crlf_row_separators(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def crlf(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                native["text"] = native["text"].replace("\n", "\r\n")
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "LF row separators"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=crlf,
+                )
+
+    def test_generated_jsonl_literal_must_be_declared_by_the_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def undeclared_literal(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row["note"] = "ordinary"
+                native["text"] = json.dumps(row) + "\n"
+                native["rows"][0]["literal_strings"].append({"pointer": "/note", "value": "ordinary"})
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "literal field.*not declared"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=undeclared_literal,
+                )
+
+    def test_generated_jsonl_rejects_path_like_literal_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def path_literal(selection: dict) -> dict:
+                projection = self.jsonl_projection(selection)
+                native = projection["datasets"][0]["view"]["native_files"][0]
+                row = json.loads(native["text"])
+                row["note"] = "relative/image.png"
+                native["text"] = json.dumps(row) + "\n"
+                native["literal_string_fields"].append("/note")
+                native["rows"][0]["literal_strings"].append({
+                    "pointer": "/note", "value": "relative/image.png",
+                })
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "path-like value as a literal"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=path_literal,
+                )
+
+    def test_materialized_generated_jsonl_is_checked_for_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=self.jsonl_projection,
+            )
+            view = materialize_dataset_view(workspace, lock)
+            (view / "native" / "items.jsonl").write_text("{}\n", encoding="utf-8")
+
+            self.assertIn("changed generated view file", " ".join(inspect_dataset_handoff(workspace, lock)))
+
     def test_projection_missing_one_input_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -135,7 +581,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 projection["datasets"][0]["consumed"].pop()
                 return projection
 
-            with self.assertRaisesRegex(ValueError, "consumed inputs differ from materialized view inputs"):
+            with self.assertRaisesRegex(ValueError, "consumed inputs differ from verified native inputs"):
                 freeze_dataset_handoff(
                     run, workspace, resolved, backend="ai-toolkit", project=drops_caption,
                 )
