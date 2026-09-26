@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -37,6 +38,123 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "sd3", "sdxl", "ssd", "vega", "wan21", "wan21_i2v", "wan22_14b",
     "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
 })
+
+_AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
+
+
+def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
+    """Project the first lossless manifest path supported by the pinned image loader."""
+    override = _ai_toolkit_backend_override(run)
+    if override.get("command") is not None:
+        raise ValueError(
+            "AI-Toolkit explicit command cannot yet prove a first-class manifest handoff"
+        )
+    if override.get("dataset_folder") is not None:
+        raise ValueError(
+            "AI-Toolkit backend.config.dataset_folder cannot select a first-class manifest dataset"
+        )
+    dataset_config = override.get("dataset_config")
+    if isinstance(dataset_config, dict) and dataset_config:
+        raise ValueError(
+            "AI-Toolkit manifest image projection does not yet support backend.config.dataset_config"
+        )
+    projected: list[dict[str, Any]] = []
+    for dataset in selection.get("datasets", []):
+        dataset_id = dataset.get("id")
+        view_root = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        consumed: list[str] = []
+        unrepresentable: list[dict[str, str]] = []
+        links: list[dict[str, str]] = []
+        files: list[dict[str, str]] = []
+        bindings: list[dict[str, Any]] = []
+        for index, sample in enumerate(dataset.get("samples", [])):
+            group = sample.get("group")
+            if group is not None:
+                unrepresentable.append({
+                    "input_id": sample["caption"]["input_id"],
+                    "reason": f"group {group!r} requires an explicit flattening decision",
+                })
+                continue
+            references = sample.get("files", [])
+            targets = [item for item in references if item.get("role") == "target"]
+            caption = sample.get("caption")
+            sample_tag_payload = {
+                "files": [
+                    {"role": item.get("role"), "sha256": item.get("sha256")}
+                    for item in references
+                ],
+                "caption": caption.get("text") if isinstance(caption, dict) else None,
+            }
+            content_tag = hashlib.sha256(
+                json.dumps(
+                    sample_tag_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()[:12]
+            for reference in references:
+                role = reference.get("role")
+                suffix = Path(str(reference.get("path"))).suffix.lower()
+                if role != "target":
+                    unrepresentable.append({
+                        "input_id": reference["input_id"],
+                        "reason": f"role {role!r} is unsupported by the initial AI-Toolkit image mode",
+                    })
+                elif len(targets) != 1:
+                    unrepresentable.append({
+                        "input_id": reference["input_id"],
+                        "reason": "AI-Toolkit image mode requires exactly one target per sample",
+                    })
+                elif suffix not in _AI_TOOLKIT_IMAGE_SUFFIXES:
+                    unrepresentable.append({
+                        "input_id": reference["input_id"],
+                        "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit image mode",
+                    })
+                else:
+                    destination = f"{view_root}/{index:06d}-{content_tag}{suffix}"
+                    links.append({
+                        "path": destination,
+                        "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
+                        "input_id": reference["input_id"],
+                    })
+                    consumed.append(reference["input_id"])
+            if not isinstance(caption, dict) or caption.get("text") is None:
+                input_id = caption.get("input_id") if isinstance(caption, dict) else None
+                unrepresentable.append({
+                    "input_id": input_id,
+                    "reason": "an absent caption cannot yet be represented losslessly in AI-Toolkit image mode",
+                })
+            elif len(targets) == 1 and Path(str(targets[0].get("path"))).suffix.lower() in _AI_TOOLKIT_IMAGE_SUFFIXES:
+                caption_path = f"{view_root}/{index:06d}-{content_tag}.txt"
+                files.append({
+                    "path": caption_path,
+                    "text": caption["text"],
+                    "input_id": caption["input_id"],
+                })
+                consumed.append(caption["input_id"])
+                links_for_sample = [item for item in links if item["input_id"] == targets[0]["input_id"]]
+                if links_for_sample:
+                    bindings.append({
+                        "rule": "same-stem",
+                        "inputs": [targets[0]["input_id"], caption["input_id"]],
+                    })
+        semantic = {
+            "caption_ext": ".txt",
+            "cache_latents_to_disk": True,
+        }
+        native_runtime = {"folder_path": f"/workspace/{view_root}"}
+        projected.append({
+            "id": dataset_id,
+            "consumed": consumed,
+            "unrepresentable": unrepresentable,
+            "semantic": semantic,
+            "bindings": bindings,
+            "native_runtime": native_runtime,
+            "native": {**semantic, **native_runtime},
+            "view": {"root": view_root, "links": links, "files": files},
+        })
+    return {"schema_version": 1, "backend": "ai-toolkit", "datasets": projected}
 
 
 def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
@@ -243,12 +361,42 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     return [{"role": "base_model", "acquisition": acquisition, "identity": identity, "runtime_reference": base, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable)}]
 
 
-def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]:
+def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
     """Write AI-Toolkit native YAML for configured training runs."""
     override = _ai_toolkit_backend_override(run)
     recipe = validated_recipe(run, required=override.get("command") is None)
     model = run.get("model", {})
     datasets = _datasets(run)
+    if override.get("command") is not None:
+        projected_datasets = []
+    elif strict:
+        projection_path = destination.parent / "dataset-projection.lock.json"
+        if not projection_path.is_file():
+            raise ValueError("AI-Toolkit first-class compile requires a frozen manifest projection")
+        projection = json.loads(projection_path.read_text(encoding="utf-8"))
+        projected_by_id = {
+            item.get("id"): item for item in projection.get("datasets", []) if isinstance(item, dict)
+        } if isinstance(projection, dict) and projection.get("backend") == "ai-toolkit" else {}
+        dataset_ids = [item.get("id") for item in datasets]
+        if len(projected_by_id) != len(dataset_ids) or set(projected_by_id) != set(dataset_ids):
+            raise ValueError("AI-Toolkit frozen projection does not match the selected datasets")
+        projected_datasets = []
+        for dataset_id in dataset_ids:
+            projected_dataset = projected_by_id[dataset_id]
+            native_dataset = projected_dataset.get("native")
+            if not isinstance(native_dataset, dict):
+                raise ValueError(f"AI-Toolkit frozen projection for dataset {dataset_id!r} has no native handoff")
+            view = projected_dataset.get("view")
+            view_root = view.get("root") if isinstance(view, dict) else None
+            if native_dataset.get("folder_path") != f"/workspace/{view_root}":
+                raise ValueError(
+                    f"AI-Toolkit frozen projection for dataset {dataset_id!r} bypasses its run-owned view"
+                )
+            projected_datasets.append(deepcopy(native_dataset))
+    else:
+        projected_datasets = _ai_toolkit_datasets(
+            datasets, override.get("dataset_folder"), None, override.get("dataset_config")
+        )
     native = override.get("native_config")
     if isinstance(native, dict):
         native_train = native.get("train")
@@ -279,9 +427,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
                 "device": "cuda:0",
                 "network": {"type": "lora"},
                 "save": {},
-                "datasets": _ai_toolkit_datasets(
-                    datasets, override.get("dataset_folder"), None, override.get("dataset_config")
-                ),
+                "datasets": projected_datasets,
                 "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
                 "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
             }],

@@ -1312,6 +1312,63 @@ class TrainingStateArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "recipe changed"):
                 compile_resume_lock(root, changed, root / "other")
 
+    def test_resume_compares_effective_input_not_file_stat(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe = {
+                "backend": {"name": "sd-scripts", "config": {"architecture": "sd15"}},
+                "model": {"base": "example/model"},
+                "datasets": [{"id": "tiny", "digest": "sha256:metadata"}],
+                "recipe": {"steps": 100, "seed": 1},
+            }
+            source_resolved = root / "runs" / "source" / "resolved"
+            source_resolved.mkdir(parents=True)
+            (source_resolved / "dataset-input.lock.json").write_text(json.dumps({
+                "schema_version": 1, "verification": "content-hash-at-compile",
+                "input_sha256": "sha256:original-caption", "files": [],
+            }), encoding="utf-8")
+            candidate = root / "candidate"
+            candidate.mkdir()
+            (candidate / "optimizer.bin").write_bytes(_torch_archive_bytes(b"optimizer"))
+            manifest = publish_training_state(
+                root, source_run="source", source_realization=None, backend="sd-scripts",
+                observed_step=100, candidate=candidate, native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": ["optimizer"], "not_restored": []},
+                compatibility={"recipe_sha256": recipe_fingerprint(recipe)},
+            )
+            run = {**recipe, "id": "derived", "parent_run": "source", "continuation": {
+                "mode": "resume", "source": {
+                    "artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"],
+                    "observed_step": 100, "recipe_sha256": recipe_fingerprint(recipe),
+                }, "additional_steps": 10, "target_step": 110,
+                "restoration_contract": manifest["restoration_contract"],
+            }}
+            same_content_new_stat = {"schema_version": 1, "verification": "content-hash-at-compile",
+                                     "input_sha256": "sha256:original-caption", "files": [{"stat": {"mtime_ns": 999}}]}
+            lock = compile_resume_lock(root, run, root / "runs" / "derived" / "resolved",
+                                       target_input_lock=same_content_new_stat)
+            self.assertEqual(lock["dataset_input"]["status"], "content-matched")
+            changed_caption = {**same_content_new_stat, "input_sha256": "sha256:different-caption"}
+            with self.assertRaisesRegex(ValueError, "dataset input.*changed"):
+                compile_resume_lock(root, run, root / "runs" / "other" / "resolved",
+                                    target_input_lock=changed_caption)
+            with self.assertRaisesRegex(ValueError, "dataset input identity is unverified"):
+                compile_resume_lock(root, run, root / "runs" / "unverified" / "resolved",
+                                    target_input_lock={"input_sha256": None})
+            (source_resolved / "dataset-input.lock.json").write_text(json.dumps({
+                "schema_version": 1, "verification": "unverified-native-source", "input_sha256": None,
+            }), encoding="utf-8")
+            unverified = compile_resume_lock(root, run, root / "runs" / "source-unverified" / "resolved",
+                                             target_input_lock=same_content_new_stat)
+            self.assertEqual(unverified["dataset_input"]["status"], "source-unverified")
+            self.assertIn("media identity is unverified", unverified["dataset_input"]["detail"])
+            self.assertNotIn("old dataset digest only", unverified["dataset_input"]["detail"])
+            changed_legacy_digest = json.loads(json.dumps(run))
+            changed_legacy_digest["datasets"][0]["digest"] = "sha256:changed"
+            with self.assertRaisesRegex(ValueError, "recipe changed"):
+                compile_resume_lock(root, changed_legacy_digest, root / "runs" / "changed-legacy" / "resolved",
+                                    target_input_lock=same_content_new_stat)
+
     def test_compile_lock_rejects_changed_runtime_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1786,6 +1843,7 @@ class ResumeRunTests(unittest.TestCase):
                     "native_start": 0,
                     "native_target": 1000,
                     "state_bytes": 1024,
+                    "dataset_input": {"status": "legacy-unverified", "detail": "media identity is unverified (old dataset digest only)"},
                 },
                 "training_state": {
                     "enabled": True,
@@ -1810,6 +1868,7 @@ class ResumeRunTests(unittest.TestCase):
         self.assertNotIn("CAUTION", output)
         self.assertIn("Training state", output)
         self.assertIn("keep         2", output)
+        self.assertIn("media identity is unverified", output)
 
     def test_resume_refuses_a_capture_only_backend_before_creating_a_run(self) -> None:
         previous = Path.cwd()

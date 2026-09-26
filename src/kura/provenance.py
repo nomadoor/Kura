@@ -114,6 +114,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         ]
     else:
         raise ValueError(f"unsupported backend for source identity: {backend_name}")
+    paths.extend([package_root / "dataset_handoff.py", package_root / "dataset_manifest.py"])
     missing = [path for path in [*paths, *runtime_paths] if not path.is_file()]
     if missing:
         raise ValueError("source identity input is missing: " + ", ".join(path.name for path in missing))

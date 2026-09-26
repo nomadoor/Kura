@@ -22,6 +22,7 @@ import yaml
 from kura import __version__
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
+from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
@@ -130,7 +131,7 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     validate_backend_config(run)
     validated_recipe(run, required=native.get("command") is None)
     adapter = get_backend(backend_name)
-    if adapter.validate_dataset is not None:
+    if adapter.project_dataset is None and adapter.validate_dataset is not None:
         adapter.validate_dataset(run, _workspace())
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     capacity = compute.get("capacity")
@@ -508,12 +509,6 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             "runtime_contract_sha256": runtime_contract,
         }
         _dump_yaml(resolved / "manifest.lock.yaml", locked)
-        compile_resume_lock(
-            _workspace(),
-            locked,
-            resolved,
-            target_runtime_identity=target_runtime_identity,
-        )
         _dump_yaml(
             resolved / "model-requirements.lock.yaml",
             {
@@ -530,7 +525,37 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
                 "datasets": dataset_observations,
             },
         )
+        explicit_native_command = (
+            "command" in adapter.surface.escape_hatches
+            and backend_config(locked, adapter.name).get("command") is not None
+        )
+        input_lock = None
+        if adapter.project_dataset is not None and not explicit_native_command:
+            input_lock = freeze_dataset_handoff(
+                locked,
+                _workspace(),
+                resolved,
+                backend=adapter.name,
+                project=lambda selection: adapter.project_dataset(locked, selection),
+            )
+        elif explicit_native_command:
+            input_lock = {
+                "schema_version": 1,
+                "backend": adapter.name,
+                "verification": "unverified-native-source",
+                "files": [],
+                "views": [],
+                "input_sha256": None,
+            }
+            atomic_write_json(resolved / "dataset-input.lock.json", input_lock)
         command_spec = adapter.compile(locked, resolved, _workspace(), True)
+        compile_resume_lock(
+            _workspace(),
+            locked,
+            resolved,
+            target_runtime_identity=target_runtime_identity,
+            target_input_lock=input_lock,
+        )
         atomic_write_json(resolved / "backend-display.lock.json", adapter.display(locked))
         atomic_write_json(resolved / "backend-command.lock.json", {**command_spec, "backend": backend.get("name"), "adapter_source": source_identity})
         env = {
@@ -776,12 +801,31 @@ def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_art
             status = {}
         state = str(status.get("state") or "unknown")
         recency = status.get("ended") or status.get("started") or run.get("created") or run_dir.name
-        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir})
+        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir, "status": status})
     runs.sort(key=lambda item: str(item["recency"]), reverse=True)
     keep_ids = {item["id"] for item in runs[: max(keep_last, 0)]}
     actions: list[dict[str, Any]] = []
     for item in runs:
         run_dir = item["path"]
+        postflight = item["status"].get("dataset_input_postflight") if isinstance(item.get("status"), dict) else None
+        failed_view = (
+            run_dir / "cache" / "dataset-view"
+            if isinstance(postflight, dict) and postflight.get("view_cleanup") == "failed"
+            else None
+        )
+        if item["id"] in keep_ids and item["state"] in states and failed_view is not None and failed_view.is_dir():
+            actions.append({
+                "id": item["id"],
+                "state": item["state"],
+                "classification": "safe-run-dataset-view-remnant",
+                "note": "Removes only a disposable dataset view left by failed automatic cleanup.",
+                "targets": [{
+                    "target": str(failed_view.relative_to(workspace)),
+                    "path": str(failed_view),
+                    "exists": True,
+                    "size_bytes": _path_size_bytes(failed_view),
+                }],
+            })
         if item["id"] in keep_ids or item["state"] not in states:
             continue
         if delete_final_artifacts:

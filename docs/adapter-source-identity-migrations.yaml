@@ -7,6 +7,24 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-shared-dataset-contract-identity-2026-09-26
+    backend: sd-scripts
+    reason: >-
+      Shared manifest and dataset-handoff sources are now included in adapter
+      identity. The sd-scripts adapter does not consume the new projection in
+      this increment, so its native dataset configuration, command, Resume
+      behavior, and the listed SD1.5 equivalence observation are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 3b88a376dd4b2081c61d8a196422fce3f55f648b853a20dfdd7169528ed6e6c0
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d626c41832b5a86e21966d293a76912503ce23b01461acdfe28ced892960792f
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -14,6 +32,10 @@ records:
       upstream registry before compilation. The recorded SD1 optimizer smoke
       used the registered sd1 selector, and its generated native model.arch,
       runtime command, optimizer step, and published output are unchanged.
+      The manifest handoff adds an independently verified run-owned view for
+      that same image-and-caption path without changing the selector or native
+      training meaning; the shared manifest and handoff sources are now part
+      of adapter identity.
       This migration applies only to that evidence, not to unregistered or
       custom-image selectors.
     behavior_changed: false
@@ -26,7 +48,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: c95615c9c951b006bfa18ccc7c4324e3446ff2ea156a9b0026e24c01c5f267c0
+      value: 830eed49984c6690fe341d1fdfc4d7fd793b1f40e0933942ab997e82fc90a24c
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

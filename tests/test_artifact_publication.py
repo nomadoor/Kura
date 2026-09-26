@@ -16,6 +16,7 @@ import yaml
 
 from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import reconcile_docker
+from kura.executors import docker as docker_executor
 from kura.run_commands.runpod_ssh import cmd_run_download
 from kura.run_commands.experiment import format_run_completion
 
@@ -47,6 +48,44 @@ class LocalOutputPublicationTests(unittest.TestCase):
         with patch("kura.executors.docker.subprocess.run", return_value=observed):
             return reconcile_docker(run_dir)
 
+    def _manifest_view(self, run_dir: Path) -> tuple[Path, Path]:
+        root = run_dir.parent.parent
+        dataset = root / "datasets" / "tiny"
+        dataset.mkdir(parents=True)
+        source = dataset / "a.png"
+        source.write_bytes(b"source")
+        stat = source.stat()
+        view = run_dir / "cache" / "dataset-view" / "ai-toolkit" / "tiny"
+        view.mkdir(parents=True)
+        link = view / "a.png"
+        link.symlink_to("/workspace/datasets/tiny/a.png")
+        (view / "_latent_cache").mkdir()
+        (view / "_latent_cache" / "a.safetensors").write_bytes(b"cache")
+        lock = {
+            "schema_version": 2,
+            "verification": "content-hash-at-compile",
+            "input_sha256": "sha256:fixture",
+            "files": [{
+                "source": "datasets/tiny/a.png",
+                "container_source": "/workspace/datasets/tiny/a.png",
+                "stat": {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns},
+            }],
+            "authoring_files": [],
+            "dataset_roots": [{"dataset": "tiny", "logical": "datasets/tiny", "physical": str(dataset.resolve())}],
+            "views": [{
+                "dataset": "tiny",
+                "root": "runs/example/cache/dataset-view/ai-toolkit/tiny",
+                "links": [{
+                    "path": "runs/example/cache/dataset-view/ai-toolkit/tiny/a.png",
+                    "target": "/workspace/datasets/tiny/a.png",
+                    "input_id": "d0:s0:f0",
+                }],
+                "files": [],
+            }],
+        }
+        (run_dir / "resolved" / "dataset-input.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        return source, view
+
     def test_missing_required_adapter_is_not_completed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run(Path(directory))
@@ -60,6 +99,29 @@ class LocalOutputPublicationTests(unittest.TestCase):
             summary = format_run_completion(run_dir.parent.parent, run_dir, status)
             self.assertIn("trainer completed", summary)
             self.assertIn("required trained-adapter", summary)
+
+    def test_blocked_publication_keeps_view_until_recovery_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, view = self._manifest_view(run_dir)
+
+            blocked = self._reconcile(run_dir)
+
+            self.assertEqual(blocked["publication_state"], "blocked")
+            self.assertTrue(blocked["recovery_required"])
+            self.assertEqual(blocked["dataset_input_postflight"]["view_cleanup"], "deferred")
+            self.assertNotIn("cleanup_record", blocked["dataset_input_postflight"])
+            self.assertTrue(view.exists())
+
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            recovered = self._reconcile(run_dir)
+
+            self.assertEqual(recovered["publication_state"], "completed")
+            self.assertFalse(recovered["recovery_required"])
+            self.assertEqual(recovered["dataset_input_postflight"]["view_cleanup"], "removed")
+            self.assertFalse(view.parent.parent.exists())
 
     def test_missing_frozen_command_is_not_treated_as_legacy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -86,6 +148,141 @@ class LocalOutputPublicationTests(unittest.TestCase):
                 "size": len(_safetensors_bytes()),
                 "sha256": hashlib.sha256(_safetensors_bytes()).hexdigest(),
             }])
+
+    def test_terminal_reconcile_records_postflight_then_removes_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, view = self._manifest_view(run_dir)
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+
+            status = self._reconcile(run_dir)
+
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["publication_state"], "completed")
+            self.assertFalse(view.parent.parent.exists())
+            postflight = status["dataset_input_postflight"]
+            self.assertEqual(postflight["status"], "matched")
+            self.assertEqual(postflight["view_cleanup"], "removed")
+            record = json.loads((run_dir / postflight["record"]).read_text(encoding="utf-8"))
+            self.assertEqual(record["source_stat_verification"], "matched")
+            self.assertEqual(record["view_link_verification"], "matched")
+            self.assertIsInstance(record["execution_ended_at"], str)
+            self.assertIsInstance(record["observed_at"], str)
+            cleanup = json.loads((run_dir / postflight["cleanup_record"]).read_text(encoding="utf-8"))
+            self.assertEqual(cleanup["status"], "removed")
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertIn("dataset_input_postflight", [item.get("event") for item in events])
+
+    def test_input_drift_warns_without_invalidating_publication_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            source, view = self._manifest_view(run_dir)
+            source.write_bytes(b"changed during training")
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+
+            first = self._reconcile(run_dir)
+            second = self._reconcile(run_dir)
+
+            self.assertEqual(first["state"], "completed")
+            self.assertEqual(first["publication_state"], "completed")
+            self.assertEqual(first["dataset_input_postflight"]["status"], "changed")
+            self.assertIn("between compile and post-training observation", first["dataset_input_postflight"]["warning"])
+            self.assertEqual(second["dataset_input_postflight"], first["dataset_input_postflight"])
+            self.assertFalse(view.parent.parent.exists())
+
+    def test_cleanup_failure_is_retried_on_later_reconcile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, view = self._manifest_view(run_dir)
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            actual_remove = docker_executor.remove_dataset_views
+            attempts = 0
+
+            def fail_once(*args: object, **kwargs: object) -> dict[str, object]:
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise OSError("busy")
+                return actual_remove(*args, **kwargs)
+
+            with patch("kura.executors.docker.remove_dataset_views", side_effect=fail_once):
+                first = self._reconcile(run_dir)
+                second = self._reconcile(run_dir)
+
+            self.assertEqual(first["dataset_input_postflight"]["view_cleanup"], "failed")
+            self.assertEqual(second["dataset_input_postflight"]["view_cleanup"], "removed")
+            self.assertEqual(attempts, 2)
+            self.assertFalse(view.parent.parent.exists())
+
+    def test_corrupt_input_lock_records_uncheckable_without_breaking_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            (run_dir / "resolved" / "dataset-input.lock.json").write_text("{", encoding="utf-8")
+
+            status = self._reconcile(run_dir)
+
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["publication_state"], "completed")
+            self.assertEqual(status["dataset_input_postflight"]["status"], "uncheckable")
+            self.assertEqual(status["dataset_input_postflight"]["view_cleanup"], "deferred")
+
+    def test_existing_postflight_record_backfills_missing_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, _ = self._manifest_view(run_dir)
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            first = self._reconcile(run_dir)
+            events_path = run_dir / "logs" / "events.jsonl"
+            events = [
+                json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()
+                if json.loads(line).get("event") != "dataset_input_postflight"
+            ]
+            events_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+
+            second = self._reconcile(run_dir)
+
+            repaired = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+            matching = [item for item in repaired if item.get("event") == "dataset_input_postflight"]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(second["dataset_input_postflight"], first["dataset_input_postflight"])
+
+    def test_failed_trainer_cleans_view_after_publication_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, view = self._manifest_view(run_dir)
+            observed = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 9}', "")
+
+            with patch("kura.executors.docker.subprocess.run", return_value=observed):
+                status = reconcile_docker(run_dir)
+
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(status["publication_state"], "not-required")
+            self.assertEqual(status["dataset_input_postflight"]["view_cleanup"], "removed")
+            self.assertFalse(view.parent.parent.exists())
+
+    def test_unknown_container_keeps_view_for_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, view = self._manifest_view(run_dir)
+            observed = subprocess.CompletedProcess([], 1, "", "Error: No such container")
+
+            with patch("kura.executors.docker.subprocess.run", return_value=observed):
+                status = reconcile_docker(run_dir)
+
+            self.assertEqual(status["state"], "unknown")
+            self.assertTrue(view.exists())
+            self.assertNotIn("dataset_input_postflight", status)
 
     def test_reconcile_preserves_completed_publication_after_outputs_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

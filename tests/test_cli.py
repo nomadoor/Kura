@@ -301,8 +301,13 @@ class InitCommandTests(unittest.TestCase):
                 dataset = root / "datasets" / "tiny"
                 (dataset / "images").mkdir(parents=True)
                 (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-                (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
-                (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+                (dataset / "dataset.yaml").write_text(
+                    "id: tiny\nitems_schema_version: 2\nstats:\n  count: 1\n", encoding="utf-8",
+                )
+                (dataset / "items.jsonl").write_text(
+                    '{"id":"1","files":[{"type":"file","role":"target","path":"images/001.png"}],"caption":{"text":"ok"}}\n',
+                    encoding="utf-8",
+                )
                 stdout = io.StringIO()
                 with patch("sys.stdout", stdout):
                     self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="runpod", backend="ai-toolkit", executor="runpod", gpu="NVIDIA A40")), 0)
@@ -332,7 +337,10 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(contract_lock["schema_version"], 1)
             self.assertEqual(contract_lock["datasets"][0]["dataset"], "tiny")
             self.assertEqual(contract_lock["datasets"][0]["observations"]["sample_count"], 1)
-            self.assertEqual(contract_lock["datasets"][0]["samples"][0]["target"], "images/001.png")
+            input_lock = json.loads((root / "runs" / run_id / "resolved" / "dataset-input.lock.json").read_text(encoding="utf-8"))
+            self.assertEqual(input_lock["schema_version"], 2)
+            self.assertEqual(input_lock["backend"], "ai-toolkit")
+            self.assertEqual(input_lock["verification"], "content-hash-at-compile")
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -50,8 +50,14 @@ class AgentIndependentCliTests(unittest.TestCase):
         (dataset / "images").mkdir(parents=True)
         (dataset / "images" / "001.png").write_bytes(PNG)
         (dataset / "images" / "001.txt").write_text("a tiny test image\n", encoding="utf-8")
-        (dataset / "dataset.yaml").write_text(yaml.safe_dump({"id": "tiny", "stats": {"count": 1}}), encoding="utf-8")
-        (dataset / "items.jsonl").write_text(json.dumps({"id": "001", "path": "images/001.png", "caption": "a tiny test image"}) + "\n", encoding="utf-8")
+        (dataset / "dataset.yaml").write_text(yaml.safe_dump({
+            "id": "tiny", "items_schema_version": 2, "stats": {"count": 1},
+        }), encoding="utf-8")
+        (dataset / "items.jsonl").write_text(json.dumps({
+            "id": "001",
+            "files": [{"type": "file", "role": "target", "path": "images/001.png"}],
+            "caption": {"file": {"type": "file", "path": "images/001.txt"}},
+        }) + "\n", encoding="utf-8")
 
     def _exercise(self, backend: str) -> None:
         previous = Path.cwd()

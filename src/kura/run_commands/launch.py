@@ -7,12 +7,14 @@ import json
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker
+from kura.executors.common import append_run_event
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -299,6 +301,7 @@ def launch_run(
     if continuation is not None and continuation.get("mode") == "resume" and image is not None:
         print("cannot launch run: Resume runtime image is frozen at compile time; remove --image or create and compile a new run", file=sys.stderr)
         return 1
+    input_preflight = None
     try:
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
@@ -310,10 +313,47 @@ def launch_run(
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
         spec = _load_frozen_command(run_dir, locked)
+        input_path = run_dir / "resolved" / "dataset-input.lock.json"
+        if input_path.is_file():
+            from kura.dataset_handoff import inspect_dataset_sources, materialize_dataset_view
+
+            input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+            if input_lock.get("schema_version") == 2:
+                changes = inspect_dataset_sources(_workspace(), input_lock)
+                if executor == "runpod":
+                    raise ValueError("manifest-v2 selective RunPod transfer is not implemented yet")
+                if changes:
+                    raise ValueError(
+                        "compiled dataset input changed; recompile the run: " + "; ".join(changes[:5])
+                    )
+                view_link_count = None
+                view_link_verification = None
+                if executor == "docker" and not dry_run:
+                    materialize_dataset_view(_workspace(), input_lock)
+                    view_link_count = sum(
+                        len(view.get("links", []))
+                        for view in input_lock.get("views", [])
+                        if isinstance(view, dict) and isinstance(view.get("links"), list)
+                    )
+                    view_link_verification = "matched"
+                input_preflight = {
+                    "event": "dataset_input_preflight",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "executor": executor,
+                    "compile_verification": input_lock.get("verification"),
+                    "launch_verification": "stat-match",
+                    "source_stat_verification": "matched",
+                    "view_link_verification": view_link_verification,
+                    "view_link_count": view_link_count,
+                    "input_sha256": input_lock.get("input_sha256"),
+                    "runpod_transfer_preflight": None,
+                }
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     try:
+        if not dry_run and input_preflight is not None:
+            append_run_event(run_dir, input_preflight)
         config = _workspace_config()
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
         adapter = get_backend(backend_name)

@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from kura.backends import get_backend, validate_backend_config
+from kura.dataset_handoff import inspect_dataset_sources, inspect_dataset_view
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -643,6 +644,17 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> list[dict[str, Any]]:
+    run_id = run.get("id")
+    if isinstance(run_id, str) and run_id and "/" not in run_id and ".." not in run_id:
+        input_path = workspace / "runs" / run_id / "resolved" / "dataset-input.lock.json"
+        if input_path.is_file():
+            lock = json.loads(input_path.read_text(encoding="utf-8"))
+            if lock.get("schema_version") == 2:
+                changes = inspect_dataset_sources(workspace, lock)
+                if changes:
+                    return [_preflight_record("dataset-images", "error", "compiled dataset input changed: " + "; ".join(changes), "dataset-input.lock.json")]
+                return [_preflight_record("dataset-images", "info", "compiled dataset input stat matches", "dataset-input.lock.json")]
+            return [_preflight_record("dataset-images", "warning", "compiled native source input is unverified", "dataset-input.lock.json")]
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
     if adapter.validate_dataset is None:
@@ -651,7 +663,7 @@ def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> li
         adapter.validate_dataset(run, workspace)
     except ValueError as exc:
         return [_preflight_record("dataset-images", "error", str(exc), "run.yaml")]
-    return [_preflight_record("dataset-images", "info", "Musubi dataset image directories resolved", "run.yaml")]
+    return [_preflight_record("dataset-images", "info", f"{adapter.name} dataset sources resolved", "run.yaml")]
 
 
 def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -930,6 +942,66 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             }
         datasets.append(dataset_payload)
 
+    dataset_input_payload = None
+    input_path = run_dir / "resolved" / "dataset-input.lock.json"
+    if input_path.is_file():
+        input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+        if input_lock.get("schema_version") == 2:
+            changes = inspect_dataset_sources(workspace, input_lock)
+            materialized = any(
+                isinstance(view, dict)
+                and isinstance(view.get("root"), str)
+                and (workspace / view["root"]).is_dir()
+                for view in input_lock.get("views", [])
+            )
+            if materialized:
+                changes.extend(inspect_dataset_view(workspace, input_lock))
+            semantic = input_lock.get("semantic") if isinstance(input_lock.get("semantic"), dict) else {}
+            selection = semantic.get("datasets") if isinstance(semantic.get("datasets"), list) else []
+            views = [
+                {
+                    "dataset": view.get("dataset"),
+                    "root": view.get("root"),
+                    "links": len(view.get("links", [])) if isinstance(view.get("links"), list) else 0,
+                    "generated_files": len(view.get("files", [])) if isinstance(view.get("files"), list) else 0,
+                }
+                for view in input_lock.get("views", []) if isinstance(view, dict)
+            ]
+            verification = input_lock.get("verification")
+            postflight = None
+            status_path = run_dir / "status.json"
+            if status_path.is_file():
+                status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+                candidate = status_payload.get("dataset_input_postflight")
+                if isinstance(candidate, dict):
+                    postflight = candidate
+            dataset_input_payload = {
+                "status": "changed" if changes else "current",
+                "verification": verification,
+                "changes": changes,
+                "input_sha256": input_lock.get("input_sha256"),
+                "declared_differences": input_lock.get("declared_differences") or [],
+                "selection": selection,
+                "views": views,
+                "postflight": postflight,
+            }
+        else:
+            dataset_input_payload = {
+                "status": "unverified", "verification": input_lock.get("verification"),
+                "changes": [], "input_sha256": None, "declared_differences": [],
+            }
+    elif manifest.is_file():
+        dataset_input_payload = {
+            "status": "legacy-unverified", "verification": "no-input-lock",
+            "changes": [], "input_sha256": None, "declared_differences": [],
+        }
+
+    command_path = run_dir / "resolved" / "backend-command.lock.json"
+    command_lock = json.loads(command_path.read_text(encoding="utf-8")) if command_path.is_file() else {}
+    write_roots = command_lock.get("write_roots") if isinstance(command_lock, dict) else None
+    if not isinstance(write_roots, list) or not all(isinstance(item, str) for item in write_roots):
+        write_roots = []
+
     plan_recipe = {
         "steps": run_recipe.get("steps"),
         "seed": run_recipe.get("seed"),
@@ -1013,6 +1085,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "native_state_path": native_state_path,
             "state_bytes": sum(item.get("size", 0) for item in files if isinstance(item, dict) and isinstance(item.get("size"), int)),
             "capture_policy": training_state_policy(run),
+            "dataset_input": lock.get("dataset_input") if lock_path.is_file() and isinstance(lock.get("dataset_input"), dict) else None,
         }
     return {
         "id": run_id,
@@ -1037,6 +1110,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resume": resume_payload,
         "training_state": training_state_payload,
         "datasets": datasets,
+        "dataset_input": dataset_input_payload,
+        "write_roots": write_roots,
         "recipe": {key: value for key, value in plan_recipe.items() if value is not None},
         "sampling": sampling_payload,
         "resources": resources,
@@ -1140,6 +1215,11 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         _append_kv(lines, "scheduler", resume.get("scheduler_behavior"))
         _append_kv(lines, "native_steps", f"{resume.get('native_start')} -> {resume.get('native_target')}")
         _append_kv(lines, "state_size", _format_bytes(resume.get("state_bytes")))
+        resume_input = resume.get("dataset_input")
+        if isinstance(resume_input, dict):
+            _append_kv(lines, "input_identity", resume_input.get("status"))
+            if resume_input.get("detail"):
+                _append_kv(lines, "input_warning", resume_input["detail"])
 
     training_state = payload.get("training_state") if isinstance(payload.get("training_state"), dict) else None
     if training_state is not None:
@@ -1214,6 +1294,48 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 _append_kv(lines, "observed", contract, indent=4)
     else:
         lines.append("  - none")
+
+    dataset_input = payload.get("dataset_input") if isinstance(payload.get("dataset_input"), dict) else None
+    if dataset_input is not None:
+        _append_kv(lines, "input_status", dataset_input.get("status"))
+        _append_kv(lines, "input_verification", dataset_input.get("verification"))
+        for selection in dataset_input.get("selection", []):
+            if not isinstance(selection, dict):
+                continue
+            samples = selection.get("samples") if isinstance(selection.get("samples"), list) else []
+            file_count = sum(
+                len(sample.get("files", []))
+                for sample in samples
+                if isinstance(sample, dict) and isinstance(sample.get("files"), list)
+            )
+            caption_count = sum(1 for sample in samples if isinstance(sample, dict) and sample.get("caption") is not None)
+            lines.append(
+                f"  - selected {_format_plan_value(selection.get('dataset'))}: "
+                f"{len(samples)} samples / {file_count} files / {caption_count} captions"
+            )
+        for view in dataset_input.get("views", []):
+            if isinstance(view, dict):
+                lines.append(f"  - trainer view: {_format_plan_value(view.get('root'))}")
+                _append_kv(lines, "source_links", view.get("links"), indent=4)
+                _append_kv(lines, "generated_files", view.get("generated_files"), indent=4)
+        for change in dataset_input.get("changes", []):
+            lines.append(f"  - {_format_plan_value(change)}; recompile before launch")
+        postflight = dataset_input.get("postflight")
+        if isinstance(postflight, dict):
+            _append_kv(lines, "postflight", postflight.get("status"))
+            if postflight.get("warning"):
+                _append_kv(lines, "warning", postflight.get("warning"))
+            if postflight.get("cleanup_warning"):
+                _append_kv(lines, "cleanup_warning", postflight.get("cleanup_warning"))
+
+    lines.append("")
+    lines.append("Trainer write locations")
+    write_roots = payload.get("write_roots") if isinstance(payload.get("write_roots"), list) else []
+    if write_roots:
+        for path in write_roots:
+            lines.append(f"  - {_format_plan_value(path)}")
+    else:
+        lines.append("  - none declared")
 
     lines.append("")
     lines.append("Recipe")

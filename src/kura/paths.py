@@ -105,9 +105,13 @@ def workspace_mount_mappings(
     mounts: list[dict[str, Any]] | None,
     *,
     container_root: str = DEFAULT_CONTAINER_ROOT,
+    include_workspace_root: bool = True,
 ) -> list[dict[str, str]]:
     """Build container-to-workspace mappings safe to pass into containers."""
-    mappings = [{"container": _container_prefix(container_root), "workspace": _container_prefix(container_root)}]
+    mappings = (
+        [{"container": _container_prefix(container_root), "workspace": _container_prefix(container_root)}]
+        if include_workspace_root else []
+    )
     for mount in mounts or []:
         if not isinstance(mount, dict):
             continue

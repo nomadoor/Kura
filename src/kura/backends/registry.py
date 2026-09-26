@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
@@ -19,6 +19,7 @@ from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
 
 
 Compile = Callable[[dict[str, Any], Path, Path | None, bool], dict[str, Any]]
+ProjectDataset = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class BackendAdapter:
     display: Callable[[dict[str, Any]], dict[str, Any]]
     requirements: Callable[..., list[dict[str, Any]]]
     surface: BackendSurface
+    project_dataset: ProjectDataset | None = None
     validate_authored: Callable[[dict[str, Any]], None] | None = None
     download_specs: Callable[..., tuple[list[dict[str, Any]], dict[str, str]]] | None = None
     validate_dataset: Callable[[dict[str, Any], Path], None] | None = None
@@ -82,9 +84,8 @@ class BackendAdapter:
 
 
 def _compile_ai(run: dict[str, Any], resolved: Path, workspace: Path | None, strict: bool) -> dict[str, Any]:
-    del workspace, strict
     validate_backend_config(run)
-    return compile_ai_toolkit(run, resolved / "ai-toolkit")
+    return compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=strict)
 
 
 def _compile_musubi(run: dict[str, Any], resolved: Path, workspace: Path | None, strict: bool) -> dict[str, Any]:
@@ -256,6 +257,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         name="ai-toolkit", image_name="ai-toolkit", compile=_compile_ai, command=command_ai_toolkit,
         display=display_ai_toolkit, requirements=requirements_ai_toolkit, surface=AI_TOOLKIT_SURFACE,
         validate_authored=validate_ai_toolkit_config,
+        project_dataset=project_ai_toolkit_dataset,
         training_state=training_state_contract_ai_toolkit,
         default_ports=("8675/http", "22/tcp"),
     ),

@@ -143,6 +143,45 @@ def _hash_stable_file(
     }, b"".join(chunks) if chunks is not None else None
 
 
+def _read_authored_file(path: Path, context: str) -> tuple[bytes, dict[str, int]]:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise ValueError(f"{context}: this platform cannot safely open dataset metadata")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | nofollow)
+    except OSError as exc:
+        raise ValueError(f"{context}: file is missing, unsafe, or not readable") from exc
+    try:
+        _, observed, content = _hash_stable_file(descriptor, path, context, capture=True)
+    finally:
+        os.close(descriptor)
+    assert content is not None
+    return content, observed
+
+
+def _reject_absolute_internal_symlink(root: Path, logical: str, context: str) -> None:
+    pending = list(PurePosixPath(logical).parts)
+    current = root
+    visited: set[Path] = set()
+    while pending:
+        current = current / pending.pop(0)
+        if not current.is_symlink():
+            continue
+        if current in visited:
+            raise ValueError(f"{context}: symlink cycle inside dataset: {logical}")
+        visited.add(current)
+        target = current.readlink()
+        if target.is_absolute():
+            raise ValueError(f"{context}: absolute symlinks inside a dataset are not container-portable: {logical}")
+        target_path = Path(os.path.normpath(current.parent / target))
+        try:
+            target_relative = target_path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"{context}: symlink escapes the dataset: {logical}") from exc
+        pending = [*PurePosixPath(target_relative.as_posix()).parts, *pending]
+        current = root
+
+
 def _metadata_has_input(value: Any) -> bool:
     if isinstance(value, dict):
         if value.get("type") == "file":
@@ -190,15 +229,21 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
     The root resolution is checked here for author feedback. Compile/launch
     must reopen references safely to protect against concurrent retargeting.
     """
-    manifest = directory / "dataset.yaml"
-    items = directory / "items.jsonl"
+    root = directory.resolve(strict=True)
+    manifest = root / "dataset.yaml"
+    items = root / "items.jsonl"
     if not manifest.is_file() or not items.is_file():
         missing = [path.name for path in (manifest, items) if not path.is_file()]
         raise ValueError("missing " + ", ".join(missing))
-    metadata = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+    manifest_bytes, manifest_stat = _read_authored_file(manifest, "dataset.yaml")
+    items_bytes, items_stat = _read_authored_file(items, "items.jsonl")
+    try:
+        metadata = yaml.safe_load(manifest_bytes.decode("utf-8"))
+        items_text = items_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
     if not isinstance(metadata, dict) or type(metadata.get("items_schema_version")) is not int or metadata["items_schema_version"] != 2:
         raise ValueError("dataset.yaml requires items_schema_version: 2")
-    root = directory.resolve(strict=True)
     excluded_files, excluded_directories = _exclusions(metadata, root)
     ids: set[str] = set()
     portable_paths: dict[str, str] = {}
@@ -207,7 +252,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
     measured_files: dict[str, dict[str, Any]] = {}
     semantic_samples: list[dict[str, Any]] = []
     count = 0
-    for number, line in enumerate(items.read_text(encoding="utf-8").splitlines(), 1):
+    for number, line in enumerate(items_text.splitlines(), 1):
         context = f"items.jsonl:{number}"
         if not line.strip():
             raise ValueError(f"{context}: blank lines are not allowed")
@@ -235,6 +280,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         for index, reference in enumerate(files):
             ref_context = f"{context}:files[{index}]"
             logical, physical, digest, stat, _ = _reference(root, reference, ref_context, role=True)
+            _reject_absolute_internal_symlink(root, logical, ref_context)
             physical_logical = physical.relative_to(root).as_posix()
             if _is_excluded(logical, excluded_files, excluded_directories) or _is_excluded(
                 physical_logical, excluded_files, excluded_directories
@@ -267,6 +313,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
                 logical, physical, digest, stat, content = _reference(
                     root, caption["file"], f"{context}:caption", role=False
                 )
+                _reject_absolute_internal_symlink(root, logical, f"{context}:caption")
                 if _is_excluded(logical, excluded_files, excluded_directories):
                     raise ValueError(f"{context}: selected caption is excluded: {logical}")
                 selected.add(logical)
@@ -339,6 +386,10 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         "identity_sha256": "sha256:" + hashlib.sha256(canonical).hexdigest(),
         "identity": identity,
         "files": [measured_files[path] for path in sorted(measured_files)],
+        "authoring_files": [
+            {"path": "dataset.yaml", "stat": manifest_stat},
+            {"path": "items.jsonl", "stat": items_stat},
+        ],
         "excluded_files": sorted(excluded_files),
         "excluded_directories": sorted(excluded_directories),
         "warnings": warnings,
