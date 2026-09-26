@@ -295,6 +295,26 @@ MUSUBI_PROJECTION_PROFILES = {
         **_FRAMEPACK_VIDEO_PROFILE_COMMON,
         "mode": {"one_frame": False, "f1": True},
     },
+    "framepack-single-frame": {
+        "codec": "image-control-jsonl",
+        "architectures": ("framepack", "frame_pack"),
+        "shape": "image-control",
+        "mode": {"one_frame": True, "f1": False},
+        "control_count": 1,
+        "allowed_options": (
+            "fp_1f_clean_indices", "fp_1f_target_index", "fp_1f_no_post",
+        ),
+        "required_options": (),
+        "native_options": {
+            "fp_latent_window_size": FRAMEPACK_LATENT_WINDOW_SIZE,
+            "fp_1f_clean_indices": [0],
+            "fp_1f_target_index": 9,
+            "fp_1f_no_post": False,
+        },
+        "native_string_fields": (),
+        "control_index_option": "fp_1f_clean_indices",
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+    },
     "h3-one-frame-fl2va": {
         "codec": "h3-one-frame-control-jsonl",
         "architectures": ("minimax_h3", "minimaxh3"),
@@ -379,6 +399,7 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
         "control_resolution": {"type": "integer-pair", "minimum": 1},
         "fp_1f_clean_indices": {"type": "integer-list", "minimum": 0},
         "fp_1f_target_index": {"type": "integer", "minimum": 0},
+        "fp_1f_no_post": {"type": "boolean", "default": False},
         "no_resize_control": {"type": "boolean"},
         "target_frames": {
             "type": "integer-list",
@@ -392,7 +413,8 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
     },
 }
 _MUSUBI_DATASET_OPTION_FIELDS = {
-    "control_resolution", "fp_1f_clean_indices", "fp_1f_target_index", "no_resize_control",
+    "control_resolution", "fp_1f_clean_indices", "fp_1f_target_index", "fp_1f_no_post",
+    "no_resize_control",
     "target_frames", "frame_extraction", "max_frames", "source_fps",
 }
 
@@ -496,6 +518,11 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
             raise ValueError(
                 f"Musubi backend.config.dataset_options.{dataset_id}.fp_1f_target_index "
                 "must be a nonnegative integer"
+            )
+        no_post = value.get("fp_1f_no_post")
+        if no_post is not None and not isinstance(no_post, bool):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.fp_1f_no_post must be boolean"
             )
         frame_extraction = value.get("frame_extraction")
         if frame_extraction is not None and frame_extraction not in {"head", "full"}:

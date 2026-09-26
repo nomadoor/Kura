@@ -121,6 +121,7 @@ dataset settings; it does not add a model taxonomy to core.
 | `hunyuan-video-1.5-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at the profile's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-video` | `plain-video-jsonl` | Same explicit `strip` rule. Normal FramePack fixes `fp_latent_window_size = 9`, defaults to the pinned recommendation `frame_extraction = full` with the frozen upstream default `max_frames = 129`, and preflights at 30fps before acquisition. Authors may explicitly choose `head` or another positive `max_frames`. `head` requires every `target_frames` value to be on the 1+4n grid and at least 37 frames; `full` mirrors the pinned full-video rounding and requires the resulting clip to contain one complete latent window. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-f1-video` | `plain-video-jsonl` | Same dataset rules as `framepack-video`; the separate profile freezes the F1 sampling mode in input identity. | `unsupported`; an audio input stops rather than being ignored. |
+| `framepack-single-frame` | `image-control-jsonl` | Same explicit `strip` rule. The verified standard path requires exactly one target and one control image and freezes `fp_latent_window_size = 9`, `fp_1f_clean_indices = [0]`, `fp_1f_target_index = 9`, and `fp_1f_no_post = false` unless the three one-frame dataset options are explicitly set. Experimental multiple-control 1f-mc/kisekaeichi layouts remain unclaimed and stop rather than being flattened into this profile. | `unsupported`; an audio input stops rather than being ignored. |
 | `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-one-frame-plain` | `plain-image-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-video-t2va`, `h3-video-fl2va`, video teacher profiles | `h3-video-jsonl` | Same explicit `strip` rule. H3 target videos are measured through the pinned timestamp-to-24fps loader; `source_fps` is not an H3 option. Plans warn outside the released 124-345 frame range. | An authored target `audio` role becomes explicit `audio_path`. Without one, preflight rejects a same-stem sidecar beside the resolved source path before allowing embedded audio or silence; pinned Musubi resolves the JSONL path before sidecar lookup. |
@@ -144,10 +145,17 @@ datasets are not covered by that profile: their meaning depends on the explicit
 T2I or Single Frame task/mode and needs a separate verified profile. FramePack
 image datasets are likewise not ordinary images: pinned FramePack one-frame
 training requires an image target plus a start/control image and `--one_frame`
-(`docs/framepack_1f.md`, lines 86-100). Those currently claimed Wan Single
-Frame and FramePack Single Frame paths remain mandatory migration work; this
-slice does not claim them as implemented. FramePack normal/F1 remains a video
-dataset path. At pinned Musubi `4e7c714`, both paths require at least one full
+(`docs/framepack_1f.md`, lines 86-100). This slice implements the standard
+one-target/one-control FramePack path; Wan Single Frame and the experimental
+multiple-control FramePack layouts remain mandatory migration work. Pinned
+`docs/dataset_config.md`, lines 499-540 defines the standard one-frame values,
+requires the number of control images to equal `fp_1f_clean_indices`, and
+documents the experimental multiple-control variants. Pinned
+`src/musubi_tuner/dataset/datasources.py`, lines 338-381 normalizes and validates
+the generated JSONL control path, while `src/musubi_tuner/fpack_cache_latents.py`,
+lines 244-325 consumes the target/control pair and frozen index settings.
+FramePack normal/F1 remains a video dataset path. At pinned Musubi `4e7c714`,
+both paths require at least one full
 9-latent window: `src/musubi_tuner/fpack_cache_latents.py`, lines 60-69 raises
 an explicit `ValueError` below 37 frames and lines 71-80 trims longer clips to
 whole windows. Pinned `full` extraction takes `min(frame_count, max_frames)` and

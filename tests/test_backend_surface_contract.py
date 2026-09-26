@@ -277,6 +277,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertEqual(options["control_resolution"], {"type": "integer-pair", "minimum": 1})
         self.assertEqual(options["fp_1f_clean_indices"], {"type": "integer-list", "minimum": 0})
         self.assertEqual(options["fp_1f_target_index"], {"type": "integer", "minimum": 0})
+        self.assertEqual(options["fp_1f_no_post"], {"type": "boolean", "default": False})
         self.assertEqual(options["no_resize_control"], {"type": "boolean"})
 
     def test_musubi_capabilities_expose_krea2_memory_accommodations(self) -> None:

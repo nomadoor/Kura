@@ -2992,6 +2992,115 @@ class DatasetHandoffTests(unittest.TestCase):
                     project=lambda selection: project_musubi_dataset(run, selection),
                 )
 
+    def test_musubi_projects_framepack_single_frame_target_and_control(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "framepack",
+                "one_frame": True,
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "control.png").write_bytes(b"control")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"].append({"type": "file", "role": "control", "path": "control.png"})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "framepack-single-frame")
+            self.assertEqual(projected["policy"]["codec"], "image-control-jsonl")
+            self.assertEqual(projected["native"]["fp_latent_window_size"], 9)
+            self.assertEqual(projected["native"]["fp_1f_clean_indices"], [0])
+            self.assertEqual(projected["native"]["fp_1f_target_index"], 9)
+            self.assertFalse(projected["native"]["fp_1f_no_post"])
+            generated = json.loads(
+                projected["views"][0]["native_files"][0]["text"]
+            )
+            self.assertIn("image_path", generated)
+            self.assertIn("control_path", generated)
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_framepack_single_frame_freezes_explicit_dataset_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "dataset_options": {"tiny": {
+                    "fp_1f_clean_indices": [2],
+                    "fp_1f_target_index": 13,
+                    "fp_1f_no_post": True,
+                }},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "control.png").write_bytes(b"control")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"].append({"type": "file", "role": "control", "path": "control.png"})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["native"]["fp_1f_clean_indices"], [2])
+            self.assertEqual(projected["native"]["fp_1f_target_index"], 13)
+            self.assertTrue(projected["native"]["fp_1f_no_post"])
+
+    def test_musubi_framepack_single_frame_stops_for_unverified_multiple_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "dataset_options": {"tiny": {
+                    "fp_1f_clean_indices": [0, 1],
+                    "fp_1f_target_index": 9,
+                }},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for name in ("control-0.png", "control-1.png"):
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "control", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"no verified Musubi projection profile matches.*image-controls-2",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
     def test_musubi_video_projection_uses_the_command_architecture_alias(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
