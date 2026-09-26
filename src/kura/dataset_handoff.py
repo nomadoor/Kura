@@ -65,6 +65,7 @@ def _manifest_selection(run: dict[str, Any], workspace: Path) -> tuple[dict[str,
                     "dataset": dataset_id,
                     "sample": sample["id"],
                     "kind": f"file[{file_index}] role={reference['role']}",
+                    "binding_kind": f"file-role:{reference['role']}",
                     "container_source": f"/workspace/datasets/{dataset_id}/{reference['path']}",
                 }
             caption_text = sample["caption"]
@@ -76,6 +77,7 @@ def _manifest_selection(run: dict[str, Any], workspace: Path) -> tuple[dict[str,
                     "dataset": dataset_id,
                     "sample": sample["id"],
                     "kind": "caption",
+                    "binding_kind": "caption",
                     "text": caption_text,
                 }
             samples.append({
@@ -119,6 +121,90 @@ def _projection_error(input_index: dict[str, dict[str, Any]], input_id: Any, rea
         f"dataset {identity['dataset']!r} sample {identity['sample']!r} "
         f"{identity['kind']} is unrepresentable: {reason}"
     )
+
+
+def _validate_bindings(
+    dataset_id: str,
+    view_root: str,
+    bindings: Any,
+    placements: dict[str, str],
+    input_index: dict[str, dict[str, Any]],
+) -> None:
+    if not isinstance(bindings, list):
+        raise ValueError(f"backend projection for dataset {dataset_id!r} has no input bindings")
+    bound: list[str] = []
+    seen_keys: set[str] = set()
+    bound_samples: set[str] = set()
+    roots_by_kind: dict[str, str] = {}
+    for index, binding in enumerate(bindings):
+        if (
+            not isinstance(binding, dict)
+            or set(binding) != {"rule", "key", "members"}
+            or binding.get("rule") != "same-relative-stem"
+        ):
+            raise ValueError(f"projection binding {index} has an unsupported rule or shape")
+        key = binding.get("key")
+        members = binding.get("members")
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"projection binding {index} has no association key")
+        key = _safe_workspace_relative(key, context=f"projection binding {index} association key")
+        if not isinstance(members, list) or not members:
+            raise ValueError(f"projection binding {index} must name one or more members")
+        input_ids: list[str] = []
+        member_roots: list[str] = []
+        relative_stems: list[str] = []
+        for member_index, member in enumerate(members):
+            if not isinstance(member, dict) or set(member) != {"input_id", "root"}:
+                raise ValueError(f"projection binding {index} member {member_index} has an invalid shape")
+            input_id = member.get("input_id")
+            member_root = _safe_workspace_relative(
+                member.get("root"), context=f"projection binding {index} member {member_index} root",
+            )
+            if not isinstance(input_id, str):
+                raise ValueError(f"projection binding {index} member {member_index} has an invalid input")
+            if member_root != view_root and not member_root.startswith(view_root + "/"):
+                raise ValueError(f"projection binding {index} member {member_index} root is outside its view")
+            try:
+                placement = placements[input_id]
+            except KeyError as exc:
+                raise ValueError(f"projection binding {index} names an input absent from the view") from exc
+            if not placement.startswith(member_root + "/"):
+                raise ValueError(f"projection binding {index} member {member_index} is outside its role root")
+            relative = PurePosixPath(placement).relative_to(PurePosixPath(member_root))
+            relative_stems.append(relative.with_suffix("").as_posix())
+            input_ids.append(input_id)
+            member_roots.append(member_root)
+        identities = [input_index.get(item) for item in input_ids]
+        if any(not isinstance(item, dict) for item in identities):
+            raise ValueError(f"projection binding {index} names an unknown input")
+        if any(item.get("dataset") != dataset_id for item in identities if isinstance(item, dict)):
+            raise ValueError(f"projection binding {index} crosses dataset boundaries")
+        if len({item.get("sample") for item in identities if isinstance(item, dict)}) != 1:
+            raise ValueError(f"projection binding {index} crosses sample boundaries")
+        if any(stem != key for stem in relative_stems):
+            raise ValueError(f"projection binding {index} violates its association key")
+        if key in seen_keys:
+            raise ValueError(f"projection binding {index} has duplicate association key {key!r}")
+        seen_keys.add(key)
+        sample = identities[0].get("sample") if isinstance(identities[0], dict) else None
+        if not isinstance(sample, str):
+            raise ValueError(f"projection binding {index} has no sample identity")
+        if sample in bound_samples:
+            raise ValueError(f"projection sample {sample!r} has more than one binding")
+        bound_samples.add(sample)
+        for identity, member_root in zip(identities, member_roots, strict=True):
+            binding_kind = identity.get("binding_kind") if isinstance(identity, dict) else None
+            if not isinstance(binding_kind, str):
+                raise ValueError(f"projection binding {index} input has no binding kind")
+            previous_root = roots_by_kind.setdefault(binding_kind, member_root)
+            if previous_root != member_root:
+                raise ValueError(
+                    f"projection input kind {binding_kind!r} uses multiple role roots: "
+                    f"{previous_root!r} and {member_root!r}"
+                )
+        bound.extend(input_ids)
+    if Counter(bound) != Counter(placements.keys()):
+        raise ValueError(f"projection bindings do not cover the exact dataset {dataset_id!r} view inputs")
 
 
 def _validate_view(run_id: str, dataset: dict[str, Any], projected: dict[str, Any],
@@ -170,35 +256,7 @@ def _validate_view(run_id: str, dataset: dict[str, Any], projected: dict[str, An
         seen_paths.add(path)
         placements[input_id] = path
         files.append({"path": path, "text": text, "input_id": input_id})
-    bindings = projected.get("bindings")
-    if not isinstance(bindings, list):
-        raise ValueError(f"backend projection for dataset {dataset['id']!r} has no input bindings")
-    bound: list[str] = []
-    for index, binding in enumerate(bindings):
-        if not isinstance(binding, dict) or binding.get("rule") != "same-stem":
-            raise ValueError(f"projection binding {index} has an unsupported rule")
-        input_ids = binding.get("inputs")
-        allow_singleton = binding.get("allow_singleton", False)
-        if not isinstance(allow_singleton, bool):
-            raise ValueError(f"projection binding {index} has an invalid singleton declaration")
-        if not isinstance(input_ids, list) or not input_ids or not all(isinstance(item, str) for item in input_ids):
-            raise ValueError(f"projection binding {index} must name one or more inputs")
-        if len(input_ids) == 1 and not allow_singleton:
-            raise ValueError(f"projection binding {index} must explicitly allow a singleton input")
-        identities = [input_index.get(item) for item in input_ids]
-        if any(not isinstance(item, dict) for item in identities):
-            raise ValueError(f"projection binding {index} names an unknown input")
-        if len({item.get("sample") for item in identities if isinstance(item, dict)}) != 1:
-            raise ValueError(f"projection binding {index} crosses sample boundaries")
-        try:
-            paths = [placements[item] for item in input_ids]
-        except KeyError as exc:
-            raise ValueError(f"projection binding {index} names an input absent from the view") from exc
-        if len({PurePosixPath(path).with_suffix("").as_posix() for path in paths}) != 1:
-            raise ValueError(f"projection binding {index} violates same-stem pairing")
-        bound.extend(input_ids)
-    if Counter(bound) != Counter(placements.keys()):
-        raise ValueError(f"projection bindings do not cover the exact dataset {dataset['id']!r} view inputs")
+    _validate_bindings(dataset["id"], root, projected.get("bindings"), placements, input_index)
     return {"dataset": dataset["id"], "root": root, "links": links, "files": files}, placements
 
 

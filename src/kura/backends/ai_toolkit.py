@@ -136,8 +136,12 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 links_for_sample = [item for item in links if item["input_id"] == targets[0]["input_id"]]
                 if links_for_sample:
                     bindings.append({
-                        "rule": "same-stem",
-                        "inputs": [targets[0]["input_id"], caption["input_id"]],
+                        "rule": "same-relative-stem",
+                        "key": f"{index:06d}-{content_tag}",
+                        "members": [
+                            {"input_id": targets[0]["input_id"], "root": view_root},
+                            {"input_id": caption["input_id"], "root": view_root},
+                        ],
                     })
         semantic = {
             "caption_ext": ".txt",

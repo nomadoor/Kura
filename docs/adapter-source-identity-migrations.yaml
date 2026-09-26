@@ -14,6 +14,11 @@ records:
       identity. The sd-scripts adapter does not consume the new projection in
       this increment, so its native dataset configuration, command, Resume
       behavior, and the listed SD1.5 equivalence observation are unchanged.
+      The later generalized association validator is also not called by the
+      current sd-scripts staging path and therefore does not change that
+      observation's native TOML, staged files, command, or training behavior.
+      Its subsequent binding-key, sample, and role-root uniqueness checks are
+      likewise outside that staging path.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
@@ -24,7 +29,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: d626c41832b5a86e21966d293a76912503ce23b01461acdfe28ced892960792f
+      value: 09de2a164b13ea64ab1f8715106b5a10a19f0d21bcca1a83431c0a8dcaee8406
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -35,7 +40,13 @@ records:
       The manifest handoff adds an independently verified run-owned view for
       that same image-and-caption path without changing the selector or native
       training meaning; the shared manifest and handoff sources are now part
-      of adapter identity.
+      of adapter identity. The generalized association report replaces the
+      internal same-directory binding with a checked relative-stem key. For
+      this recorded single image-and-caption path, the generated view paths,
+      caption bytes, native folder_path, runtime command, and cache behavior
+      remain unchanged. Requiring one unique binding key per sample and one
+      role root per input kind only rejects ambiguous reports; the recorded
+      one-image, one-caption projection already satisfies those invariants.
       This migration applies only to that evidence, not to unregistered or
       custom-image selectors.
     behavior_changed: false
@@ -48,7 +59,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 830eed49984c6690fe341d1fdfc4d7fd793b1f40e0933942ab997e82fc90a24c
+      value: 778b1886caaecceaf89b275d73b5ece96ab34cdfee75e156fa37145496de96ed
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

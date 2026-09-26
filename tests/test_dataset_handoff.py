@@ -42,6 +42,28 @@ class DatasetHandoffTests(unittest.TestCase):
         resolved.mkdir(parents=True)
         return run, resolved
 
+    def make_two_captionless_samples(self, root: Path) -> tuple[dict, Path]:
+        run, resolved = self.make_run(root)
+        dataset = root / "datasets" / "tiny"
+        (dataset / "a.txt").unlink()
+        (dataset / "b.jpg").write_bytes(b"second image")
+        rows = [
+            {
+                "id": "a",
+                "files": [{"type": "file", "role": "target", "path": "a.png"}],
+                "caption": None,
+            },
+            {
+                "id": "b",
+                "files": [{"type": "file", "role": "target", "path": "b.jpg"}],
+                "caption": None,
+            },
+        ]
+        (dataset / "items.jsonl").write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+        )
+        return run, resolved
+
     @staticmethod
     def image_projection(selection: dict) -> dict:
         dataset = selection["datasets"][0]
@@ -58,8 +80,12 @@ class DatasetHandoffTests(unittest.TestCase):
                 "unrepresentable": [],
                 "semantic": {"caption_ext": ".txt"},
                 "bindings": [{
-                    "rule": "same-stem",
-                    "inputs": [target["input_id"], caption["input_id"]],
+                    "rule": "same-relative-stem",
+                    "key": "000000",
+                    "members": [
+                        {"input_id": target["input_id"], "root": view_root},
+                        {"input_id": caption["input_id"], "root": view_root},
+                    ],
                 }],
                 "native_runtime": {"folder_path": "/workspace/" + view_root},
                 "native": {"caption_ext": ".txt", "folder_path": "/workspace/" + view_root},
@@ -142,7 +168,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
                 return projection
 
-            with self.assertRaisesRegex(ValueError, "violates same-stem pairing"):
+            with self.assertRaisesRegex(ValueError, "violates its association key"):
                 freeze_dataset_handoff(
                     run, workspace, resolved, backend="ai-toolkit", project=shifted,
                 )
@@ -159,9 +185,279 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
                 return projection
 
-            with self.assertRaisesRegex(ValueError, "violates same-stem pairing"):
+            with self.assertRaisesRegex(ValueError, "violates its association key"):
                 freeze_dataset_handoff(
                     run, workspace, resolved, backend="ai-toolkit", project=shifted_directory,
+                )
+
+    def test_projection_associates_same_relative_stem_across_role_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def cross_folder(selection: dict) -> dict:
+                projection = self.image_projection(selection)
+                dataset = projection["datasets"][0]
+                view_root = dataset["view"]["root"]
+                target = dataset["view"]["links"][0]
+                caption = dataset["view"]["files"][0]
+                target["path"] = view_root + "/targets/000000.png"
+                caption["path"] = view_root + "/captions/000000.txt"
+                dataset["bindings"] = [{
+                    "rule": "same-relative-stem",
+                    "key": "000000",
+                    "members": [
+                        {"input_id": target["input_id"], "root": view_root + "/targets"},
+                        {"input_id": caption["input_id"], "root": view_root + "/captions"},
+                    ],
+                }]
+                return projection
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=cross_folder,
+            )
+
+            self.assertEqual(
+                {Path(item["path"]).parent.name for item in lock["views"][0]["links"] + lock["views"][0]["files"]},
+                {"targets", "captions"},
+            )
+
+    def test_projection_does_not_pair_global_duplicate_basenames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def unrelated_nested_paths(selection: dict) -> dict:
+                projection = self.image_projection(selection)
+                dataset = projection["datasets"][0]
+                view_root = dataset["view"]["root"]
+                target = dataset["view"]["links"][0]
+                caption = dataset["view"]["files"][0]
+                target["path"] = view_root + "/targets/a/000000.png"
+                caption["path"] = view_root + "/captions/b/000000.txt"
+                dataset["bindings"] = [{
+                    "rule": "same-relative-stem",
+                    "key": "a/000000",
+                    "members": [
+                        {"input_id": target["input_id"], "root": view_root + "/targets"},
+                        {"input_id": caption["input_id"], "root": view_root + "/captions"},
+                    ],
+                }]
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "violates its association key"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=unrelated_nested_paths,
+                )
+
+    def test_projection_association_can_cover_three_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            dataset_root = workspace / "datasets" / "tiny"
+            (dataset_root / "control").mkdir()
+            (dataset_root / "control" / "a.png").write_bytes(b"control")
+            row = json.loads((dataset_root / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"].append({"type": "file", "role": "control", "path": "control/a.png"})
+            (dataset_root / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            def three_inputs(selection: dict) -> dict:
+                projection = self.image_projection(selection)
+                selected = selection["datasets"][0]["samples"][0]
+                control = next(item for item in selected["files"] if item["role"] == "control")
+                projected = projection["datasets"][0]
+                view_root = projected["view"]["root"]
+                target = projected["view"]["links"][0]
+                caption = projected["view"]["files"][0]
+                target["path"] = view_root + "/targets/000000.png"
+                caption["path"] = view_root + "/captions/000000.txt"
+                projected["view"]["links"].append({
+                    "path": view_root + "/controls/000000.png",
+                    "target": "/workspace/datasets/tiny/control/a.png",
+                    "input_id": control["input_id"],
+                })
+                projected["consumed"].append(control["input_id"])
+                projected["bindings"] = [{
+                    "rule": "same-relative-stem",
+                    "key": "000000",
+                    "members": [
+                        {"input_id": target["input_id"], "root": view_root + "/targets"},
+                        {"input_id": control["input_id"], "root": view_root + "/controls"},
+                        {"input_id": caption["input_id"], "root": view_root + "/captions"},
+                    ],
+                }]
+                return projection
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=three_inputs,
+            )
+
+            self.assertEqual(len(lock["views"][0]["links"]), 2)
+
+    def test_projection_rejects_legacy_same_stem_binding_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def legacy_binding(selection: dict) -> dict:
+                projection = self.image_projection(selection)
+                dataset = projection["datasets"][0]
+                member_ids = [member["input_id"] for member in dataset["bindings"][0]["members"]]
+                dataset["bindings"] = [{"rule": "same-stem", "inputs": member_ids}]
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "unsupported rule"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=legacy_binding,
+                )
+
+    def test_projection_rejects_duplicate_association_key_across_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_two_captionless_samples(workspace)
+
+            def duplicate_key(selection: dict) -> dict:
+                dataset = selection["datasets"][0]
+                first = dataset["samples"][0]["files"][0]
+                second = dataset["samples"][1]["files"][0]
+                view_root = "runs/example/cache/dataset-view/test/tiny"
+                semantic = {"format": "test"}
+                runtime = {"folder_path": "/workspace/" + view_root}
+                return {
+                    "schema_version": 1,
+                    "backend": "ai-toolkit",
+                    "datasets": [{
+                        "id": "tiny",
+                        "consumed": [first["input_id"], second["input_id"]],
+                        "unrepresentable": [],
+                        "semantic": semantic,
+                        "native_runtime": runtime,
+                        "native": {**semantic, **runtime},
+                        "bindings": [
+                            {
+                                "rule": "same-relative-stem",
+                                "key": "000000",
+                                "members": [{"input_id": first["input_id"], "root": view_root}],
+                            },
+                            {
+                                "rule": "same-relative-stem",
+                                "key": "000000",
+                                "members": [{"input_id": second["input_id"], "root": view_root}],
+                            },
+                        ],
+                        "view": {
+                            "root": view_root,
+                            "links": [
+                                {
+                                    "path": view_root + "/000000.png",
+                                    "target": "/workspace/datasets/tiny/a.png",
+                                    "input_id": first["input_id"],
+                                },
+                                {
+                                    "path": view_root + "/000000.jpg",
+                                    "target": "/workspace/datasets/tiny/b.jpg",
+                                    "input_id": second["input_id"],
+                                },
+                            ],
+                            "files": [],
+                        },
+                    }],
+                }
+
+            with self.assertRaisesRegex(ValueError, "duplicate association key"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=duplicate_key,
+                )
+
+    def test_projection_rejects_one_sample_split_across_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            def split_sample(selection: dict) -> dict:
+                projection = self.image_projection(selection)
+                dataset = projection["datasets"][0]
+                view_root = dataset["view"]["root"]
+                target = dataset["view"]["links"][0]
+                caption = dataset["view"]["files"][0]
+                caption["path"] = view_root + "/000001.txt"
+                dataset["bindings"] = [
+                    {
+                        "rule": "same-relative-stem",
+                        "key": "000000",
+                        "members": [{"input_id": target["input_id"], "root": view_root}],
+                    },
+                    {
+                        "rule": "same-relative-stem",
+                        "key": "000001",
+                        "members": [{"input_id": caption["input_id"], "root": view_root}],
+                    },
+                ]
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "sample .* has more than one binding"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=split_sample,
+                )
+
+    def test_projection_rejects_one_input_kind_in_multiple_role_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_two_captionless_samples(workspace)
+
+            def inconsistent_roots(selection: dict) -> dict:
+                dataset = selection["datasets"][0]
+                first = dataset["samples"][0]["files"][0]
+                second = dataset["samples"][1]["files"][0]
+                view_root = "runs/example/cache/dataset-view/test/tiny"
+                first_root = view_root + "/targets-a"
+                second_root = view_root + "/targets-b"
+                semantic = {"format": "test"}
+                runtime = {"folder_path": "/workspace/" + view_root}
+                return {
+                    "schema_version": 1,
+                    "backend": "ai-toolkit",
+                    "datasets": [{
+                        "id": "tiny",
+                        "consumed": [first["input_id"], second["input_id"]],
+                        "unrepresentable": [],
+                        "semantic": semantic,
+                        "native_runtime": runtime,
+                        "native": {**semantic, **runtime},
+                        "bindings": [
+                            {
+                                "rule": "same-relative-stem",
+                                "key": "000000",
+                                "members": [{"input_id": first["input_id"], "root": first_root}],
+                            },
+                            {
+                                "rule": "same-relative-stem",
+                                "key": "000001",
+                                "members": [{"input_id": second["input_id"], "root": second_root}],
+                            },
+                        ],
+                        "view": {
+                            "root": view_root,
+                            "links": [
+                                {
+                                    "path": first_root + "/000000.png",
+                                    "target": "/workspace/datasets/tiny/a.png",
+                                    "input_id": first["input_id"],
+                                },
+                                {
+                                    "path": second_root + "/000001.jpg",
+                                    "target": "/workspace/datasets/tiny/b.jpg",
+                                    "input_id": second["input_id"],
+                                },
+                            ],
+                            "files": [],
+                        },
+                    }],
+                }
+
+            with self.assertRaisesRegex(ValueError, "input kind .* uses multiple role roots"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=inconsistent_roots,
                 )
 
     def test_projection_can_explicitly_bind_one_captionless_target(self) -> None:
@@ -190,9 +486,9 @@ class DatasetHandoffTests(unittest.TestCase):
                         "native_runtime": runtime,
                         "native": {**semantic, **runtime},
                         "bindings": [{
-                            "rule": "same-stem",
-                            "inputs": [target["input_id"]],
-                            "allow_singleton": True,
+                            "rule": "same-relative-stem",
+                            "key": "000000",
+                            "members": [{"input_id": target["input_id"], "root": view_root}],
                         }],
                         "view": {
                             "root": view_root,
