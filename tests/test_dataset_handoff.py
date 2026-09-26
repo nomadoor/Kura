@@ -20,7 +20,7 @@ from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff
 from kura.dataset_handoff import local_training_mounts
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
-from kura.run_commands.plan import _dataset_layout_preflight_report
+from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, format_run_plan
 
 
 class DatasetHandoffTests(unittest.TestCase):
@@ -1726,6 +1726,55 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(records[0]["severity"], "info")
             self.assertIn("compilation", records[0]["fact"])
             self.assertNotIn("missing", records[0]["fact"])
+
+    def test_musubi_video_plan_discloses_container_only_frame_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            (resolved / "dataset-projection.lock.json").write_text(json.dumps({
+                "backend": "musubi-tuner",
+                "datasets": [{
+                    "id": "clips",
+                    "native": {
+                        "video_directory": "/workspace/runs/example/cache/dataset-view/musubi/clips",
+                        "target_frames": [1, 25, 49],
+                    },
+                }],
+            }), encoding="utf-8")
+
+            checks = _dataset_runtime_checks(run_dir)
+            output = format_run_plan({
+                "id": "example",
+                "type": "train",
+                "backend": {"name": "musubi-tuner", "config": {}},
+                "model": {},
+                "compute": {},
+                "datasets": [],
+                "dataset_input": {
+                    "status": "current",
+                    "verification": "content-hash-at-compile",
+                    "selection": [],
+                    "views": [],
+                    "changes": [],
+                    "runtime_checks": checks,
+                },
+                "write_roots": [],
+                "recipe": {},
+                "sampling": {},
+                "resources": {},
+                "runpod_capacity": None,
+                "model_downloads": {},
+                "disk_cache": {},
+                "preflight": [],
+                "experiment": {},
+                "training_state": {},
+                "resume": None,
+            })
+
+            self.assertEqual(checks[0]["required_frames"], 49)
+            self.assertIn("immediately after container launch, before model acquisition", output)
+            self.assertIn("host_verification unavailable", output)
 
     def test_input_identity_is_stable_across_run_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

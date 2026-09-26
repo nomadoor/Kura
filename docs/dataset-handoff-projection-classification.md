@@ -69,6 +69,10 @@ requires parsing the emitted native configuration file and proving exact
 equality with the complete `native` mapping already verified by core. Checking
 only selected paths or settings is insufficient.
 
+When RunPod selected-file transfer is implemented, its acceptance checks must
+also prove that the Musubi video-frame preflight realization record is returned
+to the local run alongside the other realization evidence.
+
 ## Existing authored surfaces replaced by the switch
 
 These are explicit compatibility changes, not silent capability drops:

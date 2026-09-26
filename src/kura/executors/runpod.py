@@ -451,7 +451,9 @@ def _is_runpod_transient_error(exc: ValueError) -> bool:
     return "runpod api is unreachable" in text or any(f"({code})" in text for code in (429, 500, 502, 503, 504))
 
 
-def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_id: str) -> dict[str, str]:
+def _runpod_training_env(
+    spec_env: dict[str, str], *, workspace_path: str, run_id: str, realization_id: str,
+) -> dict[str, str]:
     log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
     runtime_env = dict(spec_env)
     runtime_env.update({
@@ -461,6 +463,7 @@ def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_i
         "HF_HUB_CACHE": f"{workspace_path}/cache/huggingface/hub",
         "KURA_WORKSPACE": workspace_path,
         "KURA_RUN_ID": run_id,
+        "KURA_REALIZATION_ID": realization_id,
     })
     return runtime_env
 
@@ -623,7 +626,9 @@ def launch_runpod(
     workspace_path = settings["workspace_path"]
     write_paths = validated_write_roots(spec, workspace_path=workspace_path)
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
-    runtime_env = _runpod_training_env(spec["env"], workspace_path=workspace_path, run_id=run_dir.name)
+    runtime_env = _runpod_training_env(
+        spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
+    )
     secret_keys = [key for key in runtime_env if _is_secret(key)]
     if secret_keys:
         raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))

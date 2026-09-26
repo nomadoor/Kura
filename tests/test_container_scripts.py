@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -104,6 +104,19 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertNotEqual(baseline, changed)
 
+    def test_musubi_adapter_identity_includes_video_frame_preflight(self) -> None:
+        baseline = adapter_source_identity("musubi-tuner")["value"]
+        original = Path.read_bytes
+
+        def changed_helper(path):
+            payload = original(path)
+            return payload + (b"changed" if path.name == "musubi_dataset_assert.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_helper):
+            changed = adapter_source_identity("musubi-tuner")["value"]
+
+        self.assertNotEqual(baseline, changed)
+
     def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
         baseline = adapter_source_identity("sd-scripts")["value"]
         original = Path.read_bytes
@@ -157,6 +170,139 @@ class ContainerScriptTests(unittest.TestCase):
             )
 
         self.assertEqual(count, 1)
+
+    def test_musubi_video_preflight_lists_all_short_videos_and_records_measurements(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            view = workspace / "runs" / "video-run" / "cache" / "dataset-view" / "musubi" / "tiny"
+            view.mkdir(parents=True)
+            first = view / "first.mp4"
+            second = view / "second.mp4"
+            source = workspace / "datasets" / "clips"
+            source.mkdir(parents=True)
+            first_source = source / "one.mp4"
+            second_source = source / "two.mp4"
+            first_source.write_bytes(b"first")
+            second_source.write_bytes(b"second")
+            first.symlink_to(first_source)
+            second.symlink_to(second_source)
+            config = workspace / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nvideo_directory = "' + view.as_posix() + '"\n'
+                'target_frames = [1, 25]\nsource_fps = 30.0\n',
+                encoding="utf-8",
+            )
+            counts = {str(first): 12, str(second): 8}
+            resolved = workspace / "runs" / "video-run" / "resolved"
+            resolved.mkdir(parents=True)
+            (resolved / "dataset-input.lock.json").write_text(json.dumps({
+                "semantic": {"datasets": [{"dataset": "clips", "samples": [
+                    {"id": "sample-one"}, {"id": "sample-two"},
+                ]}]},
+                "views": [{"links": [
+                    {"path": str(first.relative_to(workspace)), "target": "/workspace/datasets/clips/one.mp4", "input_id": "d0:s0:f0"},
+                    {"path": str(second.relative_to(workspace)), "target": "/workspace/datasets/clips/two.mp4", "input_id": "d0:s1:f0"},
+                ]}],
+            }), encoding="utf-8")
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            calls: list[tuple[str, int, float | None, float | None]] = []
+
+            def fake_load_video(path, start_frame, end_frame, **kwargs):
+                calls.append((path, end_frame, kwargs.get("source_fps"), kwargs.get("target_fps")))
+                return [object()] * counts[path]
+
+            media_utils.load_video = fake_load_video  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+            }
+            env = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "realization-1",
+                "KURA_MUSUBI_ARCHITECTURE": "wan",
+                "KURA_MUSUBI_TARGET_FPS": "16.0",
+            }
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                namespace["main"]()
+
+            message = str(raised.exception)
+            self.assertIn("first.mp4: 12 converted frames", message)
+            self.assertIn("second.mp4: 8 converted frames", message)
+            self.assertIn("sample sample-one", message)
+            self.assertIn("/workspace/datasets/clips/one.mp4", message)
+            self.assertEqual(calls, [(str(first), 25, 30.0, 16.0), (str(second), 25, 30.0, 16.0)])
+            record = json.loads(
+                (workspace / "runs" / "video-run" / "realizations" / "realization-1.musubi-video-preflight.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["status"], "failed")
+            self.assertEqual([item["effective_frames"] for item in record["videos"]], [12, 8])
+            self.assertEqual(record["videos"][0]["sample_id"], "sample-one")
+            self.assertEqual(record["videos"][0]["source"], "/workspace/datasets/clips/one.mp4")
+            self.assertEqual(record["architecture"], "wan")
+            self.assertEqual(record["target_fps"], 16.0)
+
+    def test_musubi_video_preflight_records_success_without_resampling_when_source_fps_is_absent(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            view = workspace / "videos"
+            view.mkdir()
+            video = view / "enough.mp4"
+            video.write_bytes(b"video")
+            config = workspace / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nvideo_directory = "' + view.as_posix() + '"\n'
+                'target_frames = [1, 25]\n',
+                encoding="utf-8",
+            )
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            calls = []
+
+            def fake_load_video(path, start_frame, end_frame, **kwargs):
+                calls.append((path, start_frame, end_frame, kwargs))
+                return [object()] * 25
+
+            media_utils.load_video = fake_load_video  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+            }
+            env = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "realization-2",
+                "KURA_MUSUBI_ARCHITECTURE": "wan",
+                "KURA_MUSUBI_TARGET_FPS": "16.0",
+            }
+            output = io.StringIO()
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]),
+                patch("sys.stdout", output),
+            ):
+                namespace["main"]()
+
+            self.assertEqual(calls[0][1:3], (0, 25))
+            self.assertIsNone(calls[0][3]["source_fps"])
+            self.assertIsNone(calls[0][3]["target_fps"])
+            self.assertEqual(calls[0][3]["bucket_reso"], (64, 64))
+            record = json.loads(
+                (workspace / "runs" / "video-run" / "realizations" / "realization-2.musubi-video-preflight.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["status"], "passed")
+            self.assertEqual(record["videos"][0]["effective_frames"], 25)
 
     def test_musubi_dataset_assert_counts_symlinked_image_view(self) -> None:
         namespace = {"__name__": "__test__"}

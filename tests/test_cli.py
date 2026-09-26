@@ -5227,10 +5227,13 @@ class MusubiBackendTests(unittest.TestCase):
             }
         }
 
-        script = command_musubi_tuner(run)["argv"][2]
+        spec = command_musubi_tuner(run)
+        script = spec["argv"][2]
 
         self.assertIn("--dit_high_noise /models/wan22-high.safetensors", script)
         self.assertIn("--timestep_boundary 0.875", script)
+        self.assertEqual(spec["env"]["KURA_MUSUBI_ARCHITECTURE"], "wan")
+        self.assertEqual(spec["env"]["KURA_MUSUBI_TARGET_FPS"], "16.0")
 
     def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
         run = self._run()
@@ -7975,6 +7978,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         script = _runpod_remote_job_script(
             workspace="/workspace",
             run_id="example",
+            realization_id="r1",
             remote_secret_path="/tmp/kura-secrets/example.env",
             archive_name="bundle.tar.gz",
             remote_archive="/workspace/bundle.tar.gz",

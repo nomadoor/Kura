@@ -337,7 +337,9 @@ def docker_command(
     if spec_secret_keys:
         raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
     runtime_env["KURA_LOG_PATH"] = log_path
+    runtime_env["KURA_WORKSPACE"] = workspace_target.rstrip("/")
     runtime_env["KURA_RUN_ID"] = run_dir.name
+    runtime_env["KURA_REALIZATION_ID"] = realization_id
     runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(
         workspace_mount_mappings(
             workspace,

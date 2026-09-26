@@ -899,6 +899,36 @@ def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
     return _configured_gib(value, default=50) * 1024**3
 
 
+def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
+    projection_path = run_dir / "resolved" / "dataset-projection.lock.json"
+    if not projection_path.is_file():
+        return []
+    projection = json.loads(projection_path.read_text(encoding="utf-8"))
+    if not isinstance(projection, dict) or projection.get("backend") != "musubi-tuner":
+        return []
+    checks = []
+    datasets = projection.get("datasets")
+    if not isinstance(datasets, list):
+        return checks
+    for dataset in datasets:
+        if not isinstance(dataset, dict):
+            continue
+        native = dataset.get("native")
+        if not isinstance(native, dict) or not isinstance(native.get("video_directory"), str):
+            continue
+        target_frames = native.get("target_frames")
+        if not isinstance(target_frames, list) or not target_frames:
+            continue
+        checks.append({
+            "kind": "musubi-video-effective-frame-count",
+            "dataset": dataset.get("id"),
+            "required_frames": max(target_frames),
+            "timing": "immediately after container launch, before model acquisition",
+            "host_verification": "unavailable; measured by the pinned Musubi loader inside the container",
+        })
+    return checks
+
+
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
@@ -991,6 +1021,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
                 "selection": selection,
                 "views": views,
                 "postflight": postflight,
+                "runtime_checks": _dataset_runtime_checks(run_dir),
             }
         else:
             dataset_input_payload = {
@@ -1325,6 +1356,16 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 lines.append(f"  - trainer view: {_format_plan_value(view.get('root'))}")
                 _append_kv(lines, "source_links", view.get("links"), indent=4)
                 _append_kv(lines, "generated_files", view.get("generated_files"), indent=4)
+        for check in dataset_input.get("runtime_checks", []):
+            if not isinstance(check, dict):
+                continue
+            lines.append(
+                f"  - runtime input check: {_format_plan_value(check.get('kind'))} "
+                f"for {_format_plan_value(check.get('dataset'))}"
+            )
+            _append_kv(lines, "required_frames", check.get("required_frames"), indent=4)
+            _append_kv(lines, "timing", check.get("timing"), indent=4)
+            _append_kv(lines, "host_verification", check.get("host_verification"), indent=4)
         for change in dataset_input.get("changes", []):
             lines.append(f"  - {_format_plan_value(change)}; recompile before launch")
         postflight = dataset_input.get("postflight")

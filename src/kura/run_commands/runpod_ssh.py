@@ -1604,6 +1604,7 @@ def _runpod_remote_job_script(
     *,
     workspace: str,
     run_id: str,
+    realization_id: str,
     remote_secret_path: str,
     archive_name: str,
     remote_archive: str,
@@ -1632,6 +1633,7 @@ fi
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 export KURA_WORKSPACE={shlex.quote(workspace)}
 export KURA_RUN_ID={shlex.quote(run_id)}
+export KURA_REALIZATION_ID={shlex.quote(realization_id)}
 export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
 export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
@@ -1826,6 +1828,7 @@ chmod 600 {shlex.quote(remote_secret_path)}
     remote_job_script = _runpod_remote_job_script(
         workspace=workspace,
         run_id=run_id,
+        realization_id=str(realization.get("id") or Path(realization_ref).stem),
         remote_secret_path=remote_secret_path,
         archive_name=archive_name,
         remote_archive=remote_archive,

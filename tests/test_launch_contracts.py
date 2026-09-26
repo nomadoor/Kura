@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends import command_musubi_tuner
+from kura.backends.musubi_command import _musubi_video_target_fps
 from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import docker_command
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
@@ -23,6 +24,7 @@ COMFYUI_PREPARE_PATH = ROOT / "docker" / "comfyui" / "kura_comfy_prepare.py"
 SECRET_OPTIONAL = {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "KURA_REMOTE_NOTIFY_NTFY"}
 DEFAULTED_OPTIONAL = {"COMFYUI_ROOT", "SD_SCRIPTS_ROOT"}
 RETRY_OPTIONAL = {"KURA_HF_DOWNLOAD_ATTEMPTS", "KURA_HF_DOWNLOAD_POLL_SEC", "KURA_HF_DOWNLOAD_NO_PROGRESS_SEC"}
+BACKEND_SCOPED = {"KURA_MUSUBI_ARCHITECTURE", "KURA_MUSUBI_TARGET_FPS"}
 
 
 def _literal_env_name(node: ast.AST) -> str | None:
@@ -68,6 +70,7 @@ def required_env_names(paths: list[Path]) -> set[str]:
         for name in consumed_env_names(paths)
         if name not in DEFAULTED_OPTIONAL
         and name not in RETRY_OPTIONAL
+        and name not in BACKEND_SCOPED
         and name not in SECRET_OPTIONAL
         and not name.startswith("KURA_NTFY_")
     }
@@ -130,6 +133,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         remote = _runpod_remote_job_script(
             workspace="/workspace",
             run_id="contract-run",
+            realization_id="r1",
             remote_secret_path="/tmp/contract.env",
             archive_name="contract.tar.gz",
             remote_archive="/workspace/contract.tar.gz",
@@ -168,7 +172,9 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
                 )
 
     def test_container_env_inventory_is_derived_from_sources(self) -> None:
-        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HOME", "HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
+        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {
+            "HF_HOME", "HF_HUB_CACHE", "KURA_REALIZATION_ID", "KURA_RUN_ID", "KURA_WORKSPACE", "KURA_WORKSPACE_PATH_MAPS",
+        })
         self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HUB_CACHE", "KURA_WORKSPACE"})
 
     def test_local_docker_env_satisfies_container_script_contract(self) -> None:
@@ -188,16 +194,18 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             )
         self.assertTrue(required_env_names(CONTAINER_SCRIPT_PATHS) <= set(runtime_env))
         self.assertIn("KURA_LOG_PATH", runtime_env)
+        self.assertEqual(runtime_env["KURA_REALIZATION_ID"], "r1")
         mappings = json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"])
         self.assertTrue(_hf_home_has_workspace_mapping(runtime_env["HF_HOME"], mappings))
         self.assertEqual(runtime_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
 
     def test_runpod_pod_env_satisfies_training_and_session_contracts(self) -> None:
-        training_env = _runpod_training_env({}, workspace_path="/workspace", run_id="contract-run")
+        training_env = _runpod_training_env({}, workspace_path="/workspace", run_id="contract-run", realization_id="r1")
         self.assertEqual(training_env["HF_HOME"], "/workspace/cache/huggingface")
         self.assertEqual(training_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(training_env["KURA_WORKSPACE"], "/workspace")
         self.assertEqual(training_env["KURA_RUN_ID"], "contract-run")
+        self.assertEqual(training_env["KURA_REALIZATION_ID"], "r1")
         self.assertIn("KURA_LOG_PATH", training_env)
         self.assertTrue(_posix_prefix(training_env["HF_HOME"], "/workspace"))
 
@@ -213,6 +221,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         script = _runpod_remote_job_script(
             workspace="/workspace",
             run_id="contract-run",
+            realization_id="r1",
             remote_secret_path="/tmp/kura-secrets/contract-run.env",
             archive_name="bundle.tar.gz",
             remote_archive="/workspace/bundle.tar.gz",
@@ -228,6 +237,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             self.fail(f"missing line containing {needle!r}")
 
         export_hf = line_index('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"')
+        self.assertIn("export KURA_REALIZATION_ID=r1", script)
         export_hub = line_index('export HF_HUB_CACHE="$HF_HOME/hub"')
         mkdir_hf = line_index('mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"')
         contract_check = line_index("HF_HOME must be under KURA_WORKSPACE before remote job start")
@@ -242,6 +252,10 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
     def test_musubi_container_command_asserts_dataset_before_download(self) -> None:
         script = command_musubi_tuner(_minimal_flux2_run())["argv"][2]
         self.assertLess(script.index("musubi_dataset_assert.py"), script.index("hf_hub_download"))
+
+    def test_musubi_wan_command_declares_architecture_frame_rate_for_preflight(self) -> None:
+        self.assertEqual(_musubi_video_target_fps("wan"), 16.0)
+        self.assertIsNone(_musubi_video_target_fps("flux2"))
 
 
 if __name__ == "__main__":

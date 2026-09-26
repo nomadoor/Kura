@@ -175,6 +175,10 @@ def _musubi_start_commands(dataset_config: str, download_commands: list[list[str
     return [["python", "-c", script_source("musubi_dataset_assert.py"), dataset_config], *download_commands]
 
 
+def _musubi_video_target_fps(architecture: str) -> float | None:
+    return {"wan": 16.0}.get(architecture)
+
+
 def _musubi_save_precision(override: dict[str, Any]) -> str:
     value = override.get("save_precision", "bf16")
     if not isinstance(value, str) or value not in {"float", "fp32", "fp16", "bf16"}:
@@ -1259,7 +1263,12 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     else:
         raise _unsupported_musubi_adapter_error(architecture)
 
+    env = _backend_env("Musubi Tuner", override)
+    target_fps = _musubi_video_target_fps(architecture)
+    if target_fps is not None:
+        env["KURA_MUSUBI_ARCHITECTURE"] = architecture
+        env["KURA_MUSUBI_TARGET_FPS"] = str(target_fps)
     return {
-        "cwd": "/opt/musubi-tuner", "argv": argv, "env": _backend_env("Musubi Tuner", override),
+        "cwd": "/opt/musubi-tuner", "argv": argv, "env": env,
         "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},
     }
