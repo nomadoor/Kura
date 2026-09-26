@@ -43,6 +43,8 @@ MUSUBI_H3_DATASET_CAPABILITIES = {
 }
 MUSUBI_DATASET_OPTION_CAPABILITIES = {
     "dataset_options.<dataset-id>": {
+        "control_resolution": {"type": "integer-pair", "minimum": 1},
+        "no_resize_control": {"type": "boolean"},
         "target_frames": {
             "type": "integer-list",
             "minimum": 1,
@@ -55,7 +57,9 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
 }
 _H3_GENERAL_FIELDS = set(MUSUBI_H3_DATASET_CAPABILITIES["h3_dataset_config.general"])
 _H3_DATASET_FIELDS = set(MUSUBI_H3_DATASET_CAPABILITIES["h3_dataset_config.datasets[]"])
-_MUSUBI_DATASET_OPTION_FIELDS = {"target_frames", "frame_extraction", "source_fps"}
+_MUSUBI_DATASET_OPTION_FIELDS = {
+    "control_resolution", "no_resize_control", "target_frames", "frame_extraction", "source_fps",
+}
 
 
 def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -101,6 +105,33 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
             raise ValueError(
                 f"Musubi backend.config.dataset_options.{dataset_id}.target_frames "
                 "must be a non-empty list on the Wan 1+4n frame grid"
+            )
+        control_resolution = value.get("control_resolution")
+        if (
+            isinstance(control_resolution, list)
+            and control_resolution
+            and all(isinstance(item, list) for item in control_resolution)
+        ):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.control_resolution "
+                "multiple control-resolution blocks are not yet supported; declare one integer pair"
+            )
+        if control_resolution is not None and (
+            not isinstance(control_resolution, list)
+            or len(control_resolution) != 2
+            or any(
+                isinstance(item, bool) or not isinstance(item, int) or item <= 0
+                for item in control_resolution
+            )
+        ):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.control_resolution "
+                "must contain two positive integers"
+            )
+        no_resize_control = value.get("no_resize_control")
+        if no_resize_control is not None and not isinstance(no_resize_control, bool):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.no_resize_control must be boolean"
             )
         frame_extraction = value.get("frame_extraction")
         if frame_extraction is not None and frame_extraction != "head":
@@ -149,18 +180,31 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
         has_images = bool(target_suffixes & IMAGE_SUFFIXES)
         has_videos = bool(target_suffixes & VIDEO_SUFFIXES)
         media_kind = "video" if has_videos and not has_images else "image"
-        architecture = _musubi_architecture(run) if has_videos else None
+        has_control_inputs = any(
+            item.get("role") == "control"
+            for sample in samples
+            for item in sample.get("files", [])
+        )
+        selector_declared = any(override.get(key) is not None for key in ("architecture", "model_arch"))
+        architecture = _musubi_architecture(run) if has_videos or has_control_inputs or selector_declared else None
+        requires_control = architecture in {"flux_kontext", "flux1_kontext"}
         source_root = f"{view_root}/{'videos' if media_kind == 'video' else 'images'}"
+        control_root = f"{view_root}/controls"
         cache_root = f"{view_root}/cache"
         consumed: list[str] = []
+        source_consumed: list[str] = []
+        control_consumed: list[str] = []
         unrepresentable: list[dict[str, str | None]] = []
         links: list[dict[str, str]] = []
         files: list[dict[str, str]] = []
         bindings: list[dict[str, Any]] = []
         options = dataset_options.get(str(dataset_id), {})
+        has_control_options = any(key in options for key in ("control_resolution", "no_resize_control"))
         for index, sample in enumerate(samples):
             references = sample.get("files", [])
             targets = [item for item in references if item.get("role") == "target"]
+            controls = [item for item in references if item.get("role") == "control"]
+            other_references = [item for item in references if item.get("role") not in {"target", "control"}]
             caption = sample.get("caption")
             fallback_input = (
                 references[0].get("input_id") if references
@@ -173,10 +217,25 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
                     "reason": "Musubi directory projection does not yet support manifest groups",
                 })
                 continue
-            if len(references) != 1 or len(targets) != 1:
+            if len(targets) != 1 or other_references or len(controls) > 1:
                 unrepresentable.append({
                     "input_id": fallback_input,
-                    "reason": "Musubi directory projection does not yet support multiple inputs or non-target roles",
+                    "reason": "Musubi directory projection requires one target and at most one verified control input",
+                })
+                continue
+            if (has_control_inputs or requires_control or has_control_options) and len(controls) != 1:
+                unrepresentable.append({
+                    "input_id": targets[0].get("input_id") if targets else fallback_input,
+                    "reason": (
+                        "Musubi FLUX.1 Kontext control_directory projection requires exactly one control "
+                        "for every target sample"
+                    ),
+                })
+                continue
+            if controls and architecture not in {"flux_kontext", "flux1_kontext"}:
+                unrepresentable.append({
+                    "input_id": controls[0].get("input_id"),
+                    "reason": "separate control directory projection is currently verified only for flux_kontext",
                 })
                 continue
             target = targets[0]
@@ -193,6 +252,14 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
                     "reason": f"ordinary image Musubi projection does not yet support target extension {suffix!r}",
                 })
                 continue
+            if controls:
+                control_suffix = Path(str(controls[0].get("path"))).suffix.lower()
+                if control_suffix not in IMAGE_SUFFIXES:
+                    unrepresentable.append({
+                        "input_id": controls[0].get("input_id"),
+                        "reason": f"Musubi control directory projection does not support extension {control_suffix!r}",
+                    })
+                    continue
             if media_kind == "video":
                 if suffix not in VIDEO_SUFFIXES:
                     unrepresentable.append({
@@ -215,10 +282,10 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
                         ),
                     })
                     continue
-            elif options:
+            elif any(key in options for key in ("target_frames", "frame_extraction", "source_fps")):
                 unrepresentable.append({
                     "input_id": target.get("input_id"),
-                    "reason": "backend.config.dataset_options currently applies only to Musubi video datasets",
+                    "reason": "Musubi video dataset options cannot be applied to an image dataset",
                 })
                 continue
             if not isinstance(caption, dict):
@@ -230,6 +297,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             sample_tag = hashlib.sha256(json.dumps(
                 {
                     "target": target.get("sha256"),
+                    "control": controls[0].get("sha256") if controls else None,
                     "caption": caption.get("text") if isinstance(caption, dict) else None,
                 },
                 ensure_ascii=False,
@@ -244,6 +312,18 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             })
             members = [{"input_id": target["input_id"], "root": source_root}]
             consumed.append(target["input_id"])
+            source_consumed.append(target["input_id"])
+            if controls:
+                control = controls[0]
+                control_suffix = Path(str(control.get("path"))).suffix.lower()
+                links.append({
+                    "path": f"{control_root}/{stem}{control_suffix}",
+                    "target": f"/workspace/datasets/{dataset_id}/{control['path']}",
+                    "input_id": control["input_id"],
+                })
+                members.append({"input_id": control["input_id"], "root": control_root})
+                consumed.append(control["input_id"])
+                control_consumed.append(control["input_id"])
             if isinstance(caption, dict):
                 files.append({
                     "path": f"{source_root}/{stem}.txt",
@@ -252,6 +332,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
                 })
                 members.append({"input_id": caption["input_id"], "root": source_root})
                 consumed.append(caption["input_id"])
+                source_consumed.append(caption["input_id"])
             bindings.append({"rule": "same-relative-stem", "key": stem, "members": members})
 
         semantic: dict[str, Any] = {"num_repeats": 1, "caption_extension": ".txt"}
@@ -272,6 +353,25 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             native_runtime["image_directory"] = f"/workspace/{source_root}"
             consumer_id = "images"
             consumer_pointer = "/image_directory"
+        consumers = [{
+            "id": consumer_id,
+            "kind": "recursive-directory",
+            "native_pointer": consumer_pointer,
+            "path": source_root,
+            "input_ids": source_consumed,
+        }]
+        if control_consumed:
+            semantic["no_resize_control"] = options.get("no_resize_control", False)
+            if options.get("control_resolution") is not None:
+                semantic["control_resolution"] = deepcopy(options["control_resolution"])
+            native_runtime["control_directory"] = f"/workspace/{control_root}"
+            consumers.append({
+                "id": "controls",
+                "kind": "recursive-directory",
+                "native_pointer": "/control_directory",
+                "path": control_root,
+                "input_ids": control_consumed,
+            })
         projected.append({
             "id": dataset_id,
             "consumed": consumed,
@@ -287,13 +387,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
                 "files": files,
                 "native_files": [],
                 "write_roots": [{"path": cache_root, "native_pointer": "/cache_directory"}],
-                "consumers": [{
-                    "id": consumer_id,
-                    "kind": "recursive-directory",
-                    "native_pointer": consumer_pointer,
-                    "path": source_root,
-                    "input_ids": list(consumed),
-                }],
+                "consumers": consumers,
                 "repeat": 1,
                 "repeat_pointer": "/num_repeats",
                 "bindings": bindings,
@@ -518,21 +612,34 @@ def _frozen_musubi_dataset_items(
         views = item.get("views")
         view = views[0] if isinstance(views, list) and len(views) == 1 and isinstance(views[0], dict) else None
         consumers = view.get("consumers") if isinstance(view, dict) else None
-        consumer = consumers[0] if isinstance(consumers, list) and len(consumers) == 1 and isinstance(consumers[0], dict) else None
         write_roots = view.get("write_roots") if isinstance(view, dict) else None
         write_root = write_roots[0] if isinstance(write_roots, list) and len(write_roots) == 1 and isinstance(write_roots[0], dict) else None
         if not isinstance(native, dict):
             raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} has no native handoff")
-        source_pointer = consumer.get("native_pointer") if isinstance(consumer, dict) else None
-        source_key = {
+        pointer_keys = {
             "/image_directory": "image_directory",
             "/video_directory": "video_directory",
-        }.get(source_pointer)
+            "/control_directory": "control_directory",
+        }
+        verified_consumers = {
+            consumer.get("native_pointer"): consumer
+            for consumer in consumers if isinstance(consumer, dict)
+        } if isinstance(consumers, list) else {}
+        primary = [
+            pointer for pointer in ("/image_directory", "/video_directory")
+            if pointer in verified_consumers
+        ]
+        consumers_match = (
+            len(primary) == 1
+            and set(verified_consumers) <= set(pointer_keys)
+            and all(
+                consumer.get("kind") == "recursive-directory"
+                and native.get(pointer_keys[pointer]) == f"/workspace/{consumer.get('path')}"
+                for pointer, consumer in verified_consumers.items()
+            )
+        )
         if (
-            not isinstance(consumer, dict)
-            or consumer.get("kind") != "recursive-directory"
-            or source_key is None
-            or native.get(source_key) != f"/workspace/{consumer.get('path')}"
+            not consumers_match
             or not isinstance(write_root, dict)
             or write_root.get("native_pointer") != "/cache_directory"
             or native.get("cache_directory") != f"/workspace/{write_root.get('path')}"
@@ -540,12 +647,19 @@ def _frozen_musubi_dataset_items(
             raise ValueError(
                 f"Musubi frozen projection for dataset {dataset_id!r} bypasses its verified source or cache view"
             )
-        source_path = PurePosixPath(str(consumer["path"]))
+        source_path = PurePosixPath(str(verified_consumers[primary[0]]["path"]))
         cache_path = PurePosixPath(str(write_root["path"]))
         if source_path.parent != cache_path.parent or source_path == cache_path:
             raise ValueError(
                 f"Musubi frozen projection for dataset {dataset_id!r} must keep cache_directory beside its source directory"
             )
+        control = verified_consumers.get("/control_directory")
+        if isinstance(control, dict):
+            control_path = PurePosixPath(str(control["path"]))
+            if control_path.parent != source_path.parent or control_path in (source_path, cache_path):
+                raise ValueError(
+                    f"Musubi frozen projection for dataset {dataset_id!r} must keep control_directory beside its source directory"
+                )
         items.append(deepcopy(native))
     return items
 

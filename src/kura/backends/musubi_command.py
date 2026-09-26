@@ -231,6 +231,17 @@ def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int
                     resolution = item.get(key)
                     if isinstance(resolution, list):
                         values.extend(value for part in resolution if (value := _int_or_none(part)) is not None)
+    dataset_options = override.get("dataset_options")
+    if isinstance(dataset_options, dict):
+        for options in dataset_options.values():
+            if not isinstance(options, dict):
+                continue
+            control_resolution = options.get("control_resolution")
+            if isinstance(control_resolution, list):
+                values.extend(
+                    value for part in control_resolution
+                    if (value := _int_or_none(part)) is not None
+                )
     return max(values) if values else None
 
 
