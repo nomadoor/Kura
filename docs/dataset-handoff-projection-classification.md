@@ -73,6 +73,26 @@ When RunPod selected-file transfer is implemented, its acceptance checks must
 also prove that the Musubi video-frame preflight realization record is returned
 to the local run alongside the other realization evidence.
 
+### MiniMax-H3 one-frame FL2VA evidence and first projection choice
+
+The pinned Musubi source at `4e7c714` establishes that one-frame FL2VA is not
+merely a configuration label. `docs/minimax_h3_1f.md:167-195` defines targets
+paired with ordered, time-annotated controls; `src/musubi_tuner/dataset/image_video_dataset.py:332-386`
+derives the expected control count from `fp_1f_clean_indices`; and
+`src/musubi_tuner/minimax_h3_cache_latents.py:600-625` reads the control pixels,
+requires their count to match the indices, fingerprints their source files, and
+writes their timing into latent-cache metadata. The first manifest converter
+therefore consumes and freezes the control bytes as semantic input rather than
+treating them as incidental dataset metadata.
+
+The pinned trainer accepts either same-name directory matching or per-record
+JSONL paths (`docs/minimax_h3_1f.md:169-183`). The first bounded Kura path uses a
+generated `image_jsonl_file` because the manifest already owns an exact
+target/control/caption association and C2 can reparse that file and prove every
+row reference. This avoids introducing a second filename-matching inference at
+the trainer boundary. It does not claim that JSONL is the only valid upstream
+shape; a future directory converter remains a separately verified projection.
+
 ## Existing authored surfaces replaced by the switch
 
 These are explicit compatibility changes, not silent capability drops:

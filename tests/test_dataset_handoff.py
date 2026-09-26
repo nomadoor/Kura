@@ -16,7 +16,11 @@ import yaml
 
 from kura.backends.ai_toolkit import compile_ai_toolkit, project_ai_toolkit_dataset
 from kura.backends.musubi_command import _musubi_max_resolution
-from kura.backends.musubi_datasets import _write_musubi_dataset_config, project_musubi_dataset
+from kura.backends.musubi_datasets import (
+    _musubi_h3_effective_task,
+    _write_musubi_dataset_config,
+    project_musubi_dataset,
+)
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, materialize_dataset_view, remove_dataset_views
 from kura.dataset_handoff import local_training_mounts
@@ -1826,6 +1830,199 @@ class DatasetHandoffTests(unittest.TestCase):
         }
 
         self.assertEqual(_musubi_max_resolution(run, run["backend"]["config"]), 1024)
+
+    def test_musubi_projects_minimax_h3_one_frame_fl2va_control_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "fl2va",
+                "one_frame": True,
+                "dataset_options": {
+                    "tiny": {"fp_1f_clean_indices": [0], "fp_1f_target_index": 24},
+                },
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "source.png").write_bytes(b"control")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"].append({"type": "file", "role": "control", "path": "source.png"})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            materialize_dataset_view(workspace, lock)
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
+            projected = report["datasets"][0]
+            view = lock["views"][0]
+            native_file = view["native_files"][0]
+            row_value = json.loads(native_file["text"])
+            self.assertEqual(projected["semantic"]["fp_1f_clean_indices"], [0])
+            self.assertEqual(projected["semantic"]["fp_1f_target_index"], 24)
+            self.assertEqual(projected["native"]["image_jsonl_file"], "/workspace/" + native_file["path"])
+            self.assertEqual(row_value["caption"], "caption\n")
+            self.assertIn("image_path", row_value)
+            self.assertIn("control_path", row_value)
+            self.assertEqual(view["consumers"][0]["kind"], "jsonl")
+            self.assertNotIn("bindings", view)
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+            changed_run = deepcopy(run)
+            changed_run["id"] = "changed-h3-timing"
+            changed_run["backend"]["config"]["dataset_options"]["tiny"]["fp_1f_target_index"] = 48
+            changed_resolved = workspace / "runs" / changed_run["id"] / "resolved"
+            changed_lock = freeze_dataset_handoff(
+                changed_run,
+                workspace,
+                changed_resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(changed_run, selection),
+            )
+            self.assertNotEqual(lock["input_sha256"], changed_lock["input_sha256"])
+
+    def test_musubi_minimax_h3_effective_task_is_shared_with_teacher_matching(self) -> None:
+        cases = (
+            ({"task": "fl2va"}, "fl2va"),
+            ({"task": "t2va", "h3_loss_method": "teacher_matching", "h3_teacher_conditions": "first,last"}, "fl2va"),
+            ({"task": "t2va", "h3_loss_method": "teacher_matching", "h3_teacher_conditions": "ref"}, "t2va"),
+            ({"task": "t2va", "h3_loss_method": "teacher_matching", "h3_teacher_conditions": "subject_ref"}, "ref2va"),
+            ({"task": "t2va", "h3_loss_method": "guidance", "h3_teacher_conditions": "first,last"}, "t2va"),
+        )
+        for override, expected in cases:
+            with self.subTest(override=override):
+                self.assertEqual(_musubi_h3_effective_task(override), expected)
+
+    def test_musubi_minimax_h3_fl2va_control_requires_explicit_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "fl2va",
+                "one_frame": True,
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "source.png").write_bytes(b"control")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"].append({"type": "file", "role": "control", "path": "source.png"})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "sample 'a'.*fp_1f_clean_indices.*fp_1f_target_index"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_rejects_invalid_minimax_h3_one_frame_timing_options(self) -> None:
+        cases = (
+            ({"fp_1f_clean_indices": []}, "fp_1f_clean_indices.*non-empty list"),
+            ({"fp_1f_clean_indices": [True]}, "fp_1f_clean_indices.*nonnegative integers"),
+            ({"fp_1f_clean_indices": [-1]}, "fp_1f_clean_indices.*nonnegative integers"),
+            ({"fp_1f_target_index": True}, "fp_1f_target_index.*nonnegative integer"),
+            ({"fp_1f_target_index": -1}, "fp_1f_target_index.*nonnegative integer"),
+        )
+        for options, message in cases:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, _resolved = self.make_run(workspace)
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "minimax_h3",
+                    "task": "fl2va",
+                    "one_frame": True,
+                    "dataset_options": {"tiny": options},
+                }}
+
+                with self.assertRaisesRegex(ValueError, message):
+                    project_musubi_dataset(run, {"datasets": []})
+
+    def test_musubi_minimax_h3_rejects_kontext_control_resize_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "fl2va",
+                "one_frame": True,
+                "dataset_options": {
+                    "tiny": {
+                        "fp_1f_clean_indices": [0],
+                        "fp_1f_target_index": 24,
+                        "control_resolution": [768, 768],
+                    },
+                },
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "source.png").write_bytes(b"control")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"].append({"type": "file", "role": "control", "path": "source.png"})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "MiniMax-H3 controls do not support control_resolution"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_minimax_h3_fl2va_timing_requires_a_control(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "fl2va",
+                "one_frame": True,
+                "dataset_options": {
+                    "tiny": {"fp_1f_clean_indices": [0], "fp_1f_target_index": 24},
+                },
+            }}
+
+            with self.assertRaisesRegex(ValueError, "sample 'a'.*requires one target and one control"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_h3_timing_options_stop_outside_one_frame_fl2va(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "t2va",
+                "one_frame": True,
+                "dataset_options": {"tiny": {"fp_1f_target_index": 24}},
+            }}
+
+            with self.assertRaisesRegex(ValueError, "sample 'a'.*currently projected only.*task=fl2va"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
 
     def test_musubi_initial_projection_stops_unsupported_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

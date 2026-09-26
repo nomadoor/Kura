@@ -4088,7 +4088,7 @@ class MusubiBackendTests(unittest.TestCase):
             rendered = (destination / "musubi" / "dataset.toml").read_text(encoding="utf-8")
             self.assertIn("target_frames = [124]", rendered)
 
-    def test_musubi_minimax_h3_teacher_ref_requires_reference_jsonl(self) -> None:
+    def test_musubi_minimax_h3_teacher_ref_uses_t2va_inputs_without_item_references(self) -> None:
         run = self._run()
         run["backend"] = {"name": "musubi-tuner", "config": {
             "architecture": "minimax_h3",
@@ -4098,8 +4098,11 @@ class MusubiBackendTests(unittest.TestCase):
             "h3_dataset_config": {"datasets": [{"source": "video_directory", "path": "videos", "target_frames": [124]}]},
         }}
 
-        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(ValueError, "video_jsonl"):
-            BACKENDS["musubi-tuner"].compile(run, Path(directory), Path(directory), False)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+            BACKENDS["musubi-tuner"].compile(run, destination, Path(directory), False)
+            rendered = (destination / "musubi" / "dataset.toml").read_text(encoding="utf-8")
+            self.assertIn('video_directory = "/workspace/datasets/tiny/videos"', rendered)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -4114,8 +4117,7 @@ class MusubiBackendTests(unittest.TestCase):
                 {"source": "video_jsonl", "path": "items.jsonl", "target_frames": [124]}
             ]
 
-            with self.assertRaisesRegex(ValueError, "requires references"):
-                validate_musubi_dataset_layout(run, root)
+            validate_musubi_dataset_layout(run, root)
 
     def test_musubi_minimax_h3_validates_reference_jsonl_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
