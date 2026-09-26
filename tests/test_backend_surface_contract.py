@@ -242,6 +242,14 @@ class BackendSurfaceContractTests(unittest.TestCase):
             {"type": "integer", "minimum": 1, "maximum": 1},
         )
 
+    def test_musubi_video_dataset_options_are_discoverable(self) -> None:
+        capabilities = backend_capabilities("musubi-tuner")
+
+        self.assertIn("dataset_options", capabilities["config_fields"])
+        options = capabilities["nested_config_fields"]["dataset_options.<dataset-id>"]
+        self.assertEqual(options["target_frames"]["grid"], "1+4n")
+        self.assertEqual(options["frame_extraction"]["default"], "head")
+
     def test_musubi_capabilities_expose_krea2_memory_accommodations(self) -> None:
         capabilities = backend_capabilities("musubi-tuner")
 

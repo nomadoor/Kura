@@ -5,11 +5,12 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
 from pathlib import Path, PurePosixPath
 import tomllib
 from typing import Any
 
-from kura.backends.common import _musubi_backend_override
+from kura.backends.common import _musubi_architecture, _musubi_backend_override
 from kura.backends.shared import _datasets, _int_or_none, _toml_scalar, _truthy
 from kura.fsio import atomic_write_text
 
@@ -40,12 +41,89 @@ MUSUBI_H3_DATASET_CAPABILITIES = {
         "fp_1f_target_index": {"type": "integer", "minimum": 0},
     },
 }
+MUSUBI_DATASET_OPTION_CAPABILITIES = {
+    "dataset_options.<dataset-id>": {
+        "target_frames": {
+            "type": "integer-list",
+            "minimum": 1,
+            "grid": "1+4n",
+            "required_for": "Wan video-directory manifest projection",
+        },
+        "frame_extraction": {"type": "enum:head", "default": "head"},
+        "source_fps": {"type": "number", "exclusive_minimum": 0},
+    },
+}
 _H3_GENERAL_FIELDS = set(MUSUBI_H3_DATASET_CAPABILITIES["h3_dataset_config.general"])
 _H3_DATASET_FIELDS = set(MUSUBI_H3_DATASET_CAPABILITIES["h3_dataset_config.datasets[]"])
+_MUSUBI_DATASET_OPTION_FIELDS = {"target_frames", "frame_extraction", "source_fps"}
+
+
+def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Validate typed per-dataset options used by first-class manifest projection."""
+    override = _musubi_backend_override(run)
+    raw = override.get("dataset_options")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("Musubi backend.config.dataset_options must be a mapping keyed by dataset id")
+    declared = {
+        item.get("id") for item in _datasets(run)
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    unknown_datasets = sorted(set(raw) - declared)
+    if unknown_datasets:
+        raise ValueError(
+            "Musubi backend.config.dataset_options names undeclared dataset(s): "
+            + ", ".join(unknown_datasets)
+        )
+    validated: dict[str, dict[str, Any]] = {}
+    for dataset_id, value in raw.items():
+        if not isinstance(value, dict):
+            raise ValueError(f"Musubi backend.config.dataset_options.{dataset_id} must be a mapping")
+        unknown = sorted(set(value) - _MUSUBI_DATASET_OPTION_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id} contains unsupported key(s): "
+                + ", ".join(unknown)
+            )
+        target_frames = value.get("target_frames")
+        if target_frames is not None and (
+            not isinstance(target_frames, list)
+            or not target_frames
+            or any(
+                isinstance(frame, bool)
+                or not isinstance(frame, int)
+                or frame <= 0
+                or (frame - 1) % 4
+                for frame in target_frames
+            )
+        ):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.target_frames "
+                "must be a non-empty list on the Wan 1+4n frame grid"
+            )
+        frame_extraction = value.get("frame_extraction")
+        if frame_extraction is not None and frame_extraction != "head":
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.frame_extraction "
+                "currently supports only 'head'"
+            )
+        source_fps = value.get("source_fps")
+        if source_fps is not None and (
+            isinstance(source_fps, bool)
+            or not isinstance(source_fps, (int, float))
+            or source_fps <= 0
+            or not math.isfinite(source_fps)
+        ):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.source_fps must be positive and finite"
+            )
+        validated[dataset_id] = deepcopy(value)
+    return validated
 
 
 def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
-    """Project the initial lossless Musubi image-directory manifest path."""
+    """Project lossless Musubi image or initial Wan video directory inputs."""
     override = _musubi_backend_override(run)
     if override.get("dataset_config") is not None:
         raise ValueError(
@@ -56,18 +134,31 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             "Musubi backend.config.h3_dataset_config is replaced by manifest projection for first-class runs"
         )
 
+    dataset_options = _musubi_dataset_options(run)
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
         dataset_id = dataset.get("id")
         view_root = f"runs/{run['id']}/cache/dataset-view/musubi/{dataset_id}"
-        image_root = f"{view_root}/images"
+        samples = dataset.get("samples", [])
+        target_suffixes = {
+            Path(str(item.get("path"))).suffix.lower()
+            for sample in samples
+            for item in sample.get("files", [])
+            if item.get("role") == "target"
+        }
+        has_images = bool(target_suffixes & IMAGE_SUFFIXES)
+        has_videos = bool(target_suffixes & VIDEO_SUFFIXES)
+        media_kind = "video" if has_videos and not has_images else "image"
+        architecture = _musubi_architecture(run) if has_videos else None
+        source_root = f"{view_root}/{'videos' if media_kind == 'video' else 'images'}"
         cache_root = f"{view_root}/cache"
         consumed: list[str] = []
         unrepresentable: list[dict[str, str | None]] = []
         links: list[dict[str, str]] = []
         files: list[dict[str, str]] = []
         bindings: list[dict[str, Any]] = []
-        for index, sample in enumerate(dataset.get("samples", [])):
+        options = dataset_options.get(str(dataset_id), {})
+        for index, sample in enumerate(samples):
             references = sample.get("files", [])
             targets = [item for item in references if item.get("role") == "target"]
             caption = sample.get("caption")
@@ -79,27 +170,61 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             if sample.get("group") is not None:
                 unrepresentable.append({
                     "input_id": fallback_input,
-                    "reason": "ordinary image Musubi projection does not yet support manifest groups",
+                    "reason": "Musubi directory projection does not yet support manifest groups",
                 })
                 continue
             if len(references) != 1 or len(targets) != 1:
                 unrepresentable.append({
                     "input_id": fallback_input,
-                    "reason": "ordinary image Musubi projection does not yet support multiple inputs or non-target roles",
+                    "reason": "Musubi directory projection does not yet support multiple inputs or non-target roles",
                 })
                 continue
             target = targets[0]
             suffix = Path(str(target.get("path"))).suffix.lower()
-            if suffix not in IMAGE_SUFFIXES:
+            if has_images and has_videos:
+                unrepresentable.append({
+                    "input_id": target.get("input_id"),
+                    "reason": "Musubi directory projection does not support mixed image and video targets in one dataset",
+                })
+                continue
+            if media_kind == "image" and suffix not in IMAGE_SUFFIXES:
                 unrepresentable.append({
                     "input_id": target.get("input_id"),
                     "reason": f"ordinary image Musubi projection does not yet support target extension {suffix!r}",
                 })
                 continue
+            if media_kind == "video":
+                if suffix not in VIDEO_SUFFIXES:
+                    unrepresentable.append({
+                        "input_id": target.get("input_id"),
+                        "reason": f"Wan video Musubi projection does not support target extension {suffix!r}",
+                    })
+                    continue
+                if architecture != "wan" or _truthy(override.get("one_frame")):
+                    unrepresentable.append({
+                        "input_id": target.get("input_id"),
+                        "reason": "initial Musubi video projection supports only Wan directory video training",
+                    })
+                    continue
+                if not isinstance(options.get("target_frames"), list):
+                    unrepresentable.append({
+                        "input_id": target.get("input_id"),
+                        "reason": (
+                            f"sample requires backend.config.dataset_options.{dataset_id}.target_frames "
+                            "for Wan video projection"
+                        ),
+                    })
+                    continue
+            elif options:
+                unrepresentable.append({
+                    "input_id": target.get("input_id"),
+                    "reason": "backend.config.dataset_options currently applies only to Musubi video datasets",
+                })
+                continue
             if not isinstance(caption, dict):
                 unrepresentable.append({
                     "input_id": target.get("input_id"),
-                    "reason": "ordinary image Musubi projection caption cannot be absent",
+                    "reason": "Musubi directory projection caption cannot be absent",
                 })
                 continue
             sample_tag = hashlib.sha256(json.dumps(
@@ -113,27 +238,40 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             ).encode("utf-8")).hexdigest()[:12]
             stem = f"{index:06d}-{sample_tag}"
             links.append({
-                "path": f"{image_root}/{stem}{suffix}",
+                "path": f"{source_root}/{stem}{suffix}",
                 "target": f"/workspace/datasets/{dataset_id}/{target['path']}",
                 "input_id": target["input_id"],
             })
-            members = [{"input_id": target["input_id"], "root": image_root}]
+            members = [{"input_id": target["input_id"], "root": source_root}]
             consumed.append(target["input_id"])
             if isinstance(caption, dict):
                 files.append({
-                    "path": f"{image_root}/{stem}.txt",
+                    "path": f"{source_root}/{stem}.txt",
                     "text": caption["text"],
                     "input_id": caption["input_id"],
                 })
-                members.append({"input_id": caption["input_id"], "root": image_root})
+                members.append({"input_id": caption["input_id"], "root": source_root})
                 consumed.append(caption["input_id"])
             bindings.append({"rule": "same-relative-stem", "key": stem, "members": members})
 
-        semantic = {"num_repeats": 1, "caption_extension": ".txt"}
-        native_runtime = {
-            "image_directory": f"/workspace/{image_root}",
-            "cache_directory": f"/workspace/{cache_root}",
-        }
+        semantic: dict[str, Any] = {"num_repeats": 1, "caption_extension": ".txt"}
+        native_runtime = {"cache_directory": f"/workspace/{cache_root}"}
+        native_string_fields = ["/caption_extension"]
+        if media_kind == "video":
+            semantic.update({
+                "target_frames": deepcopy(options.get("target_frames")),
+                "frame_extraction": options.get("frame_extraction", "head"),
+            })
+            if options.get("source_fps") is not None:
+                semantic["source_fps"] = options["source_fps"]
+            native_runtime["video_directory"] = f"/workspace/{source_root}"
+            native_string_fields.append("/frame_extraction")
+            consumer_id = "videos"
+            consumer_pointer = "/video_directory"
+        else:
+            native_runtime["image_directory"] = f"/workspace/{source_root}"
+            consumer_id = "images"
+            consumer_pointer = "/image_directory"
         projected.append({
             "id": dataset_id,
             "consumed": consumed,
@@ -141,7 +279,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             "semantic": semantic,
             "native_runtime": native_runtime,
             "native": {**semantic, **native_runtime},
-            "native_string_fields": ["/caption_extension"],
+            "native_string_fields": native_string_fields,
             "views": [{
                 "id": f"musubi-{dataset_id}",
                 "root": view_root,
@@ -150,10 +288,10 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
                 "native_files": [],
                 "write_roots": [{"path": cache_root, "native_pointer": "/cache_directory"}],
                 "consumers": [{
-                    "id": "images",
+                    "id": consumer_id,
                     "kind": "recursive-directory",
-                    "native_pointer": "/image_directory",
-                    "path": image_root,
+                    "native_pointer": consumer_pointer,
+                    "path": source_root,
                     "input_ids": list(consumed),
                 }],
                 "repeat": 1,
@@ -305,6 +443,7 @@ def validate_musubi_authored_config(run: dict[str, Any]) -> None:
     """Validate typed Musubi configuration before writing compile artifacts."""
 
     _validate_h3_dataset_config(run)
+    _musubi_dataset_options(run)
 
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
@@ -384,23 +523,28 @@ def _frozen_musubi_dataset_items(
         write_root = write_roots[0] if isinstance(write_roots, list) and len(write_roots) == 1 and isinstance(write_roots[0], dict) else None
         if not isinstance(native, dict):
             raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} has no native handoff")
+        source_pointer = consumer.get("native_pointer") if isinstance(consumer, dict) else None
+        source_key = {
+            "/image_directory": "image_directory",
+            "/video_directory": "video_directory",
+        }.get(source_pointer)
         if (
             not isinstance(consumer, dict)
             or consumer.get("kind") != "recursive-directory"
-            or consumer.get("native_pointer") != "/image_directory"
-            or native.get("image_directory") != f"/workspace/{consumer.get('path')}"
+            or source_key is None
+            or native.get(source_key) != f"/workspace/{consumer.get('path')}"
             or not isinstance(write_root, dict)
             or write_root.get("native_pointer") != "/cache_directory"
             or native.get("cache_directory") != f"/workspace/{write_root.get('path')}"
         ):
             raise ValueError(
-                f"Musubi frozen projection for dataset {dataset_id!r} bypasses its verified image or cache view"
+                f"Musubi frozen projection for dataset {dataset_id!r} bypasses its verified source or cache view"
             )
-        image_path = PurePosixPath(str(consumer["path"]))
+        source_path = PurePosixPath(str(consumer["path"]))
         cache_path = PurePosixPath(str(write_root["path"]))
-        if image_path.parent != cache_path.parent or image_path == cache_path:
+        if source_path.parent != cache_path.parent or source_path == cache_path:
             raise ValueError(
-                f"Musubi frozen projection for dataset {dataset_id!r} must keep cache_directory beside image_directory"
+                f"Musubi frozen projection for dataset {dataset_id!r} must keep cache_directory beside its source directory"
             )
         items.append(deepcopy(native))
     return items

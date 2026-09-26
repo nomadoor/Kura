@@ -1551,7 +1551,7 @@ class DatasetHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
-            run["backend"] = {"name": "musubi-tuner", "config": {}}
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2"}}
             dataset = workspace / "datasets" / "tiny"
             (dataset / "a.png").unlink()
             (dataset / "a.mp4").write_bytes(b"video")
@@ -1559,7 +1559,7 @@ class DatasetHandoffTests(unittest.TestCase):
             row["files"][0]["path"] = "a.mp4"
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "ordinary image.*does not yet support"):
+            with self.assertRaisesRegex(ValueError, "initial Musubi video projection supports only Wan"):
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -1590,6 +1590,126 @@ class DatasetHandoffTests(unittest.TestCase):
                     backend="musubi-tuner",
                     project=lambda selection: project_musubi_dataset(run, selection),
                 )
+
+    def test_musubi_projects_wan_video_caption_with_explicit_frame_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "wan",
+                "dataset_options": {
+                    "tiny": {"target_frames": [1, 25], "frame_extraction": "head", "source_fps": 16.0},
+                },
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            materialize_dataset_view(workspace, lock)
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
+            native = report["datasets"][0]["native"]
+            self.assertEqual(native["target_frames"], [1, 25])
+            self.assertEqual(native["frame_extraction"], "head")
+            self.assertEqual(native["source_fps"], 16.0)
+            self.assertIn("/video_directory", lock["views"][0]["consumers"][0]["native_pointer"])
+            self.assertTrue(lock["views"][0]["links"][0]["path"].endswith(".mp4"))
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [native])
+
+    def test_musubi_video_projection_uses_the_command_architecture_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "model_arch": "wan",
+                "dataset_options": {"tiny": {"target_frames": [25]}},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/video_directory")
+
+    def test_musubi_video_projection_requires_explicit_frame_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "wan"}}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "sample 'a'.*dataset_options.*target_frames"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_video_projection_validates_typed_frame_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, _resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "wan",
+                "dataset_options": {"tiny": {"target_frames": [24]}},
+            }}
+
+            with self.assertRaisesRegex(ValueError, r"1\+4n frame grid"):
+                project_musubi_dataset(run, {"datasets": []})
+
+            run["backend"]["config"]["dataset_options"]["tiny"] = {
+                "target_frames": [25],
+                "frame_extraction": "uniform",
+            }
+            with self.assertRaisesRegex(ValueError, "currently supports only 'head'"):
+                project_musubi_dataset(run, {"datasets": []})
+
+            run["backend"]["config"]["dataset_options"]["tiny"] = {
+                "target_frames": [25],
+                "source_fps": float("nan"),
+            }
+            with self.assertRaisesRegex(ValueError, "source_fps must be positive and finite"):
+                project_musubi_dataset(run, {"datasets": []})
+
+            run["backend"]["config"]["dataset_options"] = {
+                "not-declared": {"target_frames": [25]},
+            }
+            with self.assertRaisesRegex(ValueError, "undeclared dataset"):
+                project_musubi_dataset(run, {"datasets": []})
 
     def test_uncompiled_plan_defers_manifest_projection_to_compile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

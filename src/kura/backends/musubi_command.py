@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from kura.container_scripts import script_source
-from kura.backends.common import _musubi_backend_override, _require_paths
+from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths
 from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _script_command as _shared_script_command, _truthy
 from kura.backends.musubi_datasets import _write_musubi_dataset_config
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
@@ -417,10 +417,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Tuner command env must not contain secrets; use the process environment instead")
         return {"cwd": cwd, "argv": argv, "env": env}
 
-    architecture_value = override.get("architecture") or override.get("model_arch")
-    if not isinstance(architecture_value, str) or not architecture_value.strip():
-        raise ValueError("Musubi backend.config.architecture is required")
-    architecture = architecture_value.lower().replace("-", "_")
+    architecture = _musubi_architecture(run)
     _validate_musubi_resource_flags(run, override, architecture)
     recipe = validated_recipe(run, required=True)
     explicit_paths = _musubi_explicit_model_paths(override)

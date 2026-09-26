@@ -11,7 +11,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
-from kura.backends.musubi_datasets import MUSUBI_H3_DATASET_CAPABILITIES, project_musubi_dataset, validate_musubi_authored_config, validate_musubi_dataset_layout
+from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, MUSUBI_H3_DATASET_CAPABILITIES, project_musubi_dataset, validate_musubi_authored_config, validate_musubi_dataset_layout
 from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
@@ -113,7 +113,7 @@ AI_TOOLKIT_SURFACE = BackendSurface(
 MUSUBI_SURFACE = BackendSurface(
     fields=frozenset({
         "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "architecture", "batch_size",
-        "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "discrete_flow_shift",
+        "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "dataset_options", "discrete_flow_shift",
         "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
         "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing", "gradient_checkpointing_cpu_offload",
         "h3_dataset_config", "h3_guidance_loss_scale", "h3_guidance_loss_sigma_min", "h3_loss_method",
@@ -207,7 +207,7 @@ MUSUBI_SURFACE = BackendSurface(
         _when("video_only", architecture=("minimax_h3", "minimaxh3")),
         _when("weighting_scheme", architecture=("flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen", "hidream_o1", "hidream")),
     ),
-    nested_config_fields=MUSUBI_H3_DATASET_CAPABILITIES,
+    nested_config_fields={**MUSUBI_H3_DATASET_CAPABILITIES, **MUSUBI_DATASET_OPTION_CAPABILITIES},
 )
 
 SD_SCRIPTS_SURFACE = BackendSurface(

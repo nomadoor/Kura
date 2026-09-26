@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.container_scripts import script_source
-from kura.backends.common import _musubi_backend_override
+from kura.backends.common import _musubi_architecture, _musubi_backend_override
 from kura.backends.shared import _truthy
 from kura.provenance import artifact_pinning
 
@@ -313,14 +313,6 @@ def requirements_musubi(run: dict[str, Any], download_estimate: dict[str, Any] |
                 identity = {"kind": "path", "path": path}
                 requirements.append({"role": role, "acquisition": "local-path", "identity": identity, "runtime_reference": path, "expected_format": "backend-role-file", "measurement": {"scope": "compile", "status": "declared"}, "pinning": artifact_pinning(identity, observable=True)})
     return requirements
-
-
-def _musubi_architecture(run: dict[str, Any]) -> str:
-    override = _musubi_backend_override(run)
-    value = override.get("architecture") or override.get("model_arch")
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("Musubi backend.config.architecture is required")
-    return value.lower().replace("-", "_")
 
 
 def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
