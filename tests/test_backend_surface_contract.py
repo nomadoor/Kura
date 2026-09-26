@@ -269,7 +269,11 @@ class BackendSurfaceContractTests(unittest.TestCase):
             options["target_frames"]["grid"],
             "profile-specific: Wan 1+4n; MiniMax-H3 5+17n",
         )
-        self.assertEqual(options["frame_extraction"]["default"], "head")
+        self.assertEqual(
+            options["frame_extraction"],
+            {"type": "enum:head|full", "default": "profile-specific"},
+        )
+        self.assertEqual(options["max_frames"], {"type": "integer", "minimum": 1})
         self.assertEqual(options["control_resolution"], {"type": "integer-pair", "minimum": 1})
         self.assertEqual(options["fp_1f_clean_indices"], {"type": "integer-list", "minimum": 0})
         self.assertEqual(options["fp_1f_target_index"], {"type": "integer", "minimum": 0})

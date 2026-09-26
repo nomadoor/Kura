@@ -134,7 +134,18 @@ def video_frame_preflight(entries, config_path):
     measured = []
     errors = []
     for entry in entries:
-        required = max(entry["target_frames"])
+        frame_extraction = entry.get("frame_extraction") or "head"
+        latent_window_size = entry.get("fp_latent_window_size")
+        full_framepack = (
+            architecture in {"framepack", "frame_pack"}
+            and frame_extraction == "full"
+            and isinstance(latent_window_size, int)
+        )
+        required = (
+            int(entry.get("max_frames") or 129)
+            if full_framepack
+            else max(entry["target_frames"])
+        )
         source_fps = entry.get("source_fps")
         target_fps = architecture_target_fps if strict_timestamp_fps or source_fps is not None else None
         video_inputs = entry.get("video_inputs")
@@ -164,14 +175,25 @@ def video_frame_preflight(entries, config_path):
                 else:
                     kwargs["source_fps"] = source_fps
                 frames = load_video(str(video), 0, required, **kwargs)
-                effective_frames = len(frames)
+                loaded_frames = len(frames)
+                if full_framepack:
+                    from musubi_tuner.dataset.architectures import round_down_frame_count
+
+                    effective_frames = round_down_frame_count(loaded_frames, architecture, 4)
+                else:
+                    effective_frames = loaded_frames
+                minimum_frames = latent_window_size * 4 + 1 if full_framepack else required
                 item = {
                     "dataset_index": entry["index"],
                     "video": str(video),
                     "source": context.get("source") or (os.readlink(video) if video.is_symlink() else str(video.resolve())),
                     "sample_id": context.get("sample_id"),
                     "effective_frames": effective_frames,
-                    "required_frames": required,
+                    "loaded_frames": loaded_frames,
+                    "required_frames": minimum_frames,
+                    "frame_extraction": frame_extraction,
+                    "max_frames": entry.get("max_frames"),
+                    "fp_latent_window_size": latent_window_size,
                     "source_fps": source_fps,
                     "target_fps": target_fps,
                     "fps_resample_mode": "timestamps" if strict_timestamp_fps else None,
@@ -180,7 +202,7 @@ def video_frame_preflight(entries, config_path):
                         if video_input.get("explicit_audio")
                         else "verified-no-sidecar; embedded-or-silence"
                     ),
-                    "passed": effective_frames >= required,
+                    "passed": effective_frames >= minimum_frames,
                 }
                 measured.append(item)
             except Exception as exc:
@@ -221,6 +243,8 @@ def video_frame_preflight(entries, config_path):
             f"; source {item['source']}; sample {item.get('sample_id') or 'unknown'}"
             for item in failures
         )
+        if any(item.get("frame_extraction") == "full" for item in failures):
+            die("Musubi video frame preflight found videos shorter than FramePack's full-window minimum:\n" + details)
         die("Musubi video frame preflight found videos shorter than max(target_frames):\n" + details)
     return record
 
@@ -270,6 +294,9 @@ def main():
                     if video.is_file() and video.suffix.lower() in VIDEO_SUFFIXES
                 ),
                 "target_frames": target_frames,
+                "frame_extraction": item.get("frame_extraction"),
+                "max_frames": item.get("max_frames"),
+                "fp_latent_window_size": item.get("fp_latent_window_size"),
                 "source_fps": item.get("source_fps"),
             })
             summary.append({"index": index, "video_directory": video_directory, "videos": count})
@@ -299,6 +326,9 @@ def main():
                 "videos": videos,
                 "video_inputs": video_inputs,
                 "target_frames": target_frames,
+                "frame_extraction": item.get("frame_extraction"),
+                "max_frames": item.get("max_frames"),
+                "fp_latent_window_size": item.get("fp_latent_window_size"),
                 "source_fps": item.get("source_fps"),
             })
             summary.append({"index": index, "video_jsonl_file": video_jsonl_file, "rows": count})

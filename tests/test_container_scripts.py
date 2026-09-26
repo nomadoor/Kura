@@ -308,6 +308,52 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertEqual(record["status"], "passed")
             self.assertEqual(record["videos"][0]["effective_frames"], 25)
 
+    def test_musubi_framepack_full_preflight_rounds_and_rejects_short_video(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            video = workspace / "short.mp4"
+            video.write_bytes(b"video")
+            video_jsonl = workspace / "items.jsonl"
+            video_jsonl.write_text(
+                json.dumps({"video_path": str(video), "caption": "caption"}) + "\n",
+                encoding="utf-8",
+            )
+            config = workspace / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nvideo_jsonl_file = "' + video_jsonl.as_posix() + '"\n'
+                'target_frames = [37]\nframe_extraction = "full"\nmax_frames = 129\n'
+                'fp_latent_window_size = 9\n',
+                encoding="utf-8",
+            )
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            media_utils.load_video = lambda *_args, **_kwargs: [object()] * 36  # type: ignore[attr-defined]
+            architectures = ModuleType("musubi_tuner.dataset.architectures")
+            architectures.round_down_frame_count = lambda count, _architecture, stride: 1 + ((count - 1) // stride) * stride  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+                "musubi_tuner.dataset.architectures": architectures,
+            }
+            env = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "framepack-full",
+                "KURA_MUSUBI_ARCHITECTURE": "framepack",
+                "KURA_MUSUBI_TARGET_FPS": "30.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "framepack-video",
+            }
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]),
+                self.assertRaisesRegex(SystemExit, r"(?s)shorter than FramePack's full-window minimum.*33 converted frames"),
+            ):
+                namespace["main"]()
+
     def test_musubi_h3_video_preflight_uses_the_pinned_timestamp_resampling_path(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("musubi_dataset_assert.py"), namespace)

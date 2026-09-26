@@ -19,6 +19,7 @@ IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
 AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
 MUSUBI_CAPTION_TRANSFORM = "strip"
+FRAMEPACK_LATENT_WINDOW_SIZE = 9
 
 
 def _musubi_caption_projection(caption: dict[str, Any], transform: str) -> tuple[str, str]:
@@ -230,6 +231,19 @@ _PLAIN_VIDEO_PROFILE_COMMON = {
     "target_frames_grid": (1, 4),
     "fps_resample_mode": "source-fps-when-declared",
 }
+_FRAMEPACK_VIDEO_PROFILE_COMMON = {
+    **_PLAIN_VIDEO_PROFILE_COMMON,
+    "architectures": ("framepack", "frame_pack"),
+    "allowed_options": ("target_frames", "frame_extraction", "max_frames", "source_fps"),
+    "native_options": {
+        **_PLAIN_VIDEO_PROFILE_COMMON["native_options"],
+        "frame_extraction": "full",
+        "max_frames": 129,
+        "fp_latent_window_size": FRAMEPACK_LATENT_WINDOW_SIZE,
+    },
+    "target_fps": 30.0,
+    "minimum_target_frames": 37,
+}
 MUSUBI_PROJECTION_PROFILES = {
     "ordinary-image": {
         "codec": "plain-image-jsonl",
@@ -272,6 +286,14 @@ MUSUBI_PROJECTION_PROFILES = {
         **_PLAIN_VIDEO_PROFILE_COMMON,
         "architectures": ("hunyuan_video_1_5",),
         "target_fps": 24.0,
+    },
+    "framepack-video": {
+        **_FRAMEPACK_VIDEO_PROFILE_COMMON,
+        "mode": {"one_frame": False, "f1": False},
+    },
+    "framepack-f1-video": {
+        **_FRAMEPACK_VIDEO_PROFILE_COMMON,
+        "mode": {"one_frame": False, "f1": True},
     },
     "h3-one-frame-fl2va": {
         "codec": "h3-one-frame-control-jsonl",
@@ -364,13 +386,14 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
             "grid": "profile-specific: Wan 1+4n; MiniMax-H3 5+17n",
             "required_for": "verified generated-video-JSONL manifest projection",
         },
-        "frame_extraction": {"type": "enum:head", "default": "head"},
+        "frame_extraction": {"type": "enum:head|full", "default": "profile-specific"},
+        "max_frames": {"type": "integer", "minimum": 1},
         "source_fps": {"type": "number", "exclusive_minimum": 0},
     },
 }
 _MUSUBI_DATASET_OPTION_FIELDS = {
     "control_resolution", "fp_1f_clean_indices", "fp_1f_target_index", "no_resize_control",
-    "target_frames", "frame_extraction", "source_fps",
+    "target_frames", "frame_extraction", "max_frames", "source_fps",
 }
 
 
@@ -475,10 +498,17 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 "must be a nonnegative integer"
             )
         frame_extraction = value.get("frame_extraction")
-        if frame_extraction is not None and frame_extraction != "head":
+        if frame_extraction is not None and frame_extraction not in {"head", "full"}:
             raise ValueError(
                 f"Musubi backend.config.dataset_options.{dataset_id}.frame_extraction "
-                "currently supports only 'head'"
+                "currently supports only 'head' or 'full'"
+            )
+        max_frames = value.get("max_frames")
+        if max_frames is not None and (
+            isinstance(max_frames, bool) or not isinstance(max_frames, int) or max_frames <= 0
+        ):
+            raise ValueError(
+                f"Musubi backend.config.dataset_options.{dataset_id}.max_frames must be a positive integer"
             )
         source_fps = value.get("source_fps")
         if source_fps is not None and (
@@ -505,6 +535,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     architecture = _musubi_architecture(run)
     mode = {
         "one_frame": _truthy(override.get("one_frame")),
+        "f1": _truthy(override.get("f1")),
         "effective_task": _musubi_h3_effective_task(override),
         "teacher_conditions": (
             str(override.get("h3_teacher_conditions"))
@@ -631,6 +662,14 @@ def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options
             raise ValueError(
                 f"Musubi profile {profile_name} target_frames must use the {first}+{step}n grid; "
                 f"invalid value(s): {invalid}"
+            )
+    minimum_target_frames = profile.get("minimum_target_frames")
+    if isinstance(minimum_target_frames, int) and isinstance(target_frames, list):
+        too_short = [frame for frame in target_frames if frame < minimum_target_frames]
+        if too_short:
+            raise ValueError(
+                f"Musubi profile {profile_name} requires at least {minimum_target_frames} frames; "
+                f"invalid value(s): {too_short}"
             )
     control_index_option = profile.get("control_index_option")
     if isinstance(control_index_option, str):

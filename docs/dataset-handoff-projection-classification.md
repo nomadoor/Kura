@@ -119,6 +119,8 @@ dataset settings; it does not add a model taxonomy to core.
 | `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at HunyuanVideo's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video-1.5-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at the profile's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
+| `framepack-video` | `plain-video-jsonl` | Same explicit `strip` rule. Normal FramePack fixes `fp_latent_window_size = 9`, defaults to the pinned recommendation `frame_extraction = full` with the frozen upstream default `max_frames = 129`, and preflights at 30fps before acquisition. Authors may explicitly choose `head` or another positive `max_frames`. `head` requires every `target_frames` value to be on the 1+4n grid and at least 37 frames; `full` mirrors the pinned full-video rounding and requires the resulting clip to contain one complete latent window. | `unsupported`; an audio input stops rather than being ignored. |
+| `framepack-f1-video` | `plain-video-jsonl` | Same dataset rules as `framepack-video`; the separate profile freezes the F1 sampling mode in input identity. | `unsupported`; an audio input stops rather than being ignored. |
 | `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-one-frame-plain` | `plain-image-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-video-t2va`, `h3-video-fl2va`, video teacher profiles | `h3-video-jsonl` | Same explicit `strip` rule. H3 target videos are measured through the pinned timestamp-to-24fps loader; `source_fps` is not an H3 option. Plans warn outside the released 124-345 frame range. | An authored target `audio` role becomes explicit `audio_path`. Without one, preflight rejects a same-stem sidecar beside the resolved source path before allowing embedded audio or silence; pinned Musubi resolves the JSONL path before sidecar lookup. |
@@ -145,7 +147,19 @@ training requires an image target plus a start/control image and `--one_frame`
 (`docs/framepack_1f.md`, lines 86-100). Those currently claimed Wan Single
 Frame and FramePack Single Frame paths remain mandatory migration work; this
 slice does not claim them as implemented. FramePack normal/F1 remains a video
-dataset path.
+dataset path. At pinned Musubi `4e7c714`, both paths require at least one full
+9-latent window: `src/musubi_tuner/fpack_cache_latents.py`, lines 60-69 raises
+an explicit `ValueError` below 37 frames and lines 71-80 trims longer clips to
+whole windows. Pinned `full` extraction takes `min(frame_count, max_frames)` and
+rounds it down on the architecture frame grid in
+`src/musubi_tuner/dataset/image_video_dataset.py`, lines 852-856. Kura repeats
+that exact minimum/rounding check before model acquisition. F1
+selects the alternate section/index construction at lines 181-241. Kura keeps
+those modes as distinct profiles even though both consume the same generated
+video JSONL. The prior optimizer smoke
+`runs/20260712-1655_musubi-real-smoke-framepack_ed86` used `full`,
+`max_frames = 37`, and `fp_latent_window_size = 9`; the new default therefore
+preserves its extraction method rather than the generic `head` default.
 
 Pinned H3 reference loading rejects video references outside 2-15 seconds with
 an explicit error; it does not silently omit them. The source contract is

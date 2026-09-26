@@ -4841,6 +4841,24 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--one_frame_no_2x", script)
         self.assertIn("--one_frame_no_4x", script)
 
+    def test_command_musubi_framepack_freezes_latent_window_size_in_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "framepack",
+            "model_paths": {
+                "dit": "/models/framepack.safetensors",
+                "vae": "/models/fpack-vae.safetensors",
+                "text_encoder1": "/models/te1.safetensors",
+                "text_encoder2": "/models/te2.safetensors",
+                "image_encoder": "/models/siglip.safetensors",
+            },
+            "precache": True,
+        }}
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertEqual(script.count("--latent_window_size 9"), 1)
+
     def test_command_musubi_qwen_model_versions_reach_all_three_stages(self) -> None:
         for model_version in ("original", "edit", "edit-2509", "edit-2511", "layered"):
             with self.subTest(model_version=model_version):
