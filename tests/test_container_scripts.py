@@ -158,6 +158,30 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
 
+    def test_musubi_dataset_assert_counts_symlinked_image_view(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.png"
+            source.write_bytes(b"image")
+            view = root / "view"
+            view.mkdir()
+            (view / "000000-deadbeef.png").symlink_to(source)
+            config = root / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nimage_directory = "' + view.as_posix() + '"\n',
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+
+            with patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]), patch(
+                "sys.stdout", output,
+            ):
+                namespace["main"]()
+
+        self.assertIn('"images": 1', output.getvalue())
+
     def test_musubi_dataset_assert_dispatches_video_jsonl_and_defers_unknown_sources(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("musubi_dataset_assert.py"), namespace)

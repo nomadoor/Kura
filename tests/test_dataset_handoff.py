@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends.ai_toolkit import compile_ai_toolkit, project_ai_toolkit_dataset
+from kura.backends.musubi_datasets import _write_musubi_dataset_config, project_musubi_dataset
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, materialize_dataset_view, remove_dataset_views
 from kura.dataset_handoff import local_training_mounts
@@ -1507,6 +1509,103 @@ class DatasetHandoffTests(unittest.TestCase):
             caption_name = Path(lock["views"][0]["files"][0]["path"]).stem
             self.assertEqual(target_name, caption_name)
             self.assertRegex(target_name, r"^000000-[0-9a-f]{12}$")
+
+    def test_musubi_projects_one_image_caption_dataset_with_sibling_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {}}
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            materialize_dataset_view(workspace, lock)
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
+            projected = report["datasets"][0]
+            view = lock["views"][0]
+            image_directory = Path(projected["native"]["image_directory"])
+            cache_directory = Path(projected["native"]["cache_directory"])
+            self.assertEqual(image_directory.parent, cache_directory.parent)
+            self.assertNotEqual(image_directory, cache_directory)
+            self.assertFalse(image_directory.is_relative_to(cache_directory))
+            self.assertFalse(cache_directory.is_relative_to(image_directory))
+            self.assertEqual(view["consumers"][0]["native_pointer"], "/image_directory")
+            self.assertEqual(view["write_roots"][0]["native_pointer"], "/cache_directory")
+            self.assertEqual(projected["native"]["caption_extension"], ".txt")
+            self.assertEqual(projected["native_string_fields"], ["/caption_extension"])
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_initial_projection_stops_unsupported_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {}}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "ordinary image.*does not yet support"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+            run["backend"]["config"]["dataset_config"] = {"general": {"resolution": [512, 512]}}
+            with self.assertRaisesRegex(ValueError, "dataset_config.*replaced by manifest projection"):
+                project_musubi_dataset(run, {"datasets": []})
+
+    def test_musubi_initial_projection_rejects_an_absent_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {}}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["caption"] = None
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "sample 'a'.*caption.*cannot be absent"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_uncompiled_plan_defers_manifest_projection_to_compile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, _resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "dataset_config": {"datasets": [{
+                    "image_directory": "/workspace/datasets/tiny/missing",
+                }]},
+            }}
+
+            records = _dataset_layout_preflight_report(run, workspace)
+
+            self.assertEqual(records[0]["severity"], "info")
+            self.assertIn("compilation", records[0]["fact"])
+            self.assertNotIn("missing", records[0]["fact"])
 
     def test_input_identity_is_stable_across_run_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

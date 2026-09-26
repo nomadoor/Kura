@@ -11,7 +11,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
-from kura.backends.musubi_datasets import MUSUBI_H3_DATASET_CAPABILITIES, validate_musubi_authored_config, validate_musubi_dataset_layout
+from kura.backends.musubi_datasets import MUSUBI_H3_DATASET_CAPABILITIES, project_musubi_dataset, validate_musubi_authored_config, validate_musubi_dataset_layout
 from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
@@ -265,6 +265,7 @@ BACKENDS: dict[str, BackendAdapter] = {
         name="musubi-tuner", image_name="musubi-tuner", compile=_compile_musubi, command=command_musubi_tuner,
         display=display_musubi_tuner, requirements=requirements_musubi, surface=MUSUBI_SURFACE,
         validate_authored=validate_musubi_authored_config,
+        project_dataset=project_musubi_dataset,
         download_specs=musubi_model_download_specs, validate_dataset=validate_musubi_dataset_layout,
         training_state=training_state_contract_musubi,
     ),

@@ -80,7 +80,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 if backend == "ai-toolkit":
                     run["backend"]["config"] = {"model_arch": "sdxl", "network_dim": 4, "network_alpha": 4, "learning_rate": 0.0001, "batch_size": 1}
                 else:
-                    run["backend"]["config"] = {"architecture": "flux2", "model_version": "klein-base-4b", "network_dim": 4, "learning_rate": 0.0001, "dataset_config": {"general": {"resolution": [64, 64], "batch_size": 1}}, "model_paths": {"dit": "/workspace/cache/models/dit.safetensors", "vae": "/workspace/cache/models/vae.safetensors", "text_encoder": "/workspace/cache/models/text.safetensors"}}
+                    run["backend"]["config"] = {"architecture": "flux2", "model_version": "klein-base-4b", "network_dim": 4, "learning_rate": 0.0001, "resolution": [64, 64], "batch_size": 1, "model_paths": {"dit": "/workspace/cache/models/dit.safetensors", "vae": "/workspace/cache/models/vae.safetensors", "text_encoder": "/workspace/cache/models/text.safetensors"}}
                 run_path.write_text(yaml.safe_dump(run, sort_keys=False), encoding="utf-8")
 
                 self.assertEqual(cmd_run_compile(argparse.Namespace(run_id=run_id)), 0)

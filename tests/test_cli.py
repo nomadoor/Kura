@@ -169,8 +169,14 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 dataset = root / "datasets" / "tiny"
                 dataset.mkdir(parents=True)
-                (dataset / "dataset.yaml").write_text("id: tiny\n", encoding="utf-8")
-                (dataset / "items.jsonl").write_text("{}\n", encoding="utf-8")
+                (dataset / "dataset.yaml").write_text(
+                    "id: tiny\nitems_schema_version: 2\n", encoding="utf-8",
+                )
+                (dataset / "items.jsonl").write_text(json.dumps({
+                    "id": "missing",
+                    "files": [{"type": "file", "role": "target", "path": "missing.png"}],
+                    "caption": None,
+                }) + "\n", encoding="utf-8")
                 stdout = io.StringIO()
                 with patch("sys.stdout", stdout):
                     self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="empty-musubi", backend="musubi-tuner", executor="docker", gpu=None)), 0)
@@ -189,7 +195,8 @@ class InitCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("dataset tiny has no images/ directory and no image files at its root", stderr.getvalue())
+        self.assertIn("missing.png", stderr.getvalue())
+        self.assertIn("does not exist", stderr.getvalue())
         self.assertFalse(manifest_exists)
 
     def test_run_compile_rejects_removed_backend_overrides(self) -> None:
@@ -4300,7 +4307,7 @@ class MusubiBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "escapes dataset"):
                 validate_musubi_dataset_layout(run, root)
 
-    def test_video_directory_is_a_native_source_without_image_sentinel(self) -> None:
+    def test_video_directory_native_selection_stops_during_initial_manifest_slice(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             videos = root / "datasets" / "video" / "videos"
@@ -4315,13 +4322,10 @@ class MusubiBackendTests(unittest.TestCase):
                 ]}}},
             }
 
-            _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
+            with self.assertRaisesRegex(ValueError, "cannot use an authored dataset_config"):
+                _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
 
-            rendered = destination.read_text(encoding="utf-8")
-            self.assertIn('video_directory = "/workspace/datasets/video/videos"', rendered)
-            self.assertNotIn("image_directory", rendered)
-
-    def test_video_jsonl_is_a_native_source_without_default_images(self) -> None:
+    def test_video_jsonl_native_selection_stops_during_initial_manifest_slice(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "datasets" / "video" / "videos.jsonl"
@@ -4336,11 +4340,8 @@ class MusubiBackendTests(unittest.TestCase):
                 ]}}},
             }
 
-            _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
-
-            rendered = destination.read_text(encoding="utf-8")
-            self.assertIn('video_jsonl_file = "/workspace/datasets/video/videos.jsonl"', rendered)
-            self.assertNotIn("image_directory", rendered)
+            with self.assertRaisesRegex(ValueError, "cannot use an authored dataset_config"):
+                _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
 
     def test_explicit_image_directory_does_not_require_default_images_layout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

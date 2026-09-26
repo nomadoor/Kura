@@ -657,6 +657,13 @@ def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> li
             return [_preflight_record("dataset-images", "warning", "compiled native source input is unverified", "dataset-input.lock.json")]
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
+    if adapter.project_dataset is not None:
+        return [_preflight_record(
+            "dataset-images",
+            "info",
+            "dataset manifest and backend projection will be verified during compilation",
+            "run.yaml",
+        )]
     if adapter.validate_dataset is None:
         return []
     try:
