@@ -261,6 +261,8 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
     def test_musubi_video_profiles_own_preflight_frame_rates(self) -> None:
         self.assertEqual(MUSUBI_PROJECTION_PROFILES["wan-video"]["target_fps"], 16.0)
         self.assertEqual(MUSUBI_PROJECTION_PROFILES["hunyuan-video"]["target_fps"], 24.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["hunyuan-video-1.5-video"]["target_fps"], 24.0)
+        self.assertNotIn("hunyuan-video-1.5-image", MUSUBI_PROJECTION_PROFILES)
         self.assertEqual(MUSUBI_PROJECTION_PROFILES["h3-video-t2va"]["target_fps"], 24.0)
         self.assertNotIn("target_fps", MUSUBI_PROJECTION_PROFILES["ordinary-image"])
 

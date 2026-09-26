@@ -2723,6 +2723,151 @@ class DatasetHandoffTests(unittest.TestCase):
                     project=lambda selection: project_musubi_dataset(run, selection),
                 )
 
+    def test_musubi_projects_hunyuan_video_1_5_video_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuan_video_1_5",
+                "task": "t2v",
+                "dataset_options": {
+                    "tiny": {"target_frames": [1, 25], "frame_extraction": "head", "source_fps": 30.0},
+                },
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "hunyuan-video-1.5-video")
+            self.assertEqual(projected["policy"]["codec"], "plain-video-jsonl")
+            self.assertEqual(projected["policy"]["target_fps"], 24.0)
+            self.assertEqual(projected["native"]["target_frames"], [1, 25])
+            self.assertEqual(projected["native"]["source_fps"], 30.0)
+            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/video_jsonl_file")
+            self.assertEqual(_musubi_video_preflight_env(run, resolved / "musubi")["KURA_MUSUBI_PROFILES"], "hunyuan-video-1.5-video")
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_projects_hunyuan_video_1_5_t2v_image_through_ordinary_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuan_video_1_5",
+                "task": "t2v",
+            }}
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "ordinary-image")
+            self.assertEqual(projected["policy"]["codec"], "plain-image-jsonl")
+            self.assertNotIn("target_fps", projected["policy"])
+            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/image_jsonl_file")
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_rejects_hunyuan_video_1_5_i2v_image_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuan_video_1_5",
+                "task": "i2v",
+            }}
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"no verified Musubi projection profile matches.*hunyuan_video_1_5.*effective_task.*i2v",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_projects_hunyuan_video_image_through_ordinary_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuan_video",
+            }}
+
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "ordinary-image")
+            self.assertEqual(projected["policy"]["codec"], "plain-image-jsonl")
+
+    def test_musubi_hunyuan_video_1_5_rejects_frames_outside_the_pinned_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuan_video_1_5",
+                "dataset_options": {"tiny": {"target_frames": [24]}},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, r"profile hunyuan-video-1.5-video.*1\+4n grid"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
     def test_musubi_video_projection_uses_the_command_architecture_alias(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

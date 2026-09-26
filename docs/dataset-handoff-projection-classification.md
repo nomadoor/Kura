@@ -114,10 +114,11 @@ dataset settings; it does not add a model taxonomy to core.
 
 | Profile | Codec | Caption rule | Audio rule |
 |---|---|---|---|
-| `ordinary-image` | `plain-image-jsonl` | Apply Python `str.strip()` explicitly before writing the JSONL caption, matching pinned Musubi directory-caption behavior. Record the profile and `caption_transform: strip` in plan and input identity. | `unsupported`; any selected audio input is unrepresentable. |
+| `ordinary-image` | `plain-image-jsonl` | Apply Python `str.strip()` explicitly before writing the JSONL caption, matching pinned Musubi directory-caption behavior. Record the profile and `caption_transform: strip` in plan and input identity. HunyuanVideo accepts one-frame targets through this same profile. HunyuanVideo 1.5 accepts them only for T2V; I2V image-only data is rejected because the pinned cache path would condition on the sole target frame itself. | `unsupported`; any selected audio input is unrepresentable. |
 | `flux-kontext-control` | `image-control-jsonl` | Same explicit `strip` rule. | `unsupported`; any selected audio input is unrepresentable. |
 | `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at HunyuanVideo's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
+| `hunyuan-video-1.5-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at the profile's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-one-frame-plain` | `plain-image-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-video-t2va`, `h3-video-fl2va`, video teacher profiles | `h3-video-jsonl` | Same explicit `strip` rule. H3 target videos are measured through the pinned timestamp-to-24fps loader; `source_fps` is not an H3 option. Plans warn outside the released 124-345 frame range. | An authored target `audio` role becomes explicit `audio_path`. Without one, preflight rejects a same-stem sidecar beside the resolved source path before allowing embedded audio or silence; pinned Musubi resolves the JSONL path before sidecar lookup. |
@@ -127,6 +128,24 @@ dataset settings; it does not add a model taxonomy to core.
 Custom-command escape hatches remain unverified. They are not fallback paths
 for an incomplete built-in converter and cannot prove that first-class support
 survived the atomic switch.
+
+At pinned Musubi `4e7c714`, HunyuanVideo 1.5 I2V obtains both its conditioning
+latent and vision feature from the selected target video's first frame
+(`src/musubi_tuner/hv_1_5_cache_latents.py`, lines 50-84); it does not require a
+separate manifest input. An image dataset becomes a one-frame video at lines
+25-29, so using it for I2V would make the only target frame also be the complete
+conditioning input. Kura therefore permits image rows for HV1.5 T2V only.
+
+The pinned generic HunyuanVideo cache accepts an image item as a one-frame
+target, so ordinary HunyuanVideo images are part of `ordinary-image`. Wan image
+datasets are not covered by that profile: their meaning depends on the explicit
+T2I or Single Frame task/mode and needs a separate verified profile. FramePack
+image datasets are likewise not ordinary images: pinned FramePack one-frame
+training requires an image target plus a start/control image and `--one_frame`
+(`docs/framepack_1f.md`, lines 86-100). Those currently claimed Wan Single
+Frame and FramePack Single Frame paths remain mandatory migration work; this
+slice does not claim them as implemented. FramePack normal/F1 remains a video
+dataset path.
 
 Pinned H3 reference loading rejects video references outside 2-15 seconds with
 an explicit error; it does not silently omit them. The source contract is

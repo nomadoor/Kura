@@ -203,6 +203,7 @@ MUSUBI_JSONL_CODECS = {
 _ORDINARY_IMAGE_ARCHITECTURES = (
     "flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen",
     "zimage", "z_image", "ideogram4", "ideogram_4", "hidream_o1", "hidream",
+    "hunyuan_video", "hunyuanvideo", "hunyuan_video_1_5",
 )
 _H3_VIDEO_PROFILE_COMMON = {
     "architectures": ("minimax_h3", "minimaxh3"),
@@ -235,6 +236,9 @@ MUSUBI_PROJECTION_PROFILES = {
         "architectures": _ORDINARY_IMAGE_ARCHITECTURES,
         "shape": "image",
         "mode": {"one_frame": False},
+        "mode_by_architecture": {
+            "hunyuan_video_1_5": {"effective_task": "t2v"},
+        },
         "control_count": 0,
         "allowed_options": (),
         "required_options": (),
@@ -262,6 +266,11 @@ MUSUBI_PROJECTION_PROFILES = {
     "hunyuan-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
         "architectures": ("hunyuan_video", "hunyuanvideo"),
+        "target_fps": 24.0,
+    },
+    "hunyuan-video-1.5-video": {
+        **_PLAIN_VIDEO_PROFILE_COMMON,
+        "architectures": ("hunyuan_video_1_5",),
         "target_fps": 24.0,
     },
     "h3-one-frame-fl2va": {
@@ -560,13 +569,18 @@ def _musubi_dataset_shape(dataset: dict[str, Any]) -> tuple[str, dict[str, list[
 def _select_musubi_projection_profile(
     *, architecture: str, shape: str, mode: dict[str, Any], shape_examples: dict[str, list[str]],
 ) -> tuple[str, dict[str, Any]]:
-    matches = [
-        (name, profile)
-        for name, profile in MUSUBI_PROJECTION_PROFILES.items()
-        if architecture in profile["architectures"]
-        and (shape in profile["shape"] if isinstance(profile["shape"], tuple) else shape == profile["shape"])
-        and all(mode.get(key) == value for key, value in profile["mode"].items())
-    ]
+    matches = []
+    for name, profile in MUSUBI_PROJECTION_PROFILES.items():
+        expected_mode = {
+            **profile["mode"],
+            **profile.get("mode_by_architecture", {}).get(architecture, {}),
+        }
+        if (
+            architecture in profile["architectures"]
+            and (shape in profile["shape"] if isinstance(profile["shape"], tuple) else shape == profile["shape"])
+            and all(mode.get(key) == value for key, value in expected_mode.items())
+        ):
+            matches.append((name, profile))
     if len(matches) != 1:
         if matches:
             raise ValueError(
