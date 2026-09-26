@@ -156,10 +156,50 @@ def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: P
     explicit_command = _musubi_backend_override(run).get("command") is not None
     command = command_musubi_tuner(run)
     if not explicit_command:
+        command["env"].update(_musubi_video_preflight_env(run, destination))
         _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
     if not explicit_command:
         atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
     return command
+
+
+def _musubi_video_preflight_env(run: dict[str, Any], destination: Path) -> dict[str, str]:
+    """Resolve video preflight semantics from the frozen projection profiles."""
+    projection_path = destination.parent / "dataset-projection.lock.json"
+    if not projection_path.is_file():
+        return {}
+    projection = json.loads(projection_path.read_text(encoding="utf-8"))
+    datasets = projection.get("datasets") if isinstance(projection, dict) else None
+    if not isinstance(datasets, list):
+        raise ValueError("Musubi frozen projection has no dataset list for video preflight")
+    policies: list[dict[str, Any]] = []
+    for dataset in datasets:
+        if not isinstance(dataset, dict):
+            continue
+        native = dataset.get("native")
+        if not isinstance(native, dict) or not isinstance(native.get("video_jsonl_file"), str):
+            continue
+        policy = dataset.get("policy")
+        if not isinstance(policy, dict):
+            raise ValueError("Musubi video projection has no verified profile policy")
+        policies.append(policy)
+    if not policies:
+        return {}
+    target_fps_values = {policy.get("target_fps") for policy in policies}
+    resample_modes = {policy.get("fps_resample_mode") for policy in policies}
+    profiles = {policy.get("profile") for policy in policies}
+    if len(target_fps_values) != 1 or not all(isinstance(value, (int, float)) for value in target_fps_values):
+        raise ValueError(f"Musubi video projection profiles disagree on target_fps: {sorted(map(str, target_fps_values))}")
+    if len(resample_modes) != 1 or not all(isinstance(value, str) and value for value in resample_modes):
+        raise ValueError(f"Musubi video projection profiles disagree on fps_resample_mode: {sorted(map(str, resample_modes))}")
+    if not all(isinstance(value, str) and value for value in profiles):
+        raise ValueError("Musubi video projection has an invalid profile name")
+    return {
+        "KURA_MUSUBI_ARCHITECTURE": _musubi_architecture(run),
+        "KURA_MUSUBI_TARGET_FPS": str(next(iter(target_fps_values))),
+        "KURA_MUSUBI_FPS_RESAMPLE_MODE": str(next(iter(resample_modes))),
+        "KURA_MUSUBI_PROFILES": ",".join(sorted(profiles)),
+    }
 
 
 def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: Any) -> list[str] | None:
@@ -176,10 +216,6 @@ def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_
 
 def _musubi_start_commands(dataset_config: str, download_commands: list[list[str]]) -> list[list[str]]:
     return [["python", "-c", script_source("musubi_dataset_assert.py"), dataset_config], *download_commands]
-
-
-def _musubi_video_target_fps(architecture: str) -> float | None:
-    return {"wan": 16.0, "minimax_h3": 24.0, "minimaxh3": 24.0}.get(architecture)
 
 
 def _musubi_save_precision(override: dict[str, Any]) -> str:
@@ -1227,10 +1263,6 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         raise _unsupported_musubi_adapter_error(architecture)
 
     env = _backend_env("Musubi Tuner", override)
-    target_fps = _musubi_video_target_fps(architecture)
-    if target_fps is not None:
-        env["KURA_MUSUBI_ARCHITECTURE"] = architecture
-        env["KURA_MUSUBI_TARGET_FPS"] = str(target_fps)
     return {
         "cwd": "/opt/musubi-tuner", "argv": argv, "env": env,
         "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},

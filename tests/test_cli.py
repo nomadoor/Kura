@@ -4442,8 +4442,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--text_encoder_blocks_to_swap 50", script)
         self.assertIn("--video_only", script)
         self.assertIn("--gradient_checkpointing", script)
-        self.assertEqual(spec["env"]["KURA_MUSUBI_ARCHITECTURE"], "minimax_h3")
-        self.assertEqual(spec["env"]["KURA_MUSUBI_TARGET_FPS"], "24.0")
+        self.assertNotIn("KURA_MUSUBI_TARGET_FPS", spec["env"])
 
     def test_command_musubi_minimax_h3_guidance_requires_precache(self) -> None:
         run = self._run()
@@ -4688,8 +4687,7 @@ class MusubiBackendTests(unittest.TestCase):
 
         self.assertIn("--dit_high_noise /models/wan22-high.safetensors", script)
         self.assertIn("--timestep_boundary 0.875", script)
-        self.assertEqual(spec["env"]["KURA_MUSUBI_ARCHITECTURE"], "wan")
-        self.assertEqual(spec["env"]["KURA_MUSUBI_TARGET_FPS"], "16.0")
+        self.assertNotIn("KURA_MUSUBI_TARGET_FPS", spec["env"])
 
     def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
         run = self._run()

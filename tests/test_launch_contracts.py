@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends import command_musubi_tuner
-from kura.backends.musubi_command import _musubi_video_target_fps
+from kura.backends.musubi_datasets import MUSUBI_PROJECTION_PROFILES
 from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import docker_command
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
@@ -24,7 +24,12 @@ COMFYUI_PREPARE_PATH = ROOT / "docker" / "comfyui" / "kura_comfy_prepare.py"
 SECRET_OPTIONAL = {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "KURA_REMOTE_NOTIFY_NTFY"}
 DEFAULTED_OPTIONAL = {"COMFYUI_ROOT", "SD_SCRIPTS_ROOT"}
 RETRY_OPTIONAL = {"KURA_HF_DOWNLOAD_ATTEMPTS", "KURA_HF_DOWNLOAD_POLL_SEC", "KURA_HF_DOWNLOAD_NO_PROGRESS_SEC"}
-BACKEND_SCOPED = {"KURA_MUSUBI_ARCHITECTURE", "KURA_MUSUBI_TARGET_FPS"}
+BACKEND_SCOPED = {
+    "KURA_MUSUBI_ARCHITECTURE",
+    "KURA_MUSUBI_TARGET_FPS",
+    "KURA_MUSUBI_FPS_RESAMPLE_MODE",
+    "KURA_MUSUBI_PROFILES",
+}
 
 
 def _literal_env_name(node: ast.AST) -> str | None:
@@ -253,10 +258,11 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         script = command_musubi_tuner(_minimal_flux2_run())["argv"][2]
         self.assertLess(script.index("musubi_dataset_assert.py"), script.index("hf_hub_download"))
 
-    def test_musubi_wan_command_declares_architecture_frame_rate_for_preflight(self) -> None:
-        self.assertEqual(_musubi_video_target_fps("wan"), 16.0)
-        self.assertEqual(_musubi_video_target_fps("minimax_h3"), 24.0)
-        self.assertIsNone(_musubi_video_target_fps("flux2"))
+    def test_musubi_video_profiles_own_preflight_frame_rates(self) -> None:
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["wan-video"]["target_fps"], 16.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["hunyuan-video"]["target_fps"], 24.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["h3-video-t2va"]["target_fps"], 24.0)
+        self.assertNotIn("target_fps", MUSUBI_PROJECTION_PROFILES["ordinary-image"])
 
 
 if __name__ == "__main__":

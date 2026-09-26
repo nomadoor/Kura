@@ -118,7 +118,14 @@ def video_frame_preflight(entries, config_path):
     except (ImportError, ModuleNotFoundError) as exc:
         die(f"pinned Musubi video loader is unavailable: {exc}")
     architecture = os.environ.get("KURA_MUSUBI_ARCHITECTURE")
-    strict_timestamp_fps = architecture in {"minimax_h3", "minimaxh3"}
+    profiles = os.environ.get("KURA_MUSUBI_PROFILES")
+    fps_resample_mode = os.environ.get("KURA_MUSUBI_FPS_RESAMPLE_MODE")
+    strict_timestamp_fps = fps_resample_mode == "timestamps"
+    if fps_resample_mode not in {"timestamps", "source-fps-when-declared"}:
+        die(
+            "Musubi video frame preflight has no verified profile resampling mode "
+            f"for profile(s) {profiles!r}: {fps_resample_mode!r}"
+        )
     try:
         architecture_target_fps = float(os.environ["KURA_MUSUBI_TARGET_FPS"])
     except (KeyError, ValueError) as exc:
@@ -193,7 +200,9 @@ def video_frame_preflight(entries, config_path):
         "observed_at": datetime.now().astimezone().isoformat(),
         "dataset_config": str(config_path),
         "architecture": architecture,
+        "profiles": profiles.split(",") if profiles else [],
         "target_fps": architecture_target_fps,
+        "fps_resample_mode": fps_resample_mode,
         "videos": measured,
         "errors": errors,
     }

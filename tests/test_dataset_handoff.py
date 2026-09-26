@@ -15,7 +15,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends.ai_toolkit import compile_ai_toolkit, project_ai_toolkit_dataset
-from kura.backends.musubi_command import _musubi_max_resolution
+from kura.backends.musubi_command import _musubi_max_resolution, _musubi_video_preflight_env
 from kura.backends.musubi_datasets import (
     _musubi_h3_effective_task,
     _write_musubi_dataset_config,
@@ -2637,10 +2637,91 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertTrue(lock["views"][0]["links"][0]["path"].endswith(".mp4"))
             self.assertEqual(report["datasets"][0]["policy"]["codec"], "plain-video-jsonl")
             self.assertEqual(report["datasets"][0]["policy"]["profile"], "wan-video")
+            self.assertEqual(report["datasets"][0]["policy"]["target_fps"], 16.0)
+            self.assertEqual(_musubi_video_preflight_env(run, resolved / "musubi"), {
+                "KURA_MUSUBI_ARCHITECTURE": "wan",
+                "KURA_MUSUBI_TARGET_FPS": "16.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "wan-video",
+            })
             self.assertEqual(report["datasets"][0]["policy"]["caption_transform"], "strip")
             self.assertEqual(report["datasets"][0]["policy"]["audio_selection"], "unsupported")
             parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
             self.assertEqual(parsed["datasets"], [native])
+
+    def test_musubi_projects_hunyuan_video_jsonl_with_verified_frame_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuan_video",
+                "dataset_options": {
+                    "tiny": {"target_frames": [1, 25], "frame_extraction": "head", "source_fps": 24.0},
+                },
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            materialize_dataset_view(workspace, lock)
+            _write_musubi_dataset_config(
+                run,
+                resolved / "musubi" / "dataset.toml",
+                workspace=workspace,
+                strict=True,
+            )
+
+            report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
+            projected = report["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "hunyuan-video")
+            self.assertEqual(projected["policy"]["codec"], "plain-video-jsonl")
+            self.assertEqual(projected["policy"]["target_fps"], 24.0)
+            self.assertEqual(_musubi_video_preflight_env(run, resolved / "musubi"), {
+                "KURA_MUSUBI_ARCHITECTURE": "hunyuan_video",
+                "KURA_MUSUBI_TARGET_FPS": "24.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "hunyuan-video",
+            })
+            self.assertEqual(projected["native"]["target_frames"], [1, 25])
+            self.assertEqual(projected["native"]["frame_extraction"], "head")
+            self.assertEqual(projected["native"]["source_fps"], 24.0)
+            self.assertEqual(lock["views"][0]["consumers"][0]["native_pointer"], "/video_jsonl_file")
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_hunyuan_video_rejects_frames_outside_the_pinned_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "hunyuanvideo",
+                "dataset_options": {"tiny": {"target_frames": [24]}},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").unlink()
+            (dataset / "a.mp4").write_bytes(b"video")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.mp4"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, r"profile hunyuan-video.*1\+4n grid"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
 
     def test_musubi_video_projection_uses_the_command_architecture_alias(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

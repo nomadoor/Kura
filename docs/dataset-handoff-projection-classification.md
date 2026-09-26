@@ -117,6 +117,7 @@ dataset settings; it does not add a model taxonomy to core.
 | `ordinary-image` | `plain-image-jsonl` | Apply Python `str.strip()` explicitly before writing the JSONL caption, matching pinned Musubi directory-caption behavior. Record the profile and `caption_transform: strip` in plan and input identity. | `unsupported`; any selected audio input is unrepresentable. |
 | `flux-kontext-control` | `image-control-jsonl` | Same explicit `strip` rule. | `unsupported`; any selected audio input is unrepresentable. |
 | `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
+| `hunyuan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at HunyuanVideo's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-one-frame-plain` | `plain-image-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-video-t2va`, `h3-video-fl2va`, video teacher profiles | `h3-video-jsonl` | Same explicit `strip` rule. H3 target videos are measured through the pinned timestamp-to-24fps loader; `source_fps` is not an H3 option. Plans warn outside the released 124-345 frame range. | An authored target `audio` role becomes explicit `audio_path`. Without one, preflight rejects a same-stem sidecar beside the resolved source path before allowing embedded audio or silence; pinned Musubi resolves the JSONL path before sidecar lookup. |
@@ -141,15 +142,16 @@ matching, audio, timed control, ordered references, and the remaining claimed
 H3 image and video forms with contract-specific compile tests, so this slice
 must leave no H3 contract in that temporary state.
 
-## Open migration decision
+## Approved old-run migration
 
-The migration method for old `run.yaml` files remains undecided: it may be a
-documented manual procedure or a dedicated conversion command. This decision
-does not authorize rewriting historical run records; compiled runs and their
-recorded intent remain immutable. It affects only the case where an author uses
-an old `run.yaml` as the starting point for a newly compiled run after the
-manifest switch. The migration must make every replaced dataset-selection
-field visible and require review rather than silently choosing an equivalent.
+Old `run.yaml` files migrate through a documented manual procedure; Kura will
+not provide a conversion command. Historical run records remain immutable.
+This affects only an author who uses an old `run.yaml` as the starting point
+for a newly compiled run after the manifest switch. Compilation must reject
+each replaced dataset-selection field with an actionable error that names the
+old field, the manifest or typed `dataset_options` replacement, and what the
+author must rewrite. The procedure and error must keep every replacement
+visible for review and must never silently choose an equivalent.
 
 ## Approved implementation gate
 
@@ -161,8 +163,21 @@ The owner approved:
 4. C1-C3 as core work that lands before backend converters.
 
 After approval the order is C1, C2, C3, focused core tests, then backend
-converters. A newly discovered current claim that does not fit an approved row
-stops implementation and returns to this table for an owner decision.
+converters. Local L1 (Krea 2) and L2 (Wan 1.3B) evidence precede the remaining
+HunyuanVideo, HunyuanVideo 1.5, FramePack, and Kandinsky 5 profiles plus
+multi-block and repeat handling. RunPod R1-R6 evidence is blocked until the
+lock-driven selected-file transfer and remote hash verification are
+implemented; no remote smoke may precede that dependency. A newly discovered
+current claim that does not fit an approved row stops implementation and
+returns to this table for an owner decision.
 The atomic manifest handoff is not merge-ready while even one support contract
 is marked `migration: pending`; merge readiness must run
 `uv run python scripts/check_backend_validation.py --require-no-migration-pending`.
+
+## Final integration cleanup ledger
+
+- Update `kura dataset inspect` to render manifest-v2 typed video targets and
+  typed caption references without reporting a present caption as missing.
+  Strict validation, projection, and execution already use the typed manifest;
+  this is a legacy inspection-display mismatch and must be removed before the
+  final merge.

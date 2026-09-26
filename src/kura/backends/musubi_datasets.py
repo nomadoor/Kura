@@ -213,6 +213,21 @@ _H3_VIDEO_PROFILE_COMMON = {
     "native_options": {"target_frames": None, "frame_extraction": "head"},
     "native_string_fields": ("/frame_extraction",),
     "target_frames_grid": (5, 17),
+    "target_fps": 24.0,
+    "fps_resample_mode": "timestamps",
+}
+_PLAIN_VIDEO_PROFILE_COMMON = {
+    "codec": "plain-video-jsonl",
+    "shape": "video",
+    "mode": {"one_frame": False},
+    "control_count": 0,
+    "allowed_options": ("target_frames", "frame_extraction", "source_fps"),
+    "required_options": ("target_frames",),
+    "native_options": {"target_frames": None, "frame_extraction": "head", "source_fps": None},
+    "native_string_fields": ("/frame_extraction",),
+    "role_limits": {"target": (1, 1)},
+    "target_frames_grid": (1, 4),
+    "fps_resample_mode": "source-fps-when-declared",
 }
 MUSUBI_PROJECTION_PROFILES = {
     "ordinary-image": {
@@ -240,17 +255,14 @@ MUSUBI_PROJECTION_PROFILES = {
         "role_limits": {"target": (1, 1), "control": (1, 1)},
     },
     "wan-video": {
-        "codec": "plain-video-jsonl",
+        **_PLAIN_VIDEO_PROFILE_COMMON,
         "architectures": ("wan",),
-        "shape": "video",
-        "mode": {"one_frame": False},
-        "control_count": 0,
-        "allowed_options": ("target_frames", "frame_extraction", "source_fps"),
-        "required_options": ("target_frames",),
-        "native_options": {"target_frames": None, "frame_extraction": "head", "source_fps": None},
-        "native_string_fields": ("/frame_extraction",),
-        "role_limits": {"target": (1, 1)},
-        "target_frames_grid": (1, 4),
+        "target_fps": 16.0,
+    },
+    "hunyuan-video": {
+        **_PLAIN_VIDEO_PROFILE_COMMON,
+        "architectures": ("hunyuan_video", "hunyuanvideo"),
+        "target_fps": 24.0,
     },
     "h3-one-frame-fl2va": {
         "codec": "h3-one-frame-control-jsonl",
@@ -757,6 +769,8 @@ def _project_musubi_jsonl_dataset(
         "profile": profile_name,
         "codec": codec_name,
         "caption_transform": MUSUBI_CAPTION_TRANSFORM,
+        **({"target_fps": profile["target_fps"]} if "target_fps" in profile else {}),
+        **({"fps_resample_mode": profile["fps_resample_mode"]} if "fps_resample_mode" in profile else {}),
         **{key: value for key, value in codec.items() if key != "build_row"},
     }
     native_runtime = {

@@ -225,6 +225,8 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_REALIZATION_ID": "realization-1",
                 "KURA_MUSUBI_ARCHITECTURE": "wan",
                 "KURA_MUSUBI_TARGET_FPS": "16.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "wan-video",
             }
             with (
                 patch.dict(sys.modules, modules),
@@ -284,6 +286,8 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_REALIZATION_ID": "realization-2",
                 "KURA_MUSUBI_ARCHITECTURE": "wan",
                 "KURA_MUSUBI_TARGET_FPS": "16.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "wan-video",
             }
             output = io.StringIO()
             with (
@@ -338,6 +342,8 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_REALIZATION_ID": "h3-realization",
                 "KURA_MUSUBI_ARCHITECTURE": "minimax_h3",
                 "KURA_MUSUBI_TARGET_FPS": "24.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "timestamps",
+                "KURA_MUSUBI_PROFILES": "h3-video-t2va",
             }
             with (
                 patch.dict(sys.modules, modules),
@@ -387,6 +393,8 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_REALIZATION_ID": "h3-sidecar",
                 "KURA_MUSUBI_ARCHITECTURE": "minimax_h3",
                 "KURA_MUSUBI_TARGET_FPS": "24.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "timestamps",
+                "KURA_MUSUBI_PROFILES": "h3-video-t2va",
             }
             with (
                 patch.dict(sys.modules, modules),
@@ -461,6 +469,8 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_REALIZATION_ID": "jsonl-realization",
                 "KURA_MUSUBI_ARCHITECTURE": "wan",
                 "KURA_MUSUBI_TARGET_FPS": "16.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "wan-video",
             }
             with patch.dict(sys.modules, modules), patch.dict(os.environ, env, clear=True), patch.object(
                 sys, "argv", ["musubi_dataset_assert.py", str(config)],
