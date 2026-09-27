@@ -14,6 +14,7 @@ from typing import Any
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
 from kura.backends.dataset_profiles import (
     classify_dataset_shape,
+    resolve_projection_partitions,
     role_cardinality_errors,
     select_projection_profile,
 )
@@ -823,50 +824,36 @@ def _resolve_musubi_projection_blocks(
     """Resolve every selected dataset to N explicit native blocks; ordinary means N=1."""
     dataset_id = str(dataset.get("id"))
     authored_blocks = options.get("blocks")
-    groups = {sample.get("group") for sample in dataset.get("samples", [])}
-    if authored_blocks is not None and flatten_groups:
-        raise ValueError(f"Musubi dataset {dataset_id!r} cannot combine blocks with flatten_groups")
-    if authored_blocks is None and any(group is not None for group in groups) and not flatten_groups:
-        raise ValueError(f"Musubi dataset {dataset_id!r} has groups; declare blocks or flatten_groups: true")
     common_options = {
         key: deepcopy(value) for key, value in options.items() if key != "blocks"
     }
-    if authored_blocks is None:
-        return [_MusubiProjectionBlock(
-            index=0,
-            count=1,
-            group=None,
-            dataset=dataset,
-            options=common_options,
-            num_repeats=1,
-            resolution=None,
-            explicit=False,
-        )]
-    block_groups = [block.get("group") for block in authored_blocks]
-    if len(set(block_groups)) != len(block_groups) or set(block_groups) != groups:
-        raise ValueError(
-            f"Musubi dataset {dataset_id!r} blocks must map each manifest group exactly once; "
-            f"expected {sorted(str(group) for group in groups)}"
-        )
+    partitions = resolve_projection_partitions(
+        dataset,
+        backend="Musubi",
+        authored_groups=(
+            [block.get("group") for block in authored_blocks]
+            if authored_blocks is not None else None
+        ),
+        flatten_groups=flatten_groups,
+        authored_unit="blocks",
+    )
     resolved = []
-    for index, authored in enumerate(authored_blocks):
+    for partition in partitions:
+        authored = authored_blocks[partition.index] if authored_blocks is not None else {}
         block_options = deepcopy(common_options)
         block_options.update({
             key: deepcopy(value) for key, value in authored.items()
             if key in {"control_resolution", "no_resize_control"}
         })
         resolved.append(_MusubiProjectionBlock(
-            index=index,
-            count=len(authored_blocks),
-            group=authored.get("group"),
-            dataset={**dataset, "samples": [
-                sample for sample in dataset["samples"]
-                if sample.get("group") == authored.get("group")
-            ]},
+            index=partition.index,
+            count=partition.count,
+            group=partition.group,
+            dataset=partition.dataset,
             options=block_options,
             num_repeats=authored.get("num_repeats", 1),
             resolution=deepcopy(authored.get("resolution")),
-            explicit=True,
+            explicit=partition.explicit,
         ))
     return resolved
 

@@ -14,7 +14,14 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.backends.ai_toolkit import compile_ai_toolkit, project_ai_toolkit_dataset
+from kura.backends.ai_toolkit import (
+    AI_TOOLKIT_PROJECTION_PROFILES,
+    _ai_toolkit_projection_architecture,
+    _resolve_ai_toolkit_projection_blocks,
+    _select_ai_toolkit_projection_profile,
+    compile_ai_toolkit,
+    project_ai_toolkit_dataset,
+)
 from kura.backends.musubi_command import _musubi_max_resolution, _musubi_video_preflight_env
 from kura.backends.musubi_datasets import (
     MUSUBI_PROJECTION_PROFILES,
@@ -33,7 +40,11 @@ from kura.backends.sd_scripts_datasets import (
     project_sd_scripts_dataset,
     write_sd_scripts_dataset_config,
 )
-from kura.backends.dataset_profiles import classify_dataset_shape, select_projection_profile
+from kura.backends.dataset_profiles import (
+    classify_dataset_shape,
+    resolve_projection_partitions,
+    select_projection_profile,
+)
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, materialize_dataset_view, remove_dataset_views
 from kura.dataset_handoff import local_training_mounts
@@ -518,6 +529,276 @@ class DatasetHandoffTests(unittest.TestCase):
             for override in profile.get("mode_by_architecture", {}).values():
                 self.assertNotIn("effective_task", override)
 
+    def test_ai_toolkit_ordinary_image_profiles_cover_fixed_source_families(self) -> None:
+        dataset = {
+            "id": "images",
+            "samples": [{
+                "id": "image-a",
+                "files": [{"role": "target", "path": "image.png"}],
+                "caption": {"text": "caption"},
+            }],
+        }
+        ordinary_architectures = {
+            "flux", "chroma", "chroma_radiance", "flux_kontext", "qwen_image",
+            "hidream", "hidream_o1", "flux2", "flux2_klein_4b", "flux2_klein_9b", "krea2",
+            "zimage",
+        }
+
+        for architecture in ordinary_architectures:
+            with self.subTest(architecture=architecture):
+                name, profile = _select_ai_toolkit_projection_profile(
+                    architecture=architecture,
+                    dataset=dataset,
+                    dataset_config={},
+                )
+                self.assertEqual(name, "ordinary-image")
+                self.assertEqual(profile["caption"], "required")
+
+        name, _profile = _select_ai_toolkit_projection_profile(
+            architecture="zimage_l2p",
+            dataset=dataset,
+            dataset_config={},
+        )
+        self.assertEqual(name, "ordinary-image")
+
+        control_dataset = deepcopy(dataset)
+        control_dataset["samples"][0]["files"].append({
+            "role": "control", "path": "control.png",
+        })
+        with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile"):
+            _select_ai_toolkit_projection_profile(
+                architecture="flux_kontext",
+                dataset=control_dataset,
+                dataset_config={},
+            )
+
+        captionless_dataset = deepcopy(dataset)
+        captionless_dataset["samples"][0]["caption"] = None
+        with self.assertRaisesRegex(ValueError, "required captions missing.*image-a"):
+            _select_ai_toolkit_projection_profile(
+                architecture="sdxl",
+                dataset=captionless_dataset,
+                dataset_config={},
+            )
+
+    def test_ai_toolkit_architecture_requirements_are_checked_outside_dataset_profiles(self) -> None:
+        dataset = {
+            "id": "images",
+            "samples": [{
+                "id": "image-a",
+                "files": [{"role": "target", "path": "image.png"}],
+                "caption": {"text": "caption"},
+            }],
+        }
+
+        name, _profile = _select_ai_toolkit_projection_profile(
+            architecture="flex2",
+            dataset=dataset,
+            dataset_config={},
+        )
+        self.assertEqual(name, "ordinary-image")
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"] = {"model_arch": "flex2"}
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires backend.config.bypass_guidance_embedding=true",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+            run["backend"]["config"] = {
+                "model_arch": "flex2",
+                "bypass_guidance_embedding": True,
+            }
+            run["model"] = {"base": "ostris/Flex.2-preview"}
+            run["recipe"] = {"steps": 1, "seed": 1}
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(
+                run, resolved / "ai-toolkit", workspace=workspace, strict=True,
+            )
+            process = yaml.safe_load(
+                (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+
+        self.assertEqual(
+            lock["semantic"]["projection"][0]["policy"]["architecture_requirements"],
+            {"bypass_guidance_embedding": True},
+        )
+        self.assertIs(process["train"]["bypass_guidance_embedding"], True)
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"] = {"model_arch": "zimage_l2p"}
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires backend.config.extras_name_or_path",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+            run["backend"]["config"]["extras_name_or_path"] = "   "
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires backend.config.extras_name_or_path",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+            run["backend"]["config"]["extras_name_or_path"] = "Tongyi-MAI/Z-Image-Turbo"
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+
+        self.assertEqual(
+            lock["semantic"]["projection"][0]["policy"]["architecture_requirements"],
+            {"extras_name_or_path": "Tongyi-MAI/Z-Image-Turbo"},
+        )
+
+    def test_ai_toolkit_block_resolver_uses_n_blocks_and_flatten_as_the_same_model(self) -> None:
+        dataset = {
+            "id": "grouped",
+            "samples": [
+                {"id": "a", "group": "first"},
+                {"id": "b", "group": "second"},
+            ],
+        }
+
+        blocks = _resolve_ai_toolkit_projection_blocks(
+            dataset,
+            {"blocks": [
+                {"group": "first", "num_repeats": 2},
+                {"group": "second", "num_repeats": 3},
+            ]},
+            flatten_groups=False,
+        )
+        flattened = _resolve_ai_toolkit_projection_blocks(
+            dataset, {}, flatten_groups=True,
+        )
+
+        self.assertEqual([block.group for block in blocks], ["first", "second"])
+        self.assertEqual([block.num_repeats for block in blocks], [2, 3])
+        self.assertEqual([[row["id"] for row in block.dataset["samples"]] for block in blocks], [["a"], ["b"]])
+        self.assertEqual(len(flattened), 1)
+        self.assertIsNone(flattened[0].group)
+        self.assertEqual([row["id"] for row in flattened[0].dataset["samples"]], ["a", "b"])
+        with self.assertRaisesRegex(ValueError, "declare blocks or flatten_groups"):
+            _resolve_ai_toolkit_projection_blocks(dataset, {}, flatten_groups=False)
+
+    def test_shared_partition_resolver_preserves_authored_order_and_flattening(self) -> None:
+        dataset = {
+            "id": "grouped",
+            "samples": [
+                {"id": "a", "group": "first"},
+                {"id": "b", "group": "second"},
+            ],
+        }
+
+        partitions = resolve_projection_partitions(
+            dataset,
+            backend="test",
+            authored_groups=["second", "first"],
+            flatten_groups=False,
+            authored_unit="blocks",
+        )
+        flattened = resolve_projection_partitions(
+            dataset,
+            backend="test",
+            authored_groups=None,
+            flatten_groups=True,
+            authored_unit="blocks",
+        )
+
+        self.assertEqual([partition.group for partition in partitions], ["second", "first"])
+        self.assertEqual(
+            [[sample["id"] for sample in partition.dataset["samples"]] for partition in partitions],
+            [["b"], ["a"]],
+        )
+        self.assertEqual([sample["id"] for sample in flattened[0].dataset["samples"]], ["a", "b"])
+
+    def test_shared_partition_resolver_never_drops_an_ungrouped_sample(self) -> None:
+        dataset = {
+            "id": "mixed",
+            "samples": [
+                {"id": "grouped", "group": "concept"},
+                {"id": "ungrouped", "group": None},
+            ],
+        }
+
+        with self.assertRaisesRegex(ValueError, "map each manifest group exactly once"):
+            resolve_projection_partitions(
+                dataset,
+                backend="test",
+                authored_groups=["concept"],
+                flatten_groups=False,
+                authored_unit="blocks",
+            )
+
+    def test_ai_toolkit_manifest_projection_requires_an_explicit_architecture(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires backend.config.model_arch"):
+            _ai_toolkit_projection_architecture({
+                "id": "implicit",
+                "backend": {"name": "ai-toolkit", "config": {}},
+            })
+
+    def test_ai_toolkit_existing_image_projection_is_selected_by_profile_without_native_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+
+            del lock
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"], {
+                "profile": "ordinary-image",
+                "codec": "media-folder",
+                "architecture_requirements": {},
+                "block_groups": [None],
+                "block_settings": [{"num_repeats": 1}],
+            })
+            self.assertEqual(projected["native"], {
+                "folder_path": "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny",
+                "caption_ext": ".txt",
+                "cache_latents_to_disk": True,
+            })
+
     def make_run(self, root: Path) -> tuple[dict, Path]:
         dataset = root / "datasets" / "tiny"
         dataset.mkdir(parents=True)
@@ -531,7 +812,7 @@ class DatasetHandoffTests(unittest.TestCase):
         }) + "\n", encoding="utf-8")
         run = {
             "id": "example",
-            "backend": {"name": "ai-toolkit", "config": {}},
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl"}},
             "datasets": [{"id": "tiny"}],
         }
         resolved = root / "runs" / "example" / "resolved"
@@ -2151,6 +2432,38 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual([item["num_repeats"] for item in parsed["datasets"]], [3, 2])
             self.assertEqual([item["resolution"] for item in parsed["datasets"]], [[512, 512], [768, 512]])
             self.assertNotEqual(parsed["datasets"][0]["cache_directory"], parsed["datasets"][1]["cache_directory"])
+
+    def test_musubi_blocks_preserve_explicit_named_and_ungrouped_partitions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            self.write_tiny_manifest(workspace, [
+                {"id": "grouped", "group": "concept", "files": [
+                    {"type": "file", "role": "target", "path": "grouped.png"}],
+                 "caption": {"text": "grouped"}},
+                {"id": "ungrouped", "files": [
+                    {"type": "file", "role": "target", "path": "ungrouped.png"}],
+                 "caption": {"text": "ungrouped"}},
+            ], {"grouped.png": b"grouped", "ungrouped.png": b"ungrouped"})
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "flux2", "dataset_options": {"tiny": {"blocks": [
+                    {"group": "concept", "num_repeats": 2},
+                    {"num_repeats": 3},
+                ]}},
+            }}
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            projected = lock["semantic"]["projection"][0]
+            self.assertEqual(projected["policy"]["block_groups"], ["concept", None])
+            self.assertEqual([view["repeat"] for view in lock["views"]], [2, 3])
+            self.assertEqual(
+                [row["input_id"] for row in lock["views"][1]["native_files"][0]["rows"][0]["references"]],
+                ["d0:s1:f0", "d0:s1:caption"],
+            )
 
     def test_musubi_group_blocks_reject_missing_and_duplicate_group_assignments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

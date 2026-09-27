@@ -7,6 +7,27 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-mixed-partition-preservation-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      The backend-shared partition helper now preserves an explicitly declared
+      ungrouped partition alongside named groups instead of rejecting that
+      complete mapping. The evidence-scoped SD 1.5 run has one ungrouped
+      dataset and one ungrouped subset, so its selected files, generated TOML,
+      input identity, command, optimizer, Resume, and publication behavior are
+      unchanged. This migration does not claim evidence for mixed grouped and
+      ungrouped sd-scripts datasets.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: fe466969d9c0efc1094df4ecc083692ea935c7f7f9abfbab3738d5fe3ff676a5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 84da8cb8807b6e8a1be6fd486b5ec5a703f16b0a8743dc59b11b5f0cd87ad5cb
   - id: sd-scripts-caption-policy-and-flattening-sd15-evidence-2026-09-27
     backend: sd-scripts
     reason: >-
@@ -15,8 +36,10 @@ records:
       N-subset resolver. The evidence-scoped ungrouped SD 1.5 run does not use
       flattening, and its generated native TOML, effective caption bytes and
       controls, repeat, command, optimizer, Resume, and publication behavior are
-      unchanged. This migration does not claim runtime evidence for grouped,
-      flattened, LLLite, SDXL, FLUX.1, or Anima paths.
+      unchanged. Block/subset partitioning is now backend-shared; the recorded
+      ungrouped N=1 path resolves to the same sole subset with the same native
+      settings and input identity. This migration does not claim runtime evidence
+      for grouped, flattened, LLLite, SDXL, FLUX.1, or Anima paths.
     behavior_changed: false
     evidence_ids:
       - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
@@ -27,7 +50,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: 3782638beae1427e038787c971bad7327ce0a4b6b83ac99cd84430b1df25ef82
+      value: fe466969d9c0efc1094df4ecc083692ea935c7f7f9abfbab3738d5fe3ff676a5
   - id: sd-scripts-shared-profile-contract-sd15-evidence-2026-09-27
     backend: sd-scripts
     reason: >-
@@ -166,8 +189,21 @@ records:
       Allowing a declared generated-JSONL literal field to be absent from some
       rows is likewise confined to native JSONL verification; AI-Toolkit's
       directory view emits no native JSONL and remains byte-for-byte unchanged.
+      The ordinary N=1 dataset path now uses the same manifest partition helper
+      as Musubi and sd-scripts, and first-class projection no longer invents an
+      SDXL architecture when the author omitted one. The recorded smoke
+      explicitly selected model_arch=sd1 and used one ungrouped dataset, so its
+      selected files, native configuration, runtime command, optimizer step,
+      cache placement, and published artifact remain unchanged.
+      The ordinary-image profile now admits additional fixed-source image
+      selectors, while a separate architecture-requirements table gives
+      Flex.2 a typed bypass_guidance_embedding train field and Z-Image L2P a
+      typed extras_name_or_path companion-model field and requirement. Neither
+      architecture requirement applies to model_arch=sd1, so the recorded SD1
+      native dataset, acquisition, and trainer command remain unchanged.
       This migration applies only to that evidence, not to unregistered or
-      custom-image selectors.
+      custom-image selectors, grouped datasets, or architectures whose
+      ordinary-image profile is not yet owner-approved.
     behavior_changed: false
     evidence_ids:
       - ai-toolkit-sd1-publication-docker-2026-09-23
@@ -178,7 +214,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: a0cb00bc1d050dd0cba992ac1f363d145287778aa55ffffc14ba1bda89512d97
+      value: 122634fa9b5ef9e5901fee80486f470ceabefa28e5d0deb6e591efb873299c94
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

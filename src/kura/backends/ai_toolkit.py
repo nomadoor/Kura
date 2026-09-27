@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from kura.backends.dataset_profiles import (
+    classify_dataset_shape,
+    resolve_projection_partitions,
+    select_projection_profile,
+)
 from kura.backends.shared import _datasets, _script_command
 from kura.container_scripts import script_source
 from kura.fsio import atomic_write_yaml
@@ -39,7 +45,196 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
 })
 
-_AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"})
+_AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
+_AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
+
+
+AI_TOOLKIT_PROJECTION_PROFILES = {
+    "ordinary-image": {
+        "architectures": (
+            "anima", "chroma", "chroma_radiance", "flex2", "flux", "flux2",
+            "flux2_klein_4b", "flux2_klein_9b", "flux_kontext", "hidream", "hidream_o1",
+            "krea2", "ltx2.5", "mageflow", "minimax_h3", "minimax_h3_vsa",
+            "qwen_image", "qwen_image_2", "sd1", "sdxl", "zimage", "zimage_l2p",
+        ),
+        "shape": "image",
+        # The caption-null image path is a later mandatory-preservation slice.
+        # Do not advertise it until the folder codec can preserve that meaning.
+        "caption": "required",
+        "mode": {
+            "do_i2v": False,
+            "do_audio": False,
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "media-folder",
+    },
+}
+
+
+AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS = {
+    "flex2": {
+        "bypass_guidance_embedding": {"kind": "literal", "value": True},
+    },
+    "zimage_l2p": {
+        "extras_name_or_path": {"kind": "nonempty-string"},
+    },
+}
+
+
+@dataclass(frozen=True)
+class _AiToolkitProjectionBlock:
+    """One resolved AI-Toolkit dataset block; the ordinary case has N=1."""
+
+    index: int
+    count: int
+    group: str | None
+    dataset: dict[str, Any]
+    num_repeats: int
+    explicit: bool
+
+
+def _select_ai_toolkit_projection_profile(
+    *, architecture: str, dataset: dict[str, Any], dataset_config: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Select one fixed-source dataset contract without creating its view."""
+    shape, examples, cardinalities = classify_dataset_shape(
+        dataset,
+        image_suffixes=_AI_TOOLKIT_IMAGE_SUFFIXES,
+        video_suffixes=_AI_TOOLKIT_VIDEO_SUFFIXES,
+    )
+    try:
+        return select_projection_profile(
+            backend="AI-Toolkit",
+            profiles=AI_TOOLKIT_PROJECTION_PROFILES,
+            architecture=architecture,
+            shape=shape,
+            mode={
+                "do_i2v": dataset_config.get("do_i2v") is True,
+                "do_audio": dataset_config.get("do_audio") is True,
+            },
+            shape_examples=examples,
+            role_cardinalities=cardinalities,
+            caption_presence={
+                str(sample.get("id")): isinstance(sample.get("caption"), dict)
+                for sample in dataset.get("samples", [])
+            },
+        )
+    except ValueError as error:
+        samples = dataset.get("samples", [])
+        if samples:
+            sample = samples[0]
+            roles = [str(item.get("role")) for item in sample.get("files", [])]
+            media_mode = "video mode" if shape.startswith("video") else "image mode"
+            raise ValueError(
+                f"{error}; sample {str(sample.get('id'))!r} roles {roles!r} "
+                f"cannot be represented in AI-Toolkit {media_mode}"
+            ) from error
+        raise
+
+
+def _resolve_ai_toolkit_projection_blocks(
+    dataset: dict[str, Any], options: dict[str, Any], *, flatten_groups: bool,
+) -> list[_AiToolkitProjectionBlock]:
+    """Resolve one manifest dataset to N blocks without projecting their files."""
+    dataset_id = str(dataset.get("id"))
+    authored_blocks = options.get("blocks")
+    if authored_blocks is not None and (
+        not isinstance(authored_blocks, list) or not authored_blocks
+    ):
+        raise ValueError(f"AI-Toolkit dataset {dataset_id!r} blocks must be a non-empty list")
+    for block in authored_blocks or []:
+        if not isinstance(block, dict) or set(block) - {"group", "num_repeats"}:
+            raise ValueError(f"AI-Toolkit dataset {dataset_id!r} block has unsupported fields")
+        group = block.get("group")
+        if not isinstance(group, str) or not group:
+            raise ValueError(f"AI-Toolkit dataset {dataset_id!r} block group must be a non-empty string")
+        repeats = block.get("num_repeats", 1)
+        if isinstance(repeats, bool) or not isinstance(repeats, int) or repeats < 1:
+            raise ValueError(f"AI-Toolkit dataset {dataset_id!r} block num_repeats must be a positive integer")
+    partitions = resolve_projection_partitions(
+        dataset,
+        backend="AI-Toolkit",
+        authored_groups=(
+            [block["group"] for block in authored_blocks]
+            if authored_blocks is not None else None
+        ),
+        flatten_groups=flatten_groups,
+        authored_unit="blocks",
+    )
+    return [
+        _AiToolkitProjectionBlock(
+            index=partition.index,
+            count=partition.count,
+            group=partition.group,
+            dataset=partition.dataset,
+            num_repeats=(
+                authored_blocks[partition.index].get("num_repeats", 1)
+                if authored_blocks is not None else 1
+            ),
+            explicit=partition.explicit,
+        )
+        for partition in partitions
+    ]
+
+
+def _normalize_ai_toolkit_architecture(value: str) -> str:
+    architecture = value.split(":", 1)[0].lower().replace("-", "_")
+    return "flux" if architecture == "flex1" else architecture
+
+
+def _ai_toolkit_projection_architecture(
+    run: dict[str, Any], *, required: bool = True,
+) -> str | None:
+    override = _ai_toolkit_backend_override(run)
+    native_config = override.get("native_config")
+    native_model = native_config.get("model") if isinstance(native_config, dict) else None
+    authored = override.get("model_arch") or (
+        native_model.get("arch") if isinstance(native_model, dict) else None
+    )
+    if not isinstance(authored, str) or not authored:
+        if required:
+            raise ValueError(
+                "AI-Toolkit first-class manifest projection requires backend.config.model_arch; "
+                "the pinned trainer resolves an omitted architecture only after runtime model inspection"
+            )
+        return None
+    return _normalize_ai_toolkit_architecture(authored)
+
+
+def _validate_ai_toolkit_architecture_requirements(
+    architecture: str, override: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate run-level model requirements once, outside dataset profiles."""
+    resolved: dict[str, Any] = {}
+    for field, requirement in AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS.get(
+        architecture, {},
+    ).items():
+        value = override.get(field)
+        if requirement["kind"] == "literal":
+            expected = requirement["value"]
+            if value != expected:
+                rendered = str(expected).lower() if isinstance(expected, bool) else repr(expected)
+                raise ValueError(
+                    f"AI-Toolkit architecture {architecture!r} requires "
+                    f"backend.config.{field}={rendered}"
+                )
+        elif requirement["kind"] == "nonempty-string":
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"AI-Toolkit architecture {architecture!r} requires "
+                    f"backend.config.{field} as a nonempty model reference"
+                )
+        else:
+            raise ValueError(
+                f"AI-Toolkit architecture requirement {field!r} has unsupported "
+                f"kind {requirement['kind']!r}"
+            )
+        resolved[field] = value
+    return resolved
 
 
 def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
@@ -58,8 +253,22 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         raise ValueError(
             "AI-Toolkit manifest image projection does not yet support backend.config.dataset_config"
         )
+    architecture = _ai_toolkit_projection_architecture(run)
+    architecture_requirements = _validate_ai_toolkit_architecture_requirements(
+        architecture, override,
+    )
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
+        profile_name, profile = _select_ai_toolkit_projection_profile(
+            architecture=architecture,
+            dataset=dataset,
+            dataset_config={},
+        )
+        blocks = _resolve_ai_toolkit_projection_blocks(
+            dataset, {}, flatten_groups=False,
+        )
+        assert len(blocks) == 1
+        dataset = blocks[0].dataset
         dataset_id = dataset.get("id")
         view_root = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
         consumed: list[str] = []
@@ -156,6 +365,15 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             "native_runtime": native_runtime,
             "native": {**semantic, **native_runtime},
             "native_string_fields": ["/caption_ext"],
+            "policy": {
+                "profile": profile_name,
+                "codec": profile["codec"],
+                "architecture_requirements": architecture_requirements,
+                "block_groups": [block.group for block in blocks],
+                "block_settings": [
+                    {"num_repeats": block.num_repeats} for block in blocks
+                ],
+            },
             "views": [{
                 "id": f"ai-toolkit-{dataset_id}",
                 "root": view_root,
@@ -185,9 +403,7 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
             raise ValueError("AI-Toolkit backend.config.model_arch must be a nonempty upstream selector")
         # ModelConfig strips a display tag and maps flex1 to the legacy flux
         # implementation before get_model_class consults the model registry.
-        resolved_arch = authored_arch.split(":", 1)[0]
-        if resolved_arch == "flex1":
-            resolved_arch = "flux"
+        resolved_arch = _normalize_ai_toolkit_architecture(authored_arch)
         if resolved_arch not in AI_TOOLKIT_PINNED_MODEL_ARCHS:
             correction = "; use 'sd1' for Stable Diffusion 1.x" if authored_arch == "sd15" else ""
             raise ValueError(
@@ -197,7 +413,21 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
     native_config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
     native_train = native_config.get("train") if isinstance(native_config.get("train"), dict) else {}
-    model_arch = str(native.get("model_arch") or native_model.get("arch") or "").lower().replace("-", "_")
+    model_arch = _ai_toolkit_projection_architecture(run, required=False) or ""
+    bypass_guidance_embedding = native.get("bypass_guidance_embedding")
+    if bypass_guidance_embedding is not None and not isinstance(
+        bypass_guidance_embedding, bool
+    ):
+        raise ValueError(
+            "AI-Toolkit backend.config.bypass_guidance_embedding must be true or false"
+        )
+    extras_name_or_path = native.get("extras_name_or_path")
+    if extras_name_or_path is not None and (
+        not isinstance(extras_name_or_path, str) or not extras_name_or_path.strip()
+    ):
+        raise ValueError(
+            "AI-Toolkit backend.config.extras_name_or_path must be a nonempty model reference"
+        )
     gradient_checkpointing = native.get(
         "gradient_checkpointing", native_train.get("gradient_checkpointing", False)
     )
@@ -344,6 +574,16 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "scheduler": native.get("lr_scheduler") or _nested(config, "train", "lr_scheduler"),
         "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
         "gradient_accumulation_steps": native.get("gradient_accumulation_steps") or _nested(config, "train", "gradient_accumulation_steps"),
+        "bypass_guidance_embedding": (
+            native.get("bypass_guidance_embedding")
+            if "bypass_guidance_embedding" in native
+            else _nested(config, "train", "bypass_guidance_embedding")
+        ),
+        "extras_name_or_path": (
+            native.get("extras_name_or_path")
+            if "extras_name_or_path" in native
+            else _nested(config, "model", "extras_name_or_path")
+        ),
         "resolution": first_dataset.get("resolution") or native.get("resolution"),
         "dataset": deepcopy(dataset_config),
         "optimizer": native.get("optimizer_type") or _nested(config, "train", "optimizer"),
@@ -364,21 +604,31 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
 def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, Any] | None = None, *, declared: bool = False) -> list[dict[str, Any]]:
     del download_estimate, declared
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
-    base = model.get("base")
-    if not isinstance(base, str) or not base:
-        return []
-    revision = model.get("revision")
-    if base.startswith(("/", "./", "../", "~")):
-        acquisition = "local-path"
-        identity: dict[str, Any] = {"kind": "path", "path": base}
-        expected_format, observable = "backend-native-path", True
-    else:
-        acquisition = "backend"
-        identity = {"kind": "huggingface-repository", "repo_id": base}
-        expected_format, observable = "backend-native-repository", False
-        if isinstance(revision, str) and revision:
-            identity["revision"] = revision
-    return [{"role": "base_model", "acquisition": acquisition, "identity": identity, "runtime_reference": base, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable)}]
+    override = _ai_toolkit_backend_override(run)
+
+    def requirement(role: str, reference: Any, *, revision: Any = None) -> dict[str, Any] | None:
+        if not isinstance(reference, str) or not reference:
+            return None
+        if reference.startswith(("/", "./", "../", "~")):
+            acquisition = "local-path"
+            identity: dict[str, Any] = {"kind": "path", "path": reference}
+            expected_format, observable = "backend-native-path", True
+        else:
+            acquisition = "backend"
+            identity = {"kind": "huggingface-repository", "repo_id": reference}
+            expected_format, observable = "backend-native-repository", False
+            if isinstance(revision, str) and revision:
+                identity["revision"] = revision
+        return {"role": role, "acquisition": acquisition, "identity": identity, "runtime_reference": reference, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable)}
+
+    requirements = []
+    base = requirement("base_model", model.get("base"), revision=model.get("revision"))
+    if base is not None:
+        requirements.append(base)
+    extras = requirement("model_extras", override.get("extras_name_or_path"))
+    if extras is not None:
+        requirements.append(extras)
+    return requirements
 
 
 def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
@@ -441,6 +691,8 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
             protected.append("model.name_or_path")
         if "model_arch" in override and isinstance(native_model, dict) and "arch" in native_model:
             protected.append("model.arch (duplicates backend.config.model_arch)")
+        if "extras_name_or_path" in override and isinstance(native_model, dict) and "extras_name_or_path" in native_model:
+            protected.append("model.extras_name_or_path (duplicates backend.config.extras_name_or_path)")
         if protected:
             raise ValueError(
                 "AI-Toolkit backend.config.native_config overrides Kura-owned field(s): "
@@ -478,8 +730,14 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
             "dtype": "mixed_precision", "batch_size": "batch_size",
             "gradient_accumulation_steps": "gradient_accumulation_steps",
             "gradient_checkpointing": "gradient_checkpointing",
+            "bypass_guidance_embedding": "bypass_guidance_embedding",
         },
-        "model": {"low_vram": "low_vram", "quantize": "quantize", "quantize_te": "quantize_te"},
+        "model": {
+            "extras_name_or_path": "extras_name_or_path",
+            "low_vram": "low_vram",
+            "quantize": "quantize",
+            "quantize_te": "quantize_te",
+        },
         "save": {"save_every": "save_every_n_steps", "max_step_saves_to_keep": "save_last_n_steps"},
     }
     for section, fields in ordinary.items():

@@ -115,14 +115,14 @@ author's responsibility.
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |
 | AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Pinned-image local `sd1` path completed one optimizer step and Kura structural publication; non-root model-cache acquisition also passed. Evidence: `ai-toolkit-sd1-publication-docker-2026-09-23` |
-| AI-Toolkit | FLUX.1 / Kontext / Flex / Chroma | Generic native-config projection | 🧩 | Model-specific defaults not verified |
-| AI-Toolkit | Qwen Image | Generic native-config projection | ⚠️ | T2I expressible; edit/control needs explicit dataset config |
+| AI-Toolkit | FLUX.1 / Kontext / Flex.2 / Chroma | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption path covers FLUX.1, Chroma, Chroma Radiance, and control-free Kontext. Flex.2 requires typed `bypass_guidance_embedding: true`. Kontext and Flex.2 control modes are migration-pending in the next control-codec slice, which must verify their fixed-source multiplicity and path conventions before claiming them. No optimizer claim for these selectors. |
+| AI-Toolkit | Qwen Image | Typed manifest projection | ⚠️ | Fixed-source ordinary image+caption T2I path is first-class. Qwen Image Edit and Edit Plus are migration-pending in the next control-codec slice; their control multiplicity will be source-audited there. |
 | AI-Toolkit | Qwen-Image 2.1 | Generic projection plus typed control path | 🧪 | T2I and single-control Edit compile fixtures pass; pinned-image class import passes; no real smoke |
 | AI-Toolkit | Anima | Generic native-config projection | 🧪 | Compile fixture and pinned-image class import pass; no real smoke |
 | AI-Toolkit | Mage-Flow / Mage-Flow Edit | Generic projection plus typed control path | 🧪 | Base and single-control Edit compile fixtures pass; pinned-image class imports pass; no real smoke |
-| AI-Toolkit | HiDream | Generic native-config projection | 🧩 | No current real smoke |
-| AI-Toolkit | FLUX.2 / Krea 2 | Generic native-config projection | 🧩 | Musubi evidence does not apply to this backend |
-| AI-Toolkit | Z-Image | Generic native-config projection | ⚠️ | Companion artifacts vary by variant |
+| AI-Toolkit | HiDream | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption path covers HiDream I1 and O1. E1 control input is migration-pending in the next control-codec slice. No current real smoke. |
+| AI-Toolkit | FLUX.2 / Krea 2 | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption path covers FLUX.2, Klein 4B/9B, and Krea 2 with edit mode off. FLUX.2 control and Krea 2 edit are migration-pending in the next control-codec slice. Musubi evidence does not apply. |
+| AI-Toolkit | Z-Image | Typed manifest projection | ⚠️ | Fixed-source ordinary image+caption path covers Z-Image. Z-Image L2P uses the same media path only when its required tokenizer/text-encoder companion is declared through typed `extras_name_or_path`; the first-class profile refuses an undeclared companion. Neither selector has optimizer smoke here. |
 | AI-Toolkit | Wan 2.1 / 2.2 | Native override only | ⚠️ | No first-class video dataset projection |
 | AI-Toolkit | LTX-2 / LTX-2.3 | — | 📋 | Not re-audited under the new typed video projection |
 | AI-Toolkit | LTX-2.5 | Generic config plus typed video-dataset projection | 🧪 | Compile fixture and pinned-image class import pass; no real smoke |

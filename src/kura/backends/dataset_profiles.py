@@ -6,8 +6,97 @@ vocabulary remains owned by each backend's profile table.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ProjectionPartition:
+    """One manifest partition selected by an adapter-authored block/subset list."""
+
+    index: int
+    count: int
+    group: str | None
+    dataset: dict[str, Any]
+    explicit: bool
+
+
+def resolve_projection_partitions(
+    dataset: dict[str, Any], *, backend: str,
+    authored_groups: list[str | None] | None, flatten_groups: bool,
+    authored_unit: str,
+    allow_single_ungrouped_authored_with_flatten: bool = False,
+) -> list[ProjectionPartition]:
+    """Resolve the shared `one dataset -> N partitions` grouping contract.
+
+    Adapters retain ownership of block/subset settings.  This helper owns only
+    the manifest grouping invariant and preserves authored ordering.
+    """
+    dataset_id = str(dataset.get("id"))
+    samples = list(dataset.get("samples", []))
+    manifest_groups = {sample.get("group") for sample in samples}
+    named_manifest_groups = {group for group in manifest_groups if group is not None}
+    label = f"{backend} dataset {dataset_id!r}"
+
+    if flatten_groups:
+        allowed_authored = (
+            allow_single_ungrouped_authored_with_flatten
+            and authored_groups == [None]
+        )
+        if authored_groups is not None and not allowed_authored:
+            if allow_single_ungrouped_authored_with_flatten:
+                raise ValueError(
+                    f"{backend} flatten_groups requires exactly one authored "
+                    f"{authored_unit[:-1]} without group; group-specific "
+                    f"{authored_unit[:-1]} settings cannot be flattened implicitly"
+                )
+            raise ValueError(
+                f"{label} cannot combine {authored_unit} with flatten_groups"
+            )
+        return [ProjectionPartition(
+            index=0,
+            count=1,
+            group=None,
+            dataset={**dataset, "samples": samples},
+            explicit=authored_groups is not None,
+        )]
+
+    if authored_groups is None:
+        if named_manifest_groups:
+            raise ValueError(
+                f"{label} has groups; declare {authored_unit} or flatten_groups: true"
+            )
+        return [ProjectionPartition(
+            index=0,
+            count=1,
+            group=None,
+            dataset={**dataset, "samples": samples},
+            explicit=False,
+        )]
+
+    if (
+        len(set(authored_groups)) != len(authored_groups)
+        or set(authored_groups) != manifest_groups
+    ):
+        raise ValueError(
+            f"{label} {authored_unit} must map each manifest group exactly once; "
+            f"expected {sorted(str(group) for group in manifest_groups)!r}"
+        )
+
+    return [
+        ProjectionPartition(
+            index=index,
+            count=len(authored_groups),
+            group=group,
+            dataset={
+                **dataset,
+                "samples": [sample for sample in samples if sample.get("group") == group],
+            },
+            explicit=True,
+        )
+        for index, group in enumerate(authored_groups)
+    ]
 
 
 def classify_dataset_shape(

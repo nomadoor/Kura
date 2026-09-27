@@ -10,7 +10,11 @@ from pathlib import Path
 import tomllib
 from typing import Any
 
-from kura.backends.dataset_profiles import classify_dataset_shape, select_projection_profile
+from kura.backends.dataset_profiles import (
+    classify_dataset_shape,
+    resolve_projection_partitions,
+    select_projection_profile,
+)
 from kura.backends.shared import _datasets, _toml_scalar
 from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
@@ -494,40 +498,22 @@ def _resolve_sd_scripts_projection_subsets(
     flatten_groups: bool,
 ) -> list[tuple[str | None, dict[str, Any], list[dict[str, Any]]]]:
     """Resolve one manifest dataset to N subsets; the ordinary case is N=1."""
-    manifest_groups = {
-        str(sample["group"]) for sample in dataset.get("samples", [])
-        if sample.get("group") is not None
-    }
     configured_groups = [subset.get("group") for subset in authored_subsets]
-    if flatten_groups:
-        if len(authored_subsets) != 1 or configured_groups != [None]:
-            raise ValueError(
-                "sd-scripts flatten_groups requires exactly one authored subset without group; "
-                "group-specific subset settings cannot be flattened implicitly"
-            )
-        return [(None, deepcopy(authored_subsets[0]), list(dataset.get("samples", [])))]
-    if manifest_groups:
-        if any(group is None for group in configured_groups):
-            raise ValueError("sd-scripts grouped manifest requires an explicit group on every subset")
-        if len(set(configured_groups)) != len(configured_groups):
-            raise ValueError("sd-scripts manifest group maps to more than one subset")
-        if set(configured_groups) != manifest_groups:
-            raise ValueError(
-                f"sd-scripts authored subset groups {sorted(configured_groups)!r} do not match "
-                f"manifest groups {sorted(manifest_groups)!r}"
-            )
-    elif len(authored_subsets) != 1 or configured_groups != [None]:
-        raise ValueError("sd-scripts ungrouped manifest requires exactly one subset without group")
+    partitions = resolve_projection_partitions(
+        dataset,
+        backend="sd-scripts",
+        authored_groups=configured_groups,
+        flatten_groups=flatten_groups,
+        authored_unit="subsets",
+        allow_single_ungrouped_authored_with_flatten=True,
+    )
     return [
         (
-            subset.get("group"),
-            deepcopy(subset),
-            [
-                sample for sample in dataset.get("samples", [])
-                if sample.get("group") == subset.get("group")
-            ],
+            partition.group,
+            deepcopy(authored_subsets[partition.index]),
+            list(partition.dataset.get("samples", [])),
         )
-        for subset in authored_subsets
+        for partition in partitions
     ]
 
 

@@ -556,6 +556,68 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "gradient_checkpointing=false"):
                 BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
 
+    def test_ai_toolkit_flex2_bypass_guidance_is_typed_and_compiled(self) -> None:
+        run = {
+            "id": "flex2-typed", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "flex2", "bypass_guidance_embedding": True,
+                "dataset_folder": "/workspace/datasets/images",
+            }},
+            "model": {"base": "ostris/Flex.2-preview"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
+                "config"
+            ]["process"][0]
+        self.assertIs(process["train"]["bypass_guidance_embedding"], True)
+        self.assertIn(
+            "bypass_guidance_embedding",
+            backend_capabilities("ai-toolkit")["conditional_fields"],
+        )
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["bypass_guidance_embedding"] = "true"
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            validate_backend_config(invalid)
+
+    def test_ai_toolkit_zimage_l2p_companion_source_is_typed_and_compiled(self) -> None:
+        run = {
+            "id": "zimage-l2p-typed", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "zimage_l2p",
+                "extras_name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+                "dataset_folder": "/workspace/datasets/images",
+            }},
+            "model": {"base": "zhen-nan/L2P/model-1k-merge.safetensors"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
+                "config"
+            ]["process"][0]
+        self.assertEqual(
+            process["model"]["extras_name_or_path"],
+            "Tongyi-MAI/Z-Image-Turbo",
+        )
+        self.assertIn(
+            "extras_name_or_path",
+            backend_capabilities("ai-toolkit")["conditional_fields"],
+        )
+        self.assertEqual(
+            BACKENDS["ai-toolkit"].requirements(run)[1]["role"],
+            "model_extras",
+        )
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["extras_name_or_path"] = "   "
+        with self.assertRaisesRegex(ValueError, "must be a nonempty model reference"):
+            validate_backend_config(invalid)
+
     def test_ai_toolkit_sdxl_evidence_settings_preserve_legacy_process_semantics(self) -> None:
         """The two migrated 2026-07-12 smokes differed only by executor."""
         ordinary = {

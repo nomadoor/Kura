@@ -320,7 +320,8 @@ class InitCommandTests(unittest.TestCase):
                 run_id = stdout.getvalue().strip()
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
-                run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
+                run["model"]["base"] = "stabilityai/stable-diffusion-xl-base-1.0"
+                run["backend"]["config"]["model_arch"] = "sdxl"
                 run["datasets"] = [{"id": "tiny"}]
                 run["recipe"] = {"steps": 1, "seed": 1}
                 run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
@@ -338,7 +339,10 @@ class InitCommandTests(unittest.TestCase):
             requirements_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "model-requirements.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(requirements_lock["schema_version"], 1)
             self.assertEqual(requirements_lock["requirements"][0]["acquisition"], "backend")
-            self.assertEqual(requirements_lock["requirements"][0]["identity"]["repo_id"], "black-forest-labs/FLUX.2-klein-base-4B")
+            self.assertEqual(
+                requirements_lock["requirements"][0]["identity"]["repo_id"],
+                "stabilityai/stable-diffusion-xl-base-1.0",
+            )
             contract_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "dataset-observations.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(contract_lock["schema_version"], 1)
             self.assertEqual(contract_lock["datasets"][0]["dataset"], "tiny")

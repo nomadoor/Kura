@@ -38,11 +38,11 @@ does not mean retaining the old directory-selection syntax.
 
 | Backend path | Class | Projection and proof | Current support impact |
 | --- | --- | --- | --- |
-| AI-Toolkit: one image target with inline/file caption | **A** | One writable view; target is a source link and effective caption a generated file. Verify loader enumeration and adjacent-cache location. | Preserve. This is the implemented and smoked first manifest path only. |
+| AI-Toolkit: one image target with inline/file caption | **A** | One writable view; target is a source link and effective caption a generated file. The `ordinary-image` profile is source-verified for SD1/SDXL, FLUX.1, Chroma/Radiance, Kontext without control, Flex.2 with typed `bypass_guidance_embedding: true`, Qwen Image, Qwen-Image 2.1 T2I, HiDream I1/O1, FLUX.2/Klein, Krea 2 with edit mode off, Z-Image/L2P, Anima, Mage-Flow base, LTX-2.5 single-frame image, and MiniMax-H3/VSA image input. | Preserve the implemented and smoked SD image+caption path and add only the listed source-audited selectors. This row does not claim optimizer evidence for every selector. |
 | AI-Toolkit: image target with `caption: null` | **A**, after C1 | Adapter declares a singleton sample; core requires no artificial caption binding. | Preserve ordinary no-sidecar behavior, now explicitly authored. |
-| AI-Toolkit: single target/control edit pair | **B**, after C1 | Typed target/control references share a declared association; verify the selected pinned loader maps the projected control path. | **Mandatory preservation:** Qwen-Image 2.1 Edit, Mage-Flow Edit, and MiniMax-H3 Ref2VA have typed single-control compile claims. Old `control_subdir` selection is replaced, not retained. |
-| AI-Toolkit: typed video with `num_frames` and `fps` | **B** | Select typed video; freeze frame/fps choices in semantic identity; verify per-mode enumeration. | **Mandatory preservation:** current LTX-2.5 and MiniMax-H3 typed-video claims. |
-| AI-Toolkit: video with `do_audio`, explicit audio, or embedded-audio choice | **B** | Freeze the exact audio source/embedded choice and prove consumption. No implicit sidecar lookup. | **Mandatory where currently claimed:** joint-audio compile coverage must not silently disappear. Unverified modes stop. |
+| AI-Toolkit: target/control edit inputs | **B**, after C1 | Typed target/control references share a declared association; the control-codec slice must verify each selected pinned loader's multiplicity and projected path convention before adding its profile row. | **Mandatory preservation:** Qwen-Image 2.1 Edit, Mage-Flow Edit, and MiniMax-H3 Ref2VA have typed single-control compile claims. **Migration pending in the next control-codec slice:** Kontext, Qwen Image Edit/Edit Plus, HiDream E1, Krea 2 edit, FLUX.2 control, and Flex.2 generated/external control. Old `control_subdir` selection is replaced, not retained. |
+| AI-Toolkit: typed video with `num_frames`, `fps`, and optional `do_i2v` | **B** | One `video` profile freezes frame/fps choices plus the architecture-allowed `do_i2v` and `do_audio` switches in semantic identity. Pinned LTX-2.5 and MiniMax-H3 I2V take the conditioning image from the target video's first frame; they do not consume a separate control input. | **Mandatory preservation:** current LTX-2.5 and MiniMax-H3 typed-video and I2V claims. The old `first-frame-control` description is replaced by `do_i2v` with no control role. |
+| AI-Toolkit: video with embedded audio selected by `do_audio` | **B** | `do_audio` means audio embedded in the selected target video. Before model acquisition, use the pinned loader's audio-extraction path to prove every selected target supplies usable audio. A manifest `audio` role or same-stem audio sidecar is unrepresentable and stops; it is never substituted for embedded audio. | **Mandatory where currently claimed:** LTX-2.5 and MiniMax-H3 joint-audio compile coverage remains, but only for embedded target-video audio. The fixed loader silently produces no audio target when a stream is absent, so the preflight is part of the claim. |
 | AI-Toolkit: grouped manifest flattened once | **B** | Explicit `flatten_groups: true`; consume every row once and record the choice in identity. | New explicit behavior; no inferred repeats. |
 | AI-Toolkit: multiple controls/references or unsupported role/multiplicity | **C** until proven | Name row, role, and unsupported multiplicity in the compile error. | No generic current claim is intentionally removed. If inventory finds one, move it to B before implementation. |
 | AI-Toolkit: custom `command` | **C: retained escape hatch** | Record an unverified native boundary; no manifest-equivalence claim. | Retained, not promoted. |
@@ -63,6 +63,42 @@ does not mean retaining the old directory-selection syntax.
 | sd-scripts: `image_subdir`, `caption_subdir`, `conditioning_subdir` select samples | **C as first-class selectors** | Selection/pairing moves to manifest. Converter may generate equivalent directories but cannot treat these fields as an independent inventory. | **Current surface replaced:** existing run files require migration. Corresponding capabilities remain mandatory through typed roles/groups. |
 | sd-scripts: video, audio, arbitrary references, or unsupported role | **C** | Name the unrepresentable row and role. | No current sd-scripts first-class claim is removed. |
 | sd-scripts: custom `command` | **C: retained escape hatch** | Keep outside manifest-equivalence claims. | Retained for other upstream modes. |
+
+The AI-Toolkit video rows above are grounded in pinned commit `31ddc709`.
+`toolkit/config_modules.py:1065-1104` defines `num_frames`, `fps`, `do_i2v`,
+and `do_audio`. `extensions_built_in/diffusion_models/ltx2/ltx2.py:844-890`
+and
+`extensions_built_in/diffusion_models/minimax_h3/minimax_h3.py:729-768`
+both implement I2V from the selected target video's first frame. They do not
+read a separate first-frame control. `toolkit/dataloader_mixins.py:740-835`
+opens the target video itself with PyAV/torchaudio when `do_audio` is true and
+leaves its audio value empty when no stream can be extracted; it does not look
+for an authored audio sidecar. The same loader's
+`toolkit/dataloader_mixins.py:580-613` stretches or repeats source frames when
+the target contains fewer frames than `num_frames`, rather than silently
+dropping the item. Therefore short-source rejection is not part of Kura's
+equivalence preflight, while the embedded-audio extraction check is.
+
+The AI-Toolkit ordinary-image boundary is also grounded in pinned commit
+`31ddc709`. `toolkit/data_loader.py:385-455` and
+`jobs/process/BaseSDTrainProcess.py:144-181` provide the common recursive media
+folder and caption path. Authored examples prove that path for FLUX.1, Chroma,
+Kontext, Flex.2, Qwen Image, and HiDream I1. The Flex.2 example at
+`config/examples/train_lora_flex2_24gb.yaml:38-70` additionally requires
+`train.bypass_guidance_embedding: true`, so Kura exposes and freezes that
+boolean instead of hiding it in native config. `toolkit/models/registry.py:21-45`
+and the corresponding model classes verify the remaining listed image
+selectors. Krea 2 is ordinary only while
+`extensions_built_in/diffusion_models/krea2/krea2.py:177-198` leaves
+`model_kwargs.edit` false. Z-Image L2P additionally reads
+`model_config.extras_name_or_path` for its tokenizer and text encoder at
+`extensions_built_in/diffusion_models/z_image/z_image_l2p_model.py:291-295,447-450`;
+its ordinary-image architecture contract therefore requires the typed companion
+source and does not silently reuse the L2P weight path. Flex.2 generated/external
+controls, Qwen Image Edit/Edit Plus, HiDream E1, Krea 2 edit, and FLUX.2 control
+input are migration-pending work for the next control-codec slice. They are not
+silently covered by the ordinary row, and they are not classified as
+unrepresentable before that fixed-source multiplicity and path audit is done.
 
 For every first-class Musubi and sd-scripts converter, acceptance additionally
 requires parsing the emitted native configuration file and proving exact
@@ -131,7 +167,7 @@ These are explicit compatibility changes, not silent capability drops:
 | Existing surface | Replacement | Consequence |
 | --- | --- | --- |
 | AI-Toolkit `dataset_config.control_subdir` | Typed per-sample control reference | Existing run files migrate; single-control support remains mandatory. |
-| AI-Toolkit directory-derived video/audio selection | Typed video/audio references plus frozen frame/audio choices | Existing datasets/runs migrate; claimed LTX-2.5 and MiniMax-H3 paths cannot be omitted. |
+| AI-Toolkit directory-derived video/audio selection | Typed video targets plus frozen frame/I2V/embedded-audio choices | Existing datasets/runs migrate; claimed LTX-2.5 and MiniMax-H3 paths cannot be omitted. `do_i2v` uses the target video's first frame. Independent manifest audio references are rejected because the fixed loader extracts audio only from the target video. |
 | Musubi `dataset_config`, H3 source path/JSONL | Manifest rows plus generated JSONL and typed architecture options | Existing native configs migrate; claimed directory/JSONL/control/reference/audio semantics remain mandatory, but Kura's resulting first-class transport is JSONL only. |
 | Musubi `paired_jsonl` directory scan and modulo selection | Explicit manifest rows and generated JSONL | Hidden directory inference and modulo selection are removed. A future run-subset contract needs a separate owner decision. |
 | sd-scripts `image_subdir`, `caption_subdir`, `conditioning_subdir` | Manifest target/caption/condition references | Existing runs migrate; the training capabilities remain. |
