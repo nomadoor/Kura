@@ -54,6 +54,16 @@ _AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
 _AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
 
 
+def _ai_toolkit_media_kind(path: object) -> str:
+    """Return the backend-local media kind used by projection profiles."""
+    suffix = Path(str(path)).suffix.lower()
+    if suffix in _AI_TOOLKIT_IMAGE_SUFFIXES:
+        return "image"
+    if suffix in _AI_TOOLKIT_VIDEO_SUFFIXES:
+        return "video"
+    return "unsupported"
+
+
 AI_TOOLKIT_PROJECTION_PROFILES = {
     "ordinary-image": {
         "architectures": (
@@ -63,6 +73,12 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
             "qwen_image", "qwen_image_2", "sd1", "sdxl", "zimage", "zimage_l2p",
         ),
         "shape": "image",
+        "target_media": "image",
+        "has_control": False,
+        "control_media": (),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
         # The caption-null image path is a later mandatory-preservation slice.
         # Do not advertise it until the folder codec can preserve that meaning.
         "caption": "required",
@@ -81,6 +97,12 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "flex2-generated-control": {
         "architectures": ("flex2",),
         "shape": "image",
+        "target_media": "image",
+        "has_control": False,
+        "control_media": (),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
         "caption": "required",
         "mode": {"do_i2v": False, "do_audio": False, "generated_controls": True},
         "mode_by_architecture": {},
@@ -94,6 +116,12 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "single-control-image": {
         "architectures": ("flux_kontext", "hidream_e1", "qwen_image_edit"),
         "shape": "image-control",
+        "target_media": "image",
+        "has_control": True,
+        "control_media": ("image",),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
         "caption": "required",
         "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
         "mode_by_architecture": {},
@@ -107,6 +135,12 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "qwen-edit-plus-control": {
         "architectures": ("qwen_image_edit_plus",),
         "shape": "image-control",
+        "target_media": "image",
+        "has_control": True,
+        "control_media": ("image",),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
         "caption": "required",
         "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
         "mode_by_architecture": {},
@@ -120,9 +154,53 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "multi-control-image": {
         "architectures": (
             "flux2", "flux2_klein_4b", "flux2_klein_9b", "krea2",
-            "mageflow_edit", "minimax_h3_ref2va", "qwen_image_2",
+            "mageflow_edit",
         ),
         "shape": "image-control",
+        "target_media": "image",
+        "has_control": True,
+        "control_media": ("image",),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
+        "caption": "required",
+        "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, None)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "paired-media-folders",
+        "control_selection": "all-in-order",
+    },
+    "qwen-image-2-control": {
+        "architectures": ("qwen_image_2",),
+        "shape": "image-control",
+        "target_media": "image",
+        "has_control": True,
+        "control_media": ("image",),
+        "uniform_control_count": True,
+        "uniform_control_media": False,
+        "control_order": None,
+        "caption": "required",
+        "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, None)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "paired-media-folders",
+        "control_selection": "all-in-order",
+    },
+    "ref2va-image-control": {
+        "architectures": ("minimax_h3_ref2va",),
+        "shape": "image-control",
+        "target_media": "image",
+        "has_control": True,
+        "control_media": ("image",),
+        "uniform_control_count": True,
+        "uniform_control_media": True,
+        "control_order": None,
         "caption": "required",
         "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
         "mode_by_architecture": {},
@@ -136,6 +214,12 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "flex2-random-control": {
         "architectures": ("flex2",),
         "shape": "image-control",
+        "target_media": "image",
+        "has_control": True,
+        "control_media": ("image",),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
         "caption": "required",
         "mode": {
             "do_i2v": False,
@@ -153,6 +237,12 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
     "video": {
         "architectures": ("ltx2.5", "minimax_h3"),
         "shape": "video",
+        "target_media": "video",
+        "has_control": False,
+        "control_media": (),
+        "uniform_control_count": False,
+        "uniform_control_media": False,
+        "control_order": None,
         "caption": "required",
         "mode": {
             "do_i2v": (False, True),
@@ -170,6 +260,34 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
             "do_audio": "do_audio",
         },
         "codec": "media-folder",
+    },
+    "ref2va-video-control": {
+        "architectures": ("minimax_h3_ref2va",),
+        "shape": "video-control",
+        "target_media": "video",
+        "has_control": True,
+        "control_media": ("image", "video"),
+        "uniform_control_count": True,
+        "uniform_control_media": True,
+        "control_order": "image-then-video",
+        "caption": "required",
+        "mode": {
+            "do_i2v": False,
+            "do_audio": (False, True),
+            "generated_controls": False,
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, None)},
+        "allowed_options": ("num_frames", "fps", "do_i2v", "do_audio"),
+        "required_options": ("num_frames", "fps"),
+        "native_options": {
+            "num_frames": "num_frames",
+            "fps": "fps",
+            "do_i2v": "do_i2v",
+            "do_audio": "do_audio",
+        },
+        "codec": "paired-media-folders",
+        "control_selection": "all-in-order",
     },
 }
 
@@ -238,7 +356,12 @@ def _select_ai_toolkit_projection_profile(
         if samples:
             sample = samples[0]
             roles = [str(item.get("role")) for item in sample.get("files", [])]
-            media_mode = "video mode" if shape.startswith("video") else "image mode"
+            target_kinds = {
+                _ai_toolkit_media_kind(item.get("path"))
+                for item in sample.get("files", [])
+                if item.get("role") == "target"
+            }
+            media_mode = "video mode" if target_kinds == {"video"} else "image mode"
             raise ValueError(
                 f"{error}; sample {str(sample.get('id'))!r} roles {roles!r} "
                 f"cannot be represented in AI-Toolkit {media_mode}"
@@ -453,8 +576,9 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         dataset = blocks[0].dataset
         dataset_id = dataset.get("id")
         view_root = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
-        control_mode = profile["shape"] == "image-control"
-        video_mode = profile["shape"] == "video"
+        control_mode = bool(profile["has_control"])
+        target_media = str(profile["target_media"])
+        video_mode = target_media == "video"
         target_root = f"{view_root}/target" if control_mode else view_root
         consumed: list[str] = []
         unrepresentable: list[dict[str, str]] = []
@@ -463,6 +587,7 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         bindings: list[dict[str, Any]] = []
         control_inputs: dict[int, list[str]] = {}
         control_counts: dict[str, int] = {}
+        control_kinds: dict[str, tuple[str, ...]] = {}
         for index, sample in enumerate(dataset.get("samples", [])):
             group = sample.get("group")
             if group is not None:
@@ -475,6 +600,24 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             targets = [item for item in references if item.get("role") == "target"]
             controls = [item for item in references if item.get("role") == "control"]
             control_counts[str(sample.get("id"))] = len(controls)
+            kinds = tuple(_ai_toolkit_media_kind(item.get("path")) for item in controls)
+            control_kinds[str(sample.get("id"))] = kinds
+            control_order = profile["control_order"]
+            if control_order is not None:
+                if control_order != "image-then-video":
+                    raise ValueError(
+                        f"AI-Toolkit profile {profile_name!r} has unsupported control order "
+                        f"{control_order!r}"
+                    )
+                media_rank = {"image": 0, "video": 1}
+                ordered_kinds = tuple(
+                    sorted(kinds, key=lambda kind: media_rank.get(kind, len(media_rank)))
+                )
+                if kinds != ordered_kinds:
+                    raise ValueError(
+                        "AI-Toolkit profile requires image references before video references "
+                        f"in manifest order; sample {sample.get('id')!r} has {kinds!r}"
+                    )
             caption = sample.get("caption")
             sample_tag_payload = {
                 "files": [
@@ -491,8 +634,7 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()[:12]
-            target_suffixes = _AI_TOOLKIT_VIDEO_SUFFIXES if video_mode else _AI_TOOLKIT_IMAGE_SUFFIXES
-            mode_label = "video" if video_mode else "image"
+            mode_label = target_media
             for reference in targets:
                 suffix = Path(str(reference.get("path"))).suffix.lower()
                 if len(targets) != 1:
@@ -500,7 +642,7 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                         "input_id": reference["input_id"],
                         "reason": f"AI-Toolkit {mode_label} mode requires exactly one target per sample",
                     })
-                elif suffix not in target_suffixes:
+                elif _ai_toolkit_media_kind(reference.get("path")) != target_media:
                     unrepresentable.append({
                         "input_id": reference["input_id"],
                         "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit {mode_label} mode",
@@ -520,10 +662,13 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                         "input_id": reference["input_id"],
                         "reason": "control input requires a verified AI-Toolkit control profile",
                     })
-                elif suffix not in _AI_TOOLKIT_IMAGE_SUFFIXES:
+                elif (
+                    _ai_toolkit_media_kind(reference.get("path"))
+                    not in profile["control_media"]
+                ):
                     unrepresentable.append({
                         "input_id": reference["input_id"],
-                        "reason": f"control extension {suffix!r} is unsupported by AI-Toolkit image control mode",
+                        "reason": f"control extension {suffix!r} is unsupported by AI-Toolkit {mode_label} control mode",
                     })
                 else:
                     control_root = f"{view_root}/control-{control_index}"
@@ -546,7 +691,7 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     "input_id": input_id,
                     "reason": f"an absent caption cannot yet be represented losslessly in AI-Toolkit {mode_label} mode",
                 })
-            elif len(targets) == 1 and Path(str(targets[0].get("path"))).suffix.lower() in target_suffixes:
+            elif len(targets) == 1 and _ai_toolkit_media_kind(targets[0].get("path")) == target_media:
                 caption_path = f"{target_root}/{index:06d}-{content_tag}.txt"
                 files.append({
                     "path": caption_path,
@@ -573,13 +718,21 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                         "key": f"{index:06d}-{content_tag}",
                         "members": members,
                     })
-        if architecture == "qwen_image_2" and len(set(control_counts.values())) > 1:
+        if profile["uniform_control_count"] and len(set(control_counts.values())) > 1:
             rendered = ", ".join(
                 f"{sample_id}={count}" for sample_id, count in sorted(control_counts.items())
             )
             raise ValueError(
-                "AI-Toolkit qwen_image_2 requires the same control slot count for every "
+                f"AI-Toolkit profile {profile_name!r} requires the same control slot count for every "
                 f"sample; observed {rendered}"
+            )
+        if profile["uniform_control_media"] and len(set(control_kinds.values())) > 1:
+            rendered = ", ".join(
+                f"{sample_id}={kinds!r}" for sample_id, kinds in sorted(control_kinds.items())
+            )
+            raise ValueError(
+                f"AI-Toolkit profile {profile_name!r} requires each reference slot to keep "
+                f"one media kind across samples; observed {rendered}"
             )
         semantic = {
             "caption_ext": ".txt",
@@ -632,6 +785,10 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 **(
                     {"control_selection": profile["control_selection"]}
                     if "control_selection" in profile else {}
+                ),
+                **(
+                    {"control_order": profile["control_order"]}
+                    if profile["control_order"] is not None else {}
                 ),
                 **(
                     {"generated_controls": list(generated_controls)}

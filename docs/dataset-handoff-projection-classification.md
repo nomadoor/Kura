@@ -43,6 +43,7 @@ does not mean retaining the old directory-selection syntax.
 | AI-Toolkit: target/control edit inputs | **B**, after C1 | The `paired-media-folders` codec writes targets/captions and each ordered control slot to separate run-owned folders with one verified association key per sample. Single-control profiles cover Kontext, Qwen Image Edit, and HiDream E1. Qwen Edit Plus accepts one to three controls. Qwen-Image 2.1, Mage-Flow Edit, MiniMax-H3 Ref2VA image references, FLUX.2/Klein, and typed Krea 2 edit accept one or more controls; Qwen-Image 2.1 additionally requires one uniform slot count across all samples. Flex.2 accepts one or more authored control alternatives but the pinned trainer randomly chooses one each step. Its typed `generated_controls` list separately freezes the pinned `depth`, `pose`, `line`, `inpaint`, or `mask` derivations; those generated files remain run-owned cache content. Both selection rules are frozen in policy. | **Mandatory preservation:** all named compile paths remain expressible. Krea 2 control requires typed `model_edit: true`; ordinary Krea 2 freezes edit mode false. Old `control_subdir` selection is replaced, not retained. This row covers image controls only; MiniMax-H3 control-video references remain in the video-control slice. |
 | AI-Toolkit: typed video with `num_frames`, `fps`, and optional `do_i2v` | **B** | One `video` profile freezes frame/fps choices plus the architecture-allowed `do_i2v` and `do_audio` switches in semantic identity. Pinned LTX-2.5 and MiniMax-H3 I2V take the conditioning image from the target video's first frame; they do not consume a separate control input. | **Mandatory preservation:** current LTX-2.5 and MiniMax-H3 typed-video and I2V claims. The old `first-frame-control` description is replaced by `do_i2v` with no control role. |
 | AI-Toolkit: video with embedded audio selected by `do_audio` | **B** | `do_audio` means audio embedded in the selected target video. Before model acquisition, use the pinned loader's audio-extraction path to prove every selected target supplies usable audio. A manifest `audio` role or same-stem audio sidecar is unrepresentable and stops; it is never substituted for embedded audio. | **Mandatory where currently claimed:** LTX-2.5 and MiniMax-H3 joint-audio compile coverage remains, but only for embedded target-video audio. The fixed loader silently produces no audio target when a stream is absent, so the preflight is part of the claim. |
+| AI-Toolkit: MiniMax-H3 Ref2VA video target with ordered image/video references | **B**, after C1 | The `paired-media-folders` codec gives the target and every reference slot the same verified relative stem. The pinned loader searches every declared `control_path` for a matching image first and then a video, collects image references before video references, and requires uniform per-batch counts for each kind. Kura therefore requires every sample to have the same slot kinds and count, and requires manifest order to be image references followed by video references; this preserves the loader's effective order instead of silently rearranging it. `num_frames`, `fps`, target `do_audio`, and `do_i2v=false` are frozen. | MiniMax-H3 Ref2VA image and video reference projection is compile-tested only; it does not inherit the base MiniMax-H3 optimizer smoke. |
 | AI-Toolkit: grouped manifest flattened once | **B** | Explicit `flatten_groups: true`; consume every row once and record the choice in identity. | New explicit behavior; no inferred repeats. |
 | AI-Toolkit: unsupported role/multiplicity beyond a selected profile | **C** until proven | Name row, role, and unsupported multiplicity in the compile error. | No generic current claim is intentionally removed. Image-control multiplicity is owned by the preceding profile row rather than inferred generically. |
 | AI-Toolkit: custom `command` | **C: retained escape hatch** | Record an unverified native boundary; no manifest-equivalence claim. | Retained, not promoted. |
@@ -86,6 +87,17 @@ acquisition. It requires the resulting audio tensor to be nonempty and records
 every view path, source path, and manifest sample ID in the realization. The
 real-container acceptance smoke must include at least one target video with no
 audio track and prove that this preflight stops before model acquisition.
+
+The Ref2VA row is grounded in the same pinned commit. In
+`toolkit/dataloader_mixins.py:1112-1147`, each declared `control_path` is
+searched by target stem, images are collected before videos, and video paths
+are carried separately. `MinimaxH3Ref2VAModel` declares multiple raw image
+references and video-reference support at
+`extensions_built_in/diffusion_models/minimax_h3/minimax_h3.py:1095-1150`;
+its batch checks require uniform image-reference counts at lines 1192-1205 and
+uniform video-reference counts at lines 1412-1426. Kura rejects manifest order
+that the pinned loader would rearrange and records the accepted ordering rule
+in plan and input identity.
 
 The AI-Toolkit ordinary-image boundary is also grounded in pinned commit
 `31ddc709`. `toolkit/data_loader.py:385-455` and

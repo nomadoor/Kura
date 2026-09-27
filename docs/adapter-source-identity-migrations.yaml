@@ -7,6 +7,30 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-ref2va-manifest-references-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      The adapter adds a source-audited MiniMax-H3 Ref2VA profile for video
+      targets with same-stem ordered image and video reference folders. The
+      evidence-scoped SD1, SDXL, and base MiniMax-H3 runs select no Ref2VA
+      profile or reference folders, so their selected bytes, native dataset
+      settings, command, optimizer, publication, and recovery behavior are
+      unchanged. This migration does not claim Ref2VA runtime evidence.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a55e6a2b244c4ccecf05bd498965c1a248f2a52be7b4f23a1ee9c7a5be3979c9
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b71f9528bb18c596bceea53d4e7631a25c5a0addd311089f59d0933ac82f4d30
   - id: ai-toolkit-manifest-video-audio-preflight-existing-evidence-2026-09-27
     backend: ai-toolkit
     reason: >-

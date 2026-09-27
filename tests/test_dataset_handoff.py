@@ -599,13 +599,13 @@ class DatasetHandoffTests(unittest.TestCase):
             "hidream_e1": ("single-control-image", (1, 1), "all-in-order"),
             "qwen_image_edit": ("single-control-image", (1, 1), "all-in-order"),
             "qwen_image_edit_plus": ("qwen-edit-plus-control", (1, 3), "all-in-order"),
-            "qwen_image_2": ("multi-control-image", (1, None), "all-in-order"),
+            "qwen_image_2": ("qwen-image-2-control", (1, None), "all-in-order"),
             "flux2": ("multi-control-image", (1, None), "all-in-order"),
             "flux2_klein_4b": ("multi-control-image", (1, None), "all-in-order"),
             "flux2_klein_9b": ("multi-control-image", (1, None), "all-in-order"),
             "krea2": ("multi-control-image", (1, None), "all-in-order"),
             "mageflow_edit": ("multi-control-image", (1, None), "all-in-order"),
-            "minimax_h3_ref2va": ("multi-control-image", (1, None), "all-in-order"),
+            "minimax_h3_ref2va": ("ref2va-image-control", (1, None), "all-in-order"),
             "flex2": ("flex2-random-control", (1, None), "random-one-per-step"),
         }
         for architecture, expected in cases.items():
@@ -630,6 +630,24 @@ class DatasetHandoffTests(unittest.TestCase):
                 dataset=too_many,
                 dataset_config={},
             )
+
+    def test_ai_toolkit_profiles_own_media_and_control_invariants(self) -> None:
+        for name, profile in AI_TOOLKIT_PROJECTION_PROFILES.items():
+            with self.subTest(profile=name):
+                self.assertIn(profile["target_media"], {"image", "video"})
+                self.assertIsInstance(profile["has_control"], bool)
+                self.assertIsInstance(profile["uniform_control_count"], bool)
+                self.assertIsInstance(profile["uniform_control_media"], bool)
+        self.assertTrue(
+            AI_TOOLKIT_PROJECTION_PROFILES["qwen-image-2-control"]["uniform_control_count"]
+        )
+        ref2va = AI_TOOLKIT_PROJECTION_PROFILES["ref2va-video-control"]
+        self.assertEqual(ref2va["target_media"], "video")
+        self.assertTrue(ref2va["has_control"])
+        self.assertEqual(ref2va["control_media"], ("image", "video"))
+        self.assertTrue(ref2va["uniform_control_count"])
+        self.assertTrue(ref2va["uniform_control_media"])
+        self.assertEqual(ref2va["control_order"], "image-then-video")
 
     def test_ai_toolkit_projects_control_folders_and_exact_native_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -745,6 +763,119 @@ class DatasetHandoffTests(unittest.TestCase):
                 dataset=dataset,
                 dataset_config={"num_frames": 49, "fps": 24, "do_audio": True},
             )
+
+    def test_ai_toolkit_ref2va_projects_ordered_image_and_video_references(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"].update({
+                "model_arch": "minimax_h3_ref2va",
+                "dataset_config": {"num_frames": 73, "fps": 24},
+            })
+            run["recipe"] = {"steps": 1, "seed": 1}
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "clip",
+                    "files": [
+                        {"type": "file", "role": "target", "path": "clip.mp4"},
+                        {"type": "file", "role": "control", "path": "portrait.png"},
+                        {"type": "file", "role": "control", "path": "motion.mp4"},
+                    ],
+                    "caption": {"text": "a referenced moving subject"},
+                }],
+                {"clip.mp4": b"target", "portrait.png": b"image", "motion.mp4": b"reference"},
+            )
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            projection = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+
+        self.assertEqual(projection["policy"]["profile"], "ref2va-video-control")
+        self.assertEqual(projection["policy"]["control_selection"], "all-in-order")
+        self.assertEqual(projection["policy"]["control_order"], "image-then-video")
+        self.assertEqual(projection["native"]["num_frames"], 73)
+        self.assertEqual(projection["native"]["control_path"], [
+            "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny/control-0",
+            "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny/control-1",
+        ])
+        self.assertEqual(
+            [member.get("slot") for member in lock["views"][0]["bindings"][0]["members"]],
+            [None, None, 0, 1],
+        )
+
+    def test_ai_toolkit_ref2va_rejects_reference_order_the_loader_would_rearrange(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"].update({
+                "model_arch": "minimax_h3_ref2va",
+                "dataset_config": {"num_frames": 73, "fps": 24},
+            })
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "clip",
+                    "files": [
+                        {"type": "file", "role": "target", "path": "clip.mp4"},
+                        {"type": "file", "role": "control", "path": "motion.mp4"},
+                        {"type": "file", "role": "control", "path": "portrait.png"},
+                    ],
+                    "caption": {"text": "caption"},
+                }],
+                {"clip.mp4": b"target", "portrait.png": b"image", "motion.mp4": b"reference"},
+            )
+
+            with self.assertRaisesRegex(ValueError, "image references before video references.*clip"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+    def test_ai_toolkit_ref2va_requires_each_slot_to_keep_one_media_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"].update({
+                "model_arch": "minimax_h3_ref2va",
+                "dataset_config": {"num_frames": 73, "fps": 24},
+            })
+            self.write_tiny_manifest(
+                workspace,
+                [
+                    {
+                        "id": "first",
+                        "files": [
+                            {"type": "file", "role": "target", "path": "first.mp4"},
+                            {"type": "file", "role": "control", "path": "first.png"},
+                        ],
+                        "caption": {"text": "first"},
+                    },
+                    {
+                        "id": "second",
+                        "files": [
+                            {"type": "file", "role": "target", "path": "second.mp4"},
+                            {"type": "file", "role": "control", "path": "second-ref.mp4"},
+                        ],
+                        "caption": {"text": "second"},
+                    },
+                ],
+                {
+                    "first.mp4": b"target-1", "first.png": b"reference-1",
+                    "second.mp4": b"target-2", "second-ref.mp4": b"reference-2",
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "each reference slot.*one media kind"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
 
     def test_ai_toolkit_flex2_generated_controls_are_typed_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1407,6 +1407,8 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             lines.append(f"  - projection rule for {_format_plan_value(rule.get('dataset'))}:")
             _append_kv(lines, "profile", rule.get("profile"), indent=4)
             _append_kv(lines, "codec", rule.get("codec"), indent=4)
+            _append_kv(lines, "control_selection", rule.get("control_selection"), indent=4)
+            _append_kv(lines, "control_order", rule.get("control_order"), indent=4)
             _append_kv(lines, "caption_transform", rule.get("caption_transform"), indent=4)
             _append_kv(lines, "audio_selection", rule.get("audio_selection"), indent=4)
             _append_kv(lines, "do_i2v", rule.get("do_i2v"), indent=4)
