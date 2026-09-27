@@ -125,7 +125,8 @@ selection and projection validation.
 | `qwen-image-edit-multi-control` | `image-control-jsonl` | Same explicit `strip` rule. Edit-2509 and Edit-2511 accept one to three controls, so `role_limits.control` is `(1, 3)`. Multiple controls are emitted as contiguous `control_path_0` through `control_path_N`; three is the fixed documentation's confirmed upper bound even though the datasource can iterate farther. | `unsupported`; any selected audio input is unrepresentable. |
 | `qwen-image-layered` | `layered-image-jsonl` | Same explicit `strip` rule. Manifest target order is semantic: the first target is the base/original image and every following target is a layer. Emit contiguous `image_path_0` through `image_path_N`, require at least two targets, and freeze `multiple_target = true`. `remove_first_image_from_target` is an explicit run-level training choice; it does not change the selected inputs or their order. | `unsupported`; control, reference, and audio roles are unrepresentable in this verified path. |
 | `flux2-image-references` | `image-control-jsonl` | Same explicit `strip` rule. FLUX.2 accepts one or more reference/control images. The fixed datasource, cache, and trainer consume a variable-length list and publish no finite model limit, so `role_limits.control` is explicitly `(1, unbounded)`. | `unsupported`; any selected audio input is unrepresentable. |
-| `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Covers pinned official T2V/I2V and Wan 2.2 dual-DiT tasks. I2V obtains its conditioning image from the target video's first frame. Fun Control is excluded until its control-video codec lands. | `unsupported`; an audio input stops rather than being ignored. |
+| `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Covers pinned official T2V/I2V and Wan 2.2 dual-DiT tasks. I2V obtains its conditioning image from the target video's first frame. | `unsupported`; an audio input stops rather than being ignored. |
+| `wan-fun-control-video` | `video-control-jsonl` | Same explicit `strip` rule. Covers pinned `t2v-1.3B-FC`, `t2v-14B-FC`, and `i2v-14B-FC`; every row contains exactly one target video and one control video. Before acquisition, the pinned loader measures both paths. A shorter control is valid because pinned Musubi repeats its last frame; a longer control is trimmed to the target length. Control directories made from image sequences remain unimplemented because manifest v2 inventories files rather than directory inputs. | `unsupported`; an audio input stops rather than being ignored. |
 | `wan-image` | `plain-image-jsonl` | Same explicit `strip` rule. Applies only to pinned `task=t2i-14B`. | `unsupported`; an audio input stops rather than being ignored. |
 | `wan-single-frame`, `wan-single-frame-intermediate` | `image-control-jsonl` | Same explicit `strip` rule. The pinned I2V one-frame task requires one control image; FLF2V intermediate-frame training requires two. Both require explicit clean and target indices. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at HunyuanVideo's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
@@ -163,8 +164,15 @@ target, so ordinary HunyuanVideo images are part of `ordinary-image`. Wan image
 datasets are not covered by that profile: their meaning depends on the explicit
 T2I or Single Frame task/mode and therefore has separate verified profiles.
 Pinned `docs/wan_1f.md`, lines 104-118 ties the one-control path to I2V 14B and
-the two-control intermediate path to FLF2V. Fun Control still needs a generated
-video-control JSONL codec and remains a separate unimplemented slice. FramePack
+the two-control intermediate path to FLF2V. Pinned `docs/wan.md`, lines 123-136
+requires a control-video dataset for Fun Control. Kura uses generated
+`video_path`/`control_path` JSONL rows (`docs/dataset_config.md`, lines 444-465;
+`src/musubi_tuner/dataset/datasources.py`, lines 749-825). The pinned generic
+video loader trims long controls and repeats a short control's last frame to
+the target length (`src/musubi_tuner/dataset/image_video_dataset.py`, lines
+816-873), and the Wan cache/trainer consumes the resulting control latents
+(`src/musubi_tuner/wan_cache_latents.py`, lines 86-107;
+`src/musubi_tuner/wan_train_network.py`, lines 54-58 and 681-690). FramePack
 image datasets are likewise not ordinary images: pinned FramePack one-frame
 training requires an image target plus a start/control image and `--one_frame`
 (`docs/framepack_1f.md`, lines 86-100). This slice implements the standard

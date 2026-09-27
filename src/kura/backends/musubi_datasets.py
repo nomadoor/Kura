@@ -50,6 +50,24 @@ def _plain_video_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], lis
     ]
 
 
+def _video_control_jsonl_row(
+    context: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    row, references = _plain_video_jsonl_row(context)
+    control_paths = context["control_paths"]
+    control_input_ids = context["control_input_ids"]
+    if len(control_paths) != 1 or len(control_input_ids) != 1:
+        raise ValueError("Musubi video-control JSONL requires exactly one control input")
+    row["control_path"] = f"/workspace/{control_paths[0]}"
+    references.insert(1, {
+        "kind": "path",
+        "pointer": "/control_path",
+        "input_id": control_input_ids[0],
+        "path": control_paths[0],
+    })
+    return row, references
+
+
 def _image_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     row, references = _plain_image_jsonl_row(context)
     control_paths = context["control_paths"]
@@ -206,6 +224,12 @@ MUSUBI_JSONL_CODECS = {
         "build_row": _plain_video_jsonl_row,
         "transport": "video_jsonl_file",
         "audio_selection": "unsupported",
+    },
+    "video-control-jsonl": {
+        "build_row": _video_control_jsonl_row,
+        "transport": "video_jsonl_file",
+        "audio_selection": "unsupported",
+        "control_length_policy": "trim-or-repeat-last-to-target",
     },
     "h3-one-frame-control-jsonl": {
         "build_row": _h3_one_frame_control_jsonl_row,
@@ -364,6 +388,20 @@ MUSUBI_PROJECTION_PROFILES = {
         **_PLAIN_VIDEO_PROFILE_COMMON,
         "architectures": ("wan",),
         "mode": {"one_frame": False, "task_dataset_kind": "video"},
+        "target_fps": 16.0,
+    },
+    "wan-fun-control-video": {
+        **_PLAIN_VIDEO_PROFILE_COMMON,
+        "codec": "video-control-jsonl",
+        "architectures": ("wan",),
+        "shape": "video-control",
+        "mode": {
+            "one_frame": False,
+            "task_dataset_kind": "video-control",
+            "task_conditioning": "fun-control",
+        },
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+        "control_media": "video",
         "target_fps": 16.0,
     },
     "wan-image": {
@@ -980,10 +1018,14 @@ def _project_musubi_jsonl_dataset(
             })
             continue
         control_suffixes = [Path(str(control.get("path"))).suffix.lower() for control in controls]
-        if any(suffix not in IMAGE_SUFFIXES for suffix in control_suffixes):
+        control_media = profile.get("control_media", "image")
+        expected_control_suffixes = VIDEO_SUFFIXES if control_media == "video" else IMAGE_SUFFIXES
+        if any(suffix not in expected_control_suffixes for suffix in control_suffixes):
             unrepresentable.append({
                 "input_id": fallback,
-                "reason": f"Musubi profile {profile_name} control inputs must be images",
+                "reason": (
+                    f"Musubi profile {profile_name} control inputs must be {control_media} files"
+                ),
             })
             continue
         caption_text, caption_reference_kind = _musubi_caption_projection(
@@ -1065,6 +1107,7 @@ def _project_musubi_jsonl_dataset(
         "profile": profile_name,
         "codec": codec_name,
         "caption_transform": MUSUBI_CAPTION_TRANSFORM,
+        **({"control_media": profile["control_media"]} if "control_media" in profile else {}),
         **({"target_fps": profile["target_fps"]} if "target_fps" in profile else {}),
         **({"fps_resample_mode": profile["fps_resample_mode"]} if "fps_resample_mode" in profile else {}),
         **{key: value for key, value in codec.items() if key != "build_row"},

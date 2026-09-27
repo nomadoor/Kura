@@ -2807,7 +2807,90 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
                 self.assertEqual(projected["native"]["fp_1f_target_index"], 1)
 
-    def test_musubi_wan_fun_control_waits_for_a_video_control_codec(self) -> None:
+    def test_musubi_wan_fun_control_projects_verified_video_control_jsonl(self) -> None:
+        for task in ("t2v-1.3B-FC", "t2v-14B-FC", "i2v-14B-FC"):
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "wan", "task": task,
+                    "dataset_options": {"tiny": {"target_frames": [1, 25]}},
+                }}
+                dataset = workspace / "datasets" / "tiny"
+                (dataset / "a.png").unlink()
+                (dataset / "a.mp4").write_bytes(b"video")
+                (dataset / "control.mp4").write_bytes(b"control")
+                row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+                row["files"] = [
+                    {"type": "file", "role": "target", "path": "a.mp4"},
+                    {"type": "file", "role": "control", "path": "control.mp4"},
+                ]
+                (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+                lock = freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+                materialize_dataset_view(workspace, lock)
+                _write_musubi_dataset_config(
+                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                )
+
+                projected = json.loads(
+                    (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+                )["datasets"][0]
+                generated = json.loads(lock["views"][0]["native_files"][0]["text"])
+                self.assertEqual(projected["policy"]["profile"], "wan-fun-control-video")
+                self.assertEqual(projected["policy"]["codec"], "video-control-jsonl")
+                self.assertEqual(projected["policy"]["control_media"], "video")
+                self.assertEqual(
+                    projected["policy"]["control_length_policy"],
+                    "trim-or-repeat-last-to-target",
+                )
+                self.assertEqual(projected["policy"]["target_fps"], 16.0)
+                self.assertEqual(set(generated), {"video_path", "control_path", "caption"})
+                self.assertTrue(generated["video_path"].endswith(".mp4"))
+                self.assertTrue(generated["control_path"].endswith(".mp4"))
+                row_references = lock["views"][0]["native_files"][0]["rows"][0]["references"]
+                self.assertEqual(
+                    [reference["pointer"] for reference in row_references],
+                    ["/video_path", "/control_path", "/caption"],
+                )
+                parsed = tomllib.loads(
+                    (resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8")
+                )
+                self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_wan_fun_control_and_plain_tasks_reject_the_wrong_dataset_shape(self) -> None:
+        for task, add_control in (("t2v-14B-FC", False), ("t2v-14B", True)):
+            with self.subTest(task=task), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "wan", "task": task,
+                    "dataset_options": {"tiny": {"target_frames": [1, 25]}},
+                }}
+                dataset = workspace / "datasets" / "tiny"
+                (dataset / "a.png").unlink()
+                (dataset / "a.mp4").write_bytes(b"video")
+                row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+                row["files"][0]["path"] = "a.mp4"
+                if add_control:
+                    (dataset / "control.mp4").write_bytes(b"control")
+                    row["files"].append({
+                        "type": "file", "role": "control", "path": "control.mp4",
+                    })
+                (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    ValueError, r"no verified Musubi projection profile matches",
+                ):
+                    freeze_dataset_handoff(
+                        run, workspace, resolved, backend="musubi-tuner",
+                        project=lambda selection: project_musubi_dataset(run, selection),
+                    )
+
+    def test_musubi_wan_fun_control_rejects_an_image_control_in_the_video_codec(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
@@ -2818,10 +2901,17 @@ class DatasetHandoffTests(unittest.TestCase):
             dataset = workspace / "datasets" / "tiny"
             (dataset / "a.png").unlink()
             (dataset / "a.mp4").write_bytes(b"video")
+            (dataset / "control.png").write_bytes(b"control")
             row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
-            row["files"][0]["path"] = "a.mp4"
+            row["files"] = [
+                {"type": "file", "role": "target", "path": "a.mp4"},
+                {"type": "file", "role": "control", "path": "control.png"},
+            ]
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, r"no verified Musubi projection profile matches"):
+
+            with self.assertRaisesRegex(
+                ValueError, r"sample 'a'.*control inputs must be video files",
+            ):
                 freeze_dataset_handoff(
                     run, workspace, resolved, backend="musubi-tuner",
                     project=lambda selection: project_musubi_dataset(run, selection),

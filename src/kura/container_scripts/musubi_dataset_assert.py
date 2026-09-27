@@ -49,6 +49,11 @@ def video_jsonl_inputs(path):
             die(f"Musubi video_jsonl_file {path} row {index} has no video_path")
         inputs.append({
             "video": Path(value),
+            "control": (
+                Path(row["control_path"])
+                if isinstance(row.get("control_path"), str) and row["control_path"]
+                else None
+            ),
             "explicit_audio": isinstance(row.get("audio_path"), str) and bool(row["audio_path"]),
         })
     return inputs
@@ -176,6 +181,36 @@ def video_frame_preflight(entries, config_path):
                     kwargs["source_fps"] = source_fps
                 frames = load_video(str(video), 0, required, **kwargs)
                 loaded_frames = len(frames)
+                control_item = None
+                control = video_input.get("control")
+                if isinstance(control, Path):
+                    control_context = contexts.get(str(control), {})
+                    try:
+                        control_frames = load_video(str(control), 0, required, **kwargs)
+                        control_loaded_frames = len(control_frames)
+                        if control_loaded_frames <= 0:
+                            raise ValueError("control input has no readable frames")
+                        control_item = {
+                            "video": str(control),
+                            "source": control_context.get("source") or (
+                                os.readlink(control) if control.is_symlink() else str(control.resolve())
+                            ),
+                            "sample_id": control_context.get("sample_id"),
+                            "loaded_frames": control_loaded_frames,
+                            "target_frames": loaded_frames,
+                            "length_policy": "trim-or-repeat-last-to-target",
+                            "passed": True,
+                        }
+                    except Exception as exc:
+                        errors.append({
+                            "dataset_index": entry["index"],
+                            "video": str(control),
+                            "source": control_context.get("source"),
+                            "sample_id": control_context.get("sample_id"),
+                            "input_kind": "control",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
+                        continue
                 if full_framepack:
                     from musubi_tuner.dataset.architectures import round_down_frame_count
 
@@ -202,6 +237,7 @@ def video_frame_preflight(entries, config_path):
                         if video_input.get("explicit_audio")
                         else "verified-no-sidecar; embedded-or-silence"
                     ),
+                    "control": control_item,
                     "passed": effective_frames >= minimum_frames,
                 }
                 measured.append(item)

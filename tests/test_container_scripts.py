@@ -524,6 +524,92 @@ class ContainerScriptTests(unittest.TestCase):
                 namespace["main"]()
             self.assertEqual(calls, [str(video)])
 
+    def test_musubi_fun_control_preflight_measures_the_jsonl_control_before_training(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            source = workspace / "datasets" / "clips"
+            source.mkdir(parents=True)
+            target_source = source / "target.mp4"
+            control_source = source / "control.mp4"
+            target_source.write_bytes(b"target")
+            control_source.write_bytes(b"control")
+            view = workspace / "view"
+            view.mkdir()
+            target = view / "target.mp4"
+            control = view / "control.mp4"
+            target.symlink_to(target_source)
+            control.symlink_to(control_source)
+            jsonl = view / "items.jsonl"
+            jsonl.write_text(json.dumps({
+                "video_path": str(target),
+                "control_path": str(control),
+                "caption": "caption",
+            }) + "\n", encoding="utf-8")
+            config = workspace / "dataset.toml"
+            config.write_text(
+                '[[datasets]]\nvideo_jsonl_file = "' + jsonl.as_posix() + '"\n'
+                'target_frames = [1, 25]\n',
+                encoding="utf-8",
+            )
+            resolved = workspace / "runs" / "video-run" / "resolved"
+            resolved.mkdir(parents=True)
+            (resolved / "dataset-input.lock.json").write_text(json.dumps({
+                "semantic": {"datasets": [{"dataset": "clips", "samples": [{"id": "pair"}]}]},
+                "views": [{"links": [
+                    {
+                        "path": str(target.relative_to(workspace)),
+                        "target": "/workspace/datasets/clips/target.mp4",
+                        "input_id": "d0:s0:f0",
+                    },
+                    {
+                        "path": str(control.relative_to(workspace)),
+                        "target": "/workspace/datasets/clips/control.mp4",
+                        "input_id": "d0:s0:f1",
+                    },
+                ]}],
+            }), encoding="utf-8")
+            media_utils = ModuleType("musubi_tuner.dataset.media_utils")
+            calls = []
+
+            def fake_load_video(path, start_frame, end_frame, **kwargs):
+                calls.append((path, start_frame, end_frame, kwargs))
+                return [object()] * (25 if path == str(target) else 12)
+
+            media_utils.load_video = fake_load_video  # type: ignore[attr-defined]
+            modules = {
+                "musubi_tuner": ModuleType("musubi_tuner"),
+                "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
+                "musubi_tuner.dataset.media_utils": media_utils,
+            }
+            env = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video-run",
+                "KURA_REALIZATION_ID": "fun-control",
+                "KURA_MUSUBI_ARCHITECTURE": "wan",
+                "KURA_MUSUBI_TARGET_FPS": "16.0",
+                "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
+                "KURA_MUSUBI_PROFILES": "wan-fun-control-video",
+            }
+            with (
+                patch.dict(sys.modules, modules),
+                patch.dict(os.environ, env, clear=True),
+                patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]),
+            ):
+                namespace["main"]()
+
+            self.assertEqual([call[0] for call in calls], [str(target), str(control)])
+            record = json.loads(
+                (workspace / "runs" / "video-run" / "realizations" / "fun-control.musubi-video-preflight.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(record["status"], "passed")
+            self.assertEqual(record["videos"][0]["control"]["video"], str(control))
+            self.assertEqual(record["videos"][0]["control"]["source"], "/workspace/datasets/clips/control.mp4")
+            self.assertEqual(record["videos"][0]["control"]["sample_id"], "pair")
+            self.assertEqual(record["videos"][0]["control"]["loaded_frames"], 12)
+            self.assertTrue(record["videos"][0]["control"]["passed"])
+
     def test_hf_download_child_script_compiles(self) -> None:
         module = importlib.import_module("kura.container_scripts.hf_download")
 
