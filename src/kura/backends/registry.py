@@ -125,6 +125,7 @@ MUSUBI_SURFACE = BackendSurface(
         "network_alpha", "network_dim", "noise_clip_std", "noise_scale_end", "noise_scale_start", "one_frame",
         "one_frame_no_2x", "one_frame_no_4x", "optimizer_type", "output_compatibility",
         "pixel_cache_batch_size", "precache", "prune_checkpoints_before_step", "quantized_qwen", "resolution",
+        "remove_first_image_from_target",
         "save_every_n_steps", "save_precision",
         "task", "text_encoder_batch_size", "text_encoder_blocks_to_swap", "timestep_boundary", "timestep_sampling", "vae_chunk_size", "vae_dtype",
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only", "weighting_scheme",
@@ -166,6 +167,7 @@ MUSUBI_SURFACE = BackendSurface(
         _when("one_frame_no_4x", architecture=("framepack", "frame_pack"), one_frame=(True,), precache=(True,)),
         _when("pixel_cache_batch_size", architecture=("hidream_o1", "hidream"), precache=(True,)),
         _when("quantized_qwen", architecture=("kandinsky5", "kandinsky_5"), precache=(True,)),
+        _when("remove_first_image_from_target", architecture=("qwen_image", "qwen")),
         _when(
             "h3_guidance_loss_scale",
             architecture=("minimax_h3", "minimaxh3"),

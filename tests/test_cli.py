@@ -4884,6 +4884,23 @@ class MusubiBackendTests(unittest.TestCase):
 
                 self.assertEqual(script.count(f"--model_version {expected}"), 3)
 
+    def test_command_musubi_qwen_layered_can_remove_the_base_from_training_targets(self) -> None:
+        run = self._run()
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "qwen_image",
+            "model_version": "layered",
+            "remove_first_image_from_target": True,
+            "model_paths": {
+                "dit": "/models/qwen-layered-dit.safetensors",
+                "vae": "/models/qwen-layered-vae.safetensors",
+                "text_encoder": "/models/qwen-vl.safetensors",
+            },
+        }}
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertEqual(script.count("--remove_first_image_from_target"), 1)
+
     def test_command_musubi_hunyuan_15_i2v_updates_cache_and_train(self) -> None:
         run = self._run()
         run["backend"] = {"name": "musubi-tuner", "config": {

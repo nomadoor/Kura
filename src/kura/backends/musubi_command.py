@@ -818,6 +818,10 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     elif architecture in ("qwen_image", "qwen"):
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         model_version = _musubi_model_version(run)
+        if _truthy(override.get("remove_first_image_from_target")) and model_version != "layered":
+            raise ValueError(
+                "Musubi remove_first_image_from_target requires model_version=layered"
+            )
         train_argv = [
             *common, "src/musubi_tuner/qwen_image_train_network.py",
             "--dit", dit, "--vae", vae, "--text_encoder", text_encoder,
@@ -832,6 +836,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_vl")
+        _append_flag(train_argv, override, "remove_first_image_from_target")
         train_argv.extend(_extra_args(override))
         commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):

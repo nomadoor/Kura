@@ -67,6 +67,26 @@ def _image_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], l
     return row, references
 
 
+def _layered_image_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    row = {"caption": context["caption_text"]}
+    references = []
+    for index, (target_path, target_input_id) in enumerate(
+        zip(context["target_paths"], context["target_input_ids"], strict=True)
+    ):
+        key = f"image_path_{index}"
+        row[key] = f"/workspace/{target_path}"
+        references.append({
+            "kind": "path", "pointer": f"/{key}",
+            "input_id": target_input_id, "path": target_path,
+        })
+    references.append({
+        "kind": context["caption_reference_kind"],
+        "pointer": "/caption",
+        "input_id": context["caption_input_id"],
+    })
+    return row, references
+
+
 def _h3_one_frame_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return _image_control_jsonl_row(context)
 
@@ -175,6 +195,12 @@ MUSUBI_JSONL_CODECS = {
         "build_row": _image_control_jsonl_row,
         "transport": "image_jsonl_file",
         "audio_selection": "unsupported",
+    },
+    "layered-image-jsonl": {
+        "build_row": _layered_image_jsonl_row,
+        "transport": "image_jsonl_file",
+        "audio_selection": "unsupported",
+        "target_order": "manifest-order;base-then-layers",
     },
     "plain-video-jsonl": {
         "build_row": _plain_video_jsonl_row,
@@ -311,6 +337,17 @@ MUSUBI_PROJECTION_PROFILES = {
         "native_options": {"no_resize_control": False, "control_resolution": None},
         "native_string_fields": (),
         "role_limits": {"target": (1, 1), "control": (1, 3)},
+    },
+    "qwen-image-layered": {
+        "codec": "layered-image-jsonl",
+        "architectures": ("qwen_image", "qwen"),
+        "shape": "image",
+        "mode": {"one_frame": False, "model_version": "layered"},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {"multiple_target": True},
+        "native_string_fields": (),
+        "role_limits": {"target": (2, None)},
     },
     "flux2-image-references": {
         "codec": "image-control-jsonl",
@@ -735,12 +772,17 @@ def _musubi_dataset_shape(
             role: ordered_roles.count(role) for role in sorted(set(ordered_roles))
         }
         other_roles = [role for role in ordered_roles if role not in {"target", "control"}]
-        if len(targets) != 1:
-            sample_shape = f"target-count-{len(targets)}"
+        if not targets:
+            sample_shape = "target-count-0"
             shape_samples.setdefault(sample_shape, []).append(sample_id)
             continue
-        suffix = Path(str(targets[0].get("path"))).suffix.lower()
-        media_kind = "image" if suffix in IMAGE_SUFFIXES else "video" if suffix in VIDEO_SUFFIXES else f"extension:{suffix}"
+        target_suffixes = [Path(str(item.get("path"))).suffix.lower() for item in targets]
+        if all(suffix in IMAGE_SUFFIXES for suffix in target_suffixes):
+            media_kind = "image"
+        elif all(suffix in VIDEO_SUFFIXES for suffix in target_suffixes):
+            media_kind = "video"
+        else:
+            media_kind = "mixed-target-media"
         if any(role in {"reference", "reference-muted", "reference-audio"} for role in other_roles):
             unknown = sorted(set(other_roles) - {"audio", "reference", "reference-muted", "reference-audio"})
             sample_shape = "roles:" + ",".join(unknown) if unknown else media_kind + "-references"
@@ -926,12 +968,15 @@ def _project_musubi_jsonl_dataset(
             })
             continue
         target = targets[0]
-        target_suffix = Path(str(target.get("path"))).suffix.lower()
+        target_suffixes = [Path(str(item.get("path"))).suffix.lower() for item in targets]
         expected_target_suffixes = VIDEO_SUFFIXES if transport == "video_jsonl_file" else IMAGE_SUFFIXES
-        if target_suffix not in expected_target_suffixes:
+        if any(suffix not in expected_target_suffixes for suffix in target_suffixes):
             unrepresentable.append({
                 "input_id": target.get("input_id"),
-                "reason": f"Musubi profile {profile_name} does not support target extension {target_suffix!r}",
+                "reason": (
+                    f"Musubi profile {profile_name} does not support target extension(s) "
+                    f"{target_suffixes!r}"
+                ),
             })
             continue
         control_suffixes = [Path(str(control.get("path"))).suffix.lower() for control in controls]
@@ -951,7 +996,7 @@ def _project_musubi_jsonl_dataset(
             "caption": caption.get("text"),
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
         stem = f"{index:06d}-{tag}"
-        target_path = f"{source_root}/{stem}{target_suffix}"
+        target_path = f"{source_root}/{stem}{target_suffixes[0]}"
         projected_entries: list[dict[str, Any]] = []
         role_ordinals: dict[str, int] = {}
         for item in references:
@@ -960,7 +1005,11 @@ def _project_musubi_jsonl_dataset(
             role_ordinals[role] = ordinal + 1
             suffix = Path(str(item["path"])).suffix.lower()
             if role == "target":
-                view_path = target_path
+                view_path = (
+                    target_path
+                    if len(targets) == 1
+                    else f"{source_root}/{stem}-{ordinal:03d}{suffix}"
+                )
             elif role == "control":
                 view_path = (
                     f"{control_root}/{stem}{suffix}"
@@ -980,9 +1029,12 @@ def _project_musubi_jsonl_dataset(
         for entry in projected_entries:
             projected_by_role.setdefault(entry["role"], []).append(entry)
         control_entries = projected_by_role.get("control", [])
+        target_entries = projected_by_role["target"]
         built = codec["build_row"]({
             "target_path": target_path,
             "target_input_id": target["input_id"],
+            "target_paths": [entry["view_path"] for entry in target_entries],
+            "target_input_ids": [entry["input_id"] for entry in target_entries],
             "control_paths": [entry["view_path"] for entry in control_entries],
             "control_input_ids": [entry["input_id"] for entry in control_entries],
             "caption_text": caption_text,

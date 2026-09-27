@@ -3513,6 +3513,66 @@ class DatasetHandoffTests(unittest.TestCase):
                         project=lambda selection: project_musubi_dataset(run, selection),
                     )
 
+    def test_musubi_qwen_layered_projects_ordered_multiple_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "qwen_image",
+                "model_version": "layered",
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for name in ("layer-1.png", "layer-2.png"):
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "target", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            freeze_dataset_handoff(
+                run, workspace, resolved, backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            _write_musubi_dataset_config(
+                run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "qwen-image-layered")
+            self.assertEqual(projected["policy"]["codec"], "layered-image-jsonl")
+            self.assertEqual(MUSUBI_PROJECTION_PROFILES["qwen-image-layered"]["shape"], "image")
+            self.assertTrue(projected["native"]["multiple_target"])
+            generated = json.loads(projected["views"][0]["native_files"][0]["text"])
+            self.assertEqual(
+                [key for key in generated if key.startswith("image_path_")],
+                ["image_path_0", "image_path_1", "image_path_2"],
+            )
+            references = projected["views"][0]["native_files"][0]["rows"][0]["references"]
+            self.assertEqual(
+                [item["pointer"] for item in references if item["kind"] == "path"],
+                ["/image_path_0", "/image_path_1", "/image_path_2"],
+            )
+            parsed = tomllib.loads((resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8"))
+            self.assertEqual(parsed["datasets"], [projected["native"]])
+
+    def test_musubi_qwen_layered_requires_at_least_base_and_one_layer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "qwen_image",
+                "model_version": "layered",
+            }}
+
+            with self.assertRaisesRegex(
+                ValueError, r"no verified Musubi projection profile matches.*layered",
+            ):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
     def test_musubi_framepack_kisekaeichi_rejects_a_separate_mask_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

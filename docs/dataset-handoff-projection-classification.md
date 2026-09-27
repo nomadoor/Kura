@@ -123,6 +123,7 @@ selection and projection validation.
 | `hidream-i2i` | `image-control-jsonl` | Same explicit `strip` rule. HiDream `task=i2i` requires one or more control/reference images; `task=t2i` accepts none. | `unsupported`; any selected audio input is unrepresentable. |
 | `qwen-image-edit` | `image-control-jsonl` | Same explicit `strip` rule. Qwen-Image Edit `model_version=edit` requires exactly one control; `role_limits.control` is `(1, 1)`. | `unsupported`; any selected audio input is unrepresentable. |
 | `qwen-image-edit-multi-control` | `image-control-jsonl` | Same explicit `strip` rule. Edit-2509 and Edit-2511 accept one to three controls, so `role_limits.control` is `(1, 3)`. Multiple controls are emitted as contiguous `control_path_0` through `control_path_N`; three is the fixed documentation's confirmed upper bound even though the datasource can iterate farther. | `unsupported`; any selected audio input is unrepresentable. |
+| `qwen-image-layered` | `layered-image-jsonl` | Same explicit `strip` rule. Manifest target order is semantic: the first target is the base/original image and every following target is a layer. Emit contiguous `image_path_0` through `image_path_N`, require at least two targets, and freeze `multiple_target = true`. `remove_first_image_from_target` is an explicit run-level training choice; it does not change the selected inputs or their order. | `unsupported`; control, reference, and audio roles are unrepresentable in this verified path. |
 | `flux2-image-references` | `image-control-jsonl` | Same explicit `strip` rule. FLUX.2 accepts one or more reference/control images. The fixed datasource, cache, and trainer consume a variable-length list and publish no finite model limit, so `role_limits.control` is explicitly `(1, unbounded)`. | `unsupported`; any selected audio input is unrepresentable. |
 | `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Covers pinned official T2V/I2V and Wan 2.2 dual-DiT tasks. I2V obtains its conditioning image from the target video's first frame. Fun Control is excluded until its control-video codec lands. | `unsupported`; an audio input stops rather than being ignored. |
 | `wan-image` | `plain-image-jsonl` | Same explicit `strip` rule. Applies only to pinned `task=t2i-14B`. | `unsupported`; an audio input stops rather than being ignored. |
@@ -212,6 +213,16 @@ though Musubi can iterate more. FLUX.2's fixed contract is
 `docs/dataset_config.md`, lines 643-651 and
 `src/musubi_tuner/dataset/image_video_dataset.py`, lines 370-377: it accepts a
 variable number of controls and the fixed version publishes no finite maximum.
+
+Qwen-Image-Layered's pinned generated-JSONL contract is
+`docs/dataset_config.md`, lines 102-123: `multiple_target = true` selects
+contiguous `image_path_N` values. The datasource reads those values in numeric
+order (`src/musubi_tuner/dataset/datasources.py`, lines 396-433), and the latent
+cache requires a list of targets (`src/musubi_tuner/qwen_image_cache_latents.py`,
+lines 42-57). The trainer requires at least the base plus one layer and uses the
+first target as its control (`src/musubi_tuner/qwen_image_train_network.py`,
+lines 445-460 and 494-507). Therefore Kura preserves manifest target order and
+does not infer a base image from filenames.
 
 Pinned H3 reference loading rejects video references outside 2-15 seconds with
 an explicit error; it does not silently omit them. The source contract is
