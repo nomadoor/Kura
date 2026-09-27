@@ -80,6 +80,38 @@ MiniMax-H3 `training_adapter` requires a BF16 DiT because upstream must merge
 `base_weights` before any ConvRot quantization. Kura rejects its known
 pre-quantized ConvRot INT8 bundles for this loss method at compile time.
 
+### Manifest groups and dataset blocks
+
+`backend.config.dataset_options.<dataset-id>.blocks` maps each manifest `group`
+to one Musubi `[[datasets]]` entry. Each block has a separate verified JSONL
+view and cache directory. `num_repeats` defaults to 1; `resolution` overrides
+the general resolution for that block. A block may also set
+`control_resolution` and `no_resize_control` when its projection profile
+supports them. Group names must occur exactly once in `blocks`; Kura rejects
+missing or duplicate groups instead of guessing which samples to train.
+
+```yaml
+backend:
+  name: musubi-tuner
+  config:
+    architecture: flux2
+    dataset_options:
+      example-dataset:
+        blocks:
+          - group: portraits
+            num_repeats: 3
+            resolution: [512, 512]
+          - group: landscapes
+            num_repeats: 1
+            resolution: [768, 512]
+```
+
+For a grouped manifest with one intentionally shared block, set
+`backend.config.flatten_groups: true`. That choice consumes every row once
+before Musubi applies its ordinary block repeat of 1. An ungrouped manifest
+continues to use one block without extra configuration. This multi-block path
+has projection and configuration tests, not a separate real optimizer smoke.
+
 ### Manifest-projected MiniMax-H3 datasets
 
 Musubi dataset inputs come from the versioned dataset manifest. Kura selects a

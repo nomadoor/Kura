@@ -31,18 +31,27 @@ class BackendSurfaceContractTests(unittest.TestCase):
             "backend": "musubi-tuner",
             "datasets": [{
                 "id": dataset_id,
-                "native": {
+                "native": {"datasets": [{
                     "image_jsonl_file": f"/workspace/{source}",
                     "cache_directory": f"/workspace/{cache}",
                     "num_repeats": 1,
-                },
+                }]},
+                "native_runtime": {"datasets": [{
+                    "image_jsonl_file": f"/workspace/{source}",
+                    "cache_directory": f"/workspace/{cache}",
+                    "num_repeats": 1,
+                }]},
+                "policy": {"block_settings": [{"num_repeats": 1}]},
                 "views": [{
                     "consumers": [{
                         "kind": "jsonl",
-                        "native_pointer": "/image_jsonl_file",
+                        "native_pointer": "/datasets/0/image_jsonl_file",
                         "native_file": source,
                     }],
-                    "write_roots": [{"native_pointer": "/cache_directory", "path": cache}],
+                    "write_roots": [{
+                        "native_pointer": "/datasets/0/cache_directory",
+                        "path": cache,
+                    }],
                 }],
             }],
         }

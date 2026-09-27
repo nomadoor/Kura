@@ -3956,7 +3956,7 @@ class MusubiBackendTests(unittest.TestCase):
         dataset_id = str(run["datasets"][0]["id"])
         source = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/source/items.jsonl"
         cache = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/cache"
-        native = {
+        native_block = {
             "image_jsonl_file": f"/workspace/{source}",
             "cache_directory": f"/workspace/{cache}",
             "num_repeats": 1,
@@ -3965,14 +3965,19 @@ class MusubiBackendTests(unittest.TestCase):
             "backend": "musubi-tuner",
             "datasets": [{
                 "id": dataset_id,
-                "native": native,
+                "native": {"datasets": [native_block]},
+                "native_runtime": {"datasets": [native_block]},
+                "policy": {"block_settings": [{"num_repeats": 1}]},
                 "views": [{
                     "consumers": [{
                         "kind": "jsonl",
-                        "native_pointer": "/image_jsonl_file",
+                        "native_pointer": "/datasets/0/image_jsonl_file",
                         "native_file": source,
                     }],
-                    "write_roots": [{"native_pointer": "/cache_directory", "path": cache}],
+                    "write_roots": [{
+                        "native_pointer": "/datasets/0/cache_directory",
+                        "path": cache,
+                    }],
                 }],
             }],
         }

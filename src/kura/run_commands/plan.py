@@ -914,27 +914,35 @@ def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
         if not isinstance(dataset, dict):
             continue
         native = dataset.get("native")
-        if not isinstance(native, dict) or not any(
-            isinstance(native.get(key), str) for key in ("video_directory", "video_jsonl_file")
-        ):
+        if not isinstance(native, dict):
             continue
-        target_frames = native.get("target_frames")
-        if not isinstance(target_frames, list) or not target_frames:
+        blocks = native.get("datasets")
+        if not isinstance(blocks, list):
             continue
-        check = {
-            "kind": "musubi-video-effective-frame-count",
-            "dataset": dataset.get("id"),
-            "required_frames": max(target_frames),
-            "timing": "immediately after container launch, before model acquisition",
-            "host_verification": "unavailable; measured by the pinned Musubi loader inside the container",
-        }
         policy = dataset.get("policy")
         profile = policy.get("profile") if isinstance(policy, dict) else None
-        if isinstance(profile, str) and profile.startswith("h3-video-"):
-            outside = sorted({frame for frame in target_frames if frame < 124 or frame > 345})
-            check["released_frame_range"] = [124, 345]
-            check["released_range_warning"] = outside
-        checks.append(check)
+        for index, block in enumerate(blocks):
+            if not isinstance(block, dict) or not any(
+                isinstance(block.get(key), str) for key in ("video_directory", "video_jsonl_file")
+            ):
+                continue
+            target_frames = block.get("target_frames")
+            if not isinstance(target_frames, list) or not target_frames:
+                continue
+            check = {
+                "kind": "musubi-video-effective-frame-count",
+                "dataset": dataset.get("id"),
+                "required_frames": max(target_frames),
+                "timing": "immediately after container launch, before model acquisition",
+                "host_verification": "unavailable; measured by the pinned Musubi loader inside the container",
+            }
+            if len(blocks) > 1:
+                check["block"] = index
+            if isinstance(profile, str) and profile.startswith("h3-video-"):
+                outside = sorted({frame for frame in target_frames if frame < 124 or frame > 345})
+                check["released_frame_range"] = [124, 345]
+                check["released_range_warning"] = outside
+            checks.append(check)
     return checks
 
 
@@ -1007,7 +1015,9 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             views = [
                 {
                     "dataset": view.get("dataset"),
+                    "id": view.get("id"),
                     "root": view.get("root"),
+                    "repeat": view.get("repeat"),
                     "links": len(view.get("links", [])) if isinstance(view.get("links"), list) else 0,
                     "generated_files": len(view.get("files", [])) if isinstance(view.get("files"), list) else 0,
                 }
@@ -1371,6 +1381,8 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         for view in dataset_input.get("views", []):
             if isinstance(view, dict):
                 lines.append(f"  - trainer view: {_format_plan_value(view.get('root'))}")
+                _append_kv(lines, "view_id", view.get("id"), indent=4)
+                _append_kv(lines, "repeat", view.get("repeat"), indent=4)
                 _append_kv(lines, "source_links", view.get("links"), indent=4)
                 _append_kv(lines, "generated_files", view.get("generated_files"), indent=4)
         for rule in dataset_input.get("projection_rules", []):
@@ -1381,6 +1393,25 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             _append_kv(lines, "codec", rule.get("codec"), indent=4)
             _append_kv(lines, "caption_transform", rule.get("caption_transform"), indent=4)
             _append_kv(lines, "audio_selection", rule.get("audio_selection"), indent=4)
+            groups = rule.get("block_groups")
+            settings = rule.get("block_settings")
+            if isinstance(groups, list) and isinstance(settings, list) and len(groups) == len(settings):
+                for group, setting in zip(groups, settings, strict=True):
+                    if not isinstance(setting, dict):
+                        continue
+                    resolution = setting.get("resolution")
+                    if isinstance(resolution, list):
+                        resolution_text = str(resolution)
+                    else:
+                        backend = payload.get("backend")
+                        config = backend.get("config") if isinstance(backend, dict) else None
+                        general = config.get("resolution", [960, 544]) if isinstance(config, dict) else [960, 544]
+                        resolution_text = f"{general} (general)"
+                    lines.append(
+                        f"    - group {_format_plan_value(group)}: repeats "
+                        f"{_format_plan_value(setting.get('num_repeats'))}, resolution "
+                        f"{resolution_text}"
+                    )
         for check in dataset_input.get("runtime_checks", []):
             if not isinstance(check, dict):
                 continue

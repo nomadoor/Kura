@@ -114,7 +114,7 @@ MUSUBI_SURFACE = BackendSurface(
     fields=frozenset({
         "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "architecture", "batch_size",
         "block_swap_h2d_only", "block_swap_ring_size", "blocks_to_swap", "dataset_options", "discrete_flow_shift",
-        "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
+        "convrot_int8", "convrot_int8_bwd", "dit_dtype", "env", "f1", "flatten_groups", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te",
         "fp8_text_encoder", "fp8_vl", "gradient_accumulation_steps", "gradient_checkpointing", "gradient_checkpointing_cpu_offload",
         "h3_guidance_loss_scale", "h3_guidance_loss_sigma_min", "h3_loss_method",
         "h3_teacher_condition_sigma_max", "h3_teacher_condition_sigma_min", "h3_teacher_conditions",

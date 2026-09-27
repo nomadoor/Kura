@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -22,6 +23,35 @@ VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
 AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
 MUSUBI_CAPTION_TRANSFORM = "strip"
 FRAMEPACK_LATENT_WINDOW_SIZE = 9
+
+
+@dataclass(frozen=True)
+class _MusubiProjectionBlock:
+    """One resolved Musubi native dataset block, including the ordinary N=1 case."""
+
+    index: int
+    count: int
+    group: str | None
+    dataset: dict[str, Any]
+    options: dict[str, Any]
+    num_repeats: int
+    resolution: list[int] | None
+    explicit: bool
+
+    def view_root(self, run_id: str, dataset_id: str) -> str:
+        base = f"runs/{run_id}/cache/dataset-view/musubi/{dataset_id}"
+        return f"{base}/block-{self.index:03d}" if self.count > 1 else base
+
+    def view_id(self, dataset_id: str) -> str:
+        return (
+            f"musubi-{dataset_id}-block-{self.index:03d}"
+            if self.count > 1
+            else f"musubi-{dataset_id}"
+        )
+
+    @property
+    def native_pointer_prefix(self) -> str:
+        return f"/datasets/{self.index}"
 
 
 def _musubi_caption_projection(caption: dict[str, Any], transform: str) -> tuple[str, str]:
@@ -575,6 +605,7 @@ MUSUBI_PROJECTION_PROFILES = {
 }
 MUSUBI_DATASET_OPTION_CAPABILITIES = {
     "dataset_options.<dataset-id>": {
+        "blocks": {"type": "list of group, num_repeats, resolution and optional control settings"},
         "control_resolution": {"type": "integer-pair", "minimum": 1},
         "fp_1f_clean_indices": {"type": "integer-list", "minimum": 0},
         "fp_1f_target_index": {"type": "integer", "minimum": 0},
@@ -592,6 +623,7 @@ MUSUBI_DATASET_OPTION_CAPABILITIES = {
     },
 }
 _MUSUBI_DATASET_OPTION_FIELDS = {
+    "blocks",
     "control_resolution", "fp_1f_clean_indices", "fp_1f_target_index", "fp_1f_no_post",
     "no_resize_control",
     "target_frames", "frame_extraction", "max_frames", "source_fps",
@@ -659,6 +691,31 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 f"Musubi backend.config.dataset_options.{dataset_id} contains unsupported key(s): "
                 + ", ".join(unknown)
             )
+        blocks = value.get("blocks")
+        if blocks is not None:
+            if not isinstance(blocks, list) or not blocks:
+                raise ValueError(f"Musubi backend.config.dataset_options.{dataset_id}.blocks must be a non-empty list")
+            for index, block in enumerate(blocks):
+                context = f"Musubi backend.config.dataset_options.{dataset_id}.blocks[{index}]"
+                if not isinstance(block, dict) or set(block) - {
+                    "group", "num_repeats", "resolution", "control_resolution", "no_resize_control",
+                }:
+                    raise ValueError(f"{context} has unsupported fields")
+                group = block.get("group")
+                if group is not None and (not isinstance(group, str) or not group):
+                    raise ValueError(f"{context}.group must be a non-empty string")
+                repeats = block.get("num_repeats", 1)
+                if isinstance(repeats, bool) or not isinstance(repeats, int) or repeats < 1:
+                    raise ValueError(f"{context}.num_repeats must be a positive integer")
+                for key in ("resolution", "control_resolution"):
+                    pair = block.get(key)
+                    if pair is not None and (
+                        not isinstance(pair, list) or len(pair) != 2
+                        or any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in pair)
+                    ):
+                        raise ValueError(f"{context}.{key} must contain two positive integers")
+                if "no_resize_control" in block and not isinstance(block["no_resize_control"], bool):
+                    raise ValueError(f"{context}.no_resize_control must be boolean")
         target_frames = value.get("target_frames")
         if target_frames is not None and (
             not isinstance(target_frames, list)
@@ -682,7 +739,7 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
         ):
             raise ValueError(
                 f"Musubi backend.config.dataset_options.{dataset_id}.control_resolution "
-                "multiple control-resolution blocks are not yet supported; declare one integer pair"
+                "must be one integer pair; use blocks[].control_resolution for group-specific values"
             )
         if control_resolution is not None and (
             not isinstance(control_resolution, list)
@@ -751,6 +808,60 @@ def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return validated
 
 
+def _resolve_musubi_projection_blocks(
+    dataset: dict[str, Any], options: dict[str, Any], *, flatten_groups: bool,
+) -> list[_MusubiProjectionBlock]:
+    """Resolve every selected dataset to N explicit native blocks; ordinary means N=1."""
+    dataset_id = str(dataset.get("id"))
+    authored_blocks = options.get("blocks")
+    groups = {sample.get("group") for sample in dataset.get("samples", [])}
+    if authored_blocks is not None and flatten_groups:
+        raise ValueError(f"Musubi dataset {dataset_id!r} cannot combine blocks with flatten_groups")
+    if authored_blocks is None and any(group is not None for group in groups) and not flatten_groups:
+        raise ValueError(f"Musubi dataset {dataset_id!r} has groups; declare blocks or flatten_groups: true")
+    common_options = {
+        key: deepcopy(value) for key, value in options.items() if key != "blocks"
+    }
+    if authored_blocks is None:
+        return [_MusubiProjectionBlock(
+            index=0,
+            count=1,
+            group=None,
+            dataset=dataset,
+            options=common_options,
+            num_repeats=1,
+            resolution=None,
+            explicit=False,
+        )]
+    block_groups = [block.get("group") for block in authored_blocks]
+    if len(set(block_groups)) != len(block_groups) or set(block_groups) != groups:
+        raise ValueError(
+            f"Musubi dataset {dataset_id!r} blocks must map each manifest group exactly once; "
+            f"expected {sorted(str(group) for group in groups)}"
+        )
+    resolved = []
+    for index, authored in enumerate(authored_blocks):
+        block_options = deepcopy(common_options)
+        block_options.update({
+            key: deepcopy(value) for key, value in authored.items()
+            if key in {"control_resolution", "no_resize_control"}
+        })
+        resolved.append(_MusubiProjectionBlock(
+            index=index,
+            count=len(authored_blocks),
+            group=authored.get("group"),
+            dataset={**dataset, "samples": [
+                sample for sample in dataset["samples"]
+                if sample.get("group") == authored.get("group")
+            ]},
+            options=block_options,
+            num_repeats=authored.get("num_repeats", 1),
+            resolution=deepcopy(authored.get("resolution")),
+            explicit=True,
+        ))
+    return resolved
+
+
 def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
     """Project first-class Musubi inputs through generated, verified JSONL."""
     override = _musubi_backend_override(run)
@@ -773,6 +884,9 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
         ),
     }
     dataset_options = _musubi_dataset_options(run)
+    flatten_groups = override.get("flatten_groups") is True
+    if override.get("flatten_groups") not in (None, True, False):
+        raise ValueError("Musubi backend.config.flatten_groups must be boolean")
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
         dataset_id = str(dataset.get("id"))
@@ -784,14 +898,42 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             shape_examples=shape_examples,
             role_cardinalities=role_cardinalities,
         )
-        projected.append(_project_musubi_jsonl_dataset(
-            run=run,
-            dataset=dataset,
-            view_root=f"runs/{run['id']}/cache/dataset-view/musubi/{dataset_id}",
-            options=dataset_options.get(dataset_id, {}),
-            profile_name=profile_name,
-            profile=profile,
-        ))
+        blocks = _resolve_musubi_projection_blocks(
+            dataset, dataset_options.get(dataset_id, {}), flatten_groups=flatten_groups,
+        )
+        block_reports = [
+            _project_musubi_jsonl_block(
+                run=run,
+                block=block,
+                profile_name=profile_name,
+                profile=profile,
+                allow_groups=flatten_groups or block.explicit,
+            )
+            for block in blocks
+        ]
+        block_native = [report["native"] for report in block_reports]
+        policy = {
+            **block_reports[0]["policy"],
+            "block_groups": [block.group for block in blocks],
+            "block_settings": [report["semantic"] for report in block_reports],
+        }
+        if flatten_groups:
+            policy["flatten_groups"] = True
+        projected.append({
+            "id": dataset_id,
+            "consumed": [input_id for report in block_reports for input_id in report["consumed"]],
+            "unrepresentable": [error for report in block_reports for error in report["unrepresentable"]],
+            "semantic": {},
+            "native_runtime": {"datasets": block_native},
+            "native": {"datasets": block_native},
+            "native_string_fields": [
+                pointer
+                for report in block_reports
+                for pointer in report["native_string_fields"]
+            ],
+            "policy": policy,
+            "views": [report["views"][0] for report in block_reports],
+        })
     return {"schema_version": 1, "backend": "musubi-tuner", "datasets": projected}
 
 
@@ -949,11 +1091,15 @@ def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options
     return semantic
 
 
-def _project_musubi_jsonl_dataset(
-    *, run: dict[str, Any], dataset: dict[str, Any], view_root: str,
-    options: dict[str, Any], profile_name: str, profile: dict[str, Any],
+def _project_musubi_jsonl_block(
+    *, run: dict[str, Any], block: _MusubiProjectionBlock,
+    profile_name: str, profile: dict[str, Any],
+    allow_groups: bool = False,
 ) -> dict[str, Any]:
+    dataset = block.dataset
     dataset_id = str(dataset.get("id"))
+    view_root = block.view_root(str(run["id"]), dataset_id)
+    options = block.options
     codec_name = str(profile["codec"])
     codec = MUSUBI_JSONL_CODECS[codec_name]
     transport = str(codec["transport"])
@@ -969,6 +1115,9 @@ def _project_musubi_jsonl_dataset(
     row_reports: list[dict[str, Any]] = []
     literal_field_pointers: set[str] = set()
     semantic = _musubi_profile_semantic(profile_name, profile, options)
+    semantic["num_repeats"] = block.num_repeats
+    if block.resolution is not None:
+        semantic["resolution"] = deepcopy(block.resolution)
     for index, sample in enumerate(dataset.get("samples", [])):
         references = sample.get("files", [])
         role_entries: dict[str, list[dict[str, Any]]] = {}
@@ -989,7 +1138,7 @@ def _project_musubi_jsonl_dataset(
                 )
         caption = sample.get("caption")
         fallback = references[0].get("input_id") if references else None
-        if sample.get("group") is not None or invalid_roles:
+        if (sample.get("group") is not None and not allow_groups) or invalid_roles:
             unrepresentable.append({
                 "input_id": fallback,
                 "reason": (
@@ -1124,9 +1273,12 @@ def _project_musubi_jsonl_dataset(
         "native_runtime": native_runtime,
         "policy": policy,
         "native": {**semantic, **native_runtime},
-        "native_string_fields": list(profile["native_string_fields"]),
+        "native_string_fields": [
+            block.native_pointer_prefix + pointer
+            for pointer in profile["native_string_fields"]
+        ],
         "views": [{
-            "id": f"musubi-{dataset_id}",
+            "id": block.view_id(dataset_id),
             "root": view_root,
             "links": links,
             "files": [],
@@ -1137,15 +1289,18 @@ def _project_musubi_jsonl_dataset(
                 "literal_string_fields": sorted(literal_field_pointers),
                 "rows": row_reports,
             }],
-            "write_roots": [{"path": cache_root, "native_pointer": "/cache_directory"}],
+            "write_roots": [{
+                "path": cache_root,
+                "native_pointer": block.native_pointer_prefix + "/cache_directory",
+            }],
             "consumers": [{
                 "id": "items",
                 "kind": "jsonl",
-                "native_pointer": f"/{transport}",
+                "native_pointer": block.native_pointer_prefix + f"/{transport}",
                 "native_file": native_file_path,
             }],
-            "repeat": 1,
-            "repeat_pointer": "/num_repeats",
+            "repeat": block.num_repeats,
+            "repeat_pointer": block.native_pointer_prefix + "/num_repeats",
         }],
     }
 
@@ -1212,45 +1367,67 @@ def _frozen_musubi_dataset_items(
         item = by_id[dataset_id]
         native = item.get("native")
         views = item.get("views")
-        view = views[0] if isinstance(views, list) and len(views) == 1 and isinstance(views[0], dict) else None
-        consumers = view.get("consumers") if isinstance(view, dict) else None
-        write_roots = view.get("write_roots") if isinstance(view, dict) else None
-        write_root = write_roots[0] if isinstance(write_roots, list) and len(write_roots) == 1 and isinstance(write_roots[0], dict) else None
         if not isinstance(native, dict):
             raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} has no native handoff")
-        pointer_keys = {
-            "/image_jsonl_file": "image_jsonl_file",
-            "/video_jsonl_file": "video_jsonl_file",
-        }
-        verified_consumers = {
-            consumer.get("native_pointer"): consumer
-            for consumer in consumers if isinstance(consumer, dict)
-        } if isinstance(consumers, list) else {}
-        primary = [pointer for pointer in pointer_keys if pointer in verified_consumers]
-        consumers_match = (
-            len(primary) == 1
-            and set(verified_consumers) == {primary[0]}
-            and all(
-                consumer.get("kind") == "jsonl"
-                and native.get(pointer_keys[pointer]) == f"/workspace/{consumer.get('native_file')}"
-                for pointer, consumer in verified_consumers.items()
-            )
-        )
+        blocks = native.get("datasets")
+        settings = item.get("policy", {}).get("block_settings")
+        runtime = item.get("native_runtime", {}).get("datasets")
         if (
-            not consumers_match
-            or not isinstance(write_root, dict)
-            or write_root.get("native_pointer") != "/cache_directory"
-            or native.get("cache_directory") != f"/workspace/{write_root.get('path')}"
+            set(native) != {"datasets"}
+            or not isinstance(blocks, list) or not isinstance(settings, list) or not isinstance(runtime, list)
+            or not isinstance(views, list) or not blocks or len(blocks) != len(views)
+            or len(settings) != len(blocks) or len(runtime) != len(blocks)
         ):
-            raise ValueError(
-                f"Musubi frozen projection for dataset {dataset_id!r} bypasses its verified source or cache view"
-            )
-        primary_consumer = verified_consumers[primary[0]]
-        source_path = PurePosixPath(str(primary_consumer.get("native_file"))).parent
-        cache_path = PurePosixPath(str(write_root["path"]))
-        if source_path.parent != cache_path.parent or source_path == cache_path:
-            raise ValueError(
-                f"Musubi frozen projection for dataset {dataset_id!r} must keep cache_directory beside its source directory"
-            )
-        items.append(deepcopy(native))
+            raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} has invalid blocks")
+        for index, (block, setting, runtime_block, view) in enumerate(
+            zip(blocks, settings, runtime, views, strict=True)
+        ):
+            if not all(isinstance(value, dict) for value in (block, setting, runtime_block, view)):
+                raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} has invalid blocks")
+            if block != runtime_block or any(block.get(key) != value for key, value in setting.items()):
+                raise ValueError(f"Musubi frozen projection for dataset {dataset_id!r} block settings differ")
+            _verify_musubi_frozen_view(dataset_id, block, view, prefix=f"/datasets/{index}")
+            items.append(deepcopy(block))
     return items
+
+
+def _verify_musubi_frozen_view(
+    dataset_id: str, native: dict[str, Any], view: dict[str, Any] | None, *, prefix: str,
+) -> None:
+    consumers = view.get("consumers") if isinstance(view, dict) else None
+    write_roots = view.get("write_roots") if isinstance(view, dict) else None
+    write_root = write_roots[0] if isinstance(write_roots, list) and len(write_roots) == 1 and isinstance(write_roots[0], dict) else None
+    pointer_keys = {
+        prefix + "/image_jsonl_file": "image_jsonl_file",
+        prefix + "/video_jsonl_file": "video_jsonl_file",
+    }
+    verified_consumers = {
+        consumer.get("native_pointer"): consumer
+        for consumer in consumers if isinstance(consumer, dict)
+    } if isinstance(consumers, list) else {}
+    primary = [pointer for pointer in pointer_keys if pointer in verified_consumers]
+    consumers_match = (
+        len(primary) == 1
+        and set(verified_consumers) == {primary[0]}
+        and all(
+            consumer.get("kind") == "jsonl"
+            and native.get(pointer_keys[pointer]) == f"/workspace/{consumer.get('native_file')}"
+            for pointer, consumer in verified_consumers.items()
+        )
+    )
+    if (
+        not consumers_match
+        or not isinstance(write_root, dict)
+        or write_root.get("native_pointer") != prefix + "/cache_directory"
+        or native.get("cache_directory") != f"/workspace/{write_root.get('path')}"
+    ):
+        raise ValueError(
+            f"Musubi frozen projection for dataset {dataset_id!r} bypasses its verified source or cache view"
+        )
+    primary_consumer = verified_consumers[primary[0]]
+    source_path = PurePosixPath(str(primary_consumer.get("native_file"))).parent
+    cache_path = PurePosixPath(str(write_root["path"]))
+    if source_path.parent != cache_path.parent or source_path == cache_path:
+        raise ValueError(
+            f"Musubi frozen projection for dataset {dataset_id!r} must keep cache_directory beside its source directory"
+        )

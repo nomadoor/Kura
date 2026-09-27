@@ -181,7 +181,15 @@ def _musubi_video_preflight_env(run: dict[str, Any], destination: Path) -> dict[
         if not isinstance(dataset, dict):
             continue
         native = dataset.get("native")
-        if not isinstance(native, dict) or not isinstance(native.get("video_jsonl_file"), str):
+        if not isinstance(native, dict):
+            continue
+        native_blocks = native.get("datasets")
+        if not isinstance(native_blocks, list):
+            raise ValueError("Musubi video projection native handoff must contain datasets[]")
+        if not any(
+            isinstance(block, dict) and isinstance(block.get("video_jsonl_file"), str)
+            for block in native_blocks
+        ):
             continue
         policy = dataset.get("policy")
         if not isinstance(policy, dict):
@@ -248,12 +256,18 @@ def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int
         for options in dataset_options.values():
             if not isinstance(options, dict):
                 continue
-            control_resolution = options.get("control_resolution")
-            if isinstance(control_resolution, list):
-                values.extend(
-                    value for part in control_resolution
-                    if (value := _int_or_none(part)) is not None
-                )
+            blocks = options.get("blocks")
+            sources = [options, *blocks] if isinstance(blocks, list) else [options]
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                for key in ("resolution", "control_resolution"):
+                    configured = source.get(key)
+                    if isinstance(configured, list):
+                        values.extend(
+                            value for part in configured
+                            if (value := _int_or_none(part)) is not None
+                        )
     return max(values) if values else None
 
 
