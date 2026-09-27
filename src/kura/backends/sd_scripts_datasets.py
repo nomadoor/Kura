@@ -20,17 +20,19 @@ IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
 def _dreambooth_image_subset(
-    run: dict[str, Any], dataset: dict[str, Any], subset: dict[str, Any],
+    run: dict[str, Any], dataset: dict[str, Any], samples: list[dict[str, Any]],
+    subset: dict[str, Any], *, view_name: str,
 ) -> dict[str, Any]:
     """Build one sd-scripts DreamBooth subset from explicit manifest rows."""
     dataset_id = str(dataset.get("id"))
-    view_root = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
+    base_root = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
+    view_root = base_root if view_name == "default" else f"{base_root}/{view_name}"
     caption_extension = str(subset["caption_extension"])
     consumed: list[str] = []
     links: list[dict[str, str]] = []
     files: list[dict[str, str]] = []
     bindings: list[dict[str, Any]] = []
-    for index, sample in enumerate(dataset.get("samples", [])):
+    for index, sample in enumerate(samples):
         references = sample.get("files", [])
         target = next(item for item in references if item.get("role") == "target")
         caption = sample.get("caption")
@@ -69,18 +71,81 @@ def _dreambooth_image_subset(
     }
 
 
+def _lllite_control_subset(
+    run: dict[str, Any], dataset: dict[str, Any], samples: list[dict[str, Any]],
+    subset: dict[str, Any], *, view_name: str,
+) -> dict[str, Any]:
+    """Build one paired Anima LLLite subset with sibling role roots."""
+    dataset_id = str(dataset.get("id"))
+    base_root = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
+    view_root = base_root if view_name == "default" else f"{base_root}/{view_name}"
+    image_root = f"{view_root}/images"
+    control_root = f"{view_root}/conditioning"
+    caption_extension = str(subset["caption_extension"])
+    consumed: list[str] = []
+    links: list[dict[str, str]] = []
+    files: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
+    image_inputs: list[str] = []
+    control_inputs: list[str] = []
+    for index, sample in enumerate(samples):
+        references = sample.get("files", [])
+        target = next(item for item in references if item.get("role") == "target")
+        control = next(item for item in references if item.get("role") == "control")
+        caption = sample.get("caption")
+        assert isinstance(caption, dict) and isinstance(caption.get("text"), str)
+        content_tag = hashlib.sha256(json.dumps(
+            {
+                "target": target.get("sha256"),
+                "control": control.get("sha256"),
+                "caption": caption["text"],
+            },
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()[:12]
+        stem = f"{index:06d}-{content_tag}"
+        target_path = f"{image_root}/{stem}{Path(str(target['path'])).suffix.lower()}"
+        caption_path = f"{image_root}/{stem}{caption_extension}"
+        control_path = f"{control_root}/{stem}{Path(str(control['path'])).suffix.lower()}"
+        links.extend([
+            {"path": target_path, "target": f"/workspace/datasets/{dataset_id}/{target['path']}", "input_id": target["input_id"]},
+            {"path": control_path, "target": f"/workspace/datasets/{dataset_id}/{control['path']}", "input_id": control["input_id"]},
+        ])
+        files.append({"path": caption_path, "text": caption["text"], "input_id": caption["input_id"]})
+        image_inputs.extend([target["input_id"], caption["input_id"]])
+        control_inputs.append(control["input_id"])
+        consumed.extend([target["input_id"], control["input_id"], caption["input_id"]])
+        bindings.append({
+            "rule": "same-relative-stem",
+            "key": stem,
+            "members": [
+                {"input_id": target["input_id"], "root": image_root},
+                {"input_id": caption["input_id"], "root": image_root},
+                {"input_id": control["input_id"], "root": control_root},
+            ],
+        })
+    return {
+        "consumed": consumed,
+        "view_root": view_root,
+        "links": links,
+        "files": files,
+        "bindings": bindings,
+        "role_roots": {"image": image_root, "conditioning": control_root},
+        "consumer_inputs": {"image": image_inputs, "conditioning": control_inputs},
+    }
+
+
 SD_SCRIPTS_FOLDER_CODECS = {
     "dreambooth-image-subset": {"build": _dreambooth_image_subset},
+    "lllite-control-subset": {"build": _lllite_control_subset},
 }
 
 SD_SCRIPTS_PROJECTION_PROFILES = {
     "ordinary-image-lora": {
         "architectures": ("sd15", "sdxl", "flux1", "anima"),
-        "shape": "image-caption",
+        "shape": "image",
+        "caption": "required",
         "mode": {
             "training_mode": "lora",
-            "groups": "ungrouped",
-            "captions": "effective",
         },
         "mode_by_architecture": {},
         "role_limits": {"target": (1, 1)},
@@ -89,6 +154,21 @@ SD_SCRIPTS_PROJECTION_PROFILES = {
         "native_options": {},
         "native_string_fields": (),
         "codec": "dreambooth-image-subset",
+    },
+    "anima-lllite-image-control": {
+        "architectures": ("anima",),
+        "shape": "image-control",
+        "caption": "required",
+        "mode": {
+            "training_mode": "controlnet_lllite",
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "native_string_fields": (),
+        "codec": "lllite-control-subset",
     },
 }
 
@@ -146,9 +226,7 @@ _DATASET_NATIVE_FIELDS: dict[str, dict[str, Any]] = {
 }
 _SUBSET_STAGING_FIELDS: dict[str, dict[str, Any]] = {
     "dataset_id": _STRING,
-    "image_subdir": _STRING,
-    "caption_subdir": _STRING,
-    "conditioning_subdir": _STRING,
+    "group": _STRING,
 }
 
 GENERAL_FIELD_SPECS = dict(_DATASET_NATIVE_FIELDS)
@@ -225,6 +303,16 @@ def _clean_keys(values: Any, specs: dict[str, dict[str, Any]], *, field: str) ->
         raise ValueError(f"sd-scripts {field} must be a mapping")
     unknown = sorted(set(values) - set(specs))
     if unknown:
+        legacy_selectors = sorted(
+            set(unknown) & {"image_subdir", "caption_subdir", "conditioning_subdir"}
+        )
+        if legacy_selectors:
+            raise ValueError(
+                "sd-scripts manifest projection replaces folder selector(s) "
+                + ", ".join(legacy_selectors)
+                + "; put target, caption, and control references in items.jsonl and use "
+                "an optional manifest group on the authored subset"
+            )
         raise ValueError(f"sd-scripts {field} contains unsupported key(s): " + ", ".join(unknown))
     clean = {key: value for key, value in values.items() if value is not None}
     for key, value in clean.items():
@@ -350,55 +438,48 @@ def _sd_scripts_profile(
     shape, examples, cardinalities = classify_dataset_shape(
         dataset, image_suffixes=IMAGE_SUFFIXES, video_suffixes=set(),
     )
-    captions = all(
-        isinstance(sample.get("caption"), dict)
-        and isinstance(sample["caption"].get("text"), str)
-        for sample in dataset.get("samples", [])
-    )
-    groups = all(sample.get("group") is None for sample in dataset.get("samples", []))
     return select_projection_profile(
         backend="sd-scripts",
         profiles=SD_SCRIPTS_PROJECTION_PROFILES,
         architecture=architecture,
-        shape="image-caption" if shape == "image" else shape,
+        shape=shape,
         mode={
             "training_mode": training_mode,
-            "groups": "ungrouped" if groups else "grouped",
-            "captions": "effective" if captions else "missing",
         },
         shape_examples=examples,
         role_cardinalities=cardinalities,
+        caption_presence={
+            str(sample.get("id")): isinstance(sample.get("caption"), dict)
+            for sample in dataset.get("samples", [])
+        },
     )
 
 
-def _sd_scripts_authored_subset(
+def _sd_scripts_authored_subsets(
     dataset_id: str,
     declared_ids: list[str],
     cleaned_datasets: list[tuple[dict[str, Any], list[dict[str, Any]]]],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    candidates: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
     for native_dataset, subsets in cleaned_datasets:
-        if len(subsets) != 1:
-            raise ValueError(
-                "sd-scripts multiple subsets are not yet supported by the initial manifest projection"
-            )
-        subset = subsets[0]
-        authored_id = subset.get("dataset_id")
-        if authored_id == dataset_id or authored_id is None and len(declared_ids) == 1:
-            candidates.append((native_dataset, subset))
+        matching = [
+            subset for subset in subsets
+            if subset.get("dataset_id") == dataset_id
+            or subset.get("dataset_id") is None and len(declared_ids) == 1
+        ]
+        if matching:
+            if len(matching) != len(subsets):
+                raise ValueError("sd-scripts one native dataset block cannot mix manifest datasets")
+            candidates.append((native_dataset, matching))
     if len(candidates) != 1:
         raise ValueError(
-            f"sd-scripts dataset {dataset_id!r} must map to exactly one explicit authored subset"
+            f"sd-scripts dataset {dataset_id!r} must map to exactly one explicit authored dataset block"
         )
-    native_dataset, authored_subset = candidates[0]
-    legacy = sorted(set(authored_subset) & {"image_subdir", "caption_subdir", "conditioning_subdir"})
-    if legacy:
-        raise ValueError(
-            "sd-scripts manifest projection replaces legacy folder selector(s): " + ", ".join(legacy)
-        )
-    if "num_repeats" not in authored_subset:
-        raise ValueError("sd-scripts manifest subset requires an explicit positive num_repeats")
-    return deepcopy(native_dataset), deepcopy(authored_subset)
+    native_dataset, authored_subsets = candidates[0]
+    for authored_subset in authored_subsets:
+        if "num_repeats" not in authored_subset:
+            raise ValueError("sd-scripts manifest subset requires an explicit positive num_repeats")
+    return deepcopy(native_dataset), deepcopy(authored_subsets)
 
 
 def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
@@ -414,32 +495,103 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         profile_name, profile = _sd_scripts_profile(native, dataset)
         codec_name = profile["codec"]
         codec = SD_SCRIPTS_FOLDER_CODECS[codec_name]
-        native_dataset, authored_subset = _sd_scripts_authored_subset(
+        native_dataset, authored_subsets = _sd_scripts_authored_subsets(
             dataset_id, declared_ids, cleaned_datasets,
         )
-        authored_subset.pop("dataset_id", None)
-        caption_extension = str(
-            authored_subset.get("caption_extension")
-            or native_dataset.get("caption_extension")
-            or general.get("caption_extension")
-            or ".txt"
-        )
-        authored_subset["caption_extension"] = caption_extension
-        report = codec["build"](
-            run, dataset, {**authored_subset, "caption_extension": caption_extension},
-        )
-        subset_native = deepcopy(authored_subset)
-        dataset_native = {**native_dataset, "subsets": [{
-            "image_dir": f"/workspace/{report['view_root']}",
-            **subset_native,
-        }]}
+        manifest_groups = {
+            str(sample["group"]) for sample in dataset.get("samples", [])
+            if sample.get("group") is not None
+        }
+        configured_groups = [subset.get("group") for subset in authored_subsets]
+        if manifest_groups:
+            if any(group is None for group in configured_groups):
+                raise ValueError("sd-scripts grouped manifest requires an explicit group on every subset")
+            if len(set(configured_groups)) != len(configured_groups):
+                raise ValueError("sd-scripts manifest group maps to more than one subset")
+            if set(configured_groups) != manifest_groups:
+                raise ValueError(
+                    f"sd-scripts authored subset groups {sorted(configured_groups)!r} do not match "
+                    f"manifest groups {sorted(manifest_groups)!r}"
+                )
+        elif len(authored_subsets) != 1 or configured_groups != [None]:
+            raise ValueError("sd-scripts ungrouped manifest requires exactly one subset without group")
+
+        subset_natives: list[dict[str, Any]] = []
+        views: list[dict[str, Any]] = []
+        all_consumed: list[str] = []
+        policy_subsets: list[dict[str, Any]] = []
+        for subset_index, authored in enumerate(authored_subsets):
+            group = authored.pop("group", None)
+            authored.pop("dataset_id", None)
+            samples = [
+                sample for sample in dataset.get("samples", [])
+                if sample.get("group") == group
+            ]
+            caption_extension = str(
+                authored.get("caption_extension")
+                or native_dataset.get("caption_extension")
+                or general.get("caption_extension")
+                or ".txt"
+            )
+            authored["caption_extension"] = caption_extension
+            # Manifest group IDs are opaque author vocabulary, not path segments.
+            view_name = "default" if len(authored_subsets) == 1 else f"subset-{subset_index:03d}"
+            report = codec["build"](
+                run, dataset, samples, authored,
+                view_name=view_name,
+            )
+            subset_native = deepcopy(authored)
+            image_root = report.get("role_roots", {}).get("image", report["view_root"])
+            native_subset = {
+                "image_dir": f"/workspace/{image_root}",
+                **({
+                    "conditioning_data_dir": f"/workspace/{report['role_roots']['conditioning']}",
+                } if "conditioning" in report.get("role_roots", {}) else {}),
+                **subset_native,
+            }
+            subset_natives.append(native_subset)
+            subset_pointer = f"/datasets/0/subsets/{subset_index}"
+            image_inputs = report.get("consumer_inputs", {}).get("image", report["consumed"])
+            consumers = [{
+                "id": "dreambooth-subset",
+                "kind": "recursive-directory",
+                "native_pointer": f"{subset_pointer}/image_dir",
+                "path": image_root,
+                "input_ids": list(image_inputs),
+            }]
+            if "conditioning" in report.get("role_roots", {}):
+                consumers.append({
+                    "id": "conditioning-subset",
+                    "kind": "recursive-directory",
+                    "native_pointer": f"{subset_pointer}/conditioning_data_dir",
+                    "path": report["role_roots"]["conditioning"],
+                    "input_ids": list(report["consumer_inputs"]["conditioning"]),
+                })
+            views.append({
+                "id": f"sd-scripts-{dataset_id}-{view_name}",
+                "root": report["view_root"],
+                "links": report["links"],
+                "files": report["files"],
+                "native_files": [],
+                "write_roots": [{
+                    "path": image_root,
+                    "native_pointer": f"{subset_pointer}/image_dir",
+                }],
+                "consumers": consumers,
+                "repeat": authored["num_repeats"],
+                "repeat_pointer": f"{subset_pointer}/num_repeats",
+                "bindings": report["bindings"],
+            })
+            all_consumed.extend(report["consumed"])
+            policy_subsets.append({"group": group, "settings": deepcopy(subset_native)})
+        dataset_native = {**native_dataset, "subsets": subset_natives}
         complete_native: dict[str, Any] = {
             **({"general": deepcopy(general)} if general else {}),
             "datasets": [dataset_native],
         }
         projected.append({
             "id": dataset_id,
-            "consumed": report["consumed"],
+            "consumed": all_consumed,
             "unrepresentable": [],
             "semantic": {},
             "native_runtime": complete_native,
@@ -454,8 +606,10 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     if isinstance(value, str)
                 ],
                 *[
-                    f"/datasets/0/subsets/0/{key}"
-                    for key, value in subset_native.items() if isinstance(value, str)
+                    f"/datasets/0/subsets/{subset_index}/{key}"
+                    for subset_index, subset_native in enumerate(subset_natives)
+                    for key, value in subset_native.items()
+                    if isinstance(value, str) and key not in {"image_dir", "conditioning_data_dir"}
                 ],
             ],
             "policy": {
@@ -463,29 +617,9 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 "codec": codec_name,
                 "general": deepcopy(general),
                 "dataset_settings": deepcopy(native_dataset),
-                "subset_settings": deepcopy(subset_native),
+                "subsets": policy_subsets,
             },
-            "views": [{
-                "id": f"sd-scripts-{dataset_id}",
-                "root": report["view_root"],
-                "links": report["links"],
-                "files": report["files"],
-                "native_files": [],
-                "write_roots": [{
-                    "path": report["view_root"],
-                    "native_pointer": "/datasets/0/subsets/0/image_dir",
-                }],
-                "consumers": [{
-                    "id": "dreambooth-subset",
-                    "kind": "recursive-directory",
-                    "native_pointer": "/datasets/0/subsets/0/image_dir",
-                    "path": report["view_root"],
-                    "input_ids": list(report["consumed"]),
-                }],
-                "repeat": authored_subset["num_repeats"],
-                "repeat_pointer": "/datasets/0/subsets/0/num_repeats",
-                "bindings": report["bindings"],
-            }],
+            "views": views,
         })
     return {"schema_version": 1, "backend": "sd-scripts", "datasets": projected}
 
@@ -536,15 +670,16 @@ def write_sd_scripts_dataset_config(
     for dataset in datasets:
         lines.extend(["", "[[datasets]]"])
         subsets = dataset.get("subsets")
-        if not isinstance(subsets, list) or len(subsets) != 1:
-            raise ValueError("sd-scripts initial manifest projection requires one subset per dataset block")
+        if not isinstance(subsets, list) or not subsets:
+            raise ValueError("sd-scripts manifest projection requires one or more subsets per dataset block")
         lines.extend(
             f"{key} = {_toml_scalar(value)}"
             for key, value in dataset.items() if key != "subsets"
         )
-        lines.append("")
-        lines.append("  [[datasets.subsets]]")
-        lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in subsets[0].items())
+        for subset in subsets:
+            lines.append("")
+            lines.append("  [[datasets.subsets]]")
+            lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in subset.items())
     destination.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(destination, "\n".join(lines) + "\n")
     parsed = tomllib.loads(destination.read_text(encoding="utf-8"))

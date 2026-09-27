@@ -73,14 +73,31 @@ def role_cardinality_errors(
     return invalid
 
 
+def caption_requirement_errors(
+    caption_presence: dict[str, bool], requirement: str,
+) -> list[str]:
+    """Return sample IDs that violate one profile's caption contract."""
+    if requirement == "required":
+        return [sample_id for sample_id, present in caption_presence.items() if not present]
+    if requirement == "optional":
+        return []
+    if requirement == "forbidden":
+        return [sample_id for sample_id, present in caption_presence.items() if present]
+    raise ValueError(f"projection profile has unsupported caption requirement {requirement!r}")
+
+
 def select_projection_profile(
     *, backend: str, profiles: dict[str, dict[str, Any]], architecture: str,
     shape: str, mode: dict[str, Any], shape_examples: dict[str, list[str]],
     role_cardinalities: dict[str, dict[str, int]],
+    caption_presence: dict[str, bool],
 ) -> tuple[str, dict[str, Any]]:
     """Select exactly one adapter-owned profile from measured manifest shape."""
     matches = []
     for name, profile in profiles.items():
+        caption_errors = caption_requirement_errors(
+            caption_presence, str(profile.get("caption")),
+        )
         expected_mode = {
             **profile["mode"],
             **profile.get("mode_by_architecture", {}).get(architecture, {}),
@@ -97,6 +114,7 @@ def select_projection_profile(
                 not role_cardinality_errors(counts, profile["role_limits"])
                 for counts in role_cardinalities.values()
             )
+            and not caption_errors
         ):
             matches.append((name, profile))
     if len(matches) != 1:
@@ -120,6 +138,13 @@ def select_projection_profile(
             details.append(f"minority sample IDs={minority!r}")
         if role_cardinalities:
             details.append(f"role cardinalities={role_cardinalities!r}")
+        missing_captions = [
+            sample_id for sample_id, present in caption_presence.items() if not present
+        ]
+        if missing_captions and any(
+            profile.get("caption") == "required" for profile in profiles.values()
+        ):
+            details.append(f"required captions missing for sample IDs={missing_captions[:5]!r}")
         detail = "; " + "; ".join(details) if details else ""
         raise ValueError(
             f"no verified {backend} projection profile matches architecture={architecture!r}, "

@@ -42,7 +42,7 @@ def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
                 "model_paths": roles[architecture],
                 "dataset_config": {
                     "general": {"resolution": [512, 512], "caption_extension": ".txt"},
-                    "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "sample", "image_subdir": "images", "num_repeats": 1}]}],
+                    "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "sample", "num_repeats": 1}]}],
                 },
                 "network_dim": 8,
                 "learning_rate": 0.0001,
@@ -141,13 +141,21 @@ class SdScriptsBackendTests(unittest.TestCase):
             "min_bucket_reso", "max_bucket_reso", "bucket_reso_steps",
             "network_multiplier", "skip_image_resolution",
         }
-        staging_only = {"dataset_id", "image_subdir", "caption_subdir", "conditioning_subdir"}
+        staging_only = {"dataset_id", "group"}
 
         self.assertEqual(GENERAL_KEYS, subset_native | dataset_native)
         self.assertEqual(DATASET_KEYS, subset_native | dataset_native)
         self.assertEqual(SUBSET_KEYS, subset_native | staging_only)
         for deliberately_unsupported in ("validation_seed", "validation_split", "custom_attributes"):
             self.assertNotIn(deliberately_unsupported, GENERAL_KEYS | DATASET_KEYS | SUBSET_KEYS)
+
+    def test_legacy_folder_selectors_name_the_manifest_migration(self) -> None:
+        run = base_run()
+        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["caption_subdir"] = "captions"
+        with self.assertRaisesRegex(
+            ValueError, r"replaces folder selector.*caption_subdir.*items\.jsonl.*manifest group",
+        ):
+            validate_sd_scripts_dataset_config(run)
 
     def test_nested_dataset_surface_rejects_unknown_invalid_types_and_ranges(self) -> None:
         cases = (

@@ -66,6 +66,7 @@ class DatasetHandoffTests(unittest.TestCase):
         profiles = {"image": {
             "architectures": ("example",),
             "shape": "image",
+            "caption": "required",
             "mode": {"variant": "base"},
             "mode_by_architecture": {},
             "role_limits": {"target": (1, 1)},
@@ -78,8 +79,40 @@ class DatasetHandoffTests(unittest.TestCase):
             mode={"variant": "base"},
             shape_examples=examples,
             role_cardinalities=cardinalities,
+            caption_presence={"a": True},
         )
         self.assertEqual(name, "image")
+
+    def test_shared_projection_profile_names_samples_missing_required_captions(self) -> None:
+        profiles = {"image": {
+            "architectures": ("example",),
+            "shape": "image",
+            "caption": "required",
+            "mode": {},
+            "mode_by_architecture": {},
+            "role_limits": {"target": (1, 1)},
+        }}
+        with self.assertRaisesRegex(
+            ValueError, r"required captions.*missing-caption.*another-missing",
+        ):
+            select_projection_profile(
+                backend="Example",
+                profiles=profiles,
+                architecture="example",
+                shape="image",
+                mode={},
+                shape_examples={"image": ["captioned", "missing-caption", "another-missing"]},
+                role_cardinalities={
+                    "captioned": {"target": 1},
+                    "missing-caption": {"target": 1},
+                    "another-missing": {"target": 1},
+                },
+                caption_presence={
+                    "captioned": True,
+                    "missing-caption": False,
+                    "another-missing": False,
+                },
+            )
 
     def test_sd_scripts_projects_one_image_caption_subset_from_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,7 +165,27 @@ class DatasetHandoffTests(unittest.TestCase):
             )
             parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
             self.assertEqual(parsed, projected["native"])
-            self.assertEqual(lock["semantic"]["projection"][0]["policy"]["profile"], "ordinary-image-lora")
+            self.assertEqual(projected["native"], {
+                "general": {"resolution": [512, 512]},
+                "datasets": [{"subsets": [{
+                    "image_dir": "/workspace/runs/example/cache/dataset-view/sd-scripts/tiny",
+                    "num_repeats": 2,
+                    "caption_extension": ".txt",
+                }]}],
+            })
+            self.assertEqual(projected["policy"], {
+                "profile": "ordinary-image-lora",
+                "codec": "dreambooth-image-subset",
+                "general": {"resolution": [512, 512]},
+                "dataset_settings": {},
+                "subsets": [{
+                    "group": None,
+                    "settings": {"num_repeats": 2, "caption_extension": ".txt"},
+                }],
+            })
+            self.assertEqual(
+                lock["semantic"]["projection"][0]["policy"], projected["policy"],
+            )
             self.assertIn("dreambooth-image-subset", SD_SCRIPTS_FOLDER_CODECS)
             self.assertIn("ordinary-image-lora", SD_SCRIPTS_PROJECTION_PROFILES)
 
@@ -174,6 +227,145 @@ class DatasetHandoffTests(unittest.TestCase):
                     backend="sd-scripts",
                     project=lambda selection: project_sd_scripts_dataset(run, selection),
                 )
+
+    def test_sd_scripts_caption_source_folder_does_not_change_effective_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sd15",
+                    "mode": "lora",
+                    "dataset_config": {"datasets": [{"subsets": [
+                        {"dataset_id": "tiny", "num_repeats": 1},
+                    ]}]},
+                },
+            }
+            dataset = root / "datasets" / "tiny"
+            (dataset / "captions").mkdir()
+            (dataset / "captions" / "a.caption").write_text("caption\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "a",
+                "files": [{"type": "file", "role": "target", "path": "a.png"}],
+                "caption": {"file": {"type": "file", "path": "captions/a.caption"}},
+            }) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+            view = lock["views"][0]
+            self.assertEqual(len(view["files"]), 1)
+            self.assertEqual(view["files"][0]["text"], "caption\n")
+            self.assertTrue(view["files"][0]["path"].endswith(".txt"))
+
+    def test_sd_scripts_projects_lllite_target_caption_and_control_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "anima",
+                    "mode": "controlnet_lllite",
+                    "dataset_config": {"datasets": [{"subsets": [
+                        {"dataset_id": "tiny", "group": "paired", "num_repeats": 2},
+                    ]}]},
+                },
+            }
+            dataset = root / "datasets" / "tiny"
+            (dataset / "control.png").write_bytes(b"control")
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "a",
+                "group": "paired",
+                "files": [
+                    {"type": "file", "role": "target", "path": "a.png"},
+                    {"type": "file", "role": "control", "path": "control.png"},
+                ],
+                "caption": {"file": {"type": "file", "path": "a.txt"}},
+            }) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            subset = projected["native"]["datasets"][0]["subsets"][0]
+            view = projected["views"][0]
+            self.assertEqual(projected["policy"]["profile"], "anima-lllite-image-control")
+            self.assertEqual(projected["policy"]["codec"], "lllite-control-subset")
+            self.assertNotEqual(subset["image_dir"], subset["conditioning_data_dir"])
+            self.assertEqual(
+                {item["id"] for item in view["consumers"]},
+                {"dreambooth-subset", "conditioning-subset"},
+            )
+            self.assertEqual(len(view["bindings"][0]["members"]), 3)
+            self.assertEqual(len(lock["views"]), 1)
+            self.assertEqual(projected["policy"]["subsets"][0]["group"], "paired")
+            destination = resolved / "sd-scripts" / "dataset.toml"
+            self.assertEqual(
+                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
+                projected["native"],
+            )
+
+    def test_sd_scripts_projects_manifest_groups_as_multiple_subsets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sdxl",
+                    "mode": "lora",
+                    "dataset_config": {"datasets": [{"subsets": [
+                        {"dataset_id": "tiny", "group": "person", "num_repeats": 3},
+                        {"dataset_id": "tiny", "group": "style/paint", "num_repeats": 1},
+                    ]}]},
+                },
+            }
+            dataset = root / "datasets" / "tiny"
+            (dataset / "b.png").write_bytes(b"image-b")
+            (dataset / "b.txt").write_text("style\n", encoding="utf-8")
+            rows = [
+                {"id": "a", "group": "person", "files": [{"type": "file", "role": "target", "path": "a.png"}], "caption": {"file": {"type": "file", "path": "a.txt"}}},
+                {"id": "b", "group": "style/paint", "files": [{"type": "file", "role": "target", "path": "b.png"}], "caption": {"file": {"type": "file", "path": "b.txt"}}},
+            ]
+            (dataset / "items.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+            )
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            subsets = projected["native"]["datasets"][0]["subsets"]
+            self.assertEqual([item["num_repeats"] for item in subsets], [3, 1])
+            self.assertEqual(projected["policy"]["profile"], "ordinary-image-lora")
+            self.assertEqual(len(projected["views"]), 2)
+            self.assertEqual({view["repeat"] for view in projected["views"]}, {1, 3})
+            self.assertEqual(len(lock["views"]), 2)
+            destination = resolved / "sd-scripts" / "dataset.toml"
+            self.assertEqual(
+                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
+                projected["native"],
+            )
+
+    def test_sd_scripts_profiles_use_shared_media_shapes_and_caption_contract(self) -> None:
+        self.assertEqual(SD_SCRIPTS_PROJECTION_PROFILES["ordinary-image-lora"]["shape"], "image")
+        self.assertEqual(
+            SD_SCRIPTS_PROJECTION_PROFILES["anima-lllite-image-control"]["shape"],
+            "image-control",
+        )
+        self.assertEqual(
+            {profile["caption"] for profile in SD_SCRIPTS_PROJECTION_PROFILES.values()},
+            {"required"},
+        )
 
     def test_musubi_task_table_is_the_single_source_for_defaults_and_dataset_properties(self) -> None:
         self.assertEqual(musubi_native_task("wan", None), "t2v-1.3B")
@@ -1769,6 +1961,24 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["policy"]["audio_selection"], "unsupported")
             self.assertEqual(projected["policy"]["block_groups"], [None])
             self.assertEqual(projected["policy"]["block_settings"], [{"num_repeats": 1}])
+            self.assertEqual(native_block, {
+                "num_repeats": 1,
+                "image_jsonl_file": (
+                    "/workspace/runs/example/cache/dataset-view/musubi/tiny/native/items.jsonl"
+                ),
+                "cache_directory": (
+                    "/workspace/runs/example/cache/dataset-view/musubi/tiny/cache"
+                ),
+            })
+            self.assertEqual(projected["policy"], {
+                "profile": "ordinary-image",
+                "codec": "plain-image-jsonl",
+                "caption_transform": "strip",
+                "transport": "image_jsonl_file",
+                "audio_selection": "unsupported",
+                "block_groups": [None],
+                "block_settings": [{"num_repeats": 1}],
+            })
             self.assertEqual(lock["semantic"]["projection"][0]["policy"], projected["policy"])
             generated = json.loads(view["native_files"][0]["text"])
             self.assertEqual(generated["caption"], "caption")
@@ -2993,13 +3203,36 @@ class DatasetHandoffTests(unittest.TestCase):
             row["caption"] = None
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "sample 'a'.*caption.*cannot be absent"):
+            with self.assertRaisesRegex(ValueError, r"required captions missing for sample IDs=\['a'\]"):
                 freeze_dataset_handoff(
                     run,
                     workspace,
                     resolved,
                     backend="musubi-tuner",
                     project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_sd_scripts_profile_rejects_an_absent_caption_with_sample_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "sd-scripts", "config": {
+                "architecture": "sd15", "mode": "lora",
+                "dataset_config": {"datasets": [{"subsets": [
+                    {"dataset_id": "tiny", "num_repeats": 1},
+                ]}]},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["caption"] = None
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError, r"required captions missing for sample IDs=\['a'\]",
+            ):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="sd-scripts",
+                    project=lambda selection: project_sd_scripts_dataset(run, selection),
                 )
 
     def test_musubi_projects_wan_video_caption_with_explicit_frame_options(self) -> None:

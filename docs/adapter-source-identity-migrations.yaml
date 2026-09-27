@@ -7,6 +7,47 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-shared-profile-contract-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      Profile selection now uses the backend-shared media shape and caption
+      requirement contract, and the ordinary N=1 subset follows the same path
+      as grouped N-subset datasets. For the evidence-scoped ungrouped SD 1.5
+      path, the generated native TOML, target and caption bytes, repeat count,
+      input identity, command, optimizer, Resume, and publication behavior are
+      unchanged. This migration does not claim runtime evidence for grouped,
+      LLLite, SDXL, FLUX.1, or Anima paths.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0b0fdd0f0059ec999f12fb4b672ef5eec10406d4a2f231ab0e1a9a84ba347752
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e8177ad847ecc610f68f470895b507356770828e5b4e82d63665911c3e95106f
+  - id: sd-scripts-manifest-groups-and-control-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      The manifest codec learned separate caption sources, explicit group-to-subset
+      views, and paired LLLite control roots. The evidence-scoped ungrouped SD 1.5
+      path still presents the same target and effective caption bytes with the
+      same repeat and native dataset controls; only run-owned view bookkeeping
+      was generalized. This migration does not claim current evidence for grouped,
+      LLLite, SDXL, FLUX.1, or Anima execution.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a2e2f1e17c10d19ada515a3fd1997206e77ddfe6400db2f7528a05d7c093ec5c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0b0fdd0f0059ec999f12fb4b672ef5eec10406d4a2f231ab0e1a9a84ba347752
   - id: sd-scripts-manifest-image-handoff-sd15-evidence-2026-09-27
     backend: sd-scripts
     reason: >-

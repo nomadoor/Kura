@@ -55,9 +55,9 @@ does not mean retaining the old directory-selection syntax.
 | Musubi: author-supplied native dataset JSONL/config selects samples | **C as first-class source** | First-class compile uses manifest rows and Kura-generated native files. Equivalent native data is migrated; unverifiable selection stays escape-only. | **Current surface replaced:** `dataset_config`, H3 `source=*jsonl`, and `paired_jsonl` may no longer independently select files. Current capabilities remain mandatory only where representable by manifest plus typed options. |
 | Musubi: custom `command` / native source | **C: retained escape hatch** | Keep visibly unverified and outside equivalence claims. | Retained, not promoted. |
 | sd-scripts: one ungrouped image set with effective captions, one subset | **A**, after C1 | Generate one image view and TOML subset; account for all targets/captions. | Preserve basic SD1/SDXL/FLUX/Anima LoRA paths. |
-| sd-scripts: captions in a separate folder with the same logical sample name | **B**, after C1 | Manifest owns effective caption; adapter creates same-stem trainer layout; core proves cross-folder association. | **Mandatory preservation:** current `caption_subdir` capability is replaced by typed captions, not dropped. |
-| sd-scripts: conditioning/control images in a separate folder | **B**, after C1 | Typed target/condition references form one association and exact paired layout. | **Mandatory preservation:** Anima ControlNet-LLLite `conditioning_subdir` claim. |
-| sd-scripts: multiple concepts/groups, subsets, or datasets from one manifest dataset | **B**, after C3 | Each group/subset maps to a view with explicit positive repeat/settings; core proves per-view and global coverage. | **Mandatory preservation:** reviewed multi-subset configuration remains possible, but directory selection is replaced. |
+| sd-scripts: captions in a separate folder with the same logical sample name | **B**, implemented on this branch | Manifest owns effective caption; adapter creates same-stem trainer layout; core proves the effective caption association independent of its source folder. | **Mandatory preservation:** current `caption_subdir` capability is replaced by typed captions, not dropped. |
+| sd-scripts: conditioning/control images in a separate folder | **B**, implemented on this branch | Typed target/condition references form one association and exact paired layout. | **Mandatory preservation:** Anima ControlNet-LLLite `conditioning_subdir` claim. Runtime evidence remains separate. |
+| sd-scripts: multiple concepts/groups, subsets, or datasets from one manifest dataset | **B**, implemented on this branch | Each group/subset maps to a view with explicit positive repeat/settings; core proves per-view and global coverage. | **Mandatory preservation:** reviewed multi-subset configuration remains possible, but directory selection is replaced. |
 | sd-scripts: explicit `flatten_groups: true` | **B**, after C3 | One subset/view consumes all rows with one explicit positive repeat and identical settings; conflicting group overrides fail. | New explicit behavior; no silent flattening. |
 | sd-scripts: caption augmentation/dropout/cache controls | **B** | Keep reviewed controls in semantic projection; reject combinations that change effective captions incompatibly. | Preserve existing validated controls; they do not select files. |
 | sd-scripts: `image_subdir`, `caption_subdir`, `conditioning_subdir` select samples | **C as first-class selectors** | Selection/pairing moves to manifest. Converter may generate equivalent directories but cannot treat these fields as an independent inventory. | **Current surface replaced:** existing run files require migration. Corresponding capabilities remain mandatory through typed roles/groups. |
@@ -81,7 +81,7 @@ claim is silently reassigned to a different test.
 | Tier-1 compile: SDXL LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
 | Tier-1 compile: FLUX.1 LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
 | Tier-1 compile: Anima LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
-| Tier-1 compile: Anima ControlNet-LLLite | Delete the obsolete stage-lock assertion; the typed-control converter is migration pending. |
+| Tier-1 compile: Anima ControlNet-LLLite | Delete the obsolete stage-lock assertion; the typed-control converter is now covered by manifest projection tests, while current-identity runtime evidence remains pending. |
 | LLLite caption dropout with text-cache | Delete for now; this is part of the migration-pending LLLite/caption-controls slice. |
 | Zero `caption_dropout_every_n_epochs` emission | Delete for now; native caption controls are restored through verified manifest TOML in the caption-controls slice. |
 | Runtime logging of caption dropout from the stage lock | Delete permanently with the stage lock; the projection policy and realization replace this record. |
@@ -98,7 +98,7 @@ claim is silently reassigned to a different test.
 | Non-numeric caption dropout | Keep at the authored-config validation seam. |
 | Out-of-range caption dropout | Keep at the authored-config validation seam. |
 | Non-boolean bucket control | Keep at the authored-config validation seam. |
-| Paired-directory stems mismatch | Delete the directory-inference test; typed target/control association is migration pending for LLLite. |
+| Paired-directory stems mismatch | Delete the directory-inference test; manifest sample association plus core binding verification now replaces inferred pairing for LLLite. |
 
 When RunPod selected-file transfer is implemented, its acceptance checks must
 also prove that the Musubi video-frame preflight realization record is returned

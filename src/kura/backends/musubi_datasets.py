@@ -334,7 +334,7 @@ _FRAMEPACK_VIDEO_PROFILE_COMMON = {
     "target_fps": 30.0,
     "minimum_target_frames": 37,
 }
-MUSUBI_PROJECTION_PROFILES = {
+_MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     "ordinary-image": {
         "codec": "plain-image-jsonl",
         "architectures": _ORDINARY_IMAGE_ARCHITECTURES,
@@ -607,6 +607,10 @@ MUSUBI_PROJECTION_PROFILES = {
         "native_string_fields": (),
         "role_limits": {"target": (1, 1), "reference": (1, 9)},
     },
+}
+MUSUBI_PROJECTION_PROFILES = {
+    name: {"caption": "required", **profile}
+    for name, profile in _MUSUBI_PROJECTION_PROFILE_DEFINITIONS.items()
 }
 MUSUBI_DATASET_OPTION_CAPABILITIES = {
     "dataset_options.<dataset-id>": {
@@ -906,6 +910,10 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             mode=mode,
             shape_examples=shape_examples,
             role_cardinalities=role_cardinalities,
+            caption_presence={
+                str(sample.get("id")): isinstance(sample.get("caption"), dict)
+                for sample in dataset.get("samples", [])
+            },
         )
         blocks = _resolve_musubi_projection_blocks(
             dataset, dataset_options.get(dataset_id, {}), flatten_groups=flatten_groups,
@@ -1041,12 +1049,7 @@ def _project_musubi_jsonl_block(
             })
             continue
         targets = role_entries["target"]
-        if not isinstance(caption, dict):
-            unrepresentable.append({
-                "input_id": targets[0].get("input_id"),
-                "reason": f"Musubi profile {profile_name} caption cannot be absent",
-            })
-            continue
+        assert isinstance(caption, dict)  # profile caption contract is checked before blocks
         target = targets[0]
         target_suffixes = [Path(str(item.get("path"))).suffix.lower() for item in targets]
         expected_target_suffixes = VIDEO_SUFFIXES if transport == "video_jsonl_file" else IMAGE_SUFFIXES
