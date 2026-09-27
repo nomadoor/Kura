@@ -59,7 +59,7 @@ checked rather than assumed covered by the removed workspace bind.
 
 Source survey: `src/kura/backends/{ai_toolkit,musubi_command,musubi_datasets,
 musubi_models,sd_scripts,sd_scripts_datasets,sd_scripts_models}.py`,
-`src/kura/container_scripts/{dataset_stage,sd_scripts_dataset_stage,
+`src/kura/container_scripts/{dataset_stage,
 training_state_verify,hf_download}.py`, `src/kura/executors/{docker,runpod}.py`,
 `src/kura/run_commands/{launch,plan,runpod_ssh,render_runpod}.py`,
 `src/kura/{paths,runtime_io,training_artifacts,init_templates}.py`, and the

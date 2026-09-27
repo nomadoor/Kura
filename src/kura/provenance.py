@@ -85,7 +85,11 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         symbols = [(shared, name) for name in ("_datasets", "_script_command")]
         runtime_paths = [container_root / "ai_toolkit_state.py", container_root / "training_state_verify.py"]
     elif backend_name == "musubi-tuner":
-        paths = [backend_root / "common.py", *sorted(backend_root.glob("musubi_*.py"))]
+        paths = [
+            backend_root / "common.py",
+            backend_root / "dataset_profiles.py",
+            *sorted(backend_root.glob("musubi_*.py")),
+        ]
         symbols = [
             (shared, name)
             for name in ("_datasets", "_toml_scalar", "_script_command", "_truthy", "_extra_args", "_append_flag")
@@ -95,7 +99,10 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
             for name in ("hf_download.py", "musubi_dataset_assert.py", "prune_checkpoints.py", "safetensors_validator.py", "training_state_verify.py")
         ]
     elif backend_name == "sd-scripts":
-        paths = sorted(backend_root.glob("sd_scripts*.py"))
+        paths = [
+            backend_root / "dataset_profiles.py",
+            *sorted(backend_root.glob("sd_scripts*.py")),
+        ]
         symbols = [
             (shared, name)
             for name in ("_datasets", "_toml_scalar", "_script_command", "_truthy", "_extra_args", "_int_or_none", "_append_flag")
@@ -104,7 +111,6 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
             container_root / name
             for name in (
                 "hf_download.py",
-                "sd_scripts_dataset_stage.py",
                 "sd_scripts_probe.py",
                 "sd_scripts_publish_anima.py",
                 "sd_scripts_state.py",

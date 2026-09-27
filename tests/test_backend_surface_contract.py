@@ -58,6 +58,24 @@ class BackendSurfaceContractTests(unittest.TestCase):
         resolved.mkdir(parents=True, exist_ok=True)
         (resolved / "dataset-projection.lock.json").write_text(json.dumps(lock), encoding="utf-8")
 
+    def _write_sd_scripts_projection(self, run: dict[str, object], resolved: Path) -> None:
+        dataset_id = str(run["datasets"][0]["id"])
+        view = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
+        block = {"subsets": [{
+            "image_dir": f"/workspace/{view}",
+            "num_repeats": 1,
+            "caption_extension": ".txt",
+        }]}
+        lock = {
+            "backend": "sd-scripts",
+            "datasets": [{
+                "id": dataset_id,
+                "native": {"datasets": [block]},
+            }],
+        }
+        resolved.mkdir(parents=True, exist_ok=True)
+        (resolved / "dataset-projection.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for name, adapter in BACKENDS.items():
@@ -772,7 +790,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             "sd-scripts": {
                 "id": "surface-sd", "backend": {"name": "sd-scripts", "config": {
                     "architecture": "sd15", "optimizer_type": "AdamW8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2, "model_paths": {"base": "/models/base"},
-                    "dataset_config": {"datasets": [{"subsets": [{"dataset_id": "tiny"}]}]},
+                    "dataset_config": {"datasets": [{"subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}]},
                 }}, "model": {"base": "/models/base"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
         }
@@ -786,6 +804,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.subTest(backend=name):
                     if name == "musubi-tuner":
                         self._write_musubi_projection(run, root / name)
+                    elif name == "sd-scripts":
+                        self._write_sd_scripts_projection(run, root / name)
                     spec = BACKENDS[name].compile(run, root / name, root, False)
                     if name == "ai-toolkit":
                         compiled = yaml.safe_load((root / "ai-toolkit" / "ai-toolkit.yaml").read_text(encoding="utf-8"))

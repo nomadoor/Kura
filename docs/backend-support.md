@@ -145,10 +145,10 @@ author's responsibility.
 | Musubi Tuner | FramePack | Built-in | 🔥 | Normal, F1, and Single Frame compile paths covered. Evidence: `musubi-framepack-video-docker-2026-07-12` |
 | Musubi Tuner | Kandinsky 5 | Built-in | ⚠️ | Lite real-smoked; Pro remains capacity-dependent |
 | sd-scripts | Stable Diffusion 1.5 LoRA | Built-in | 🔥 | Two uninterrupted 100-step controls and a 50+50 Resume run completed with identical learned weights, optimizer, scheduler, and normalized train state in the recorded one-item case. The newer Kura post-exit publication gate still needs a real container smoke. Evidence: `sd-scripts-sd15-resume-equivalence-docker-2026-08-27` |
-| sd-scripts | SDXL LoRA | Built-in | 🔧 | Compile coverage remains; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
-| sd-scripts | FLUX.1 LoRA | Built-in | 🔧 | Compile coverage remains; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
-| sd-scripts | Anima LoRA | Built-in | 🔧 | Compile and publication tests remain; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
-| sd-scripts | Anima ControlNet-LLLite | Built-in | 🔧 | Compile, conversion, and cache tests remain; earlier optimizer smokes predate the default durable-state contract and are retained only as historical evidence |
+| sd-scripts | SDXL LoRA | Built-in | 🟡 | Manifest projection migration pending: the old stage-based compile evidence was removed and must be restored through the profile/codec path. The earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence. |
+| sd-scripts | FLUX.1 LoRA | Built-in | 🟡 | Manifest projection migration pending: the old stage-based compile evidence was removed and must be restored through the profile/codec path. The earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence. |
+| sd-scripts | Anima LoRA | Built-in | 🟡 | Manifest projection migration pending: the old stage-based compile evidence was removed and must be restored through the profile/codec path. Publication tests remain; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence. |
+| sd-scripts | Anima ControlNet-LLLite | Built-in | 🟡 | Manifest projection migration pending: typed control/subset projection must restore the removed stage-based compile and cache evidence. Earlier optimizer smokes predate the default durable-state contract and are retained only as historical evidence. |
 | sd-scripts | Other upstream families and modes | Explicit command only | ⚠️ | No built-in selector or support claim in the initial milestone |
 
 Musubi `v0.3.5` and Kura's FLUX.2 VAE compatibility patch passed the full image

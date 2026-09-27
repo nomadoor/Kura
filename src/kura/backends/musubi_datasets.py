@@ -12,6 +12,11 @@ import tomllib
 from typing import Any
 
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
+from kura.backends.dataset_profiles import (
+    classify_dataset_shape,
+    role_cardinality_errors,
+    select_projection_profile,
+)
 from kura.backends.musubi_models import _musubi_model_version
 from kura.backends.musubi_native_selectors import musubi_native_task, musubi_native_task_profile
 from kura.backends.shared import _datasets, _toml_scalar, _truthy
@@ -890,8 +895,12 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
         dataset_id = str(dataset.get("id"))
-        shape, shape_examples, role_cardinalities = _musubi_dataset_shape(dataset)
-        profile_name, profile = _select_musubi_projection_profile(
+        shape, shape_examples, role_cardinalities = classify_dataset_shape(
+            dataset, image_suffixes=IMAGE_SUFFIXES, video_suffixes=VIDEO_SUFFIXES,
+        )
+        profile_name, profile = select_projection_profile(
+            backend="Musubi",
+            profiles=MUSUBI_PROJECTION_PROFILES,
             architecture=architecture,
             shape=shape,
             mode=mode,
@@ -935,122 +944,6 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             "views": [report["views"][0] for report in block_reports],
         })
     return {"schema_version": 1, "backend": "musubi-tuner", "datasets": projected}
-
-
-def _musubi_dataset_shape(
-    dataset: dict[str, Any],
-) -> tuple[str, dict[str, list[str]], dict[str, dict[str, int]]]:
-    shape_samples: dict[str, list[str]] = {}
-    role_cardinalities: dict[str, dict[str, int]] = {}
-    for sample in dataset.get("samples", []):
-        sample_id = str(sample.get("id"))
-        references = sample.get("files", [])
-        targets = [item for item in references if item.get("role") == "target"]
-        controls = [item for item in references if item.get("role") == "control"]
-        ordered_roles = [str(item.get("role")) for item in references]
-        role_cardinalities[sample_id] = {
-            role: ordered_roles.count(role) for role in sorted(set(ordered_roles))
-        }
-        other_roles = [role for role in ordered_roles if role not in {"target", "control"}]
-        if not targets:
-            sample_shape = "target-count-0"
-            shape_samples.setdefault(sample_shape, []).append(sample_id)
-            continue
-        target_suffixes = [Path(str(item.get("path"))).suffix.lower() for item in targets]
-        if all(suffix in IMAGE_SUFFIXES for suffix in target_suffixes):
-            media_kind = "image"
-        elif all(suffix in VIDEO_SUFFIXES for suffix in target_suffixes):
-            media_kind = "video"
-        else:
-            media_kind = "mixed-target-media"
-        if any(role in {"reference", "reference-muted", "reference-audio"} for role in other_roles):
-            unknown = sorted(set(other_roles) - {"audio", "reference", "reference-muted", "reference-audio"})
-            sample_shape = "roles:" + ",".join(unknown) if unknown else media_kind + "-references"
-        elif other_roles == ["audio"]:
-            sample_shape = media_kind + "-audio"
-        elif other_roles:
-            sample_shape = "roles:" + ",".join(other_roles)
-        else:
-            control_suffix = "-control" if controls else ""
-            sample_shape = media_kind + control_suffix
-        shape_samples.setdefault(sample_shape, []).append(sample_id)
-    if not shape_samples:
-        return "empty", {}, role_cardinalities
-    if len(shape_samples) != 1:
-        return "mixed:" + ",".join(sorted(shape_samples)), shape_samples, role_cardinalities
-    return next(iter(shape_samples)), shape_samples, role_cardinalities
-
-
-def _select_musubi_projection_profile(
-    *, architecture: str, shape: str, mode: dict[str, Any],
-    shape_examples: dict[str, list[str]], role_cardinalities: dict[str, dict[str, int]],
-) -> tuple[str, dict[str, Any]]:
-    matches = []
-    for name, profile in MUSUBI_PROJECTION_PROFILES.items():
-        expected_mode = {
-            **profile["mode"],
-            **profile.get("mode_by_architecture", {}).get(architecture, {}),
-        }
-        if (
-            architecture in profile["architectures"]
-            and (
-                shape in profile["shape"]
-                if isinstance(profile["shape"], tuple)
-                else shape == profile["shape"]
-            )
-            and all(
-                mode.get(key) in value if isinstance(value, tuple) else mode.get(key) == value
-                for key, value in expected_mode.items()
-            )
-            and all(
-                not _musubi_role_cardinality_errors(counts, profile["role_limits"])
-                for counts in role_cardinalities.values()
-            )
-        ):
-            matches.append((name, profile))
-    if len(matches) != 1:
-        if matches:
-            raise ValueError(
-                f"Musubi projection profile table is ambiguous for architecture={architecture!r}, "
-                f"shape={shape!r}, mode={mode!r}"
-            )
-        counts = {sample_shape: len(ids) for sample_shape, ids in shape_examples.items()}
-        largest = max(counts.values(), default=0)
-        minority_shapes = [
-            sample_shape for sample_shape, count in sorted(counts.items()) if count < largest
-        ]
-        if len(counts) > 1 and not minority_shapes:
-            minority_shapes = sorted(counts)
-        minority = {
-            sample_shape: shape_examples[sample_shape][:3] for sample_shape in minority_shapes
-        }
-        details = []
-        if minority:
-            details.append(f"minority sample IDs={minority!r}")
-        if role_cardinalities:
-            details.append(f"role cardinalities={role_cardinalities!r}")
-        detail = "; " + "; ".join(details) if details else ""
-        raise ValueError(
-            "no verified Musubi projection profile matches "
-            f"architecture={architecture!r}, shape={shape!r}, mode={mode!r}{detail}"
-        )
-    return matches[0]
-
-
-def _musubi_role_cardinality_errors(
-    counts: dict[str, int], limits: dict[str, tuple[int, int | None]],
-) -> list[str]:
-    invalid = []
-    for role, count in counts.items():
-        bounds = limits.get(role)
-        if bounds is None or count < bounds[0] or (
-            bounds[1] is not None and count > bounds[1]
-        ):
-            invalid.append(f"{role}={count}")
-    for role, (minimum, _maximum) in limits.items():
-        if minimum and role not in counts:
-            invalid.append(f"{role}=0")
-    return invalid
 
 
 def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
@@ -1123,7 +1016,7 @@ def _project_musubi_jsonl_block(
         role_entries: dict[str, list[dict[str, Any]]] = {}
         for item in references:
             role_entries.setdefault(str(item.get("role")), []).append(item)
-        invalid_roles = _musubi_role_cardinality_errors(
+        invalid_roles = role_cardinality_errors(
             {role: len(items) for role, items in role_entries.items()},
             profile["role_limits"],
         )

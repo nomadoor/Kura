@@ -7,6 +7,32 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-manifest-image-handoff-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      The old backend-specific staging script was replaced by the shared
+      manifest handoff for the ordinary one-target, one-caption SD 1.5 path.
+      The evidence-scoped training meaning is unchanged: the same target bytes
+      and exact caption bytes are presented as a same-stem pair, the same
+      explicit repeat and native dataset controls reach sd-scripts, and the
+      training entrypoint, model roles, optimizer, Resume state, and publication
+      behavior are unchanged. Run-owned filenames and the prelaunch verification
+      mechanism changed, but neither changes the recorded optimizer-step and
+      learned-weight equivalence claim. This migration is only for the recorded
+      SD 1.5 image-caption evidence; SDXL, FLUX.1, Anima, control, and multi-subset
+      compile claims remain migration pending until their manifest paths are
+      separately evidenced.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 607c98ded3ddb21fddf55cf13953e7f0b82d7e9edbd2546791aa67a0cb7b9937
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a2e2f1e17c10d19ada515a3fd1997206e77ddfe6400db2f7528a05d7c093ec5c
   - id: sd-scripts-shared-dataset-contract-identity-2026-09-26
     backend: sd-scripts
     reason: >-

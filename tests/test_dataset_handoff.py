@@ -27,6 +27,13 @@ from kura.backends.musubi_native_selectors import (
     musubi_native_task,
     musubi_native_task_profile,
 )
+from kura.backends.sd_scripts_datasets import (
+    SD_SCRIPTS_FOLDER_CODECS,
+    SD_SCRIPTS_PROJECTION_PROFILES,
+    project_sd_scripts_dataset,
+    write_sd_scripts_dataset_config,
+)
+from kura.backends.dataset_profiles import classify_dataset_shape, select_projection_profile
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, materialize_dataset_view, remove_dataset_views
 from kura.dataset_handoff import local_training_mounts
@@ -44,6 +51,130 @@ def _musubi_semantic_block(projected: dict, index: int = 0) -> dict:
 
 
 class DatasetHandoffTests(unittest.TestCase):
+    def test_shared_projection_profile_selects_by_shape_mode_and_role_limits(self) -> None:
+        dataset = {
+            "samples": [{
+                "id": "a",
+                "files": [{"role": "target", "path": "a.png"}],
+            }],
+        }
+        shape, examples, cardinalities = classify_dataset_shape(
+            dataset,
+            image_suffixes={".png"},
+            video_suffixes={".mp4"},
+        )
+        profiles = {"image": {
+            "architectures": ("example",),
+            "shape": "image",
+            "mode": {"variant": "base"},
+            "mode_by_architecture": {},
+            "role_limits": {"target": (1, 1)},
+        }}
+        name, _profile = select_projection_profile(
+            backend="Example",
+            profiles=profiles,
+            architecture="example",
+            shape=shape,
+            mode={"variant": "base"},
+            shape_examples=examples,
+            role_cardinalities=cardinalities,
+        )
+        self.assertEqual(name, "image")
+
+    def test_sd_scripts_projects_one_image_caption_subset_from_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sd15",
+                    "mode": "lora",
+                    "dataset_config": {
+                        "general": {"resolution": [512, 512]},
+                        "datasets": [{
+                            "subsets": [{"dataset_id": "tiny", "num_repeats": 2}],
+                        }],
+                    },
+                },
+            }
+
+            lock = freeze_dataset_handoff(
+                run,
+                root,
+                resolved,
+                backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+            materialize_dataset_view(root, lock)
+            destination = resolved / "sd-scripts" / "dataset.toml"
+            write_sd_scripts_dataset_config(
+                run, destination, workspace=root, strict=True,
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            view = projected["views"][0]
+            self.assertEqual(projected["policy"]["profile"], "ordinary-image-lora")
+            self.assertEqual(projected["policy"]["codec"], "dreambooth-image-subset")
+            self.assertEqual(view["repeat"], 2)
+            self.assertEqual(len(view["links"]), 1)
+            self.assertEqual(len(view["files"]), 1)
+            self.assertEqual(
+                Path(view["links"][0]["path"]).stem,
+                Path(view["files"][0]["path"]).stem,
+            )
+            self.assertTrue((root / view["links"][0]["path"]).is_symlink())
+            self.assertEqual(
+                (root / view["files"][0]["path"]).read_text(encoding="utf-8"),
+                "caption\n",
+            )
+            parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+            self.assertEqual(parsed, projected["native"])
+            self.assertEqual(lock["semantic"]["projection"][0]["policy"]["profile"], "ordinary-image-lora")
+            self.assertIn("dreambooth-image-subset", SD_SCRIPTS_FOLDER_CODECS)
+            self.assertIn("ordinary-image-lora", SD_SCRIPTS_PROJECTION_PROFILES)
+
+    def test_sd_scripts_initial_profile_stops_grouped_and_control_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sd15",
+                    "mode": "lora",
+                    "dataset_config": {
+                        "datasets": [{
+                            "subsets": [{"dataset_id": "tiny", "num_repeats": 1}],
+                        }],
+                    },
+                },
+            }
+            dataset = root / "datasets" / "tiny"
+            (dataset / "control.png").write_bytes(b"control")
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "a",
+                "group": "concept-a",
+                "files": [
+                    {"type": "file", "role": "target", "path": "a.png"},
+                    {"type": "file", "role": "control", "path": "control.png"},
+                ],
+                "caption": {"file": {"type": "file", "path": "a.txt"}},
+            }) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError, "shape='image-control'.*role cardinalities=.*'a'",
+            ):
+                freeze_dataset_handoff(
+                    run,
+                    root,
+                    resolved,
+                    backend="sd-scripts",
+                    project=lambda selection: project_sd_scripts_dataset(run, selection),
+                )
+
     def test_musubi_task_table_is_the_single_source_for_defaults_and_dataset_properties(self) -> None:
         self.assertEqual(musubi_native_task("wan", None), "t2v-1.3B")
         self.assertEqual(musubi_native_task("kandinsky_5", None), "k5-pro-t2v-5s-sd")

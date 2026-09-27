@@ -13,7 +13,7 @@ from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, project_musubi_dataset, validate_musubi_authored_config
 from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, training_state_contract_sd_scripts
-from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, validate_sd_scripts_dataset_config
+from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
 
@@ -273,6 +273,7 @@ BACKENDS: dict[str, BackendAdapter] = {
     "sd-scripts": BackendAdapter(
         name="sd-scripts", image_name="sd-scripts", compile=_compile_sd_scripts, command=command_sd_scripts,
         display=display_sd_scripts, requirements=requirements_sd_scripts, surface=SD_SCRIPTS_SURFACE,
+        project_dataset=project_sd_scripts_dataset,
         validate_authored=validate_sd_scripts_dataset_config,
         download_specs=sd_scripts_model_download_specs,
         training_state=training_state_contract_sd_scripts,

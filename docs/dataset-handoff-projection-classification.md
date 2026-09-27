@@ -69,6 +69,37 @@ requires parsing the emitted native configuration file and proving exact
 equality with the complete `native` mapping already verified by core. Checking
 only selected paths or settings is insufficient.
 
+### SD-scripts legacy-test disposition for the first manifest slice
+
+The first manifest converter made 22 old direct-writer/stage assertions fail.
+They were classified individually before removal or migration; no support
+claim is silently reassigned to a different test.
+
+| Failing case | Disposition |
+| --- | --- |
+| Tier-1 compile: SD 1.5 LoRA | Delete the obsolete stage-lock assertion. Existing real-run evidence remains; the new manifest path has its own independent regression. |
+| Tier-1 compile: SDXL LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
+| Tier-1 compile: FLUX.1 LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
+| Tier-1 compile: Anima LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
+| Tier-1 compile: Anima ControlNet-LLLite | Delete the obsolete stage-lock assertion; the typed-control converter is migration pending. |
+| LLLite caption dropout with text-cache | Delete for now; this is part of the migration-pending LLLite/caption-controls slice. |
+| Zero `caption_dropout_every_n_epochs` emission | Delete for now; native caption controls are restored through verified manifest TOML in the caption-controls slice. |
+| Runtime logging of caption dropout from the stage lock | Delete permanently with the stage lock; the projection policy and realization replace this record. |
+| Caption controls inherited at `general` | Delete for now; verified native inheritance is migration pending. |
+| Caption controls inherited at `datasets[]` | Delete for now; verified native inheritance is migration pending. |
+| Caption controls inherited at `subsets[]` | Delete for now; verified native inheritance is migration pending. |
+| Two-level TOML plus frozen stage lock | Delete permanently; the run view and projection lock replace the backend stage lock. |
+| Dataset-level caption extension selecting a staged sidecar | Delete the selector test; manifest caption identity replaces directory selection, with extension emission covered in the typed-caption slice. |
+| Implicit default repeat recorded by stage logging | Delete permanently; manifest subsets require an explicit positive repeat. |
+| Missing declared dataset and invalid caption extension through the old writer | Delete the old-selection half; the existing preapproval validator remains the caption-extension authority. |
+| Dynamic `caption_dropout_every_n_epochs` rejected with text-cache | Keep, but call the authored-config validator rather than a writer that now requires frozen projection. |
+| Dynamic `caption_tag_dropout_rate` rejected with text-cache | Keep, but call the authored-config validator rather than a writer that now requires frozen projection. |
+| Unknown nested dataset key | Keep at the authored-config validation seam. |
+| Non-numeric caption dropout | Keep at the authored-config validation seam. |
+| Out-of-range caption dropout | Keep at the authored-config validation seam. |
+| Non-boolean bucket control | Keep at the authored-config validation seam. |
+| Paired-directory stems mismatch | Delete the directory-inference test; typed target/control association is migration pending for LLLite. |
+
 When RunPod selected-file transfer is implemented, its acceptance checks must
 also prove that the Musubi video-frame preflight realization record is returned
 to the local run alongside the other realization evidence.

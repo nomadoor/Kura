@@ -441,7 +441,6 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     else:
         training_argv.extend(native_training_argv)
     commands: list[list[str]] = [
-        ["python", "-c", script_source("sd_scripts_dataset_stage.py"), f"/workspace/runs/{run['id']}/resolved/sd-scripts/dataset-stage.lock.json", "/workspace"],
         *download_commands,
         _validation_command(models=model_items),
     ]
