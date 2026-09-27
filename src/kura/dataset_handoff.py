@@ -129,6 +129,22 @@ def _projection_error(input_index: dict[str, dict[str, Any]], input_id: Any, rea
     )
 
 
+def project_caption_text(text: str, transform: str) -> str:
+    """Apply a small, backend-declared caption text projection."""
+    if transform == "identity":
+        return text
+    if transform == "strip":
+        return text.strip()
+    # Match Python text-file universal-newline handling without treating Unicode
+    # line separators as physical caption-file lines.
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if transform == "first-line-strip":
+        return lines[0].strip()
+    if transform == "nonempty-lines-strip":
+        return "\n".join(line.strip() for line in lines if line.strip())
+    raise ValueError(f"projection declares unsupported caption transform {transform!r}")
+
+
 def _validate_bindings(
     dataset_id: str,
     view_root: str,
@@ -736,18 +752,29 @@ def _validate_view(
             raise ValueError(f"projection generated file {index} must be a mapping")
         path = _safe_workspace_relative(generated.get("path"), context=f"projection generated file {index}")
         text, input_id = generated.get("text"), generated.get("input_id")
+        caption_transform = generated.get("caption_transform", "identity")
         if not path.startswith(root + "/") or path in seen_paths or not isinstance(text, str):
             raise ValueError(f"projection generated file {path!r} is outside its root, duplicated, or non-text")
         identity = input_index.get(input_id)
         if not isinstance(identity, dict):
             raise ValueError(f"projection generated file {path!r} names an unknown input")
-        if identity.get("kind") != "caption" or identity.get("text") != text:
+        source_text = identity.get("text") if identity.get("kind") == "caption" else None
+        if (
+            not isinstance(caption_transform, str)
+            or not isinstance(source_text, str)
+            or project_caption_text(source_text, caption_transform) != text
+        ):
             raise ValueError(f"projection generated file {path!r} does not preserve its caption input")
         if input_id in placements:
             raise ValueError(f"projection places input {input_id!r} more than once")
         seen_paths.add(path)
         placements[input_id] = path
-        files.append({"path": path, "text": text, "input_id": input_id})
+        files.append({
+            "path": path,
+            "text": text,
+            "input_id": input_id,
+            **({"caption_transform": caption_transform} if caption_transform != "identity" else {}),
+        })
     native_files, native_inputs = _validate_native_jsonl_files(
         dataset, root, view.get("native_files"), placements, input_index, seen_paths,
     )
@@ -893,6 +920,10 @@ def _view_semantic(view: dict[str, Any]) -> dict[str, Any]:
                 "input_id": item["input_id"],
                 "path": PurePosixPath(item["path"]).relative_to(root).as_posix(),
                 "kind": "link" if "target" in item else "generated",
+                **(
+                    {"caption_transform": item["caption_transform"]}
+                    if "caption_transform" in item else {}
+                ),
             }
             for item in [*view.get("links", []), *view.get("files", [])]
         ],

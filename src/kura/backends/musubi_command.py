@@ -10,7 +10,7 @@ import yaml
 
 from kura.container_scripts import script_source
 from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths
-from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _script_command as _shared_script_command, _truthy
+from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _reject_owned_extra_args, _script_command as _shared_script_command, _truthy
 from kura.backends.musubi_datasets import (
     FRAMEPACK_LATENT_WINDOW_SIZE,
     _musubi_h3_effective_task,
@@ -39,8 +39,40 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+MUSUBI_OWNED_FLAGS = frozenset({
+    "--audio_vae", "--base_weights", "--batch_size", "--block_swap_h2d_only",
+    "--block_swap_ring_size", "--blocks_to_swap", "--byt5", "--cache_seed",
+    "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config",
+    "--discrete_flow_shift", "--dit", "--dit_dtype", "--dit_high_noise", "--f1",
+    "--fp8", "--fp8_base", "--fp8_llm", "--fp8_scaled", "--fp8_t5", "--fp8_te",
+    "--fp8_text_encoder", "--fp8_vl", "--gradient_accumulation_steps",
+    "--gradient_checkpointing", "--gradient_checkpointing_cpu_offload",
+    "--h3_guidance_loss_scale", "--h3_guidance_loss_sigma_min",
+    "--h3_guidance_loss_uncond_cache", "--h3_teacher_conditions",
+    "--h3_teacher_matching", "--i2v", "--image_encoder", "--latent_window_size",
+    "--learning_rate", "--lr_scheduler", "--max_data_loader_n_workers",
+    "--max_train_steps", "--mixed_precision", "--model_type", "--model_version",
+    "--network_alpha", "--network_dim", "--network_module", "--noise_clip_std",
+    "--noise_scale_end", "--noise_scale_start", "--one_frame", "--one_frame_no_2x",
+    "--one_frame_no_4x", "--optimizer_type", "--output_dir", "--output_name",
+    "--persistent_data_loader_workers", "--quantized_qwen", "--resume",
+    "--save_every_n_steps", "--save_last_n_steps", "--save_last_n_steps_state",
+    "--save_precision", "--save_state", "--save_state_on_train_end", "--sdpa",
+    "--seed", "--skip_existing", "--t5", "--task", "--teacher_conditions",
+    "--text_cache_dtype", "--text_encoder", "--text_encoder1", "--text_encoder2",
+    "--text_encoder_blocks_to_swap", "--text_encoder_clip", "--text_encoder_qwen",
+    "--timestep_boundary", "--timestep_sampling", "--turbo_dit", "--uncond_output",
+    "--use_pinned_memory_for_block_swap", "--vae", "--vae_chunk_size", "--vae_dtype",
+    "--vae_tiling", "--video_only", "--video_vae", "--weighting_scheme",
+})
+
+
 def _extra_args(override: dict[str, Any]) -> list[str]:
-    return _shared_extra_args(override, backend_label="Musubi Tuner")
+    values = _shared_extra_args(override, backend_label="Musubi Tuner")
+    _reject_owned_extra_args(
+        values, owned_flags=MUSUBI_OWNED_FLAGS, backend_label="Musubi Tuner",
+    )
+    return values
 
 
 def _extra_arg_value(arguments: list[str], flag: str) -> str | None:
@@ -371,7 +403,7 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
             "prune_before_step": native.get("prune_checkpoints_before_step"),
-            "keep_last": _extra_arg_value(extra_args, "--save_last_n_steps") or _extra_arg_value(extra_args, "--save_last_n_epochs"),
+            "keep_last": native.get("save_last_n_steps") or _extra_arg_value(extra_args, "--save_last_n_epochs"),
         },
     }
 

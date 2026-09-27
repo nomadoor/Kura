@@ -96,7 +96,10 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         ]
         symbols = [
             (shared, name)
-            for name in ("_datasets", "_toml_scalar", "_script_command", "_truthy", "_extra_args", "_append_flag")
+            for name in (
+                "_datasets", "_toml_scalar", "_script_command", "_truthy",
+                "_extra_args", "_reject_owned_extra_args", "_append_flag",
+            )
         ]
         runtime_paths = [
             container_root / name
@@ -109,7 +112,10 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         ]
         symbols = [
             (shared, name)
-            for name in ("_datasets", "_toml_scalar", "_script_command", "_truthy", "_extra_args", "_int_or_none", "_append_flag")
+            for name in (
+                "_datasets", "_toml_scalar", "_script_command", "_truthy",
+                "_extra_args", "_reject_owned_extra_args", "_int_or_none", "_append_flag",
+            )
         ]
         runtime_paths = [
             container_root / name

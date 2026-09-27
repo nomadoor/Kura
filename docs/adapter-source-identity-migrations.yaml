@@ -7,6 +7,72 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-shared-caption-projection-verifier-existing-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      The shared dataset handoff verifier now validates explicitly declared
+      generated-caption transforms. AI-Toolkit's evidence-scoped projections
+      continue to use identity-preserving generated captions and the same
+      selected media, native settings, commands, optimizer behavior, and
+      publications. This migration does not claim a new runtime path.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e7fbad4cd272e6455ae369e982db76c8480b5d873527a0e046a5d834af39acf9
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c8e52a2538ec44d8afa5993ed5bd5d7b51d8532e18936f25494adea6adc9ec72
+  - id: musubi-owned-extra-args-and-caption-verifier-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Reject exact and argparse-abbreviated adapter-owned flags in extra_args,
+      and extend the shared handoff verifier for generated-caption transforms.
+      Recorded successful Musubi commands contain no conflicting extra_args and
+      use JSONL caption references rather than generated caption files, so their
+      inputs, native settings, optimizer behavior, and artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0d0d921164306f78b21b7b97b9cbc36d9d8d49446f7280593d497edc42b13093
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a93e340f2b4f191eceb91a19c74c0faf746c9dab92b1123aa1d36108e192d241
+  - id: sd-scripts-owned-extra-args-and-caption-loader-existing-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Reject exact and argparse-abbreviated adapter-owned dataset/caption flags,
+      and materialize the pinned DreamBooth loader's effective caption text with
+      an explicitly verified transform. Recorded successful SD1 captions are
+      single-line and their commands contain no conflicting extra_args, so the
+      selected text, native TOML, optimizer behavior, Resume, and publication
+      evidence are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 20f757d0a62c074325d07826d52879865f179a920a951441dbbaa47771fe57a8
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 666ae26034ee8cbde74958844a83db290bf258e203763b4c7e3688c5195c6aae
   - id: ai-toolkit-closed-local-input-mounts-existing-evidence-2026-09-28
     backend: ai-toolkit
     reason: >-

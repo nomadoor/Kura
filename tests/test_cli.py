@@ -1502,7 +1502,7 @@ class RunPlanTests(unittest.TestCase):
                             "fp8_base": True,
                             "gradient_checkpointing": True,
                             "save_every_n_steps": 100,
-                            "extra_args": ["--blocks_to_swap", "3"],
+                            "blocks_to_swap": 3,
                         }
                     },
                     },
@@ -1921,11 +1921,12 @@ class RunPlanTests(unittest.TestCase):
                         "recipe": {"steps": 3000},
             "backend": {"name": "musubi-tuner", "config": {
                     "save_every_n_steps": 100,
-                    "extra_args": ["--save_last_n_steps", "300"],
+                    "save_last_n_steps": 300,
                 }
             },
         }
         _checkpoint_safety_preflight(run)
+        run["backend"]["config"].pop("save_last_n_steps")
         run["backend"]["config"]["extra_args"] = ["--save_last_n_epochs=2"]
         _checkpoint_safety_preflight(run)
 
@@ -4104,7 +4105,7 @@ class MusubiBackendTests(unittest.TestCase):
                     "target_step": 40,
                     "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
                 }
-                with self.assertRaisesRegex(ValueError, "constant scheduler"):
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
                     command_musubi_tuner(run)
 
     def test_musubi_rejects_duplicate_value_flags_in_extra_args(self) -> None:
@@ -4113,8 +4114,21 @@ class MusubiBackendTests(unittest.TestCase):
             "--blocks_to_swap", "2", "--blocks_to_swap=3",
         ]
 
-        with self.assertRaisesRegex(ValueError, "duplicates --blocks_to_swap"):
+        with self.assertRaisesRegex(ValueError, "adapter-owned flag.*--blocks_to_swap"):
             command_musubi_tuner(run)
+
+    def test_musubi_extra_args_cannot_override_adapter_owned_flags_or_abbreviate_them(self) -> None:
+        for extra_args in (
+            ["--dataset_config", "/workspace/datasets/unsafe.toml"],
+            ["--dataset_conf=/workspace/datasets/unsafe.toml"],
+            ["--output_dir", "/workspace/datasets/unsafe-output"],
+            ["--res", "/workspace/artifacts/training-state/unsafe/payload"],
+        ):
+            with self.subTest(extra_args=extra_args):
+                run = self._run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                    command_musubi_tuner(run)
 
     def test_musubi_resume_rejects_invalid_state_save_cadence_cleanly(self) -> None:
         for cadence in ("10", True, 0, -1):
@@ -4211,13 +4225,17 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_rejects_recipe_duplicates_in_extra_args(self) -> None:
         run = self._run()
         run["backend"]["config"]["extra_args"] = ["--max_train_steps=2"]
-        with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
+        with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
             command_musubi_tuner(run)
 
     def test_command_musubi_only_adds_memory_saving_flags_when_explicit(self) -> None:
         run = self._run()
-        run["backend"]["config"]["gradient_checkpointing"] = True
-        run["backend"]["config"]["extra_args"] = ["--fp8_base", "--fp8_scaled", "--blocks_to_swap", "4"]
+        run["backend"]["config"].update({
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "blocks_to_swap": 4,
+        })
 
         script = command_musubi_tuner(run)["argv"][2]
 
@@ -4244,7 +4262,10 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_rejects_h2d_block_swap_without_gradient_checkpointing(self) -> None:
         run = self._run()
-        run["backend"]["config"]["extra_args"] = ["--blocks_to_swap", "4", "--block_swap_h2d_only"]
+        run["backend"]["config"].update({
+            "blocks_to_swap": 4,
+            "block_swap_h2d_only": True,
+        })
 
         with self.assertRaisesRegex(ValueError, "H2D-only block swap requires explicit gradient_checkpointing"):
             command_musubi_tuner(run)
@@ -4318,7 +4339,7 @@ class MusubiBackendTests(unittest.TestCase):
         run["backend"]["config"].update({
                 "model_version": "klein-base-9b",
                 "gradient_checkpointing": True,
-                "extra_args": ["--gradient_accumulation_steps", "4"],
+                "gradient_accumulation_steps": 4,
             })
 
         script = command_musubi_tuner(run)["argv"][2]

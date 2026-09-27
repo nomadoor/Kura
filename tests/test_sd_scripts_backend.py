@@ -613,6 +613,19 @@ class SdScriptsBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "duplicates"):
                     command_sd_scripts(run)
 
+    def test_extra_args_cannot_abbreviate_or_override_dataset_caption_fields(self) -> None:
+        for extra_args in (
+            ["--dataset_conf=/workspace/datasets/unsafe.toml"],
+            ["--caption_pref", "untracked"],
+            ["--caption_dropout_rate", "0.5"],
+            ["--shuffle_caption"],
+        ):
+            with self.subTest(extra_args=extra_args):
+                run = base_run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                    command_sd_scripts(run)
+
     def test_every_generated_option_is_adapter_owned(self) -> None:
         generated: set[str] = set()
         runs = [base_run("sd15"), base_run("sdxl"), base_run("flux1"), base_run("anima", "lora"), base_run("anima", "controlnet_lllite")]

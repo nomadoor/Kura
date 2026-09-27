@@ -828,9 +828,7 @@ class MonitorProjectionTests(unittest.TestCase):
                         "backend:",
                         "  name: musubi-tuner",
                         "  config:",
-                        "    extra_args:",
-                        "      - --gradient_accumulation_steps",
-                        "      - '2'",
+                        "    gradient_accumulation_steps: 2",
                         "    batch_size: 1",
                     ]
                 ),

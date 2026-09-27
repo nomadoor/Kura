@@ -955,7 +955,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             root = Path(directory)
             run = json.loads(json.dumps(base))
             run["backend"]["config"].update({"blocks_to_swap": 1, "extra_args": ["--blocks_to_swap", "2"]})
-            with self.assertRaisesRegex(ValueError, "duplicates backend.config.extra_args"):
+            with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
                 BACKENDS["musubi-tuner"].compile(run, root / "args", root, False)
 
             run = json.loads(json.dumps(base))
@@ -965,7 +965,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "gradient_checkpointing": True,
                 "extra_args": ["--block_swap_h2d_only"],
             })
-            with self.assertRaisesRegex(ValueError, "duplicates backend.config.extra_args"):
+            with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
                 BACKENDS["musubi-tuner"].compile(run, root / "h2d", root, False)
 
     def test_declared_ordinary_values_reach_each_adapter_artifact(self) -> None:

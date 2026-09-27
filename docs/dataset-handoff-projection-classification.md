@@ -55,7 +55,7 @@ does not mean retaining the old directory-selection syntax.
 | Musubi: group-specific repeats | **B**, after C3 | Typed group-to-repeat mapping; every group maps to a view/block and repeat enters identity. Otherwise require explicit flattening. | Preserve existing authored repeat semantics through migration; infer nothing from paths. |
 | Musubi: author-supplied native dataset JSONL/config selects samples | **C as first-class source** | First-class compile uses manifest rows and Kura-generated native files. Equivalent native data is migrated; unverifiable selection stays escape-only. | **Current surface replaced:** `dataset_config`, H3 `source=*jsonl`, and `paired_jsonl` may no longer independently select files. Current capabilities remain mandatory only where representable by manifest plus typed options. |
 | Musubi: custom `command` / native source | **C: retained escape hatch** | Keep visibly unverified and outside equivalence claims. | Retained, not promoted. |
-| sd-scripts: one ungrouped image set with effective captions, one subset | **A**, after C1 | Generate one image view and TOML subset; account for all targets/captions. | Preserve basic SD1/SDXL/FLUX/Anima LoRA paths. |
+| sd-scripts: one ungrouped image set with effective captions, one subset | **A**, after C1 | Generate one image view and TOML subset; account for all targets/captions. Match the pinned DreamBooth caption-file loader explicitly: without wildcard, use the stripped first line; with wildcard, remove blank lines, strip each remaining line, and preserve their order for the trainer's random choice. Reject a caption that is empty after this transform. Freeze the chosen transform and generated text in input identity and plan data. | Preserve basic SD1/SDXL/FLUX/Anima LoRA paths. |
 | sd-scripts: captions in a separate folder with the same logical sample name | **B**, implemented on this branch | Manifest owns effective caption; adapter creates same-stem trainer layout; core proves the effective caption association independent of its source folder. | **Mandatory preservation:** current `caption_subdir` capability is replaced by typed captions, not dropped. |
 | sd-scripts: conditioning/control images in a separate folder | **B**, implemented on this branch | Typed target/condition references form one association and exact paired layout. | **Mandatory preservation:** Anima ControlNet-LLLite `conditioning_subdir` claim. Runtime evidence remains separate. |
 | sd-scripts: multiple concepts/groups, subsets, or datasets from one manifest dataset | **B**, implemented on this branch | Each group/subset maps to a view with explicit positive repeat/settings; core proves per-view and global coverage. | **Mandatory preservation:** reviewed multi-subset configuration remains possible, but directory selection is replaced. |
@@ -64,6 +64,15 @@ does not mean retaining the old directory-selection syntax.
 | sd-scripts: `image_subdir`, `caption_subdir`, `conditioning_subdir` select samples | **C as first-class selectors** | Selection/pairing moves to manifest. Converter may generate equivalent directories but cannot treat these fields as an independent inventory. | **Current surface replaced:** existing run files require migration. Corresponding capabilities remain mandatory through typed roles/groups. |
 | sd-scripts: video, audio, arbitrary references, or unsupported role | **C** | Name the unrepresentable row and role. | No current sd-scripts first-class claim is removed. |
 | sd-scripts: custom `command` | **C: retained escape hatch** | Keep outside manifest-equivalence claims. | Retained for other upstream modes. |
+
+The sd-scripts caption rule above is grounded in pinned commit `6721028`.
+`library/dreambooth_dataset.py:90-111` reads caption files with Python universal
+newline handling; without wildcard it selects and strips only the first physical
+line, while wildcard mode strips each nonempty physical line and joins them in
+order. `library/dataset.py:501-545` subsequently applies the configured
+prefix/suffix and either chooses a wildcard line or again keeps the first line.
+Kura materializes the first loader result, records the selected transform, and
+rejects an empty result before execution.
 
 The AI-Toolkit video rows above are grounded in pinned commit `31ddc709`.
 `toolkit/config_modules.py:1065-1104` defines `num_frames`, `fps`, `do_i2v`,

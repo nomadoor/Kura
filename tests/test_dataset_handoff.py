@@ -172,7 +172,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertTrue((root / view["links"][0]["path"]).is_symlink())
             self.assertEqual(
                 (root / view["files"][0]["path"]).read_text(encoding="utf-8"),
-                "caption\n",
+                "caption",
             )
             parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
             self.assertEqual(parsed, projected["native"])
@@ -192,7 +192,10 @@ class DatasetHandoffTests(unittest.TestCase):
                 "subsets": [{
                     "group": None,
                     "settings": {"num_repeats": 2, "caption_extension": ".txt"},
-                    "caption_processing": {"caption_extension": ".txt"},
+                    "caption_processing": {
+                        "caption_extension": ".txt",
+                        "caption_transform": "first-line-strip",
+                    },
                     "cache_settings": {},
                 }],
             })
@@ -270,8 +273,101 @@ class DatasetHandoffTests(unittest.TestCase):
             )
             view = lock["views"][0]
             self.assertEqual(len(view["files"]), 1)
-            self.assertEqual(view["files"][0]["text"], "caption\n")
+            self.assertEqual(view["files"][0]["text"], "caption")
             self.assertTrue(view["files"][0]["path"].endswith(".txt"))
+
+    def test_sd_scripts_freezes_the_pinned_caption_file_transform(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sd15",
+                    "mode": "lora",
+                    "dataset_config": {"datasets": [{"subsets": [
+                        {"dataset_id": "tiny", "num_repeats": 1},
+                    ]}]},
+                },
+            }
+            (root / "datasets" / "tiny" / "a.txt").write_text(
+                "  first\u2028still first  \nignored second line\n", encoding="utf-8",
+            )
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+
+            projected = lock["semantic"]["projection"][0]
+            self.assertEqual(
+                projected["policy"]["subsets"][0]["caption_processing"]["caption_transform"],
+                "first-line-strip",
+            )
+            self.assertEqual(
+                projected["views"][0]["entries"][1]["caption_transform"],
+                "first-line-strip",
+            )
+            self.assertEqual(
+                lock["views"][0]["files"][0]["text"], "first\u2028still first",
+            )
+
+    def test_sd_scripts_wildcard_caption_transform_preserves_only_nonempty_stripped_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sd15",
+                    "mode": "lora",
+                    "dataset_config": {"datasets": [{"subsets": [{
+                        "dataset_id": "tiny", "num_repeats": 1, "enable_wildcard": True,
+                    }]}]},
+                },
+            }
+            (root / "datasets" / "tiny" / "a.txt").write_text(
+                " first choice \n\n second choice \n", encoding="utf-8",
+            )
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+
+            projected = lock["semantic"]["projection"][0]
+            self.assertEqual(
+                projected["policy"]["subsets"][0]["caption_processing"]["caption_transform"],
+                "nonempty-lines-strip",
+            )
+            self.assertEqual(
+                lock["views"][0]["files"][0]["text"],
+                "first choice\nsecond choice",
+            )
+
+    def test_sd_scripts_rejects_a_caption_that_is_empty_after_pinned_loading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {
+                "name": "sd-scripts",
+                "config": {
+                    "architecture": "sd15",
+                    "mode": "lora",
+                    "dataset_config": {"datasets": [{"subsets": [
+                        {"dataset_id": "tiny", "num_repeats": 1},
+                    ]}]},
+                },
+            }
+            (root / "datasets" / "tiny" / "a.txt").write_text(
+                "   \nsecond line is ignored\n", encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "sample 'a'.*empty.*first-line-strip"):
+                freeze_dataset_handoff(
+                    run, root, resolved, backend="sd-scripts",
+                    project=lambda selection: project_sd_scripts_dataset(run, selection),
+                )
 
     def test_sd_scripts_projects_lllite_target_caption_and_control_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -481,6 +577,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 "caption_prefix": "dataset",
                 "caption_dropout_rate": 0.15,
                 "caption_dropout_every_n_epochs": 0,
+                "caption_transform": "first-line-strip",
             })
             self.assertEqual(policy["subsets"][0]["cache_settings"], {"cache_info": True})
 

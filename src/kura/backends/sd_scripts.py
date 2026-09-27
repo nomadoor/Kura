@@ -13,7 +13,7 @@ from kura.backends.sd_scripts_datasets import (
     write_sd_scripts_dataset_config,
 )
 from kura.backends.sd_scripts_models import explicit_model_paths, sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
-from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _script_command, _truthy
+from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _reject_owned_extra_args, _script_command, _truthy
 from kura.container_scripts import script_source
 from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
 from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
@@ -94,6 +94,17 @@ OWNED_FLAGS = {
     "--qwen_image_vae_2d", "--vae_chunk_size", "--unet_lr", "--text_encoder_lr1", "--text_encoder_lr2",
     "--cond_emb_dim", "--lllite_mlp_dim", "--lllite_target_layers", "--lllite_cond_dim", "--lllite_cond_resblocks",
     "--lllite_dropout", "--lllite_multiplier", "--lllite_cond_in_channels", "--lllite_use_aspp",
+    # The generated dataset TOML owns these values even when a pinned trainer
+    # parser also exposes a command-line fallback for them.
+    "--train_data_dir", "--conditioning_data_dir", "--dataset_class", "--cache_info",
+    "--batch_size", "--resolution", "--enable_bucket", "--bucket_no_upscale",
+    "--min_bucket_reso", "--max_bucket_reso", "--bucket_reso_steps",
+    "--caption_extension", "--caption_extention", "--shuffle_caption",
+    "--caption_separator", "--keep_tokens", "--keep_tokens_separator",
+    "--secondary_separator", "--enable_wildcard", "--caption_prefix",
+    "--caption_suffix", "--caption_dropout_rate", "--caption_dropout_every_n_epochs",
+    "--caption_tag_dropout_rate", "--token_warmup_min", "--token_warmup_step",
+    "--color_aug", "--flip_aug", "--random_crop", "--network_multiplier",
 }
 CONFIG_KEYS = {
     "architecture", "mode", "command", "model_paths", "model_downloads", "dataset_config", "flatten_groups", "output_name", "env", "extra_args",
@@ -118,9 +129,9 @@ BOOLEAN_CONFIG_KEYS = {
 
 def _extra_args(native: dict[str, Any]) -> list[str]:
     values = _shared_extra_args(native, backend_label="sd-scripts")
-    duplicated = sorted({item.split("=", 1)[0] for item in values if item.startswith("--")} & OWNED_FLAGS)
-    if duplicated:
-        raise ValueError("sd-scripts extra_args duplicates adapter-owned flag(s): " + ", ".join(duplicated))
+    _reject_owned_extra_args(
+        values, owned_flags=OWNED_FLAGS, backend_label="sd-scripts",
+    )
     return values
 
 

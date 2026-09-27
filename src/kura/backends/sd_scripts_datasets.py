@@ -16,6 +16,7 @@ from kura.backends.dataset_profiles import (
     select_projection_profile,
 )
 from kura.backends.shared import _datasets, _toml_scalar
+from kura.dataset_handoff import project_caption_text
 from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
 
@@ -23,9 +24,24 @@ from kura.run_envelope import backend_config
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 
 
+def _sd_scripts_caption_projection(
+    caption: dict[str, Any], transform: str, *, sample_id: str,
+) -> str:
+    """Match the pinned DreamBooth caption-file loader before materialization."""
+    text = caption.get("text")
+    if not isinstance(text, str):
+        raise ValueError(f"sd-scripts sample {sample_id!r} has no caption text")
+    projected = project_caption_text(text, transform)
+    if not projected:
+        raise ValueError(
+            f"sd-scripts sample {sample_id!r} caption is empty after {transform}"
+        )
+    return projected
+
+
 def _dreambooth_image_subset(
     run: dict[str, Any], dataset: dict[str, Any], samples: list[dict[str, Any]],
-    subset: dict[str, Any], *, view_name: str,
+    subset: dict[str, Any], *, view_name: str, caption_transform: str,
 ) -> dict[str, Any]:
     """Build one sd-scripts DreamBooth subset from explicit manifest rows."""
     dataset_id = str(dataset.get("id"))
@@ -42,8 +58,11 @@ def _dreambooth_image_subset(
         caption = sample.get("caption")
         suffix = Path(str(target.get("path"))).suffix.lower()
         assert isinstance(caption, dict) and isinstance(caption.get("text"), str)
+        caption_text = _sd_scripts_caption_projection(
+            caption, caption_transform, sample_id=str(sample.get("id")),
+        )
         content_tag = hashlib.sha256(json.dumps(
-            {"target": target.get("sha256"), "caption": caption["text"]},
+            {"target": target.get("sha256"), "caption": caption_text},
             ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()[:12]
         stem = f"{index:06d}-{content_tag}"
@@ -54,8 +73,9 @@ def _dreambooth_image_subset(
         })
         files.append({
             "path": f"{view_root}/{stem}{caption_extension}",
-            "text": caption["text"],
+            "text": caption_text,
             "input_id": caption["input_id"],
+            "caption_transform": caption_transform,
         })
         consumed.extend([target["input_id"], caption["input_id"]])
         bindings.append({
@@ -77,7 +97,7 @@ def _dreambooth_image_subset(
 
 def _lllite_control_subset(
     run: dict[str, Any], dataset: dict[str, Any], samples: list[dict[str, Any]],
-    subset: dict[str, Any], *, view_name: str,
+    subset: dict[str, Any], *, view_name: str, caption_transform: str,
 ) -> dict[str, Any]:
     """Build one paired Anima LLLite subset with sibling role roots."""
     dataset_id = str(dataset.get("id"))
@@ -98,11 +118,14 @@ def _lllite_control_subset(
         control = next(item for item in references if item.get("role") == "control")
         caption = sample.get("caption")
         assert isinstance(caption, dict) and isinstance(caption.get("text"), str)
+        caption_text = _sd_scripts_caption_projection(
+            caption, caption_transform, sample_id=str(sample.get("id")),
+        )
         content_tag = hashlib.sha256(json.dumps(
             {
                 "target": target.get("sha256"),
                 "control": control.get("sha256"),
-                "caption": caption["text"],
+                "caption": caption_text,
             },
             ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()[:12]
@@ -114,7 +137,12 @@ def _lllite_control_subset(
             {"path": target_path, "target": f"/workspace/datasets/{dataset_id}/{target['path']}", "input_id": target["input_id"]},
             {"path": control_path, "target": f"/workspace/datasets/{dataset_id}/{control['path']}", "input_id": control["input_id"]},
         ])
-        files.append({"path": caption_path, "text": caption["text"], "input_id": caption["input_id"]})
+        files.append({
+            "path": caption_path,
+            "text": caption_text,
+            "input_id": caption["input_id"],
+            "caption_transform": caption_transform,
+        })
         image_inputs.extend([target["input_id"], caption["input_id"]])
         control_inputs.append(control["input_id"])
         consumed.extend([target["input_id"], control["input_id"], caption["input_id"]])
@@ -157,6 +185,10 @@ SD_SCRIPTS_PROJECTION_PROFILES = {
         "required_options": (),
         "native_options": {},
         "native_string_fields": (),
+        "caption_transforms": {
+            "default": "first-line-strip",
+            "wildcard": "nonempty-lines-strip",
+        },
         "codec": "dreambooth-image-subset",
     },
     "anima-lllite-image-control": {
@@ -172,6 +204,10 @@ SD_SCRIPTS_PROJECTION_PROFILES = {
         "required_options": (),
         "native_options": {},
         "native_string_fields": (),
+        "caption_transforms": {
+            "default": "first-line-strip",
+            "wildcard": "nonempty-lines-strip",
+        },
         "codec": "lllite-control-subset",
     },
 }
@@ -571,11 +607,19 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 or ".txt"
             )
             authored["caption_extension"] = caption_extension
+            caption_processing, cache_settings = _effective_sd_scripts_subset_semantics(
+                general, native_dataset, authored,
+            )
+            caption_transform = profile["caption_transforms"][
+                "wildcard" if caption_processing.get("enable_wildcard") is True else "default"
+            ]
+            caption_processing["caption_transform"] = caption_transform
             # Manifest group IDs are opaque author vocabulary, not path segments.
             view_name = "default" if len(resolved_subsets) == 1 else f"subset-{subset_index:03d}"
             report = codec["build"](
                 run, dataset, samples, authored,
                 view_name=view_name,
+                caption_transform=caption_transform,
             )
             subset_native = deepcopy(authored)
             image_root = report.get("role_roots", {}).get("image", report["view_root"])
@@ -620,9 +664,6 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 "bindings": report["bindings"],
             })
             all_consumed.extend(report["consumed"])
-            caption_processing, cache_settings = _effective_sd_scripts_subset_semantics(
-                general, native_dataset, subset_native,
-            )
             policy_subsets.append({
                 "group": group,
                 "settings": deepcopy(subset_native),

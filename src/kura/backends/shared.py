@@ -58,6 +58,28 @@ def _extra_args(override: dict[str, Any], *, backend_label: str) -> list[str]:
     return list(extra_args)
 
 
+def _reject_owned_extra_args(
+    arguments: list[str], *, owned_flags: set[str] | frozenset[str], backend_label: str,
+) -> None:
+    """Reject exact or argparse-abbreviated spellings of adapter-owned flags."""
+    duplicates: dict[str, str] = {}
+    for argument in arguments:
+        candidate = argument.split("=", 1)[0]
+        if not candidate.startswith("--"):
+            continue
+        matches = sorted(flag for flag in owned_flags if flag.startswith(candidate))
+        if matches:
+            duplicates[candidate] = matches[0]
+    if duplicates:
+        rendered = ", ".join(
+            candidate if candidate == owned else f"{candidate} (abbreviates {owned})"
+            for candidate, owned in sorted(duplicates.items())
+        )
+        raise ValueError(
+            f"{backend_label} extra_args duplicates adapter-owned flag(s): {rendered}"
+        )
+
+
 def _int_or_none(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
