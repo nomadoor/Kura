@@ -120,12 +120,16 @@ selection and projection validation.
 |---|---|---|---|
 | `ordinary-image` | `plain-image-jsonl` | Apply Python `str.strip()` explicitly before writing the JSONL caption, matching pinned Musubi directory-caption behavior. Record the profile and `caption_transform: strip` in plan and input identity. HunyuanVideo accepts one-frame targets through this same profile. HunyuanVideo 1.5 accepts them only for T2V; I2V image-only data is rejected because the pinned cache path would condition on the sole target frame itself. | `unsupported`; any selected audio input is unrepresentable. |
 | `flux-kontext-control` | `image-control-jsonl` | Same explicit `strip` rule. | `unsupported`; any selected audio input is unrepresentable. |
+| `hidream-i2i` | `image-control-jsonl` | Same explicit `strip` rule. HiDream `task=i2i` requires one or more control/reference images; `task=t2i` accepts none. | `unsupported`; any selected audio input is unrepresentable. |
 | `qwen-image-edit` | `image-control-jsonl` | Same explicit `strip` rule. Qwen-Image Edit `model_version=edit` requires exactly one control; `role_limits.control` is `(1, 1)`. | `unsupported`; any selected audio input is unrepresentable. |
 | `qwen-image-edit-multi-control` | `image-control-jsonl` | Same explicit `strip` rule. Edit-2509 and Edit-2511 accept one to three controls, so `role_limits.control` is `(1, 3)`. Multiple controls are emitted as contiguous `control_path_0` through `control_path_N`; three is the fixed documentation's confirmed upper bound even though the datasource can iterate farther. | `unsupported`; any selected audio input is unrepresentable. |
 | `flux2-image-references` | `image-control-jsonl` | Same explicit `strip` rule. FLUX.2 accepts one or more reference/control images. The fixed datasource, cache, and trainer consume a variable-length list and publish no finite model limit, so `role_limits.control` is explicitly `(1, unbounded)`. | `unsupported`; any selected audio input is unrepresentable. |
-| `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
+| `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Covers pinned official T2V/I2V and Wan 2.2 dual-DiT tasks. I2V obtains its conditioning image from the target video's first frame. Fun Control is excluded until its control-video codec lands. | `unsupported`; an audio input stops rather than being ignored. |
+| `wan-image` | `plain-image-jsonl` | Same explicit `strip` rule. Applies only to pinned `task=t2i-14B`. | `unsupported`; an audio input stops rather than being ignored. |
+| `wan-single-frame`, `wan-single-frame-intermediate` | `image-control-jsonl` | Same explicit `strip` rule. The pinned I2V one-frame task requires one control image; FLF2V intermediate-frame training requires two. Both require explicit clean and target indices. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at HunyuanVideo's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video-1.5-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at the profile's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
+| `kandinsky5-video` | `plain-video-jsonl` | Same explicit `strip` rule. Covers the pinned Lite/Pro T2V and I2V video task table, requires explicit 1+4n `target_frames`, and preflights at the pinned dataset loader's 24fps before acquisition. I2V conditioning comes from first/last latents cached from the target video. Image Lite tasks remain outside this row. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-video` | `plain-video-jsonl` | Same explicit `strip` rule. Normal FramePack fixes `fp_latent_window_size = 9`, defaults to the pinned recommendation `frame_extraction = full` with the frozen upstream default `max_frames = 129`, and preflights at 30fps before acquisition. Authors may explicitly choose `head` or another positive `max_frames`. `head` requires every `target_frames` value to be on the 1+4n grid and at least 37 frames; `full` mirrors the pinned full-video rounding and requires the resulting clip to contain one complete latent window. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-f1-video` | `plain-video-jsonl` | Same dataset rules as `framepack-video`; the separate profile freezes the F1 sampling mode in input identity. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-single-frame` | `image-control-jsonl` | Same explicit `strip` rule. The verified standard path requires exactly one target and one control image and freezes `fp_latent_window_size = 9`, `fp_1f_clean_indices = [0]`, `fp_1f_target_index = 9`, and `fp_1f_no_post = false` unless the three one-frame dataset options are explicitly set. | `unsupported`; an audio input stops rather than being ignored. |
@@ -147,15 +151,24 @@ separate manifest input. An image dataset becomes a one-frame video at lines
 25-29, so using it for I2V would make the only target frame also be the complete
 conditioning input. Kura therefore permits image rows for HV1.5 T2V only.
 
+The pinned HiDream trainer rejects an I2I task without cached control tokens and
+rejects control tokens under T2I (`src/musubi_tuner/hidream_o1_train_network.py`,
+lines 562-571). Its image datasource accepts a variable number of JSONL
+`control_path_N` values (`src/musubi_tuner/dataset/image_video_dataset.py`,
+lines 357-386), which is why the profile has no finite control upper bound.
+
 The pinned generic HunyuanVideo cache accepts an image item as a one-frame
 target, so ordinary HunyuanVideo images are part of `ordinary-image`. Wan image
 datasets are not covered by that profile: their meaning depends on the explicit
-T2I or Single Frame task/mode and needs a separate verified profile. FramePack
+T2I or Single Frame task/mode and therefore has separate verified profiles.
+Pinned `docs/wan_1f.md`, lines 104-118 ties the one-control path to I2V 14B and
+the two-control intermediate path to FLF2V. Fun Control still needs a generated
+video-control JSONL codec and remains a separate unimplemented slice. FramePack
 image datasets are likewise not ordinary images: pinned FramePack one-frame
 training requires an image target plus a start/control image and `--one_frame`
 (`docs/framepack_1f.md`, lines 86-100). This slice implements the standard
 one-target/one-control FramePack path and the explicit multiple-control 1f-mc
-and kisekaeichi path; Wan Single Frame remains mandatory migration work. Pinned
+and kisekaeichi path. Pinned
 `docs/dataset_config.md`, lines 499-540 defines the standard one-frame values,
 requires the number of control images to equal `fp_1f_clean_indices`, and
 documents the multiple-control variants without a finite upper bound. Pinned
@@ -167,6 +180,13 @@ Pinned `docs/dataset_config.md`, lines 349-372 and
 are carried in each control image's alpha channel. The separate mask-file
 arguments documented in `docs/framepack_1f.md`, lines 240-262 are inference
 inputs, not fields accepted by the training dataset.
+Kandinsky 5 uses the shared video datasource at 24fps
+(`src/musubi_tuner/dataset/image_video_dataset.py`, lines 694-712) and its
+latent cache records the target video's first and last latents for I2V
+conditioning (`src/musubi_tuner/kandinsky5_cache_latents.py`, lines 74-91).
+The profile enumerates every video task key in the pinned
+`src/musubi_tuner/kandinsky5/configs.py`; it intentionally does not claim the
+Lite image task keys that the pinned documentation calls unsupported.
 FramePack normal/F1 remains a video dataset path. At pinned Musubi `4e7c714`,
 both paths require at least one full
 9-latent window: `src/musubi_tuner/fpack_cache_latents.py`, lines 60-69 raises

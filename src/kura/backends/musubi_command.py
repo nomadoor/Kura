@@ -17,7 +17,7 @@ from kura.backends.musubi_datasets import (
     _write_musubi_dataset_config,
 )
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
-from kura.backends.musubi_native_selectors import wan_native_selector
+from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
@@ -510,7 +510,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         argv = _script_command(commands, override, run)
     elif architecture == "wan":
         dit, vae, t5 = _require_paths(paths, ("dit", "vae", "t5"))
-        task = str(override.get("task") or "t2v-1.3B")
+        task = musubi_native_task(architecture, override.get("task"))
         native_selector = wan_native_selector(task)
         clip = paths.get("clip")
         one_frame = _truthy(override.get("one_frame"))
@@ -594,7 +594,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         dit, video_vae, audio_vae, text_encoder = _require_paths(
             paths, ("dit", "video_vae", "audio_vae", "text_encoder")
         )
-        task = str(override.get("task") or "t2va")
+        task = musubi_native_task(architecture, override.get("task"))
         if task not in {"t2va", "fl2va", "ref2va"}:
             raise ValueError("Musubi MiniMax-H3 task must be t2va, fl2va, or ref2va")
         loss_method = str(override.get("h3_loss_method") or "guidance")
@@ -1003,7 +1003,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     elif architecture in ("hidream_o1", "hidream"):
         dit = _require_paths(paths, ("dit",))[0]
         model_type = str(override.get("model_type") or "full")
-        task = str(override.get("task") or "t2i")
+        task = musubi_native_task(architecture, override.get("task"))
         train_argv = [
             *common, "src/musubi_tuner/hidream_o1_train_network.py",
             "--dit", dit,
@@ -1100,7 +1100,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "hunyuan_video_1_5":
-        task = str(override.get("task") or "t2v")
+        task = musubi_native_task(architecture, override.get("task"))
         required = ("dit", "vae", "text_encoder", "byt5", "image_encoder") if task == "i2v" else ("dit", "vae", "text_encoder", "byt5")
         required_paths = dict(zip(required, _require_paths(paths, required)))
         train_argv = [
@@ -1216,7 +1216,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         argv = _script_command(commands, override, run)
     elif architecture in ("kandinsky5", "kandinsky_5"):
         dit, vae, text_encoder_qwen, text_encoder_clip = _require_paths(paths, ("dit", "vae", "text_encoder_qwen", "text_encoder_clip"))
-        task = str(override.get("task") or "k5-pro-t2v-5s-sd")
+        task = musubi_native_task(architecture, override.get("task"))
         train_argv = [
             *common, "src/musubi_tuner/kandinsky5_train_network.py",
             "--mixed_precision", "bf16",

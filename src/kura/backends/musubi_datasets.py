@@ -12,6 +12,7 @@ from typing import Any
 
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
 from kura.backends.musubi_models import _musubi_model_version
+from kura.backends.musubi_native_selectors import musubi_native_task, musubi_native_task_profile
 from kura.backends.shared import _datasets, _toml_scalar, _truthy
 from kura.fsio import atomic_write_text
 
@@ -255,7 +256,9 @@ MUSUBI_PROJECTION_PROFILES = {
         "shape": "image",
         "mode": {"one_frame": False},
         "mode_by_architecture": {
-            "hunyuan_video_1_5": {"effective_task": "t2v"},
+            "hidream_o1": {"task_dataset_kind": "image"},
+            "hidream": {"task_dataset_kind": "image"},
+            "hunyuan_video_1_5": {"task_conditioning": "text"},
             "qwen_image": {"model_version": "original"},
             "qwen": {"model_version": "original"},
         },
@@ -275,6 +278,17 @@ MUSUBI_PROJECTION_PROFILES = {
         "native_options": {"no_resize_control": False, "control_resolution": None},
         "native_string_fields": (),
         "role_limits": {"target": (1, 1), "control": (1, 1)},
+    },
+    "hidream-i2i": {
+        "codec": "image-control-jsonl",
+        "architectures": ("hidream_o1", "hidream"),
+        "shape": "image-control",
+        "mode": {"one_frame": False, "task_dataset_kind": "image-control"},
+        "allowed_options": ("control_resolution", "no_resize_control"),
+        "required_options": (),
+        "native_options": {"no_resize_control": False, "control_resolution": None},
+        "native_string_fields": (),
+        "role_limits": {"target": (1, 1), "control": (1, None)},
     },
     "qwen-image-edit": {
         "codec": "image-control-jsonl",
@@ -312,7 +326,40 @@ MUSUBI_PROJECTION_PROFILES = {
     "wan-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
         "architectures": ("wan",),
+        "mode": {"one_frame": False, "task_dataset_kind": "video"},
         "target_fps": 16.0,
+    },
+    "wan-image": {
+        "codec": "plain-image-jsonl",
+        "architectures": ("wan",),
+        "shape": "image",
+        "mode": {"one_frame": False, "task_dataset_kind": "image"},
+        "allowed_options": (), "required_options": (), "native_options": {},
+        "native_string_fields": (), "role_limits": {"target": (1, 1)},
+    },
+    "wan-single-frame": {
+        "codec": "image-control-jsonl",
+        "architectures": ("wan",),
+        "shape": "image-control",
+        "mode": {"one_frame": True, "task_one_frame_kind": "single"},
+        "allowed_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "required_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "native_options": {"fp_1f_clean_indices": None, "fp_1f_target_index": None},
+        "native_string_fields": (),
+        "control_index_option": "fp_1f_clean_indices",
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+    },
+    "wan-single-frame-intermediate": {
+        "codec": "image-control-jsonl",
+        "architectures": ("wan",),
+        "shape": "image-control",
+        "mode": {"one_frame": True, "task_one_frame_kind": "intermediate"},
+        "allowed_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "required_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "native_options": {"fp_1f_clean_indices": None, "fp_1f_target_index": None},
+        "native_string_fields": (),
+        "control_index_option": "fp_1f_clean_indices",
+        "role_limits": {"target": (1, 1), "control": (2, 2)},
     },
     "hunyuan-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
@@ -322,6 +369,12 @@ MUSUBI_PROJECTION_PROFILES = {
     "hunyuan-video-1.5-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
         "architectures": ("hunyuan_video_1_5",),
+        "target_fps": 24.0,
+    },
+    "kandinsky5-video": {
+        **_PLAIN_VIDEO_PROFILE_COMMON,
+        "architectures": ("kandinsky5", "kandinsky_5"),
+        "mode": {"one_frame": False, "task_dataset_kind": "video"},
         "target_fps": 24.0,
     },
     "framepack-video": {
@@ -374,7 +427,7 @@ MUSUBI_PROJECTION_PROFILES = {
         "codec": "h3-one-frame-control-jsonl",
         "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image-control",
-        "mode": {"one_frame": True, "effective_task": "fl2va"},
+        "mode": {"one_frame": True, "task_conditioning": "first-last-frame"},
         "allowed_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
         "required_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
         "native_options": {"fp_1f_clean_indices": None, "fp_1f_target_index": None},
@@ -386,27 +439,27 @@ MUSUBI_PROJECTION_PROFILES = {
         "codec": "plain-image-jsonl",
         "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image",
-        "mode": {"one_frame": True, "effective_task": "t2va", "teacher_conditions": None},
+        "mode": {"one_frame": True, "task_conditioning": "text", "teacher_conditions": None},
         "allowed_options": (), "required_options": (), "native_options": {},
         "native_string_fields": (), "role_limits": {"target": (1, 1)},
     },
     "h3-video-t2va": {
         **_H3_VIDEO_PROFILE_COMMON,
         "codec": "h3-video-jsonl",
-        "mode": {"one_frame": False, "effective_task": "t2va", "teacher_conditions": None},
+        "mode": {"one_frame": False, "task_conditioning": "text", "teacher_conditions": None},
         "role_limits": {"target": (1, 1), "audio": (0, 1)},
     },
     "h3-video-fl2va": {
         **_H3_VIDEO_PROFILE_COMMON,
         "codec": "h3-video-jsonl",
-        "mode": {"one_frame": False, "effective_task": "fl2va", "teacher_conditions": None},
+        "mode": {"one_frame": False, "task_conditioning": "first-last-frame", "teacher_conditions": None},
         "role_limits": {"target": (1, 1), "audio": (0, 1)},
     },
     "h3-video-ref2va": {
         **_H3_VIDEO_PROFILE_COMMON,
         "codec": "h3-reference-jsonl",
         "shape": "video-references",
-        "mode": {"one_frame": False, "effective_task": "ref2va", "teacher_conditions": None},
+        "mode": {"one_frame": False, "task_conditioning": "references", "teacher_conditions": None},
         "role_limits": {
             "target": (1, 1), "audio": (0, 1), "reference": (0, 12),
             "reference-muted": (0, 3), "reference-audio": (0, 3),
@@ -416,7 +469,7 @@ MUSUBI_PROJECTION_PROFILES = {
         "codec": "h3-one-frame-reference-jsonl",
         "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image-references",
-        "mode": {"one_frame": True, "effective_task": "ref2va", "teacher_conditions": None},
+        "mode": {"one_frame": True, "task_conditioning": "references", "teacher_conditions": None},
         "allowed_options": (), "required_options": (), "native_options": {},
         "native_string_fields": (),
         "role_limits": {
@@ -427,19 +480,19 @@ MUSUBI_PROJECTION_PROFILES = {
     "h3-video-teacher-endpoints": {
         **_H3_VIDEO_PROFILE_COMMON,
         "codec": "h3-video-jsonl",
-        "mode": {"one_frame": False, "effective_task": "fl2va", "teacher_conditions": "first,last"},
+        "mode": {"one_frame": False, "task_conditioning": "first-last-frame", "teacher_conditions": "first,last"},
         "role_limits": {"target": (1, 1), "audio": (0, 1)},
     },
     "h3-video-teacher-ref": {
         **_H3_VIDEO_PROFILE_COMMON,
         "codec": "h3-video-jsonl",
-        "mode": {"one_frame": False, "effective_task": "t2va", "teacher_conditions": "ref"},
+        "mode": {"one_frame": False, "task_conditioning": "text", "teacher_conditions": "ref"},
         "role_limits": {"target": (1, 1), "audio": (0, 1)},
     },
     "h3-one-frame-teacher-subject-ref": {
         "codec": "h3-one-frame-reference-jsonl", "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image-references",
-        "mode": {"one_frame": True, "effective_task": "ref2va", "teacher_conditions": "subject_ref"},
+        "mode": {"one_frame": True, "task_conditioning": "references", "teacher_conditions": "subject_ref"},
         "allowed_options": (), "required_options": (), "native_options": {},
         "native_string_fields": (),
         "role_limits": {"target": (1, 1), "reference": (1, 9)},
@@ -472,7 +525,7 @@ _MUSUBI_DATASET_OPTION_FIELDS = {
 
 def _musubi_h3_effective_task(override: dict[str, Any]) -> str:
     """Return the task required by the H3 latent dataset contract."""
-    task = str(override.get("task") or "t2va")
+    task = musubi_native_task("minimax_h3", override.get("task"))
     if str(override.get("h3_loss_method") or "guidance") != "teacher_matching":
         return task
     return {
@@ -480,6 +533,27 @@ def _musubi_h3_effective_task(override: dict[str, Any]) -> str:
         "ref": "t2va",
         "subject_ref": "ref2va",
     }.get(str(override.get("h3_teacher_conditions") or ""), task)
+
+
+def _musubi_projection_task(architecture: str, override: dict[str, Any]) -> str:
+    """Resolve the same architecture-specific task default used by the command."""
+    if architecture in {"minimax_h3", "minimaxh3"}:
+        return _musubi_h3_effective_task(override)
+    return musubi_native_task(architecture, override.get("task"))
+
+
+def _musubi_projection_task_mode(
+    architecture: str, effective_task: str,
+) -> dict[str, str | None]:
+    """Expose task properties, rather than native task names, to profile matching."""
+    task = musubi_native_task_profile(architecture, effective_task)
+    if task is None:
+        return {}
+    return {
+        "task_dataset_kind": task.dataset_kind,
+        "task_conditioning": task.conditioning,
+        "task_one_frame_kind": task.one_frame_kind,
+    }
 
 
 def _musubi_dataset_options(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -611,11 +685,12 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
         )
 
     architecture = _musubi_architecture(run)
+    effective_task = _musubi_projection_task(architecture, override)
     mode = {
         "one_frame": _truthy(override.get("one_frame")),
         "f1": _truthy(override.get("f1")),
         "model_version": _musubi_model_version(run),
-        "effective_task": _musubi_h3_effective_task(override),
+        **_musubi_projection_task_mode(architecture, effective_task),
         "teacher_conditions": (
             str(override.get("h3_teacher_conditions"))
             if str(override.get("h3_loss_method") or "guidance") == "teacher_matching"
