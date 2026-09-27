@@ -7,6 +7,27 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-caption-policy-and-flattening-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      Effective inherited caption and cache settings are now recorded explicitly
+      in semantic input identity, and explicit flatten_groups uses the existing
+      N-subset resolver. The evidence-scoped ungrouped SD 1.5 run does not use
+      flattening, and its generated native TOML, effective caption bytes and
+      controls, repeat, command, optimizer, Resume, and publication behavior are
+      unchanged. This migration does not claim runtime evidence for grouped,
+      flattened, LLLite, SDXL, FLUX.1, or Anima paths.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e8177ad847ecc610f68f470895b507356770828e5b4e82d63665911c3e95106f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 3782638beae1427e038787c971bad7327ce0a4b6b83ac99cd84430b1df25ef82
   - id: sd-scripts-shared-profile-contract-sd15-evidence-2026-09-27
     backend: sd-scripts
     reason: >-

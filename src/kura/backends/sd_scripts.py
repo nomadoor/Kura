@@ -96,7 +96,7 @@ OWNED_FLAGS = {
     "--lllite_dropout", "--lllite_multiplier", "--lllite_cond_in_channels", "--lllite_use_aspp",
 }
 CONFIG_KEYS = {
-    "architecture", "mode", "command", "model_paths", "model_downloads", "dataset_config", "output_name", "env", "extra_args",
+    "architecture", "mode", "command", "model_paths", "model_downloads", "dataset_config", "flatten_groups", "output_name", "env", "extra_args",
     "network_dim", "network_alpha", "learning_rate", "optimizer_type", "lr_scheduler", "mixed_precision",
     "gradient_checkpointing", "gradient_accumulation_steps", "network_train_unet_only", "fp8_base", "blocks_to_swap",
     "cache_latents", "cache_latents_to_disk", "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk",

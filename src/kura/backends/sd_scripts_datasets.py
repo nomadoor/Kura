@@ -424,8 +424,15 @@ def _validated_dataset_config(
     return general, cleaned_datasets
 
 
+def _sd_scripts_flatten_groups(native: dict[str, Any]) -> bool:
+    if native.get("flatten_groups") not in (None, True, False):
+        raise ValueError("sd-scripts backend.config.flatten_groups must be true or false")
+    return native.get("flatten_groups") is True
+
+
 def validate_sd_scripts_dataset_config(run: dict[str, Any]) -> None:
     native = backend_config(run, "sd-scripts")
+    _sd_scripts_flatten_groups(native)
     if native.get("command") is None:
         _validated_dataset_config(native)
 
@@ -482,11 +489,73 @@ def _sd_scripts_authored_subsets(
     return deepcopy(native_dataset), deepcopy(authored_subsets)
 
 
+def _resolve_sd_scripts_projection_subsets(
+    dataset: dict[str, Any], authored_subsets: list[dict[str, Any]], *,
+    flatten_groups: bool,
+) -> list[tuple[str | None, dict[str, Any], list[dict[str, Any]]]]:
+    """Resolve one manifest dataset to N subsets; the ordinary case is N=1."""
+    manifest_groups = {
+        str(sample["group"]) for sample in dataset.get("samples", [])
+        if sample.get("group") is not None
+    }
+    configured_groups = [subset.get("group") for subset in authored_subsets]
+    if flatten_groups:
+        if len(authored_subsets) != 1 or configured_groups != [None]:
+            raise ValueError(
+                "sd-scripts flatten_groups requires exactly one authored subset without group; "
+                "group-specific subset settings cannot be flattened implicitly"
+            )
+        return [(None, deepcopy(authored_subsets[0]), list(dataset.get("samples", [])))]
+    if manifest_groups:
+        if any(group is None for group in configured_groups):
+            raise ValueError("sd-scripts grouped manifest requires an explicit group on every subset")
+        if len(set(configured_groups)) != len(configured_groups):
+            raise ValueError("sd-scripts manifest group maps to more than one subset")
+        if set(configured_groups) != manifest_groups:
+            raise ValueError(
+                f"sd-scripts authored subset groups {sorted(configured_groups)!r} do not match "
+                f"manifest groups {sorted(manifest_groups)!r}"
+            )
+    elif len(authored_subsets) != 1 or configured_groups != [None]:
+        raise ValueError("sd-scripts ungrouped manifest requires exactly one subset without group")
+    return [
+        (
+            subset.get("group"),
+            deepcopy(subset),
+            [
+                sample for sample in dataset.get("samples", [])
+                if sample.get("group") == subset.get("group")
+            ],
+        )
+        for subset in authored_subsets
+    ]
+
+
+def _effective_sd_scripts_subset_semantics(
+    general: dict[str, Any], dataset: dict[str, Any], subset: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Freeze effective caption and cache meaning after native inheritance."""
+    effective = {**general, **dataset, **subset}
+    caption_keys = {
+        key for key, spec in _SUBSET_NATIVE_FIELDS.items()
+        if spec.get("plan_group") == "caption"
+    } | {"caption_extension"}
+    cache_keys = {
+        key for key, spec in _SUBSET_NATIVE_FIELDS.items()
+        if spec.get("plan_group") == "cache"
+    }
+    return (
+        {key: deepcopy(effective[key]) for key in sorted(caption_keys) if key in effective},
+        {key: deepcopy(effective[key]) for key in sorted(cache_keys) if key in effective},
+    )
+
+
 def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
     """Project the first sd-scripts manifest path through a named folder codec."""
     native = backend_config(run, "sd-scripts")
     if native.get("command") is not None:
         raise ValueError("sd-scripts explicit command is outside first-class manifest projection")
+    flatten_groups = _sd_scripts_flatten_groups(native)
     general, cleaned_datasets = _validated_dataset_config(native)
     declared_ids = [str(item.get("id")) for item in selection.get("datasets", [])]
     projected: list[dict[str, Any]] = []
@@ -498,35 +567,17 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         native_dataset, authored_subsets = _sd_scripts_authored_subsets(
             dataset_id, declared_ids, cleaned_datasets,
         )
-        manifest_groups = {
-            str(sample["group"]) for sample in dataset.get("samples", [])
-            if sample.get("group") is not None
-        }
-        configured_groups = [subset.get("group") for subset in authored_subsets]
-        if manifest_groups:
-            if any(group is None for group in configured_groups):
-                raise ValueError("sd-scripts grouped manifest requires an explicit group on every subset")
-            if len(set(configured_groups)) != len(configured_groups):
-                raise ValueError("sd-scripts manifest group maps to more than one subset")
-            if set(configured_groups) != manifest_groups:
-                raise ValueError(
-                    f"sd-scripts authored subset groups {sorted(configured_groups)!r} do not match "
-                    f"manifest groups {sorted(manifest_groups)!r}"
-                )
-        elif len(authored_subsets) != 1 or configured_groups != [None]:
-            raise ValueError("sd-scripts ungrouped manifest requires exactly one subset without group")
+        resolved_subsets = _resolve_sd_scripts_projection_subsets(
+            dataset, authored_subsets, flatten_groups=flatten_groups,
+        )
 
         subset_natives: list[dict[str, Any]] = []
         views: list[dict[str, Any]] = []
         all_consumed: list[str] = []
         policy_subsets: list[dict[str, Any]] = []
-        for subset_index, authored in enumerate(authored_subsets):
-            group = authored.pop("group", None)
+        for subset_index, (group, authored, samples) in enumerate(resolved_subsets):
+            authored.pop("group", None)
             authored.pop("dataset_id", None)
-            samples = [
-                sample for sample in dataset.get("samples", [])
-                if sample.get("group") == group
-            ]
             caption_extension = str(
                 authored.get("caption_extension")
                 or native_dataset.get("caption_extension")
@@ -535,7 +586,7 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             )
             authored["caption_extension"] = caption_extension
             # Manifest group IDs are opaque author vocabulary, not path segments.
-            view_name = "default" if len(authored_subsets) == 1 else f"subset-{subset_index:03d}"
+            view_name = "default" if len(resolved_subsets) == 1 else f"subset-{subset_index:03d}"
             report = codec["build"](
                 run, dataset, samples, authored,
                 view_name=view_name,
@@ -583,7 +634,15 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 "bindings": report["bindings"],
             })
             all_consumed.extend(report["consumed"])
-            policy_subsets.append({"group": group, "settings": deepcopy(subset_native)})
+            caption_processing, cache_settings = _effective_sd_scripts_subset_semantics(
+                general, native_dataset, subset_native,
+            )
+            policy_subsets.append({
+                "group": group,
+                "settings": deepcopy(subset_native),
+                "caption_processing": caption_processing,
+                "cache_settings": cache_settings,
+            })
         dataset_native = {**native_dataset, "subsets": subset_natives}
         complete_native: dict[str, Any] = {
             **({"general": deepcopy(general)} if general else {}),
@@ -618,6 +677,7 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 "general": deepcopy(general),
                 "dataset_settings": deepcopy(native_dataset),
                 "subsets": policy_subsets,
+                **({"flatten_groups": True} if flatten_groups else {}),
             },
             "views": views,
         })

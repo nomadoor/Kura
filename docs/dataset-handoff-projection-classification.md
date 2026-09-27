@@ -58,8 +58,8 @@ does not mean retaining the old directory-selection syntax.
 | sd-scripts: captions in a separate folder with the same logical sample name | **B**, implemented on this branch | Manifest owns effective caption; adapter creates same-stem trainer layout; core proves the effective caption association independent of its source folder. | **Mandatory preservation:** current `caption_subdir` capability is replaced by typed captions, not dropped. |
 | sd-scripts: conditioning/control images in a separate folder | **B**, implemented on this branch | Typed target/condition references form one association and exact paired layout. | **Mandatory preservation:** Anima ControlNet-LLLite `conditioning_subdir` claim. Runtime evidence remains separate. |
 | sd-scripts: multiple concepts/groups, subsets, or datasets from one manifest dataset | **B**, implemented on this branch | Each group/subset maps to a view with explicit positive repeat/settings; core proves per-view and global coverage. | **Mandatory preservation:** reviewed multi-subset configuration remains possible, but directory selection is replaced. |
-| sd-scripts: explicit `flatten_groups: true` | **B**, after C3 | One subset/view consumes all rows with one explicit positive repeat and identical settings; conflicting group overrides fail. | New explicit behavior; no silent flattening. |
-| sd-scripts: caption augmentation/dropout/cache controls | **B** | Keep reviewed controls in semantic projection; reject combinations that change effective captions incompatibly. | Preserve existing validated controls; they do not select files. |
+| sd-scripts: explicit `flatten_groups: true` | **B**, implemented on this branch | The ordinary N-subset resolver produces one subset/view that consumes all rows with one explicit positive repeat; authored group-specific subsets fail instead of being merged. | New explicit behavior; no silent flattening. |
+| sd-scripts: caption augmentation/dropout/cache controls | **B**, implemented on this branch | Freeze the effective inherited caption and cache settings per subset in semantic projection; reject text-cache combinations that cannot preserve dynamic caption behavior. | Preserve existing validated controls; they do not select files. Current-identity runtime/cache evidence remains separate. |
 | sd-scripts: `image_subdir`, `caption_subdir`, `conditioning_subdir` select samples | **C as first-class selectors** | Selection/pairing moves to manifest. Converter may generate equivalent directories but cannot treat these fields as an independent inventory. | **Current surface replaced:** existing run files require migration. Corresponding capabilities remain mandatory through typed roles/groups. |
 | sd-scripts: video, audio, arbitrary references, or unsupported role | **C** | Name the unrepresentable row and role. | No current sd-scripts first-class claim is removed. |
 | sd-scripts: custom `command` | **C: retained escape hatch** | Keep outside manifest-equivalence claims. | Retained for other upstream modes. |
@@ -82,12 +82,12 @@ claim is silently reassigned to a different test.
 | Tier-1 compile: FLUX.1 LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
 | Tier-1 compile: Anima LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
 | Tier-1 compile: Anima ControlNet-LLLite | Delete the obsolete stage-lock assertion; the typed-control converter is now covered by manifest projection tests, while current-identity runtime evidence remains pending. |
-| LLLite caption dropout with text-cache | Delete for now; this is part of the migration-pending LLLite/caption-controls slice. |
-| Zero `caption_dropout_every_n_epochs` emission | Delete for now; native caption controls are restored through verified manifest TOML in the caption-controls slice. |
+| LLLite caption dropout with text-cache | Restored at the authored-config validation seam; dynamic caption behavior that the text cache cannot preserve is rejected before projection. |
+| Zero `caption_dropout_every_n_epochs` emission | Restored through verified manifest TOML and the effective per-subset semantic caption policy. |
 | Runtime logging of caption dropout from the stage lock | Delete permanently with the stage lock; the projection policy and realization replace this record. |
-| Caption controls inherited at `general` | Delete for now; verified native inheritance is migration pending. |
-| Caption controls inherited at `datasets[]` | Delete for now; verified native inheritance is migration pending. |
-| Caption controls inherited at `subsets[]` | Delete for now; verified native inheritance is migration pending. |
+| Caption controls inherited at `general` | Restored; effective inherited values are frozen per subset in input identity. |
+| Caption controls inherited at `datasets[]` | Restored; effective inherited values are frozen per subset in input identity. |
+| Caption controls inherited at `subsets[]` | Restored; effective inherited values are frozen per subset in input identity. |
 | Two-level TOML plus frozen stage lock | Delete permanently; the run view and projection lock replace the backend stage lock. |
 | Dataset-level caption extension selecting a staged sidecar | Delete the selector test; manifest caption identity replaces directory selection, with extension emission covered in the typed-caption slice. |
 | Implicit default repeat recorded by stage logging | Delete permanently; manifest subsets require an explicit positive repeat. |

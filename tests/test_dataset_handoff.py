@@ -181,6 +181,8 @@ class DatasetHandoffTests(unittest.TestCase):
                 "subsets": [{
                     "group": None,
                     "settings": {"num_repeats": 2, "caption_extension": ".txt"},
+                    "caption_processing": {"caption_extension": ".txt"},
+                    "cache_settings": {},
                 }],
             })
             self.assertEqual(
@@ -355,6 +357,134 @@ class DatasetHandoffTests(unittest.TestCase):
                 write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
                 projected["native"],
             )
+
+    def test_sd_scripts_flatten_groups_uses_the_single_n_subset_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {"name": "sd-scripts", "config": {
+                "architecture": "sdxl",
+                "mode": "lora",
+                "flatten_groups": True,
+                "dataset_config": {"datasets": [{"subsets": [{
+                    "dataset_id": "tiny", "num_repeats": 2,
+                }]}]},
+            }}
+            dataset = root / "datasets" / "tiny"
+            (dataset / "b.png").write_bytes(b"image-b")
+            (dataset / "b.txt").write_text("style\n", encoding="utf-8")
+            rows = [
+                {"id": "a", "group": "person", "files": [{"type": "file", "role": "target", "path": "a.png"}], "caption": {"file": {"type": "file", "path": "a.txt"}}},
+                {"id": "b", "group": "style", "files": [{"type": "file", "role": "target", "path": "b.png"}], "caption": {"file": {"type": "file", "path": "b.txt"}}},
+            ]
+            (dataset / "items.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+            )
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(len(projected["native"]["datasets"][0]["subsets"]), 1)
+            self.assertEqual(len(projected["views"]), 1)
+            self.assertEqual(len(projected["views"][0]["links"]), 2)
+            self.assertEqual(len(projected["views"][0]["files"]), 2)
+            self.assertTrue(projected["policy"]["flatten_groups"])
+            self.assertEqual(projected["policy"]["subsets"][0]["group"], None)
+            self.assertEqual(lock["semantic"]["projection"][0]["policy"], projected["policy"])
+            destination = resolved / "sd-scripts" / "dataset.toml"
+            self.assertEqual(
+                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
+                projected["native"],
+            )
+
+    def test_sd_scripts_flatten_groups_rejects_group_specific_subset_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {"name": "sd-scripts", "config": {
+                "architecture": "sdxl",
+                "mode": "lora",
+                "flatten_groups": True,
+                "dataset_config": {"datasets": [{"subsets": [
+                    {"dataset_id": "tiny", "group": "person", "num_repeats": 2},
+                    {"dataset_id": "tiny", "group": "style", "num_repeats": 1},
+                ]}]},
+            }}
+            dataset = root / "datasets" / "tiny"
+            (dataset / "b.png").write_bytes(b"image-b")
+            (dataset / "b.txt").write_text("style\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text("".join(json.dumps(row) + "\n" for row in [
+                {"id": "a", "group": "person", "files": [{"type": "file", "role": "target", "path": "a.png"}], "caption": {"file": {"type": "file", "path": "a.txt"}}},
+                {"id": "b", "group": "style", "files": [{"type": "file", "role": "target", "path": "b.png"}], "caption": {"file": {"type": "file", "path": "b.txt"}}},
+            ]), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "flatten_groups.*one authored subset without group"):
+                freeze_dataset_handoff(
+                    run, root, resolved, backend="sd-scripts",
+                    project=lambda selection: project_sd_scripts_dataset(run, selection),
+                )
+
+    def test_sd_scripts_freezes_effective_caption_and_cache_settings_in_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run, resolved = self.make_run(root)
+            run["backend"] = {"name": "sd-scripts", "config": {
+                "architecture": "sd15",
+                "mode": "lora",
+                "dataset_config": {
+                    "general": {"shuffle_caption": True, "caption_prefix": "general"},
+                    "datasets": [{
+                        "caption_prefix": "dataset",
+                        "subsets": [{
+                            "dataset_id": "tiny",
+                            "num_repeats": 1,
+                            "caption_dropout_rate": 0.15,
+                            "caption_dropout_every_n_epochs": 0,
+                            "cache_info": True,
+                        }],
+                    }],
+                },
+            }}
+
+            lock = freeze_dataset_handoff(
+                run, root, resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(run, selection),
+            )
+            policy = lock["semantic"]["projection"][0]["policy"]
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(
+                projected["native"]["datasets"][0]["subsets"][0][
+                    "caption_dropout_every_n_epochs"
+                ],
+                0,
+            )
+            self.assertEqual(policy["subsets"][0]["caption_processing"], {
+                "caption_extension": ".txt",
+                "shuffle_caption": True,
+                "caption_prefix": "dataset",
+                "caption_dropout_rate": 0.15,
+                "caption_dropout_every_n_epochs": 0,
+            })
+            self.assertEqual(policy["subsets"][0]["cache_settings"], {"cache_info": True})
+
+            changed = deepcopy(run)
+            changed["id"] = "changed"
+            changed["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0][
+                "caption_dropout_rate"
+            ] = 0.25
+            changed_resolved = root / "runs" / "changed" / "resolved"
+            changed_resolved.mkdir(parents=True)
+            changed_lock = freeze_dataset_handoff(
+                changed, root, changed_resolved, backend="sd-scripts",
+                project=lambda selection: project_sd_scripts_dataset(changed, selection),
+            )
+            self.assertNotEqual(lock["semantic"], changed_lock["semantic"])
 
     def test_sd_scripts_profiles_use_shared_media_shapes_and_caption_contract(self) -> None:
         self.assertEqual(SD_SCRIPTS_PROJECTION_PROFILES["ordinary-image-lora"]["shape"], "image")

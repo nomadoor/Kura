@@ -217,6 +217,29 @@ class SdScriptsBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, rf"{key}.*text-encoder cache"):
                     validate_sd_scripts_dataset_config(run)
 
+    def test_inherited_caption_controls_are_checked_against_text_encoder_cache(self) -> None:
+        for level in ("general", "dataset"):
+            with self.subTest(level=level):
+                run = base_run("sd15", "lora")
+                native = run["backend"]["config"]
+                native["cache_text_encoder_outputs_to_disk"] = True
+                target = (
+                    native["dataset_config"]["general"]
+                    if level == "general"
+                    else native["dataset_config"]["datasets"][0]
+                )
+                target["shuffle_caption"] = True
+                with self.assertRaisesRegex(ValueError, r"shuffle_caption.*text-encoder cache"):
+                    validate_sd_scripts_dataset_config(run)
+
+    def test_flatten_groups_is_a_typed_first_class_sd_scripts_field(self) -> None:
+        capabilities = backend_capabilities("sd-scripts")
+        self.assertIn("flatten_groups", capabilities["config_fields"])
+        run = base_run()
+        run["backend"]["config"]["flatten_groups"] = "yes"
+        with self.assertRaisesRegex(ValueError, r"flatten_groups must be true or false"):
+            validate_sd_scripts_dataset_config(run)
+
     def test_sd_scripts_capabilities_expose_nested_dataset_contract(self) -> None:
         nested = backend_capabilities("sd-scripts")["nested_config_fields"]
         for path in (
