@@ -23,6 +23,10 @@ from kura.run_envelope import backend_config, resume_intent, training_state_poli
 
 AI_TOOLKIT_DATASET_FIELD_SPECS = {
     "control_subdir": {"type": "relative-path"},
+    "generated_controls": {
+        "type": "string-list",
+        "choices": ("depth", "pose", "line", "inpaint", "mask"),
+    },
     "num_frames": {"type": "integer", "minimum": 1},
     "fps": {"type": "integer", "minimum": 1},
     "do_audio": {"type": "boolean"},
@@ -64,6 +68,7 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "mode": {
             "do_i2v": False,
             "do_audio": False,
+            "generated_controls": False,
         },
         "mode_by_architecture": {},
         "role_limits": {"target": (1, 1)},
@@ -71,6 +76,78 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "required_options": (),
         "native_options": {},
         "codec": "media-folder",
+    },
+    "flex2-generated-control": {
+        "architectures": ("flex2",),
+        "shape": "image",
+        "caption": "required",
+        "mode": {"do_i2v": False, "do_audio": False, "generated_controls": True},
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1)},
+        "allowed_options": ("generated_controls",),
+        "required_options": ("generated_controls",),
+        "native_options": {"generated_controls": "controls"},
+        "codec": "media-folder",
+        "control_selection": "generated-random-one-per-step",
+    },
+    "single-control-image": {
+        "architectures": ("flux_kontext", "hidream_e1", "qwen_image_edit"),
+        "shape": "image-control",
+        "caption": "required",
+        "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "paired-media-folders",
+        "control_selection": "all-in-order",
+    },
+    "qwen-edit-plus-control": {
+        "architectures": ("qwen_image_edit_plus",),
+        "shape": "image-control",
+        "caption": "required",
+        "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, 3)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "paired-media-folders",
+        "control_selection": "all-in-order",
+    },
+    "multi-control-image": {
+        "architectures": (
+            "flux2", "flux2_klein_4b", "flux2_klein_9b", "krea2",
+            "mageflow_edit", "minimax_h3_ref2va", "qwen_image_2",
+        ),
+        "shape": "image-control",
+        "caption": "required",
+        "mode": {"do_i2v": False, "do_audio": False, "generated_controls": False},
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, None)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "paired-media-folders",
+        "control_selection": "all-in-order",
+    },
+    "flex2-random-control": {
+        "architectures": ("flex2",),
+        "shape": "image-control",
+        "caption": "required",
+        "mode": {
+            "do_i2v": False,
+            "do_audio": False,
+            "generated_controls": (False, True),
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, None)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "codec": "paired-media-folders",
+        "control_selection": "random-one-per-step",
     },
 }
 
@@ -81,6 +158,16 @@ AI_TOOLKIT_ARCHITECTURE_REQUIREMENTS = {
     },
     "zimage_l2p": {
         "extras_name_or_path": {"kind": "nonempty-string"},
+    },
+}
+
+
+AI_TOOLKIT_PROFILE_REQUIREMENTS = {
+    ("krea2", "ordinary-image"): {
+        "model_edit": {"kind": "literal-default", "value": False},
+    },
+    ("krea2", "multi-control-image"): {
+        "model_edit": {"kind": "literal", "value": True},
     },
 }
 
@@ -115,6 +202,7 @@ def _select_ai_toolkit_projection_profile(
             mode={
                 "do_i2v": dataset_config.get("do_i2v") is True,
                 "do_audio": dataset_config.get("do_audio") is True,
+                "generated_controls": bool(dataset_config.get("generated_controls")),
             },
             shape_examples=examples,
             role_cardinalities=cardinalities,
@@ -237,6 +325,36 @@ def _validate_ai_toolkit_architecture_requirements(
     return resolved
 
 
+def _validate_ai_toolkit_profile_requirements(
+    architecture: str, profile: str, override: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate model-mode settings selected by one dataset profile."""
+    native_config = override.get("native_config")
+    native_model = native_config.get("model") if isinstance(native_config, dict) else None
+    native_model_kwargs = (
+        native_model.get("model_kwargs") if isinstance(native_model, dict) else None
+    )
+    if isinstance(native_model_kwargs, dict) and "edit" in native_model_kwargs:
+        raise ValueError(
+            "AI-Toolkit backend.config.native_config.model.model_kwargs.edit is not a "
+            "first-class escape hatch; use typed backend.config.model_edit"
+        )
+    resolved: dict[str, Any] = {}
+    for field, requirement in AI_TOOLKIT_PROFILE_REQUIREMENTS.get(
+        (architecture, profile), {},
+    ).items():
+        value = override.get(field, requirement.get("value") if requirement["kind"] == "literal-default" else None)
+        expected = requirement["value"]
+        if requirement["kind"] not in {"literal", "literal-default"} or value != expected:
+            rendered = str(expected).lower() if isinstance(expected, bool) else repr(expected)
+            raise ValueError(
+                f"AI-Toolkit architecture {architecture!r} profile {profile!r} "
+                f"requires backend.config.{field}={rendered}"
+            )
+        resolved[field] = value
+    return resolved
+
+
 def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
     """Project the first lossless manifest path supported by the pinned image loader."""
     override = _ai_toolkit_backend_override(run)
@@ -249,21 +367,43 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             "AI-Toolkit backend.config.dataset_folder cannot select a first-class manifest dataset"
         )
     dataset_config = override.get("dataset_config")
-    if isinstance(dataset_config, dict) and dataset_config:
+    if dataset_config is None:
+        dataset_config = {}
+    if not isinstance(dataset_config, dict):
+        raise ValueError("AI-Toolkit backend.config.dataset_config must be a mapping")
+    unsupported_dataset_options = sorted(set(dataset_config) - {"generated_controls"})
+    if unsupported_dataset_options:
         raise ValueError(
-            "AI-Toolkit manifest image projection does not yet support backend.config.dataset_config"
+            "AI-Toolkit manifest image projection does not yet support "
+            "backend.config.dataset_config key(s): " + ", ".join(unsupported_dataset_options)
         )
     architecture = _ai_toolkit_projection_architecture(run)
+    generated_controls = dataset_config.get("generated_controls", [])
+    if generated_controls and architecture != "flex2":
+        raise ValueError(
+            "AI-Toolkit backend.config.dataset_config.generated_controls is verified only for flex2"
+        )
     architecture_requirements = _validate_ai_toolkit_architecture_requirements(
         architecture, override,
     )
+    checked_profile_requirements: dict[str, dict[str, Any]] = {}
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
         profile_name, profile = _select_ai_toolkit_projection_profile(
             architecture=architecture,
             dataset=dataset,
-            dataset_config={},
+            dataset_config=dataset_config,
         )
+        if profile_name not in checked_profile_requirements:
+            checked_profile_requirements[profile_name] = (
+                _validate_ai_toolkit_profile_requirements(
+                    architecture, profile_name, override,
+                )
+            )
+        effective_requirements = {
+            **architecture_requirements,
+            **checked_profile_requirements[profile_name],
+        }
         blocks = _resolve_ai_toolkit_projection_blocks(
             dataset, {}, flatten_groups=False,
         )
@@ -271,11 +411,15 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         dataset = blocks[0].dataset
         dataset_id = dataset.get("id")
         view_root = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        control_mode = profile["shape"] == "image-control"
+        target_root = f"{view_root}/target" if control_mode else view_root
         consumed: list[str] = []
         unrepresentable: list[dict[str, str]] = []
         links: list[dict[str, str]] = []
         files: list[dict[str, str]] = []
         bindings: list[dict[str, Any]] = []
+        control_inputs: dict[int, list[str]] = {}
+        control_counts: dict[str, int] = {}
         for index, sample in enumerate(dataset.get("samples", [])):
             group = sample.get("group")
             if group is not None:
@@ -286,6 +430,8 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 continue
             references = sample.get("files", [])
             targets = [item for item in references if item.get("role") == "target"]
+            controls = [item for item in references if item.get("role") == "control"]
+            control_counts[str(sample.get("id"))] = len(controls)
             caption = sample.get("caption")
             sample_tag_payload = {
                 "files": [
@@ -302,15 +448,9 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()[:12]
-            for reference in references:
-                role = reference.get("role")
+            for reference in targets:
                 suffix = Path(str(reference.get("path"))).suffix.lower()
-                if role != "target":
-                    unrepresentable.append({
-                        "input_id": reference["input_id"],
-                        "reason": f"role {role!r} is unsupported by the initial AI-Toolkit image mode",
-                    })
-                elif len(targets) != 1:
+                if len(targets) != 1:
                     unrepresentable.append({
                         "input_id": reference["input_id"],
                         "reason": "AI-Toolkit image mode requires exactly one target per sample",
@@ -321,13 +461,40 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                         "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit image mode",
                     })
                 else:
-                    destination = f"{view_root}/{index:06d}-{content_tag}{suffix}"
+                    destination = f"{target_root}/{index:06d}-{content_tag}{suffix}"
                     links.append({
                         "path": destination,
                         "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
                         "input_id": reference["input_id"],
                     })
                     consumed.append(reference["input_id"])
+            for control_index, reference in enumerate(controls):
+                suffix = Path(str(reference.get("path"))).suffix.lower()
+                if not control_mode:
+                    unrepresentable.append({
+                        "input_id": reference["input_id"],
+                        "reason": "control input requires a verified AI-Toolkit control profile",
+                    })
+                elif suffix not in _AI_TOOLKIT_IMAGE_SUFFIXES:
+                    unrepresentable.append({
+                        "input_id": reference["input_id"],
+                        "reason": f"control extension {suffix!r} is unsupported by AI-Toolkit image control mode",
+                    })
+                else:
+                    control_root = f"{view_root}/control-{control_index}"
+                    links.append({
+                        "path": f"{control_root}/{index:06d}-{content_tag}{suffix}",
+                        "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
+                        "input_id": reference["input_id"],
+                    })
+                    consumed.append(reference["input_id"])
+                    control_inputs.setdefault(control_index, []).append(reference["input_id"])
+            for reference in references:
+                if reference.get("role") not in {"target", "control"}:
+                    unrepresentable.append({
+                        "input_id": reference["input_id"],
+                        "reason": f"role {reference.get('role')!r} is unsupported by AI-Toolkit image mode",
+                    })
             if not isinstance(caption, dict) or caption.get("text") is None:
                 input_id = caption.get("input_id") if isinstance(caption, dict) else None
                 unrepresentable.append({
@@ -335,7 +502,7 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     "reason": "an absent caption cannot yet be represented losslessly in AI-Toolkit image mode",
                 })
             elif len(targets) == 1 and Path(str(targets[0].get("path"))).suffix.lower() in _AI_TOOLKIT_IMAGE_SUFFIXES:
-                caption_path = f"{view_root}/{index:06d}-{content_tag}.txt"
+                caption_path = f"{target_root}/{index:06d}-{content_tag}.txt"
                 files.append({
                     "path": caption_path,
                     "text": caption["text"],
@@ -344,19 +511,59 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 consumed.append(caption["input_id"])
                 links_for_sample = [item for item in links if item["input_id"] == targets[0]["input_id"]]
                 if links_for_sample:
+                    members = [
+                        {"input_id": targets[0]["input_id"], "root": target_root},
+                        {"input_id": caption["input_id"], "root": target_root},
+                    ]
+                    members.extend(
+                        {
+                            "input_id": reference["input_id"],
+                            "root": f"{view_root}/control-{control_index}",
+                            "slot": control_index,
+                        }
+                        for control_index, reference in enumerate(controls)
+                    )
                     bindings.append({
                         "rule": "same-relative-stem",
                         "key": f"{index:06d}-{content_tag}",
-                        "members": [
-                            {"input_id": targets[0]["input_id"], "root": view_root},
-                            {"input_id": caption["input_id"], "root": view_root},
-                        ],
+                        "members": members,
                     })
+        if architecture == "qwen_image_2" and len(set(control_counts.values())) > 1:
+            rendered = ", ".join(
+                f"{sample_id}={count}" for sample_id, count in sorted(control_counts.items())
+            )
+            raise ValueError(
+                "AI-Toolkit qwen_image_2 requires the same control slot count for every "
+                f"sample; observed {rendered}"
+            )
         semantic = {
             "caption_ext": ".txt",
             "cache_latents_to_disk": True,
+            **({"controls": list(generated_controls)} if generated_controls else {}),
         }
-        native_runtime = {"folder_path": f"/workspace/{view_root}"}
+        native_runtime: dict[str, Any] = {"folder_path": f"/workspace/{target_root}"}
+        if control_mode:
+            native_runtime["control_path"] = [
+                f"/workspace/{view_root}/control-{index}"
+                for index in sorted(control_inputs)
+            ]
+        consumers = [{
+            "id": "dataset",
+            "kind": "recursive-directory",
+            "native_pointer": "/folder_path",
+            "path": target_root,
+            "input_ids": [
+                input_id for input_id in consumed
+                if input_id not in {item for values in control_inputs.values() for item in values}
+            ],
+        }]
+        consumers.extend({
+            "id": f"control-{index}",
+            "kind": "recursive-directory",
+            "native_pointer": f"/control_path/{index}",
+            "path": f"{view_root}/control-{index}",
+            "input_ids": control_inputs[index],
+        } for index in sorted(control_inputs))
         projected.append({
             "id": dataset_id,
             "consumed": consumed,
@@ -364,11 +571,22 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             "semantic": semantic,
             "native_runtime": native_runtime,
             "native": {**semantic, **native_runtime},
-            "native_string_fields": ["/caption_ext"],
+            "native_string_fields": [
+                "/caption_ext",
+                *(f"/controls/{index}" for index in range(len(generated_controls))),
+            ],
             "policy": {
                 "profile": profile_name,
                 "codec": profile["codec"],
-                "architecture_requirements": architecture_requirements,
+                "architecture_requirements": effective_requirements,
+                **(
+                    {"control_selection": profile["control_selection"]}
+                    if "control_selection" in profile else {}
+                ),
+                **(
+                    {"generated_controls": list(generated_controls)}
+                    if generated_controls else {}
+                ),
                 "block_groups": [block.group for block in blocks],
                 "block_settings": [
                     {"num_repeats": block.num_repeats} for block in blocks
@@ -380,14 +598,8 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 "links": links,
                 "files": files,
                 "native_files": [],
-                "write_roots": [{"path": view_root, "native_pointer": "/folder_path"}],
-                "consumers": [{
-                    "id": "dataset",
-                    "kind": "recursive-directory",
-                    "native_pointer": "/folder_path",
-                    "path": view_root,
-                    "input_ids": list(consumed),
-                }],
+                "write_roots": [{"path": target_root, "native_pointer": "/folder_path"}],
+                "consumers": consumers,
                 "repeat": 1,
                 "bindings": bindings,
             }],
@@ -412,6 +624,7 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
             )
     native_config = native.get("native_config") if isinstance(native.get("native_config"), dict) else {}
     native_model = native_config.get("model") if isinstance(native_config.get("model"), dict) else {}
+    native_model_kwargs = native_model.get("model_kwargs") if isinstance(native_model, dict) else None
     native_train = native_config.get("train") if isinstance(native_config.get("train"), dict) else {}
     model_arch = _ai_toolkit_projection_architecture(run, required=False) or ""
     bypass_guidance_embedding = native.get("bypass_guidance_embedding")
@@ -420,6 +633,14 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
     ):
         raise ValueError(
             "AI-Toolkit backend.config.bypass_guidance_embedding must be true or false"
+        )
+    model_edit = native.get("model_edit")
+    if model_edit is not None and not isinstance(model_edit, bool):
+        raise ValueError("AI-Toolkit backend.config.model_edit must be true or false")
+    if isinstance(native_model_kwargs, dict) and "edit" in native_model_kwargs:
+        raise ValueError(
+            "AI-Toolkit backend.config.native_config.model.model_kwargs.edit is not a "
+            "first-class escape hatch; use typed backend.config.model_edit"
         )
     extras_name_or_path = native.get("extras_name_or_path")
     if extras_name_or_path is not None and (
@@ -456,10 +677,25 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
             if not isinstance(value, bool):
                 raise ValueError(f"AI-Toolkit backend.config.dataset_config.{field} must be true or false")
             continue
+        if spec["type"] == "string-list":
+            if (
+                not isinstance(value, list)
+                or any(not isinstance(item, str) or item not in spec["choices"] for item in value)
+                or len(set(value)) != len(value)
+            ):
+                raise ValueError(
+                    f"AI-Toolkit backend.config.dataset_config.{field} must be a unique list "
+                    f"chosen from {list(spec['choices'])!r}"
+                )
+            continue
         if isinstance(value, bool) or not isinstance(value, int) or value < spec["minimum"]:
             raise ValueError(
                 f"AI-Toolkit backend.config.dataset_config.{field} must be an integer >= {spec['minimum']}"
             )
+    if dataset_config.get("generated_controls") and model_arch != "flex2":
+        raise ValueError(
+            "AI-Toolkit backend.config.dataset_config.generated_controls is verified only for flex2"
+        )
 
 
 def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
@@ -579,6 +815,7 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             if "bypass_guidance_embedding" in native
             else _nested(config, "train", "bypass_guidance_embedding")
         ),
+        "model_edit": native.get("model_edit"),
         "extras_name_or_path": (
             native.get("extras_name_or_path")
             if "extras_name_or_path" in native
@@ -658,15 +895,26 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
                 raise ValueError(f"AI-Toolkit frozen projection for dataset {dataset_id!r} has no native handoff")
             views = projected_dataset.get("views")
             view = views[0] if isinstance(views, list) and len(views) == 1 and isinstance(views[0], dict) else None
-            view_root = view.get("root") if isinstance(view, dict) else None
             consumers = view.get("consumers") if isinstance(view, dict) else None
-            consumer = consumers[0] if isinstance(consumers, list) and len(consumers) == 1 else None
+            control_paths = native_dataset.get("control_path", [])
+            if not isinstance(control_paths, list):
+                control_paths = [control_paths]
+            expected_consumers = {
+                "/folder_path": native_dataset.get("folder_path"),
+                **{
+                    f"/control_path/{index}": path
+                    for index, path in enumerate(control_paths)
+                },
+            }
+            actual_consumers = {
+                item.get("native_pointer"): f"/workspace/{item.get('path')}"
+                for item in consumers or [] if isinstance(item, dict)
+            }
             if (
-                not isinstance(consumer, dict)
-                or consumer.get("kind") != "recursive-directory"
-                or consumer.get("native_pointer") != "/folder_path"
-                or consumer.get("path") != view_root
-                or native_dataset.get("folder_path") != f"/workspace/{view_root}"
+                not isinstance(view, dict)
+                or not isinstance(consumers, list)
+                or any(item.get("kind") != "recursive-directory" for item in consumers)
+                or actual_consumers != expected_consumers
             ):
                 raise ValueError(
                     f"AI-Toolkit frozen projection for dataset {dataset_id!r} bypasses its run-owned view"
@@ -693,6 +941,9 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
             protected.append("model.arch (duplicates backend.config.model_arch)")
         if "extras_name_or_path" in override and isinstance(native_model, dict) and "extras_name_or_path" in native_model:
             protected.append("model.extras_name_or_path (duplicates backend.config.extras_name_or_path)")
+        native_model_kwargs = native_model.get("model_kwargs") if isinstance(native_model, dict) else None
+        if isinstance(native_model_kwargs, dict) and "edit" in native_model_kwargs:
+            protected.append("model.model_kwargs.edit (use backend.config.model_edit)")
         if protected:
             raise ValueError(
                 "AI-Toolkit backend.config.native_config overrides Kura-owned field(s): "
@@ -750,6 +1001,17 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
                         f"backend.config.native_config.{section}.{native_key}"
                     )
                 process.setdefault(section, {})[native_key] = deepcopy(override[authored_key])
+    if "model_edit" in override:
+        raw_model = native.get("model") if isinstance(native, dict) else None
+        raw_kwargs = raw_model.get("model_kwargs") if isinstance(raw_model, dict) else None
+        if isinstance(raw_kwargs, dict) and "edit" in raw_kwargs:
+            raise ValueError(
+                "AI-Toolkit backend.config.model_edit duplicates "
+                "backend.config.native_config.model.model_kwargs.edit"
+            )
+        process.setdefault("model", {}).setdefault("model_kwargs", {})["edit"] = deepcopy(
+            override["model_edit"]
+        )
     if override.get("resolution") is not None:
         for dataset in process.get("datasets", []):
             if isinstance(dataset, dict):

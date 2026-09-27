@@ -20,17 +20,19 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         migrations = yaml.safe_load((repository / "docs" / "adapter-source-identity-migrations.yaml").read_text(encoding="utf-8"))
         record = next(item for item in evidence["records"] if item["id"] == "ai-toolkit-sd1-publication-docker-2026-09-23")
         migration = next(item for item in migrations["records"] if item["id"] == "ai-toolkit-registered-selector-validation-sd1-2026-09-23")
+        latest = next(item for item in migrations["records"] if item["id"] == "ai-toolkit-ordered-control-slots-existing-evidence-2026-09-27")
 
         self.assertEqual(migration["backend"], record["backend"])
         self.assertIs(migration["behavior_changed"], False)
         self.assertEqual(migration["evidence_ids"], [record["id"]])
         self.assertEqual(migration["previous"]["value"], record["adapter_source"]["value"])
-        self.assertEqual(migration["replacement"]["value"], adapter_source_identity("ai-toolkit")["value"])
+        self.assertIn(record["id"], latest["evidence_ids"])
+        self.assertEqual(latest["replacement"]["value"], adapter_source_identity("ai-toolkit")["value"])
         self.assertTrue(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], migrations["records"]))
         for field, invalid in (("backend", "musubi-tuner"), ("behavior_changed", True), ("evidence_ids", [])):
             with self.subTest(field=field):
                 altered = deepcopy(migrations["records"])
-                item = next(entry for entry in altered if entry["id"] == migration["id"])
+                item = next(entry for entry in altered if entry["id"] == latest["id"])
                 item[field] = invalid
                 self.assertFalse(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], altered))
 

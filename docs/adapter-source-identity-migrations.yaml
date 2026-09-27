@@ -7,6 +7,72 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-ordered-control-slots-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      Core now verifies optional ordered slots when one manifest role must be
+      projected into several native directories, and the AI-Toolkit adapter adds
+      source-audited image-control profiles. The evidence-scoped SD1, SDXL, and
+      MiniMax-H3 runs use no repeated-role slot binding, so their selected bytes,
+      native dataset settings, command, optimizer, publication, and recovery
+      behavior are unchanged. This migration does not claim runtime evidence for
+      any newly added control profile.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 122634fa9b5ef9e5901fee80486f470ceabefa28e5d0deb6e591efb873299c94
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 98057597da3004dd96e6d2612244e5a537aa17ee371d238bb4e6e1bac7f25769
+  - id: musubi-ordered-control-slots-existing-evidence-2026-09-27
+    backend: musubi-tuner
+    reason: >-
+      Core accepts an optional ordered slot on directory-binding members. Existing
+      Musubi JSONL consumers use row-reference verification rather than directory
+      bindings, and existing directory bindings declare no repeated-role slots,
+      so the evidence-scoped native TOML, input identity, commands, optimizer,
+      publication, and recovery behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 081aa2d6375c708dd4d2d6185c130e498199c23ab8b16a0fe0d98b719721f9a2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6a2974be58cb8304a5ad9eb9937c654e1745d365db2c803085f9176082a3807c
+  - id: sd-scripts-ordered-control-slots-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      Core accepts an optional ordered slot on directory-binding members. The
+      evidence-scoped SD1 path has one target and one caption root and declares no
+      repeated-role slots, so its selected bytes, native TOML, input identity,
+      command, optimizer, Resume, and publication behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 84da8cb8807b6e8a1be6fd486b5ec5a703f16b0a8743dc59b11b5f0cd87ad5cb
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d0817f908d618b2e81a9bed61f2cdfd46298ce797fe1b8cc6f836362273b348f
   - id: sd-scripts-mixed-partition-preservation-sd15-evidence-2026-09-27
     backend: sd-scripts
     reason: >-

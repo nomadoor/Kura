@@ -101,13 +101,14 @@ def _compile_sd_scripts(run: dict[str, Any], resolved: Path, workspace: Path | N
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
         "batch_size", "dataset_config", "dataset_folder", "gradient_accumulation_steps", "gradient_checkpointing",
-        "bypass_guidance_embedding", "extras_name_or_path", "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch",
+        "bypass_guidance_embedding", "extras_name_or_path", "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch", "model_edit",
         "network_alpha", "network_dim", "optimizer_type", "quantize", "quantize_te", "resolution",
         "save_every_n_steps", "save_last_n_steps",
     }),
     conditions=(
         _when("bypass_guidance_embedding", model_arch=("flex2",)),
         _when("extras_name_or_path", model_arch=("zimage_l2p",)),
+        _when("model_edit", model_arch=("krea2",)),
     ),
     escape_hatches=frozenset({"command", "native_config"}),
     nested_config_fields={"dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS},

@@ -68,6 +68,7 @@ def _manifest_selection(run: dict[str, Any], workspace: Path) -> tuple[dict[str,
                     "sample": sample["id"],
                     "kind": f"file[{file_index}] role={reference['role']}",
                     "binding_kind": f"file-role:{reference['role']}",
+                    "manifest_position": file_index,
                     "container_source": f"/workspace/datasets/{dataset_id}/{reference['path']}",
                 }
             caption_text = sample["caption"]
@@ -137,7 +138,7 @@ def _validate_bindings(
     bound: list[str] = []
     seen_keys: set[str] = set()
     bound_samples: set[str] = set()
-    roots_by_kind: dict[str, str] = {}
+    roots_by_kind: dict[tuple[str, int | None], str] = {}
     for index, binding in enumerate(bindings):
         if (
             not isinstance(binding, dict)
@@ -155,8 +156,14 @@ def _validate_bindings(
         input_ids: list[str] = []
         member_roots: list[str] = []
         relative_stems: list[str] = []
+        binding_slots: dict[str, list[int | None]] = {}
+        binding_positions: dict[str, list[tuple[int | None, int | None]]] = {}
+        member_slots: list[int | None] = []
         for member_index, member in enumerate(members):
-            if not isinstance(member, dict) or set(member) != {"input_id", "root"}:
+            if (
+                not isinstance(member, dict)
+                or set(member) not in ({"input_id", "root"}, {"input_id", "root", "slot"})
+            ):
                 raise ValueError(f"projection binding {index} member {member_index} has an invalid shape")
             input_id = member.get("input_id")
             member_root = _safe_workspace_relative(
@@ -164,6 +171,13 @@ def _validate_bindings(
             )
             if not isinstance(input_id, str):
                 raise ValueError(f"projection binding {index} member {member_index} has an invalid input")
+            slot = member.get("slot")
+            if slot is not None and (
+                isinstance(slot, bool) or not isinstance(slot, int) or slot < 0
+            ):
+                raise ValueError(
+                    f"projection binding {index} member {member_index} slot must be a non-negative integer"
+                )
             if member_root != view_root and not member_root.startswith(view_root + "/"):
                 raise ValueError(f"projection binding {index} member {member_index} root is outside its view")
             try:
@@ -176,6 +190,7 @@ def _validate_bindings(
             relative_stems.append(relative.with_suffix("").as_posix())
             input_ids.append(input_id)
             member_roots.append(member_root)
+            member_slots.append(slot)
         identities = [input_index.get(item) for item in input_ids]
         if any(not isinstance(item, dict) for item in identities):
             raise ValueError(f"projection binding {index} names an unknown input")
@@ -194,14 +209,61 @@ def _validate_bindings(
         if sample in bound_samples:
             raise ValueError(f"projection sample {sample!r} has more than one binding")
         bound_samples.add(sample)
-        for identity, member_root in zip(identities, member_roots, strict=True):
+        for identity, slot in zip(identities, member_slots, strict=True):
             binding_kind = identity.get("binding_kind") if isinstance(identity, dict) else None
             if not isinstance(binding_kind, str):
                 raise ValueError(f"projection binding {index} input has no binding kind")
-            previous_root = roots_by_kind.setdefault(binding_kind, member_root)
-            if previous_root != member_root:
+            binding_slots.setdefault(binding_kind, []).append(slot)
+            manifest_position = identity.get("manifest_position") if isinstance(identity, dict) else None
+            binding_positions.setdefault(binding_kind, []).append((slot, manifest_position))
+        for binding_kind, slots in binding_slots.items():
+            if all(slot is None for slot in slots):
+                if len(slots) > 1:
+                    raise ValueError(
+                        f"projection binding {index} input kind {binding_kind!r} has multiple "
+                        "members but does not declare an ordered slot for every member"
+                    )
+                continue
+            if any(slot is None for slot in slots):
                 raise ValueError(
-                    f"projection input kind {binding_kind!r} uses multiple role roots: "
+                    f"projection binding {index} input kind {binding_kind!r} must either omit "
+                    "slots or declare an ordered slot for every member"
+                )
+            concrete = [slot for slot in slots if slot is not None]
+            if sorted(concrete) != list(range(len(concrete))):
+                raise ValueError(
+                    f"projection binding {index} input kind {binding_kind!r} slots must be "
+                    "unique and contiguous from zero"
+                )
+            positions = binding_positions[binding_kind]
+            manifest_positions = [position for _slot, position in positions]
+            if all(isinstance(position, int) for position in manifest_positions):
+                by_slot = [
+                    position
+                    for _slot, position in sorted(
+                        positions,
+                        key=lambda item: item[0] if item[0] is not None else -1,
+                    )
+                ]
+                if by_slot != sorted(manifest_positions):
+                    raise ValueError(
+                        f"projection binding {index} input kind {binding_kind!r} slot order "
+                        "does not match manifest file order"
+                    )
+        for identity, member_root, slot in zip(
+            identities, member_roots, member_slots, strict=True,
+        ):
+            binding_kind = identity.get("binding_kind") if isinstance(identity, dict) else None
+            if not isinstance(binding_kind, str):
+                raise ValueError(f"projection binding {index} input has no binding kind")
+            root_key = (binding_kind, slot)
+            previous_root = roots_by_kind.setdefault(root_key, member_root)
+            if previous_root != member_root:
+                rendered_kind = (
+                    binding_kind if slot is None else f"{binding_kind} slot {slot}"
+                )
+                raise ValueError(
+                    f"projection input kind {rendered_kind!r} uses multiple role roots: "
                     f"{previous_root!r} and {member_root!r}"
                 )
         bound.extend(input_ids)

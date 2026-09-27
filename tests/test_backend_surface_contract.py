@@ -220,6 +220,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "control_subdir": {"type": "relative-path"},
                 "do_audio": {"type": "boolean"},
                 "fps": {"type": "integer", "minimum": 1},
+                "generated_controls": {
+                    "type": "string-list",
+                    "choices": ("depth", "pose", "line", "inpaint", "mask"),
+                },
                 "num_frames": {"type": "integer", "minimum": 1},
             },
         )
@@ -616,6 +620,55 @@ class BackendSurfaceContractTests(unittest.TestCase):
         invalid = deepcopy(run)
         invalid["backend"]["config"]["extras_name_or_path"] = "   "
         with self.assertRaisesRegex(ValueError, "must be a nonempty model reference"):
+            validate_backend_config(invalid)
+
+    def test_ai_toolkit_krea2_edit_mode_is_typed_and_compiled(self) -> None:
+        run = {
+            "id": "krea2-edit-typed", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "krea2", "model_edit": True,
+                "dataset_folder": "/workspace/datasets/images",
+            }},
+            "model": {"base": "black-forest-labs/FLUX.2-krea-dev"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
+                "config"
+            ]["process"][0]
+        self.assertIs(process["model"]["model_kwargs"]["edit"], True)
+        self.assertIn(
+            "model_edit",
+            backend_capabilities("ai-toolkit")["conditional_fields"],
+        )
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["model_edit"] = "true"
+        with self.assertRaisesRegex(ValueError, "model_edit must be true or false"):
+            validate_backend_config(invalid)
+
+    def test_ai_toolkit_generated_controls_are_closed_and_flex2_only(self) -> None:
+        run = {
+            "id": "generated-controls", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "flex2",
+                "dataset_config": {"generated_controls": ["depth", "pose"]},
+            }},
+            "model": {"base": "ostris/Flex.2-preview"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        validate_backend_config(run)
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["dataset_config"]["generated_controls"] = ["depth", "depth"]
+        with self.assertRaisesRegex(ValueError, "unique list"):
+            validate_backend_config(invalid)
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["model_arch"] = "sdxl"
+        with self.assertRaisesRegex(ValueError, "verified only for flex2"):
             validate_backend_config(invalid)
 
     def test_ai_toolkit_sdxl_evidence_settings_preserve_legacy_process_semantics(self) -> None:

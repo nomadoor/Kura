@@ -565,12 +565,13 @@ class DatasetHandoffTests(unittest.TestCase):
         control_dataset["samples"][0]["files"].append({
             "role": "control", "path": "control.png",
         })
-        with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile"):
-            _select_ai_toolkit_projection_profile(
-                architecture="flux_kontext",
-                dataset=control_dataset,
-                dataset_config={},
-            )
+        name, profile = _select_ai_toolkit_projection_profile(
+            architecture="flux_kontext",
+            dataset=control_dataset,
+            dataset_config={},
+        )
+        self.assertEqual(name, "single-control-image")
+        self.assertEqual(profile["role_limits"]["control"], (1, 1))
 
         captionless_dataset = deepcopy(dataset)
         captionless_dataset["samples"][0]["caption"] = None
@@ -580,6 +581,281 @@ class DatasetHandoffTests(unittest.TestCase):
                 dataset=captionless_dataset,
                 dataset_config={},
             )
+
+    def test_ai_toolkit_control_profiles_freeze_fixed_source_multiplicity(self) -> None:
+        dataset = {
+            "id": "images",
+            "samples": [{
+                "id": "image-a",
+                "files": [
+                    {"role": "target", "path": "image.png"},
+                    {"role": "control", "path": "control.png"},
+                ],
+                "caption": {"text": "caption"},
+            }],
+        }
+        cases = {
+            "flux_kontext": ("single-control-image", (1, 1), "all-in-order"),
+            "hidream_e1": ("single-control-image", (1, 1), "all-in-order"),
+            "qwen_image_edit": ("single-control-image", (1, 1), "all-in-order"),
+            "qwen_image_edit_plus": ("qwen-edit-plus-control", (1, 3), "all-in-order"),
+            "qwen_image_2": ("multi-control-image", (1, None), "all-in-order"),
+            "flux2": ("multi-control-image", (1, None), "all-in-order"),
+            "flux2_klein_4b": ("multi-control-image", (1, None), "all-in-order"),
+            "flux2_klein_9b": ("multi-control-image", (1, None), "all-in-order"),
+            "krea2": ("multi-control-image", (1, None), "all-in-order"),
+            "mageflow_edit": ("multi-control-image", (1, None), "all-in-order"),
+            "minimax_h3_ref2va": ("multi-control-image", (1, None), "all-in-order"),
+            "flex2": ("flex2-random-control", (1, None), "random-one-per-step"),
+        }
+        for architecture, expected in cases.items():
+            with self.subTest(architecture=architecture):
+                name, profile = _select_ai_toolkit_projection_profile(
+                    architecture=architecture,
+                    dataset=dataset,
+                    dataset_config={},
+                )
+                self.assertEqual(name, expected[0])
+                self.assertEqual(profile["role_limits"]["control"], expected[1])
+                self.assertEqual(profile["control_selection"], expected[2])
+
+        too_many = deepcopy(dataset)
+        too_many["samples"][0]["files"].extend(
+            {"role": "control", "path": f"control-{index}.png"}
+            for index in range(1, 4)
+        )
+        with self.assertRaisesRegex(ValueError, r"role cardinalities=.*control.*4"):
+            _select_ai_toolkit_projection_profile(
+                architecture="qwen_image_edit_plus",
+                dataset=too_many,
+                dataset_config={},
+            )
+
+    def test_ai_toolkit_projects_control_folders_and_exact_native_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["model_arch"] = "qwen_image_edit_plus"
+            run["recipe"] = {"steps": 1, "seed": 1}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for index in range(2):
+                name = f"control-{index}.png"
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "control", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            process = yaml.safe_load(
+                (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+
+        native = projected["native"]
+        self.assertEqual(projected["policy"]["profile"], "qwen-edit-plus-control")
+        self.assertEqual(projected["policy"]["control_selection"], "all-in-order")
+        self.assertEqual(native["control_path"], [
+            "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny/control-0",
+            "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny/control-1",
+        ])
+        self.assertEqual(process["datasets"], [native])
+        self.assertEqual(
+            [consumer["native_pointer"] for consumer in lock["views"][0]["consumers"]],
+            ["/folder_path", "/control_path/0", "/control_path/1"],
+        )
+        self.assertEqual(len(lock["views"][0]["bindings"][0]["members"]), 4)
+
+    def test_ai_toolkit_flex2_generated_controls_are_typed_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"].update({
+                "model_arch": "flex2",
+                "bypass_guidance_embedding": True,
+                "dataset_config": {"generated_controls": ["depth", "line", "inpaint"]},
+            })
+            run["recipe"] = {"steps": 1, "seed": 1}
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            process = yaml.safe_load(
+                (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+
+        self.assertEqual(projected["policy"]["profile"], "flex2-generated-control")
+        self.assertEqual(
+            projected["policy"]["control_selection"],
+            "generated-random-one-per-step",
+        )
+        self.assertEqual(projected["semantic"]["controls"], ["depth", "line", "inpaint"])
+        self.assertEqual(process["datasets"], [projected["native"]])
+        self.assertEqual(
+            lock["semantic"]["projection"][0]["policy"]["generated_controls"],
+            ["depth", "line", "inpaint"],
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["dataset_config"] = {
+                "generated_controls": ["depth"],
+            }
+            with self.assertRaisesRegex(ValueError, "verified only for flex2"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+    def test_ai_toolkit_krea_control_requires_typed_edit_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["model_arch"] = "krea2"
+            run["recipe"] = {"steps": 1, "seed": 1}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            (dataset / "control.png").write_bytes(b"control")
+            row["files"].append({"type": "file", "role": "control", "path": "control.png"})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "requires backend.config.model_edit=true"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+            run["backend"]["config"]["model_edit"] = True
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            process = yaml.safe_load(
+                (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+
+        self.assertEqual(
+            lock["semantic"]["projection"][0]["policy"]["architecture_requirements"],
+            {"model_edit": True},
+        )
+        self.assertIs(process["model"]["model_kwargs"]["edit"], True)
+
+    def test_ai_toolkit_krea_native_edit_cannot_bypass_typed_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"].update({
+                "model_arch": "krea2",
+                "native_config": {"model": {"model_kwargs": {"edit": True}}},
+            })
+
+            with self.assertRaisesRegex(ValueError, "use typed backend.config.model_edit"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+    def test_ai_toolkit_qwen_image_2_requires_uniform_control_slots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["model_arch"] = "qwen_image_2"
+            rows = []
+            payloads: dict[str, bytes] = {}
+            for sample_index, control_count in enumerate((1, 2)):
+                sample_id = f"sample-{sample_index}"
+                target = f"{sample_id}.png"
+                caption = f"{sample_id}.txt"
+                files = [{"type": "file", "role": "target", "path": target}]
+                payloads[target] = b"image"
+                payloads[caption] = b"caption"
+                for control_index in range(control_count):
+                    control = f"{sample_id}-control-{control_index}.png"
+                    payloads[control] = b"control"
+                    files.append({"type": "file", "role": "control", "path": control})
+                rows.append({
+                    "id": sample_id,
+                    "files": files,
+                    "caption": {"file": {"type": "file", "path": caption}},
+                })
+            self.write_tiny_manifest(workspace, rows, payloads)
+
+            with self.assertRaisesRegex(
+                ValueError, r"same control slot count.*sample-0=1.*sample-1=2",
+            ):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+    def test_projection_requires_ordered_slots_for_same_kind_in_multiple_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["model_arch"] = "qwen_image_edit_plus"
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for index in range(2):
+                name = f"control-{index}.png"
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "control", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            def missing_slots(selection: dict) -> dict:
+                projection = project_ai_toolkit_dataset(run, selection)
+                for member in projection["datasets"][0]["views"][0]["bindings"][0]["members"]:
+                    member.pop("slot", None)
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "does not declare an ordered slot"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=missing_slots,
+                )
+
+            def nonzero_first_slot(selection: dict) -> dict:
+                projection = project_ai_toolkit_dataset(run, selection)
+                controls = [
+                    member
+                    for member in projection["datasets"][0]["views"][0]["bindings"][0]["members"]
+                    if "slot" in member
+                ]
+                controls[0]["slot"] = 1
+                controls[1]["slot"] = 2
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "contiguous from zero"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=nonzero_first_slot,
+                )
+
+            def reordered_slots(selection: dict) -> dict:
+                projection = project_ai_toolkit_dataset(run, selection)
+                controls = [
+                    member
+                    for member in projection["datasets"][0]["views"][0]["bindings"][0]["members"]
+                    if "slot" in member
+                ]
+                controls[0]["slot"], controls[1]["slot"] = controls[1]["slot"], controls[0]["slot"]
+                return projection
+
+            with self.assertRaisesRegex(ValueError, "manifest file order"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=reordered_slots,
+                )
 
     def test_ai_toolkit_architecture_requirements_are_checked_outside_dataset_profiles(self) -> None:
         dataset = {
