@@ -5820,6 +5820,135 @@ class DatasetHandoffTests(unittest.TestCase):
             mappings = json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"])
             self.assertNotIn({"container": "/workspace", "workspace": "/workspace"}, mappings)
 
+    def test_v2_local_mounts_include_resume_state_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            payload = workspace / "artifacts" / "training-state" / "state-1" / "payload"
+            payload.mkdir(parents=True)
+            (payload / "optimizer.bin").write_bytes(b"state")
+            (resolved / "training-state-source.lock.json").write_text(
+                json.dumps({
+                    "artifact_id": "state-1",
+                    "native_state_path": "/workspace/artifacts/training-state/state-1/payload",
+                }),
+                encoding="utf-8",
+            )
+
+            mounts = local_training_mounts(workspace, resolved.parent, lock, configured=[])
+
+            self.assertIn({
+                "source": str((workspace / "artifacts" / "training-state" / "state-1").resolve()),
+                "target": "/workspace/artifacts/training-state/state-1",
+                "mode": "ro",
+            }, mounts)
+
+    def test_v2_local_mounts_overlay_workspace_local_models_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            model = workspace / "cache" / "models" / "dit.safetensors"
+            model.parent.mkdir(parents=True)
+            model.write_bytes(b"model")
+            (resolved / "model-requirements.lock.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "requirements": [{
+                        "role": "dit",
+                        "acquisition": "local-path",
+                        "runtime_reference": "/workspace/cache/models/dit.safetensors",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            mounts = local_training_mounts(workspace, resolved.parent, lock, configured=[])
+
+            self.assertEqual(mounts[-1], {
+                "source": str(model.resolve()),
+                "target": "/workspace/cache/models/dit.safetensors",
+                "mode": "ro",
+            })
+
+    def test_v2_local_mounts_reject_missing_or_unmapped_local_models(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            requirements = resolved / "model-requirements.lock.yaml"
+            requirements.write_text(yaml.safe_dump({
+                "schema_version": 1,
+                "requirements": [{
+                    "role": "dit",
+                    "acquisition": "local-path",
+                    "runtime_reference": "/workspace/models/missing.safetensors",
+                }],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "local-path model.*does not exist"):
+                local_training_mounts(workspace, resolved.parent, lock, configured=[])
+
+            requirements.write_text(yaml.safe_dump({
+                "schema_version": 1,
+                "requirements": [{
+                    "role": "dit",
+                    "acquisition": "local-path",
+                    "runtime_reference": "/models/dit.safetensors",
+                }],
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "local-path model.*not covered"):
+                local_training_mounts(workspace, resolved.parent, lock, configured=[])
+
+    def test_v2_local_mounts_reject_a_writable_alias_to_a_local_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            model = workspace / "models" / "dit.safetensors"
+            model.parent.mkdir()
+            model.write_bytes(b"model")
+            (resolved / "model-requirements.lock.yaml").write_text(
+                yaml.safe_dump({
+                    "schema_version": 1,
+                    "requirements": [{
+                        "role": "dit",
+                        "acquisition": "local-path",
+                        "runtime_reference": "/workspace/models/dit.safetensors",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "writable mount re-exposes"):
+                local_training_mounts(workspace, resolved.parent, lock, configured=[{
+                    "source": "models", "target": "/unprotected-models", "mode": "rw",
+                }])
+
     def test_run_view_links_are_not_doctor_fix_link_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -5903,6 +6032,58 @@ class DatasetHandoffTests(unittest.TestCase):
             volumes = [command[index + 1] for index, value in enumerate(command) if value == "--volume"]
             self.assertNotIn(f"{workspace.resolve()}:/workspace", volumes)
             self.assertIn(f"{resolved.resolve()}:/workspace/runs/example/resolved:ro", volumes)
+
+    def test_v2_docker_dry_run_mounts_resume_state_and_local_models_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            payload = workspace / "artifacts" / "training-state" / "state-1" / "payload"
+            payload.mkdir(parents=True)
+            (payload / "optimizer.bin").write_bytes(b"state")
+            (resolved / "training-state-source.lock.json").write_text(json.dumps({
+                "artifact_id": "state-1",
+                "native_state_path": "/workspace/artifacts/training-state/state-1/payload",
+            }), encoding="utf-8")
+            model = workspace / "models" / "base.safetensors"
+            model.parent.mkdir()
+            model.write_bytes(b"model")
+            (resolved / "model-requirements.lock.yaml").write_text(yaml.safe_dump({
+                "schema_version": 1,
+                "requirements": [{
+                    "role": "base_model",
+                    "acquisition": "local-path",
+                    "runtime_reference": "/workspace/models/base.safetensors",
+                }],
+            }), encoding="utf-8")
+
+            with patch("kura.executors.docker._docker_image_id", return_value=None):
+                command, _ = launch_docker(
+                    workspace=workspace,
+                    run_dir=resolved.parent,
+                    spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
+                    image="example:image",
+                    dockerfile="docker/ai-toolkit/Dockerfile",
+                    mounts=[],
+                    gpu=False,
+                    dry_run=True,
+                )
+
+            volumes = [command[index + 1] for index, value in enumerate(command) if value == "--volume"]
+            self.assertIn(
+                f"{(workspace / 'artifacts' / 'training-state' / 'state-1').resolve()}:/workspace/artifacts/training-state/state-1:ro",
+                volumes,
+            )
+            self.assertIn(
+                f"{model.resolve()}:/workspace/models/base.safetensors:ro",
+                volumes,
+            )
 
     def test_v2_docker_stops_on_changed_source_before_docker_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

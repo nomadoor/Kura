@@ -203,6 +203,7 @@ These are explicit compatibility changes, not silent capability drops:
 
 | Existing surface | Replacement | Consequence |
 | --- | --- | --- |
+| AI-Toolkit `dataset_folder` | Typed per-sample target references | Existing run files migrate by listing every selected target in manifest v2; no directory-selection fallback remains. |
 | AI-Toolkit `dataset_config.control_subdir` | Typed per-sample control reference | Existing run files migrate; single-control support remains mandatory. |
 | AI-Toolkit directory-derived video/audio selection | Typed video targets plus frozen frame/I2V/embedded-audio choices | Existing datasets/runs migrate; claimed LTX-2.5 and MiniMax-H3 paths cannot be omitted. `do_i2v` uses the target video's first frame. Independent manifest audio references are rejected because the fixed loader extracts audio only from the target video. |
 | Musubi `dataset_config`, H3 source path/JSONL | Manifest rows plus generated JSONL and typed architecture options | Existing native configs migrate; claimed directory/JSONL/control/reference/audio semantics remain mandatory, but Kura's resulting first-class transport is JSONL only. |
@@ -384,6 +385,9 @@ is marked `migration: pending`; merge readiness must run
 
 ## Final integration cleanup ledger
 
+- Remove AI-Toolkit's non-strict directory-derived dataset projection. Direct
+  compiler tests must supply the same frozen manifest projection used by the
+  public compile path; they must not preserve a second inferred transport.
 - Update `kura dataset inspect` to render manifest-v2 typed video targets and
   typed caption references without reporting a present caption as missing.
   Strict validation, projection, and execution already use the typed manifest;

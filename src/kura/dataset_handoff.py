@@ -12,8 +12,11 @@ import re
 import shutil
 from typing import Any, Callable
 
+import yaml
+
 from kura.dataset_manifest import measure_manifest
 from kura.fsio import atomic_write_json
+from kura.paths import to_workspace_relative
 
 
 Project = Callable[[dict[str, Any]], dict[str, Any]]
@@ -1297,6 +1300,141 @@ def _overlaps(left: PurePosixPath, right: PurePosixPath) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
+def _resume_state_mount(workspace: Path, run_dir: Path) -> dict[str, str] | None:
+    lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+    if not lock_path.is_file():
+        return None
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("cannot read the frozen training-state source lock") from exc
+    artifact_id = lock.get("artifact_id") if isinstance(lock, dict) else None
+    expected = (
+        f"/workspace/artifacts/training-state/{artifact_id}/payload"
+        if isinstance(artifact_id, str) and artifact_id
+        else None
+    )
+    if expected is None or lock.get("native_state_path") != expected:
+        raise ValueError("training-state source lock has an invalid native state path")
+    source = workspace / "artifacts" / "training-state" / artifact_id
+    payload = source / "payload"
+    if not payload.is_dir():
+        raise ValueError(f"required training-state payload does not exist: {payload}")
+    return {
+        "source": str(source.resolve(strict=True)),
+        "target": f"/workspace/artifacts/training-state/{artifact_id}",
+        "mode": "ro",
+    }
+
+
+def _local_model_requirements(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "resolved" / "model-requirements.lock.yaml"
+    if not path.is_file():
+        return []
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError("cannot read the frozen model requirements") from exc
+    requirements = document.get("requirements") if isinstance(document, dict) else None
+    if not isinstance(requirements, list):
+        raise ValueError("frozen model requirements must contain requirements[]")
+    return [
+        item for item in requirements
+        if isinstance(item, dict) and item.get("acquisition") == "local-path"
+    ]
+
+
+def _configured_model_source(
+    workspace: Path,
+    runtime: PurePosixPath,
+    configured: list[dict[str, str]],
+) -> Path | None:
+    matches: list[tuple[int, Path]] = []
+    for index, item in enumerate(configured):
+        if not isinstance(item, dict):
+            continue
+        target_value, source_value = item.get("target"), item.get("source")
+        if not isinstance(target_value, str) or not isinstance(source_value, str):
+            continue
+        target = _container_path(target_value, context=f"configured mount {index} target")
+        if runtime != target and target not in runtime.parents:
+            continue
+        source = Path(source_value).expanduser()
+        if not source.is_absolute():
+            source = workspace / source
+        suffix = runtime.relative_to(target)
+        matches.append((len(target.parts), source.joinpath(*suffix.parts)))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: item[0])[1]
+
+
+def _local_model_mounts(
+    workspace: Path,
+    run_dir: Path,
+    configured: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    mounts: list[dict[str, str]] = []
+    seen_targets: set[str] = set()
+    workspace_root = PurePosixPath("/workspace")
+    for requirement in _local_model_requirements(run_dir):
+        role = requirement.get("role")
+        reference = requirement.get("runtime_reference")
+        if not isinstance(reference, str) or not reference:
+            raise ValueError(f"local-path model {role!r} has no runtime reference")
+        runtime = _container_path(reference, context=f"local-path model {role!r}")
+        relative = to_workspace_relative(runtime.as_posix(), workspace=workspace)
+        source = workspace / relative if relative is not None else _configured_model_source(
+            workspace, runtime, configured,
+        )
+        if source is None:
+            raise ValueError(
+                f"local-path model {role!r} at {reference} is not covered by the local Docker mount table"
+            )
+        try:
+            physical = source.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise ValueError(f"local-path model {role!r} does not exist: {source}") from exc
+        target = runtime.as_posix()
+        if target in seen_targets:
+            continue
+        seen_targets.add(target)
+        mounts.append({"source": str(physical), "target": target, "mode": "ro"})
+    return mounts
+
+
+def _reject_writable_model_aliases(
+    workspace: Path,
+    configured: list[dict[str, str]],
+    model_mounts: list[dict[str, str]],
+) -> None:
+    for index, item in enumerate(configured):
+        if not isinstance(item, dict) or item.get("mode", "rw") != "rw":
+            continue
+        source_value, target_value = item.get("source"), item.get("target")
+        if not isinstance(source_value, str) or not isinstance(target_value, str):
+            continue
+        source = Path(source_value).expanduser()
+        if not source.is_absolute():
+            source = workspace / source
+        source = source.resolve(strict=False)
+        target = _container_path(target_value, context=f"configured mount {index} target")
+        for model in model_mounts:
+            model_source = Path(model["source"]).resolve(strict=False)
+            model_target = PurePosixPath(model["target"])
+            source_overlap = (
+                source == model_source
+                or source in model_source.parents
+                or model_source in source.parents
+            )
+            protected_by_overlay = model_target == target or target in model_target.parents
+            if source_overlap and not protected_by_overlay:
+                raise ValueError(
+                    "configured writable mount re-exposes a local-path model through "
+                    f"another target: {target}"
+                )
+
+
 def local_training_mounts(
     workspace: Path,
     run_dir: Path,
@@ -1360,4 +1498,27 @@ def local_training_mounts(
             raise ValueError(f"configured mount duplicates managed target: {target}")
         seen_targets.add(target.as_posix())
         mounts.append({"source": source, "target": target.as_posix(), "mode": mode})
+    resume_mount = _resume_state_mount(workspace, run_dir)
+    if resume_mount is not None:
+        if resume_mount["target"] in seen_targets:
+            raise ValueError("configured mount duplicates managed training-state target")
+        seen_targets.add(resume_mount["target"])
+        mounts.append(resume_mount)
+    model_mounts = _local_model_mounts(workspace, run_dir, configured)
+    _reject_writable_model_aliases(workspace, configured, model_mounts)
+    for mount in model_mounts:
+        target = mount["target"]
+        if target in seen_targets:
+            existing = next(item for item in mounts if item["target"] == target)
+            existing_source = Path(existing["source"]).expanduser()
+            if not existing_source.is_absolute():
+                existing_source = workspace / existing_source
+            if (
+                existing.get("mode") != "ro"
+                or existing_source.resolve(strict=False) != Path(mount["source"])
+            ):
+                raise ValueError(f"local-path model target conflicts with another mount: {target}")
+            continue
+        seen_targets.add(target)
+        mounts.append(mount)
     return mounts

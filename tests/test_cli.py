@@ -3882,15 +3882,42 @@ class AiToolkitBackendTests(unittest.TestCase):
         return {
             "id": "ai-toolkit-example",
             "type": "train",
-            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False, "dataset_folder": "/workspace/datasets/tiny/images"}},
+            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False}},
             "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
             "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
             "recipe": {"steps": 1, "seed": 42},
         }
 
+    def _write_frozen_projection(self, run: dict[str, object], destination: Path) -> str:
+        dataset_id = str(run["datasets"][0]["id"])
+        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        native = {
+            "folder_path": f"/workspace/{view}",
+            "caption_ext": ".txt",
+            "cache_latents_to_disk": True,
+        }
+        lock = {
+            "backend": "ai-toolkit",
+            "datasets": [{
+                "id": dataset_id,
+                "native": native,
+                "views": [{"consumers": [{
+                    "kind": "recursive-directory",
+                    "native_pointer": "/folder_path",
+                    "path": view,
+                }]}],
+            }],
+        }
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        (destination.parent / "dataset-projection.lock.json").write_text(
+            json.dumps(lock), encoding="utf-8",
+        )
+        return native["folder_path"]
+
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
+            folder_path = self._write_frozen_projection(self._run(), destination)
             compile_ai_toolkit(self._run(), destination)
             config = yaml.safe_load((destination.with_suffix(".yaml")).read_text(encoding="utf-8"))
         command = command_ai_toolkit(self._run())
@@ -3898,7 +3925,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(config["config"]["name"], "ai-toolkit-example")
         process = config["config"]["process"][0]
         self.assertEqual(process["model"]["name_or_path"], "black-forest-labs/FLUX.2-klein-base-4B")
-        self.assertEqual(process["datasets"][0]["folder_path"], "/workspace/datasets/tiny/images")
+        self.assertEqual(process["datasets"][0]["folder_path"], folder_path)
         self.assertEqual(process["network"]["linear"], 4)
         self.assertEqual(process["train"]["steps"], 1)
         self.assertFalse(process["train"]["gradient_checkpointing"])
@@ -3910,6 +3937,11 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertIn("hook_before_train_loop", command["argv"][2])
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
         self.assertEqual(command["env"], {"SEED": "42", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
+
+    def test_compile_has_no_directory_inference_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "requires a frozen manifest projection"):
+                compile_ai_toolkit(self._run(), Path(directory) / "ai-toolkit")
 
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()
@@ -3924,6 +3956,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
+            self._write_frozen_projection(run, destination)
             command = compile_ai_toolkit(run, destination)
             process = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))["config"]["process"][0]
         self.assertEqual(process["train"]["steps"], 150)
@@ -3937,15 +3970,19 @@ class AiToolkitBackendTests(unittest.TestCase):
         run = self._run()
         run["backend"] = {"name": "ai-toolkit", "config": {"native_config": ["not", "a", "mapping"]}}
         with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            self._write_frozen_projection(run, destination)
             with self.assertRaisesRegex(ValueError, "backend.config.native_config"):
-                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+                compile_ai_toolkit(run, destination)
 
     def test_compile_rejects_native_steps_that_duplicate_recipe(self) -> None:
         run = self._run()
         run["backend"]["config"]["native_config"] = {"train": {"steps": 2}}
         with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            self._write_frozen_projection(run, destination)
             with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
-                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+                compile_ai_toolkit(run, destination)
 
     def test_removed_backend_overrides_are_rejected(self) -> None:
         run = self._run()
@@ -4441,17 +4478,24 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--video_vae /models/minimax-h3-video-vae.safetensors", script)
         self.assertIn("--audio_vae /models/minimax-h3-audio-vae.safetensors", script)
         self.assertIn("minimax_h3_cache_text_encoder_outputs.py", script)
-        self.assertIn("--uncond_output /workspace/runs/musubi-example/resolved/musubi/minimax-h3-uncond.safetensors", script)
+        cache_path = "/workspace/runs/musubi-example/cache/musubi/minimax-h3-uncond.safetensors"
+        self.assertIn(f"--uncond_output {cache_path}", script)
         self.assertIn("minimax_h3_train_network.py", script)
         self.assertGreaterEqual(script.count("--task t2va"), 3)
         self.assertIn("--h3_guidance_loss_scale 4.0", script)
         self.assertIn("--h3_guidance_loss_sigma_min 0.15", script)
-        self.assertIn("--h3_guidance_loss_uncond_cache /workspace/runs/musubi-example/resolved/musubi/minimax-h3-uncond.safetensors", script)
+        self.assertIn(f"--h3_guidance_loss_uncond_cache {cache_path}", script)
         self.assertIn("--blocks_to_swap 48", script)
         self.assertIn("--text_encoder_blocks_to_swap 50", script)
         self.assertIn("--video_only", script)
         self.assertIn("--gradient_checkpointing", script)
         self.assertNotIn("KURA_MUSUBI_TARGET_FPS", spec["env"])
+        self.assertEqual(spec["env"]["KURA_MUSUBI_CACHE"], "/workspace/runs/musubi-example/cache/musubi")
+        self.assertEqual(spec["write_roots"], [{
+            "role": "backend-cache",
+            "path": "/workspace/runs/musubi-example/cache/musubi",
+            "env": "KURA_MUSUBI_CACHE",
+        }])
 
     def test_command_musubi_minimax_h3_guidance_requires_precache(self) -> None:
         run = self._run()

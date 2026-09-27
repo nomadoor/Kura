@@ -455,6 +455,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     common = [
         "accelerate", "launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
     ]
+    backend_cache_path: str | None = None
     precache = bool(override.get("precache", True))
     if architecture in ("flux2", "flux_2"):
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
@@ -657,7 +658,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         blocks_to_swap = _int_or_none(override.get("blocks_to_swap"))
         if blocks_to_swap is not None and not 0 <= blocks_to_swap <= 48:
             raise ValueError("Musubi MiniMax-H3 blocks_to_swap must be in [0, 48]")
-        uncond_cache = f"/workspace/runs/{run['id']}/resolved/musubi/minimax-h3-uncond.safetensors"
+        backend_cache_path = f"/workspace/runs/{run['id']}/cache/musubi"
+        uncond_cache = f"{backend_cache_path}/minimax-h3-uncond.safetensors"
         train_argv = [
             *common, "src/musubi_tuner/minimax_h3_train_network.py",
             "--dataset_config", dataset_config,
@@ -1287,7 +1289,15 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         raise _unsupported_musubi_adapter_error(architecture)
 
     env = _backend_env("Musubi Tuner", override)
-    return {
+    result = {
         "cwd": "/opt/musubi-tuner", "argv": argv, "env": env,
         "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},
     }
+    if backend_cache_path is not None:
+        env["KURA_MUSUBI_CACHE"] = backend_cache_path
+        result["write_roots"] = [{
+            "role": "backend-cache",
+            "path": backend_cache_path,
+            "env": "KURA_MUSUBI_CACHE",
+        }]
+    return result

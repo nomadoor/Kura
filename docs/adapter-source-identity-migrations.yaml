@@ -7,6 +7,99 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-closed-local-input-mounts-existing-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      The shared local-Docker handoff now mounts frozen Resume state and
+      workspace local-path models read-only instead of leaving those inputs
+      unreachable after removal of the broad workspace bind. Evidence-scoped
+      dataset projection, native settings, trainer command, optimizer behavior,
+      publication, and recovery semantics are unchanged. This migration does
+      not claim a new real-container Resume or local-model smoke.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 15895a9ce7fb8e58ec087b4657704a9c5be43fdd1f0bdbc120b6c17f06c3df9b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e7fbad4cd272e6455ae369e982db76c8480b5d873527a0e046a5d834af39acf9
+  - id: musubi-closed-local-input-mounts-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      The shared local-Docker handoff now mounts frozen Resume state and
+      workspace local-path models read-only. MiniMax-H3 guidance writes its
+      unconditional cache to the run-owned cache instead of immutable resolved
+      input. The cache bytes remain an internal producer-consumer handoff and
+      do not change selected data, native dataset settings, optimizer behavior,
+      or published artifacts. This migration does not claim the pending
+      real-container mount and guidance-cache smokes.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6a2974be58cb8304a5ad9eb9937c654e1745d365db2c803085f9176082a3807c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0d0d921164306f78b21b7b97b9cbc36d9d8d49446f7280593d497edc42b13093
+  - id: sd-scripts-closed-local-input-mounts-existing-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      The shared local-Docker handoff now mounts frozen Resume state and
+      workspace local-path models read-only after removal of the broad workspace
+      bind. The evidence-scoped SD1 selected inputs, native TOML, command,
+      optimizer, Resume payload, and publication semantics are unchanged. This
+      migration does not claim the pending real-container mount smoke.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d0817f908d618b2e81a9bed61f2cdfd46298ce797fe1b8cc6f836362273b348f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 20f757d0a62c074325d07826d52879865f179a920a951441dbbaa47771fe57a8
+  - id: ai-toolkit-removes-legacy-dataset-selectors-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      The adapter removes the obsolete dataset_folder and control_subdir
+      directory-inference compile path after all built-in first-class dataset
+      handoffs moved to frozen manifest projections. Evidence-scoped compiled
+      trainer settings, commands, optimizer behavior, publication, and recovery
+      are unchanged; the authored migration now fails before execution with an
+      actionable manifest-v2 correction. This migration does not claim runtime
+      evidence for a newly added model or dataset mode.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b71f9528bb18c596bceea53d4e7631a25c5a0addd311089f59d0933ac82f4d30
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 15895a9ce7fb8e58ec087b4657704a9c5be43fdd1f0bdbc120b6c17f06c3df9b
   - id: ai-toolkit-ref2va-manifest-references-existing-evidence-2026-09-27
     backend: ai-toolkit
     reason: >-

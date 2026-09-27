@@ -100,7 +100,7 @@ def _compile_sd_scripts(run: dict[str, Any], resolved: Path, workspace: Path | N
 
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
-        "batch_size", "dataset_config", "dataset_folder", "gradient_accumulation_steps", "gradient_checkpointing",
+        "batch_size", "dataset_config", "gradient_accumulation_steps", "gradient_checkpointing",
         "bypass_guidance_embedding", "extras_name_or_path", "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch", "model_edit",
         "network_alpha", "network_dim", "optimizer_type", "quantize", "quantize_te", "resolution",
         "save_every_n_steps", "save_last_n_steps",
@@ -111,6 +111,12 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         _when("model_edit", model_arch=("krea2",)),
     ),
     escape_hatches=frozenset({"command", "native_config"}),
+    unavailable=((
+        "dataset_folder",
+        "AI-Toolkit backend.config.dataset_folder was replaced by the dataset manifest; "
+        "list selected files in items.jsonl with role 'target', remove dataset_folder, "
+        "and recompile",
+    ),),
     nested_config_fields={"dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS},
     config_value_choices=(("model_arch", tuple(sorted(AI_TOOLKIT_PINNED_MODEL_ARCHS))),),
 )

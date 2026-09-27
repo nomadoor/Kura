@@ -88,6 +88,30 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
 
 
 class TrainingStateArtifactTests(unittest.TestCase):
+    def _write_ai_toolkit_projection(self, run: dict[str, object], destination: Path) -> None:
+        dataset_id = str(run["datasets"][0]["id"])
+        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        lock = {
+            "backend": "ai-toolkit",
+            "datasets": [{
+                "id": dataset_id,
+                "native": {
+                    "folder_path": f"/workspace/{view}",
+                    "caption_ext": ".txt",
+                    "cache_latents_to_disk": True,
+                },
+                "views": [{"consumers": [{
+                    "kind": "recursive-directory",
+                    "native_pointer": "/folder_path",
+                    "path": view,
+                }]}],
+            }],
+        }
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        (destination.parent / "dataset-projection.lock.json").write_text(
+            json.dumps(lock), encoding="utf-8",
+        )
+
     def test_ai_toolkit_h3_command_requires_a_nonzero_lora_update(self) -> None:
         run = {
             "id": "h3-smoke",
@@ -248,7 +272,9 @@ class TrainingStateArtifactTests(unittest.TestCase):
             "recipe": {"steps": 10, "seed": 1},
         }
         with tempfile.TemporaryDirectory() as directory:
-            command = compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+            destination = Path(directory) / "ai-toolkit"
+            self._write_ai_toolkit_projection(run, destination)
+            command = compile_ai_toolkit(run, destination)
 
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
 
@@ -264,8 +290,10 @@ class TrainingStateArtifactTests(unittest.TestCase):
             "recipe": {"steps": 10, "seed": 1},
         }
         with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            self._write_ai_toolkit_projection(run, destination)
             with self.assertRaisesRegex(ValueError, "does not support.*EMA"):
-                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+                compile_ai_toolkit(run, destination)
 
     def test_ai_toolkit_optimizer_without_a_verified_update_counter_does_not_claim_resume(self) -> None:
         run = {

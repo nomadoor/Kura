@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from kura.backends.dataset_profiles import (
@@ -22,7 +22,6 @@ from kura.run_envelope import backend_config, resume_intent, training_state_poli
 
 
 AI_TOOLKIT_DATASET_FIELD_SPECS = {
-    "control_subdir": {"type": "relative-path"},
     "generated_controls": {
         "type": "string-list",
         "choices": ("depth", "pose", "line", "inpaint", "mask"),
@@ -507,10 +506,6 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         raise ValueError(
             "AI-Toolkit explicit command cannot yet prove a first-class manifest handoff"
         )
-    if override.get("dataset_folder") is not None:
-        raise ValueError(
-            "AI-Toolkit backend.config.dataset_folder cannot select a first-class manifest dataset"
-        )
     dataset_config = override.get("dataset_config")
     if dataset_config is None:
         dataset_config = {}
@@ -879,17 +874,18 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
         return
     if not isinstance(dataset_config, dict):
         raise ValueError("AI-Toolkit backend.config.dataset_config must be a mapping")
+    if "control_subdir" in dataset_config:
+        raise ValueError(
+            "AI-Toolkit backend.config.dataset_config.control_subdir was replaced by the "
+            "dataset manifest: add each selected control to items.jsonl as a typed file "
+            "reference with role 'control', preserving its per-sample order, then remove "
+            "control_subdir and recompile"
+        )
     unknown = sorted(set(dataset_config) - set(AI_TOOLKIT_DATASET_FIELD_SPECS))
     if unknown:
         raise ValueError("AI-Toolkit backend.config.dataset_config contains unsupported key(s): " + ", ".join(unknown))
     for field, value in dataset_config.items():
         spec = AI_TOOLKIT_DATASET_FIELD_SPECS[field]
-        if spec["type"] == "relative-path":
-            if not isinstance(value, str) or not value or not _dataset_relative_path(value):
-                raise ValueError(
-                    f"AI-Toolkit backend.config.dataset_config.{field} must be a relative path inside the dataset"
-                )
-            continue
         if spec["type"] == "boolean":
             if not isinstance(value, bool):
                 raise ValueError(f"AI-Toolkit backend.config.dataset_config.{field} must be true or false")
@@ -972,31 +968,6 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "scheduler_behavior": "reconstructed to the saved step; initial Resume execution limited to constant scheduler",
         },
     }
-
-
-def _ai_toolkit_datasets(
-    datasets: list[dict[str, Any]], override_folder: Any, resolution: Any, dataset_config: Any
-) -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    for index, dataset in enumerate(datasets):
-        dataset_id = dataset.get("id", "")
-        folder = override_folder if index == 0 and isinstance(override_folder, str) and override_folder else f"/workspace/datasets/{dataset_id}/images"
-        entry = {"folder_path": folder, "caption_ext": ".txt", "cache_latents_to_disk": True}
-        if resolution is not None:
-            entry["resolution"] = resolution
-        if isinstance(dataset_config, dict):
-            projected = deepcopy(dataset_config)
-            control_subdir = projected.pop("control_subdir", None)
-            entry.update(projected)
-            if isinstance(control_subdir, str):
-                entry["control_path"] = f"/workspace/datasets/{dataset_id}/{control_subdir}"
-        entries.append(entry)
-    return entries
-
-
-def _dataset_relative_path(value: str) -> bool:
-    path = PurePosixPath(value)
-    return not path.is_absolute() and all(part not in {"", ".", ".."} for part in path.parts)
 
 
 def _ai_toolkit_backend_override(run: dict[str, Any]) -> dict[str, Any]:
@@ -1087,13 +1058,14 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
 
 def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
     """Write AI-Toolkit native YAML for configured training runs."""
+    del strict
     override = _ai_toolkit_backend_override(run)
     recipe = validated_recipe(run, required=override.get("command") is None)
     model = run.get("model", {})
     datasets = _datasets(run)
     if override.get("command") is not None:
         projected_datasets = []
-    elif strict:
+    else:
         projection_path = destination.parent / "dataset-projection.lock.json"
         if not projection_path.is_file():
             raise ValueError("AI-Toolkit first-class compile requires a frozen manifest projection")
@@ -1137,10 +1109,6 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
                     f"AI-Toolkit frozen projection for dataset {dataset_id!r} bypasses its run-owned view"
                 )
             projected_datasets.append(deepcopy(native_dataset))
-    else:
-        projected_datasets = _ai_toolkit_datasets(
-            datasets, override.get("dataset_folder"), None, override.get("dataset_config")
-        )
     native = override.get("native_config")
     if isinstance(native, dict):
         native_train = native.get("train")

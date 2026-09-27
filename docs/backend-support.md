@@ -66,10 +66,10 @@ contracts.
 | Upstream delta | Kura status | Required action | Current evidence |
 | --- | --- | --- | --- |
 | AI-Toolkit Qwen-Image 2.1 T2I | Generic image projection | Keep explicit `model_arch: qwen_image_2`; real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
-| AI-Toolkit Qwen-Image 2.1 Edit | Generic image projection plus typed control path | Author `dataset_config.control_subdir`; real smoke remains separate | Compile fixture and GPU image import passed |
+| AI-Toolkit Qwen-Image 2.1 Edit | Manifest image projection plus typed control roles | Author ordered per-sample `control` references in `items.jsonl`; real smoke remains separate | Compile fixture and GPU image import passed |
 | AI-Toolkit Anima | Generic image projection | Real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
 | AI-Toolkit Mage-Flow Base | Generic image projection | Real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
-| AI-Toolkit Mage-Flow Edit | Generic image projection plus typed control path | Author `dataset_config.control_subdir`; real smoke remains separate | Compile fixture and GPU image import passed |
+| AI-Toolkit Mage-Flow Edit | Manifest image projection plus typed control roles | Author ordered per-sample `control` references in `items.jsonl`; real smoke remains separate | Compile fixture and GPU image import passed |
 | AI-Toolkit LTX-2.5 | Manifest-backed typed video projection | Real smoke remains separate | Typed `num_frames`, `fps`, `do_i2v`, and `do_audio` compile fixture; embedded audio is checked by the pinned loader before model acquisition; GPU image import passed |
 | AI-Toolkit MiniMax-H3 | Generic typed video projection | Keep gradient checkpointing disabled for the pinned runtime; validate quality separately from this bounded smoke | Patched image published by digest; base one-step A40 smoke passed with all 208 `lora_B` tensors finite and non-zero; Ref2VA and VSA/Fast remain compile/import-only |
 | AI-Toolkit MiniMax-H3 Ref2VA | Generic typed video projection plus typed control path | Real smoke remains separate from the base target | `minimax_h3_ref2va` compile fixture and GPU image import passed |

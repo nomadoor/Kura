@@ -25,7 +25,7 @@ def validated_write_roots(spec: dict[str, Any], *, workspace_path: str = "/works
         if not isinstance(item, dict) or set(item) != {"role", "path", "env"}:
             raise ValueError("backend command write_roots item must have role, path, and env")
         role, path, env_name = item["role"], item["path"], item["env"]
-        if role != "model-cache" or not isinstance(path, str) or not isinstance(env_name, str):
+        if role not in {"model-cache", "backend-cache"} or not isinstance(path, str) or not isinstance(env_name, str):
             raise ValueError("backend command has an unsupported write root")
         parsed = PurePosixPath(path)
         if not parsed.is_absolute() or not parsed.is_relative_to(workspace) or parsed == workspace:

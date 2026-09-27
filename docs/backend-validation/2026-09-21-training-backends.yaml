@@ -114,7 +114,7 @@ contracts:
     dataset: {kind: image, conditioning: single-control-image}
     execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_control_subdir_inside_each_owned_dataset], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_manifest_controls_inside_each_owned_view], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
     runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Edit.
   - id: ai-anima-image
     change_ids: [ai-anima]

@@ -174,6 +174,39 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             "required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}],
         })
 
+    def test_musubi_h3_guidance_cache_is_a_writable_run_cache(self) -> None:
+        spec = command_musubi_tuner({
+            "id": "h3-run",
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+            "backend": {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "t2va",
+                "model_bundle": "none",
+                "model_paths": {
+                    "dit": "/models/dit.safetensors",
+                    "video_vae": "/models/video-vae.safetensors",
+                    "audio_vae": "/models/audio-vae.safetensors",
+                    "text_encoder": "/models/text-encoder.safetensors",
+                },
+            }},
+        })
+        cache = "/workspace/runs/h3-run/cache/musubi"
+        self.assertEqual(spec["write_roots"], [{
+            "role": "backend-cache", "path": cache, "env": "KURA_MUSUBI_CACHE",
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "h3-run"
+            run_dir.mkdir(parents=True)
+            argv, _, _ = docker_command(
+                workspace, run_dir, spec, "example:image", [], False, "r1",
+            )
+        wrapper = argv[argv.index("kura-job") - 1]
+        self.assertIn(f'mkdir -p "$HOME"', wrapper)
+        self.assertIn(f'"{cache}"', wrapper)
+        self.assertIn(f'test -w "{cache}"', wrapper)
+
     def test_ai_toolkit_explicit_command_keeps_model_cache_managed(self) -> None:
         run = {
             "id": "contract-run", "backend": {"name": "ai-toolkit", "config": {

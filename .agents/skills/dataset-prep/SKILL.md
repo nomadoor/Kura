@@ -71,3 +71,19 @@ because its generated JSONL consumes them as `control_path` /
 Use `sha256` on an individual file reference only when the author intends to
 assert that exact digest. See `docs/dataset-handoff-implementation-spec.md`
 for the complete closed schema.
+
+## Migrating old AI-Toolkit dataset selectors
+
+Historical run records stay unchanged. When using an old `run.yaml` as the
+starting point for a new run:
+
+- replace `backend.config.dataset_folder` by listing each selected media file
+  in manifest-v2 `items.jsonl` with `role: "target"`;
+- replace `backend.config.dataset_config.control_subdir` by adding the matching
+  per-sample files with `role: "control"`, in the order the trainer must
+  receive them; and
+- remove both old selectors, validate the dataset, then compile again.
+
+Kura does not infer either replacement during compile. Use `kura dataset draft`
+only to create a reviewable candidate manifest; confirm its sample associations
+before adopting it.

@@ -19,7 +19,7 @@ must be checked against this table before that broad bind is removed.
 | `/workspace/runs/<id>/{outputs,checkpoints,samples,metrics,logs,realizations}/...` | Trainers, wrappers and executor logs/exit records | read-write | Current run directory, read-write bind. Output and Resume state must never live only in the disposable view. |
 | `/workspace/cache/huggingface/...` and `/workspace/cache/models/...` | `HF_HOME`, `HF_HUB_CACHE`, Kura download helpers, Musubi/sd-scripts model links | read-write during acquisition | Workspace `cache/`, read-write bind. An explicitly selected local-path model under it needs a read-only overlay at its frozen runtime path. |
 | `/workspace/cache/ai-toolkit/models/...` | AI-Toolkit `MODELS_PATH` | read-write | Workspace `cache/`, read-write bind. |
-| `/workspace/artifacts/training-state/<id>/payload` | All three backend Resume commands and the verifier | read | Workspace `artifacts/training-state/`, read-only bind when resuming. |
+| `/workspace/artifacts/training-state/<id>/payload` | All three backend Resume commands and the verifier | read | Only the selected workspace `artifacts/training-state/<id>/`, read-only bind when resuming. |
 | Selected workspace local-path model file or directory under `/workspace/...` | AI-Toolkit base path, Musubi/sd-scripts explicit role paths | read | Exact frozen file/directory, read-only bind, with no writable alias. The source may need its own physical-root mapping. |
 | `/workspace` itself | Helper path-resolution root and RunPod archive extraction/workdir | path traversal; no implicit write | Docker: namespace of explicit mounts, not a broad bind. RunPod: disposable Pod workspace with separate transfer validation. |
 
@@ -56,6 +56,19 @@ checked rather than assumed covered by the removed workspace bind.
 5. RunPod currently stages broad workspace archive content. Replace it with
    the selected-file transfer and Pod-side SHA-256 proof specified in the
    handoff contract. This remote copy is not a Docker bind-mount problem.
+
+## Real-container checks still required
+
+The closed mount table has unit coverage, but these checks still require the
+owner-approved local Docker smoke before the branch can merge:
+
+1. Resume once with each built-in backend and prove that the container reads
+   `/workspace/artifacts/training-state/<id>/payload` from the read-only mount.
+2. Run MiniMax-H3 guidance precaching and prove that the unconditional cache is
+   created under `runs/<id>/cache/musubi/` while `resolved/` remains read-only.
+3. Launch each backend with a workspace local-path model and prove that the
+   exact model input is mounted read-only. A missing or uncovered local path
+   must stop before Docker starts and therefore before any model acquisition.
 
 Source survey: `src/kura/backends/{ai_toolkit,musubi_command,musubi_datasets,
 musubi_models,sd_scripts,sd_scripts_datasets,sd_scripts_models}.py`,
