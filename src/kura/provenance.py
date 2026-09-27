@@ -83,7 +83,11 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     if backend_name == "ai-toolkit":
         paths = [backend_root / "ai_toolkit.py"]
         symbols = [(shared, name) for name in ("_datasets", "_script_command")]
-        runtime_paths = [container_root / "ai_toolkit_state.py", container_root / "training_state_verify.py"]
+        runtime_paths = [
+            container_root / "ai_toolkit_state.py",
+            container_root / "ai_toolkit_video_assert.py",
+            container_root / "training_state_verify.py",
+        ]
     elif backend_name == "musubi-tuner":
         paths = [
             backend_root / "common.py",

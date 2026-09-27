@@ -70,14 +70,22 @@ and `do_audio`. `extensions_built_in/diffusion_models/ltx2/ltx2.py:844-890`
 and
 `extensions_built_in/diffusion_models/minimax_h3/minimax_h3.py:729-768`
 both implement I2V from the selected target video's first frame. They do not
-read a separate first-frame control. `toolkit/dataloader_mixins.py:740-835`
-opens the target video itself with PyAV/torchaudio when `do_audio` is true and
-leaves its audio value empty when no stream can be extracted; it does not look
-for an authored audio sidecar. The same loader's
+read a separate first-frame control. `toolkit/dataloader_mixins.py:740-838`
+initializes `audio_tensor` to `None`, checks `container.streams.audio`, and only
+assigns a tensor after a nonempty waveform has been decoded. A target with no
+audio track therefore remains `None`; the pinned loader does not synthesize a
+zero-filled replacement and does not look for an authored audio sidecar. The
+same loader's
 `toolkit/dataloader_mixins.py:580-613` stretches or repeats source frames when
 the target contains fewer frames than `num_frames`, rather than silently
 dropping the item. Therefore short-source rejection is not part of Kura's
-equivalence preflight, while the embedded-audio extraction check is.
+equivalence preflight. For `do_audio`, Kura's container preflight constructs the
+pinned `DatasetConfig` and `FileItemDTO`, then invokes that same
+`load_and_process_video` method with a small spatial crop before model
+acquisition. It requires the resulting audio tensor to be nonempty and records
+every view path, source path, and manifest sample ID in the realization. The
+real-container acceptance smoke must include at least one target video with no
+audio track and prove that this preflight stops before model acquisition.
 
 The AI-Toolkit ordinary-image boundary is also grounded in pinned commit
 `31ddc709`. `toolkit/data_loader.py:385-455` and

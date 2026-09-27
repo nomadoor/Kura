@@ -7,6 +7,32 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-manifest-video-audio-preflight-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      The adapter adds first-class manifest projection for AI-Toolkit video
+      datasets and a pinned-loader embedded-audio preflight that runs only when
+      do_audio is explicitly enabled. The evidence-scoped SD1, SDXL, and
+      MiniMax-H3 runs do not enable do_audio, so their selected bytes, native
+      dataset settings, command, optimizer, publication, and recovery behavior
+      are unchanged. The existing MiniMax-H3 video observation remains evidence
+      only for its base video path; this migration does not claim runtime
+      evidence for the new manifest video projection, I2V, or audio preflight.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 98057597da3004dd96e6d2612244e5a537aa17ee371d238bb4e6e1bac7f25769
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a55e6a2b244c4ccecf05bd498965c1a248f2a52be7b4f23a1ee9c7a5be3979c9
   - id: ai-toolkit-ordered-control-slots-existing-evidence-2026-09-27
     backend: ai-toolkit
     reason: >-

@@ -112,6 +112,25 @@ def _minimal_flux2_run() -> dict[str, Any]:
 
 
 class LaunchEnvironmentContractTests(unittest.TestCase):
+    def test_ai_toolkit_audio_preflight_runs_before_the_trainer(self) -> None:
+        spec = command_ai_toolkit({
+            "id": "audio-video",
+            "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "ltx2.5",
+                "dataset_config": {
+                    "num_frames": 49, "fps": 24, "do_audio": True,
+                },
+            }},
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+        })
+
+        script = " ".join(spec["argv"])
+        self.assertLess(
+            script.index("AI-Toolkit embedded-audio preflight"),
+            script.index("ai_toolkit_state"),
+        )
+
     def test_ai_toolkit_declares_its_backend_managed_model_write_root(self) -> None:
         spec = command_ai_toolkit({
             "id": "contract-run",

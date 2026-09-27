@@ -218,6 +218,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             backend_capabilities("ai-toolkit")["nested_config_fields"]["dataset_config"],
             {
                 "control_subdir": {"type": "relative-path"},
+                "do_i2v": {"type": "boolean"},
                 "do_audio": {"type": "boolean"},
                 "fps": {"type": "integer", "minimum": 1},
                 "generated_controls": {

@@ -117,6 +117,19 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertNotEqual(baseline, changed)
 
+    def test_ai_toolkit_adapter_identity_includes_video_audio_preflight(self) -> None:
+        baseline = adapter_source_identity("ai-toolkit")["value"]
+        original = Path.read_bytes
+
+        def changed_helper(path):
+            payload = original(path)
+            return payload + (b"changed" if path.name == "ai_toolkit_video_assert.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_helper):
+            changed = adapter_source_identity("ai-toolkit")["value"]
+
+        self.assertNotEqual(baseline, changed)
+
     def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
         baseline = adapter_source_identity("sd-scripts")["value"]
         original = Path.read_bytes
@@ -146,6 +159,7 @@ class ContainerScriptTests(unittest.TestCase):
     def test_container_scripts_compile(self) -> None:
         for name in (
             "hf_download.py",
+            "ai_toolkit_video_assert.py",
             "safetensors_validator.py",
             "prune_checkpoints.py",
             "musubi_probe.py",
@@ -154,6 +168,102 @@ class ContainerScriptTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 compile(script_source(name), name, "exec")
+
+    def test_ai_toolkit_audio_preflight_uses_pinned_file_item_loader(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("ai_toolkit_video_assert.py"), namespace)
+        calls = []
+
+        class FakeDatasetConfig:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeAudio:
+            @staticmethod
+            def numel():
+                return 4
+
+        class FakeFileItem:
+            def __init__(self, **kwargs):
+                calls.append(("init", kwargs))
+                self.audio_tensor = None
+
+            def load_and_process_video(self, transform):
+                calls.append(("load", transform))
+                self.audio_tensor = FakeAudio()
+
+        config_module = ModuleType("toolkit.config_modules")
+        config_module.DatasetConfig = FakeDatasetConfig
+        data_module = ModuleType("toolkit.data_transfer_object.data_loader")
+        data_module.FileItemDTO = FakeFileItem
+        with patch.dict(sys.modules, {
+            "toolkit": ModuleType("toolkit"),
+            "toolkit.config_modules": config_module,
+            "toolkit.data_transfer_object": ModuleType("toolkit.data_transfer_object"),
+            "toolkit.data_transfer_object.data_loader": data_module,
+        }):
+            namespace["_probe_with_pinned_loader"](
+                Path("/workspace/view/clip.mp4"),
+                {"num_frames": 49, "fps": 24, "do_audio": True},
+            )
+
+        self.assertEqual(calls[1], ("load", None))
+        self.assertEqual(calls[0][1]["scale_to_width"], 64)
+
+    def test_ai_toolkit_audio_preflight_records_and_rejects_missing_audio(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("ai_toolkit_video_assert.py"), namespace)
+
+        class FakeDatasetConfig:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        class FakeFileItem:
+            def __init__(self, **_kwargs):
+                self.audio_tensor = None
+
+            def load_and_process_video(self, _transform):
+                self.audio_tensor = None
+
+        config_module = ModuleType("toolkit.config_modules")
+        config_module.DatasetConfig = FakeDatasetConfig
+        data_module = ModuleType("toolkit.data_transfer_object.data_loader")
+        data_module.FileItemDTO = FakeFileItem
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            view = workspace / "runs" / "video" / "cache" / "dataset-view" / "ai-toolkit" / "tiny"
+            view.mkdir(parents=True)
+            (view / "clip.mp4").write_bytes(b"video")
+            config = workspace / "runs" / "video" / "resolved" / "ai-toolkit.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                "config:\n  process:\n    - datasets:\n"
+                f"        - folder_path: {view}\n"
+                "          num_frames: 49\n          fps: 24\n          do_audio: true\n",
+                encoding="utf-8",
+            )
+            environment = {
+                "KURA_WORKSPACE": str(workspace),
+                "KURA_RUN_ID": "video",
+                "KURA_REALIZATION_ID": "r1",
+            }
+            with patch.dict(sys.modules, {
+                "toolkit": ModuleType("toolkit"),
+                "toolkit.config_modules": config_module,
+                "toolkit.data_transfer_object": ModuleType("toolkit.data_transfer_object"),
+                "toolkit.data_transfer_object.data_loader": data_module,
+            }), patch.dict(os.environ, environment), patch.object(
+                sys, "argv", ["ai_toolkit_video_assert.py", str(config)],
+            ):
+                with self.assertRaisesRegex(SystemExit, "produced no usable audio tensor"):
+                    namespace["main"]()
+
+            record = json.loads(
+                (workspace / "runs" / "video" / "realizations" / "r1.ai-toolkit-video-preflight.json")
+                .read_text(encoding="utf-8")
+            )
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["videos"][0]["status"], "unusable")
 
     def test_musubi_dataset_assert_counts_video_inputs(self) -> None:
         namespace = {"__name__": "__test__"}

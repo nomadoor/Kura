@@ -674,6 +674,78 @@ class DatasetHandoffTests(unittest.TestCase):
         )
         self.assertEqual(len(lock["views"][0]["bindings"][0]["members"]), 4)
 
+    def test_ai_toolkit_projects_one_video_profile_with_i2v_and_embedded_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"].update({
+                "model_arch": "ltx2.5",
+                "dataset_config": {
+                    "num_frames": 49,
+                    "fps": 24,
+                    "do_i2v": True,
+                    "do_audio": True,
+                },
+            })
+            run["recipe"] = {"steps": 1, "seed": 1}
+            self.write_tiny_manifest(
+                workspace,
+                [{
+                    "id": "clip",
+                    "files": [{"type": "file", "role": "target", "path": "clip.mp4"}],
+                    "caption": {"text": "a moving subject"},
+                }],
+                {"clip.mp4": b"video"},
+            )
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            projection = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            runtime_checks = _dataset_runtime_checks(resolved.parent)
+
+        self.assertEqual(projection["policy"]["profile"], "video")
+        self.assertEqual(projection["policy"]["audio_selection"], "embedded-target-video")
+        self.assertEqual(projection["native"]["num_frames"], 49)
+        self.assertEqual(projection["native"]["fps"], 24)
+        self.assertIs(projection["native"]["do_i2v"], True)
+        self.assertIs(projection["native"]["do_audio"], True)
+        self.assertEqual(
+            lock["semantic"]["projection"][0]["policy"]["audio_selection"],
+            "embedded-target-video",
+        )
+        self.assertEqual(runtime_checks, [{
+            "kind": "ai-toolkit-embedded-audio",
+            "dataset": "tiny",
+            "timing": "immediately after container launch, before model acquisition",
+            "host_verification": (
+                "unavailable; invokes the pinned AI-Toolkit video/audio loader inside the container"
+            ),
+        }])
+
+    def test_ai_toolkit_video_rejects_authored_audio_role(self) -> None:
+        dataset = {
+            "id": "videos",
+            "samples": [{
+                "id": "clip",
+                "files": [
+                    {"role": "target", "path": "clip.mp4"},
+                    {"role": "audio", "path": "clip.wav"},
+                ],
+                "caption": {"text": "caption"},
+            }],
+        }
+        with self.assertRaisesRegex(ValueError, "shape='video-audio'"):
+            _select_ai_toolkit_projection_profile(
+                architecture="ltx2.5",
+                dataset=dataset,
+                dataset_config={"num_frames": 49, "fps": 24, "do_audio": True},
+            )
+
     def test_ai_toolkit_flex2_generated_controls_are_typed_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

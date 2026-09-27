@@ -29,6 +29,7 @@ AI_TOOLKIT_DATASET_FIELD_SPECS = {
     },
     "num_frames": {"type": "integer", "minimum": 1},
     "fps": {"type": "integer", "minimum": 1},
+    "do_i2v": {"type": "boolean"},
     "do_audio": {"type": "boolean"},
 }
 
@@ -148,6 +149,27 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "native_options": {},
         "codec": "paired-media-folders",
         "control_selection": "random-one-per-step",
+    },
+    "video": {
+        "architectures": ("ltx2.5", "minimax_h3"),
+        "shape": "video",
+        "caption": "required",
+        "mode": {
+            "do_i2v": (False, True),
+            "do_audio": (False, True),
+            "generated_controls": False,
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1)},
+        "allowed_options": ("num_frames", "fps", "do_i2v", "do_audio"),
+        "required_options": ("num_frames", "fps"),
+        "native_options": {
+            "num_frames": "num_frames",
+            "fps": "fps",
+            "do_i2v": "do_i2v",
+            "do_audio": "do_audio",
+        },
+        "codec": "media-folder",
     },
 }
 
@@ -371,7 +393,10 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         dataset_config = {}
     if not isinstance(dataset_config, dict):
         raise ValueError("AI-Toolkit backend.config.dataset_config must be a mapping")
-    unsupported_dataset_options = sorted(set(dataset_config) - {"generated_controls"})
+    supported_dataset_options = {
+        "generated_controls", "num_frames", "fps", "do_i2v", "do_audio",
+    }
+    unsupported_dataset_options = sorted(set(dataset_config) - supported_dataset_options)
     if unsupported_dataset_options:
         raise ValueError(
             "AI-Toolkit manifest image projection does not yet support "
@@ -404,6 +429,23 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
             **architecture_requirements,
             **checked_profile_requirements[profile_name],
         }
+        missing_options = sorted(
+            field for field in profile.get("required_options", ())
+            if field not in dataset_config
+        )
+        disallowed_options = sorted(
+            set(dataset_config) - set(profile.get("allowed_options", ()))
+        )
+        if missing_options or disallowed_options:
+            details = []
+            if missing_options:
+                details.append("missing " + ", ".join(missing_options))
+            if disallowed_options:
+                details.append("unsupported " + ", ".join(disallowed_options))
+            raise ValueError(
+                f"AI-Toolkit profile {profile_name!r} dataset options are invalid: "
+                + "; ".join(details)
+            )
         blocks = _resolve_ai_toolkit_projection_blocks(
             dataset, {}, flatten_groups=False,
         )
@@ -412,6 +454,7 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         dataset_id = dataset.get("id")
         view_root = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
         control_mode = profile["shape"] == "image-control"
+        video_mode = profile["shape"] == "video"
         target_root = f"{view_root}/target" if control_mode else view_root
         consumed: list[str] = []
         unrepresentable: list[dict[str, str]] = []
@@ -448,17 +491,19 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()[:12]
+            target_suffixes = _AI_TOOLKIT_VIDEO_SUFFIXES if video_mode else _AI_TOOLKIT_IMAGE_SUFFIXES
+            mode_label = "video" if video_mode else "image"
             for reference in targets:
                 suffix = Path(str(reference.get("path"))).suffix.lower()
                 if len(targets) != 1:
                     unrepresentable.append({
                         "input_id": reference["input_id"],
-                        "reason": "AI-Toolkit image mode requires exactly one target per sample",
+                        "reason": f"AI-Toolkit {mode_label} mode requires exactly one target per sample",
                     })
-                elif suffix not in _AI_TOOLKIT_IMAGE_SUFFIXES:
+                elif suffix not in target_suffixes:
                     unrepresentable.append({
                         "input_id": reference["input_id"],
-                        "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit image mode",
+                        "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit {mode_label} mode",
                     })
                 else:
                     destination = f"{target_root}/{index:06d}-{content_tag}{suffix}"
@@ -493,15 +538,15 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 if reference.get("role") not in {"target", "control"}:
                     unrepresentable.append({
                         "input_id": reference["input_id"],
-                        "reason": f"role {reference.get('role')!r} is unsupported by AI-Toolkit image mode",
+                    "reason": f"role {reference.get('role')!r} is unsupported by AI-Toolkit {mode_label} mode",
                     })
             if not isinstance(caption, dict) or caption.get("text") is None:
                 input_id = caption.get("input_id") if isinstance(caption, dict) else None
                 unrepresentable.append({
                     "input_id": input_id,
-                    "reason": "an absent caption cannot yet be represented losslessly in AI-Toolkit image mode",
+                    "reason": f"an absent caption cannot yet be represented losslessly in AI-Toolkit {mode_label} mode",
                 })
-            elif len(targets) == 1 and Path(str(targets[0].get("path"))).suffix.lower() in _AI_TOOLKIT_IMAGE_SUFFIXES:
+            elif len(targets) == 1 and Path(str(targets[0].get("path"))).suffix.lower() in target_suffixes:
                 caption_path = f"{target_root}/{index:06d}-{content_tag}.txt"
                 files.append({
                     "path": caption_path,
@@ -539,6 +584,11 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
         semantic = {
             "caption_ext": ".txt",
             "cache_latents_to_disk": True,
+            **{
+                native_key: deepcopy(dataset_config[field])
+                for field, native_key in profile.get("native_options", {}).items()
+                if field in dataset_config
+            },
             **({"controls": list(generated_controls)} if generated_controls else {}),
         }
         native_runtime: dict[str, Any] = {"folder_path": f"/workspace/{target_root}"}
@@ -586,6 +636,16 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 **(
                     {"generated_controls": list(generated_controls)}
                     if generated_controls else {}
+                ),
+                **(
+                    {
+                        "do_i2v": bool(dataset_config.get("do_i2v")),
+                        "audio_selection": (
+                            "embedded-target-video"
+                            if dataset_config.get("do_audio") is True else "disabled"
+                        ),
+                    }
+                    if video_mode else {}
                 ),
                 "block_groups": [block.group for block in blocks],
                 "block_settings": [
@@ -1047,6 +1107,12 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
         cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
         config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"
+        dataset_config = override.get("dataset_config")
+        audio_preflight = (
+            ["python", "-c", script_source("ai_toolkit_video_assert.py"), config_path]
+            if isinstance(dataset_config, dict) and dataset_config.get("do_audio") is True
+            else None
+        )
         continuation = resume_intent(run)
         policy = training_state_policy(run)
         state_contract = training_state_contract_ai_toolkit(run)
@@ -1055,7 +1121,12 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
                 limitations = state_contract.get("restoration_contract", {}).get("limitations") or []
                 detail = "; ".join(limitations) if limitations else "training-state capture is disabled"
                 raise ValueError(f"AI-Toolkit Resume is unavailable: {detail}")
-            return {"cwd": cwd, "argv": ["python", "run.py", config_path], "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
+            runner = ["python", "run.py", config_path]
+            argv = (
+                _script_command([audio_preflight, runner], step_name="ai-toolkit")
+                if audio_preflight is not None else runner
+            )
+            return {"cwd": cwd, "argv": argv, "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
         spec: dict[str, Any] = {
             "config_path": config_path,
             "run_id": run["id"],
@@ -1069,7 +1140,11 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             spec["require_nonzero_lora_b"] = True
         runner = ["python", "-c", script_source("ai_toolkit_state.py"), json.dumps(spec, ensure_ascii=False, separators=(",", ":"))]
         if continuation is None:
-            return {"cwd": cwd, "argv": runner, "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
+            argv = (
+                _script_command([audio_preflight, runner], step_name="ai-toolkit")
+                if audio_preflight is not None else runner
+            )
+            return {"cwd": cwd, "argv": argv, "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
         artifact_id = continuation["source"]["artifact_id"]
         spec["resume"] = {
             "payload": f"/workspace/artifacts/training-state/{artifact_id}/payload",
@@ -1081,7 +1156,10 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "python", "-c", script_source("training_state_verify.py"),
             f"/workspace/runs/{run['id']}/resolved/training-state-source.lock.json", "/workspace",
         ]
-        return {"cwd": cwd, "argv": _script_command([verifier, runner], step_name="ai-toolkit"), "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
+        commands = [verifier, runner]
+        if audio_preflight is not None:
+            commands.insert(0, audio_preflight)
+        return {"cwd": cwd, "argv": _script_command(commands, step_name="ai-toolkit"), "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
     combined = sorted(set(override) - {"command"})
     if combined:
         raise ValueError("AI-Toolkit explicit command cannot be combined with: " + ", ".join(combined))

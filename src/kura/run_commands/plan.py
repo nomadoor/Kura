@@ -904,11 +904,27 @@ def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
     if not projection_path.is_file():
         return []
     projection = json.loads(projection_path.read_text(encoding="utf-8"))
-    if not isinstance(projection, dict) or projection.get("backend") != "musubi-tuner":
+    if not isinstance(projection, dict):
         return []
     checks = []
     datasets = projection.get("datasets")
     if not isinstance(datasets, list):
+        return checks
+    if projection.get("backend") == "ai-toolkit":
+        for dataset in datasets:
+            policy = dataset.get("policy") if isinstance(dataset, dict) else None
+            if isinstance(policy, dict) and policy.get("audio_selection") == "embedded-target-video":
+                checks.append({
+                    "kind": "ai-toolkit-embedded-audio",
+                    "dataset": dataset.get("id"),
+                    "timing": "immediately after container launch, before model acquisition",
+                    "host_verification": (
+                        "unavailable; invokes the pinned AI-Toolkit video/audio loader "
+                        "inside the container"
+                    ),
+                })
+        return checks
+    if projection.get("backend") != "musubi-tuner":
         return checks
     for dataset in datasets:
         if not isinstance(dataset, dict):
@@ -1393,6 +1409,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             _append_kv(lines, "codec", rule.get("codec"), indent=4)
             _append_kv(lines, "caption_transform", rule.get("caption_transform"), indent=4)
             _append_kv(lines, "audio_selection", rule.get("audio_selection"), indent=4)
+            _append_kv(lines, "do_i2v", rule.get("do_i2v"), indent=4)
             groups = rule.get("block_groups")
             settings = rule.get("block_settings")
             if isinstance(groups, list) and isinstance(settings, list) and len(groups) == len(settings):

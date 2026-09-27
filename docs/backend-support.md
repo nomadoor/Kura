@@ -70,7 +70,7 @@ contracts.
 | AI-Toolkit Anima | Generic image projection | Real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
 | AI-Toolkit Mage-Flow Base | Generic image projection | Real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
 | AI-Toolkit Mage-Flow Edit | Generic image projection plus typed control path | Author `dataset_config.control_subdir`; real smoke remains separate | Compile fixture and GPU image import passed |
-| AI-Toolkit LTX-2.5 | Generic typed video projection | Real smoke remains separate | Typed `num_frames`, `fps`, and `do_audio` compile fixture and GPU image import passed |
+| AI-Toolkit LTX-2.5 | Manifest-backed typed video projection | Real smoke remains separate | Typed `num_frames`, `fps`, `do_i2v`, and `do_audio` compile fixture; embedded audio is checked by the pinned loader before model acquisition; GPU image import passed |
 | AI-Toolkit MiniMax-H3 | Generic typed video projection | Keep gradient checkpointing disabled for the pinned runtime; validate quality separately from this bounded smoke | Patched image published by digest; base one-step A40 smoke passed with all 208 `lora_B` tensors finite and non-zero; Ref2VA and VSA/Fast remain compile/import-only |
 | AI-Toolkit MiniMax-H3 Ref2VA | Generic typed video projection plus typed control path | Real smoke remains separate from the base target | `minimax_h3_ref2va` compile fixture and GPU image import passed |
 | AI-Toolkit MiniMax-H3 VSA/Fast | Generic typed video projection | Keep evidence distinct from the base real smoke | `minimax_h3_vsa` compile fixture and GPU image import passed |
@@ -164,12 +164,17 @@ projection is not SDXL-specific. Other families remain explicit configurations
 until representative tests promote them.
 
 AI-Toolkit video runs keep dataset source paths under Kura ownership and use
-the typed `backend.config.dataset_config` mapping for `num_frames`, `fps`, and
-`do_audio`. Paired/edit and single-reference runs use the relative
-`control_subdir`; Kura projects it to `control_path` inside each declared
-dataset. Model-specific settings that are not yet first-class remain visible in
-the recorded `native_config`; the protected native `datasets` list cannot be
-used to bypass Kura's dataset source contract.
+the typed `backend.config.dataset_config` mapping for `num_frames`, `fps`,
+`do_i2v`, and `do_audio`. `do_i2v` conditions on the selected target video's
+first frame. `do_audio` selects only embedded target-video audio and runs the
+pinned trainer's own video/audio loader before model acquisition; authored
+audio sidecars are rejected. In pinned `toolkit/dataloader_mixins.py:740-838`,
+a video with no audio stream leaves `audio_tensor` as `None`; no zero-filled
+audio is synthesized. The future real-container smoke must mix in one such
+video and prove that preflight stops before acquisition. Short videos are
+stretched by the pinned loader rather than silently skipped. Paired image/edit runs use manifest control roles
+projected into ordered run-owned folders. The protected native `datasets` list
+cannot bypass Kura's dataset source contract.
 
 MiniMax-H3 uses a checksum-pinned upstream finite-gradient patch on top of the
 official `0.13.18` image. For Kura-managed LoRA training-state runs, publication

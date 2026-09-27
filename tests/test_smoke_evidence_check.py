@@ -20,7 +20,10 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         migrations = yaml.safe_load((repository / "docs" / "adapter-source-identity-migrations.yaml").read_text(encoding="utf-8"))
         record = next(item for item in evidence["records"] if item["id"] == "ai-toolkit-sd1-publication-docker-2026-09-23")
         migration = next(item for item in migrations["records"] if item["id"] == "ai-toolkit-registered-selector-validation-sd1-2026-09-23")
-        latest = next(item for item in migrations["records"] if item["id"] == "ai-toolkit-ordered-control-slots-existing-evidence-2026-09-27")
+        latest = next(
+            item for item in migrations["records"]
+            if item["id"] == "ai-toolkit-manifest-video-audio-preflight-existing-evidence-2026-09-27"
+        )
 
         self.assertEqual(migration["backend"], record["backend"])
         self.assertIs(migration["behavior_changed"], False)
