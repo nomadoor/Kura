@@ -4860,7 +4860,13 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(script.count("--latent_window_size 9"), 1)
 
     def test_command_musubi_qwen_model_versions_reach_all_three_stages(self) -> None:
-        for model_version in ("original", "edit", "edit-2509", "edit-2511", "layered"):
+        for model_version, expected in (
+            ("original", "original"),
+            ("edit", "edit"),
+            ("edit-2509", "edit-2509"),
+            ("EDIT_2511", "edit-2511"),
+            ("layered", "layered"),
+        ):
             with self.subTest(model_version=model_version):
                 run = self._run()
                 run["backend"] = {"name": "musubi-tuner", "config": {
@@ -4876,7 +4882,7 @@ class MusubiBackendTests(unittest.TestCase):
 
                 script = command_musubi_tuner(run)["argv"][2]
 
-                self.assertEqual(script.count(f"--model_version {model_version}"), 3)
+                self.assertEqual(script.count(f"--model_version {expected}"), 3)
 
     def test_command_musubi_hunyuan_15_i2v_updates_cache_and_train(self) -> None:
         run = self._run()

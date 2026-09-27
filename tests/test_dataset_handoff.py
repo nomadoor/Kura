@@ -17,6 +17,7 @@ import yaml
 from kura.backends.ai_toolkit import compile_ai_toolkit, project_ai_toolkit_dataset
 from kura.backends.musubi_command import _musubi_max_resolution, _musubi_video_preflight_env
 from kura.backends.musubi_datasets import (
+    MUSUBI_PROJECTION_PROFILES,
     _musubi_h3_effective_task,
     _write_musubi_dataset_config,
     project_musubi_dataset,
@@ -2181,7 +2182,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "no verified Musubi projection profile matches.*flux1_kontext.*image-controls-2",
+                "no verified Musubi projection profile matches.*flux1_kontext.*image-control.*control.*2",
             ):
                 freeze_dataset_handoff(
                     run,
@@ -3070,7 +3071,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["native"]["fp_1f_target_index"], 13)
             self.assertTrue(projected["native"]["fp_1f_no_post"])
 
-    def test_musubi_framepack_single_frame_stops_for_unverified_multiple_controls(self) -> None:
+    def test_musubi_framepack_single_frame_projects_1f_mc_controls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             run, resolved = self.make_run(workspace)
@@ -3089,10 +3090,108 @@ class DatasetHandoffTests(unittest.TestCase):
                 row["files"].append({"type": "file", "role": "control", "path": name})
             (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(
-                ValueError,
-                r"no verified Musubi projection profile matches.*image-controls-2",
-            ):
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "framepack-single-frame-multi-control")
+            self.assertEqual(projected["native"]["fp_1f_clean_indices"], [0, 1])
+            self.assertEqual(projected["native"]["fp_1f_target_index"], 9)
+            generated = json.loads(projected["views"][0]["native_files"][0]["text"])
+            self.assertEqual(
+                sorted(key for key in generated if key.startswith("control_path")),
+                ["control_path_0", "control_path_1"],
+            )
+
+    def test_musubi_framepack_multi_control_projects_numbered_jsonl_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "dataset_options": {"tiny": {
+                    "fp_1f_clean_indices": [0, 10],
+                    "fp_1f_target_index": 1,
+                    "fp_1f_no_post": True,
+                }},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for name in ("start.png", "reference.png"):
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "control", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "framepack-single-frame-multi-control")
+            self.assertEqual(projected["native"]["fp_1f_clean_indices"], [0, 10])
+            self.assertEqual(projected["native"]["fp_1f_target_index"], 1)
+            self.assertTrue(projected["native"]["fp_1f_no_post"])
+            native_file = projected["views"][0]["native_files"][0]
+            generated = json.loads(native_file["text"])
+            self.assertNotIn("control_path", generated)
+            self.assertIn("control_path_0", generated)
+            self.assertIn("control_path_1", generated)
+            references = native_file["rows"][0]["references"]
+            self.assertEqual(
+                [item["pointer"] for item in references if item["kind"] == "path"],
+                ["/image_path", "/control_path_0", "/control_path_1"],
+            )
+            self.assertEqual(
+                MUSUBI_PROJECTION_PROFILES["framepack-single-frame-multi-control"]
+                ["role_limits"]["control"],
+                (2, None),
+            )
+            self.assertEqual(
+                MUSUBI_PROJECTION_PROFILES["framepack-single-frame-multi-control"]["shape"],
+                "image-control",
+            )
+            self.assertTrue(all(
+                "control_count" not in profile
+                for profile in MUSUBI_PROJECTION_PROFILES.values()
+            ))
+
+    def test_musubi_qwen_edit_profiles_enforce_pinned_control_limits(self) -> None:
+        cases = (
+            ("edit", 1, "qwen-image-edit"),
+            ("edit-2509", 3, "qwen-image-edit-multi-control"),
+            ("edit-2511", 3, "qwen-image-edit-multi-control"),
+            ("EDIT_2509", 3, "qwen-image-edit-multi-control"),
+        )
+        for model_version, control_count, expected_profile in cases:
+            with self.subTest(model_version=model_version), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "qwen_image",
+                    "model_version": model_version,
+                }}
+                dataset = workspace / "datasets" / "tiny"
+                row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+                for index in range(control_count):
+                    name = f"control-{index}.png"
+                    (dataset / name).write_bytes(name.encode("utf-8"))
+                    row["files"].append({"type": "file", "role": "control", "path": name})
+                (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
                 freeze_dataset_handoff(
                     run,
                     workspace,
@@ -3100,6 +3199,209 @@ class DatasetHandoffTests(unittest.TestCase):
                     backend="musubi-tuner",
                     project=lambda selection: project_musubi_dataset(run, selection),
                 )
+                _write_musubi_dataset_config(
+                    run,
+                    resolved / "musubi" / "dataset.toml",
+                    workspace=workspace,
+                    strict=True,
+                )
+                projected = json.loads(
+                    (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+                )["datasets"][0]
+                self.assertEqual(projected["policy"]["profile"], expected_profile)
+                generated = json.loads(projected["views"][0]["native_files"][0]["text"])
+                expected_keys = (
+                    ["control_path"]
+                    if control_count == 1
+                    else [f"control_path_{index}" for index in range(control_count)]
+                )
+                self.assertEqual(
+                    sorted(key for key in generated if key.startswith("control_path")),
+                    expected_keys,
+                )
+                parsed = tomllib.loads(
+                    (resolved / "musubi" / "dataset.toml").read_text(encoding="utf-8")
+                )
+                self.assertEqual(parsed["datasets"], [projected["native"]])
+
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["qwen-image-edit"]["role_limits"]["control"], (1, 1))
+        self.assertEqual(
+            MUSUBI_PROJECTION_PROFILES["qwen-image-edit-multi-control"]["role_limits"]["control"],
+            (1, 3),
+        )
+
+    def test_musubi_qwen_edit_stops_above_each_model_control_limit(self) -> None:
+        for model_version, control_count in (("edit", 2), ("edit-2509", 4), ("edit-2511", 4)):
+            with self.subTest(model_version=model_version), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "qwen_image",
+                    "model_version": model_version,
+                }}
+                dataset = workspace / "datasets" / "tiny"
+                row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+                for index in range(control_count):
+                    name = f"control-{index}.png"
+                    (dataset / name).write_bytes(name.encode("utf-8"))
+                    row["files"].append({"type": "file", "role": "control", "path": name})
+                (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+                expected_error = (
+                    r"no verified Musubi projection profile matches.*image-control.*control.*2"
+                    if model_version == "edit"
+                    else r"role cardinalities=.*control.*4"
+                )
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    freeze_dataset_handoff(
+                        run,
+                        workspace,
+                        resolved,
+                        backend="musubi-tuner",
+                        project=lambda selection: project_musubi_dataset(run, selection),
+                    )
+
+    def test_musubi_qwen_original_accepts_image_only_but_edit_requires_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "qwen_image",
+                "model_version": "original",
+            }}
+
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "ordinary-image")
+
+        for model_version in ("edit", "edit-2509", "edit-2511"):
+            with self.subTest(model_version=model_version), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                run["backend"] = {"name": "musubi-tuner", "config": {
+                    "architecture": "qwen_image",
+                    "model_version": model_version,
+                }}
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"no verified Musubi projection profile matches.*model_version.*{model_version}",
+                ):
+                    freeze_dataset_handoff(
+                        run,
+                        workspace,
+                        resolved,
+                        backend="musubi-tuner",
+                        project=lambda selection: project_musubi_dataset(run, selection),
+                    )
+
+    def test_musubi_framepack_kisekaeichi_rejects_a_separate_mask_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "dataset_options": {"tiny": {
+                    "fp_1f_clean_indices": [0, 10],
+                    "fp_1f_target_index": 1,
+                    "fp_1f_no_post": True,
+                }},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for role, name in (
+                ("control", "start.png"),
+                ("control", "reference.png"),
+                ("mask", "mask.png"),
+            ):
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": role, "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, r"shape='roles:mask'"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_framepack_multi_control_requires_one_index_per_control(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "framepack",
+                "one_frame": True,
+                "dataset_options": {"tiny": {
+                    "fp_1f_clean_indices": [0],
+                    "fp_1f_target_index": 9,
+                }},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for index in range(2):
+                name = f"control-{index}.png"
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "control", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, r"fp_1f_clean_indices=1 for control=2"):
+                freeze_dataset_handoff(
+                    run,
+                    workspace,
+                    resolved,
+                    backend="musubi-tuner",
+                    project=lambda selection: project_musubi_dataset(run, selection),
+                )
+
+    def test_musubi_flux2_profile_accepts_an_unbounded_number_of_references(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "musubi-tuner", "config": {
+                "architecture": "flux2",
+                "model_version": "dev",
+                "dataset_options": {"tiny": {
+                    "no_resize_control": True,
+                    "control_resolution": [1024, 1024],
+                }},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            for index in range(4):
+                name = f"reference-{index}.png"
+                (dataset / name).write_bytes(name.encode("utf-8"))
+                row["files"].append({"type": "file", "role": "control", "path": name})
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="musubi-tuner",
+                project=lambda selection: project_musubi_dataset(run, selection),
+            )
+
+            projected = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            self.assertEqual(projected["policy"]["profile"], "flux2-image-references")
+            self.assertTrue(projected["native"]["no_resize_control"])
+            self.assertEqual(projected["native"]["control_resolution"], [1024, 1024])
+            self.assertEqual(
+                MUSUBI_PROJECTION_PROFILES["flux2-image-references"]["role_limits"]["control"],
+                (1, None),
+            )
 
     def test_musubi_video_projection_uses_the_command_architecture_alias(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

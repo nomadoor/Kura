@@ -111,17 +111,25 @@ These are explicit compatibility changes, not silent capability drops:
 All first-class Musubi projections use generated JSONL. A profile chooses one
 of the named codecs and supplies architecture-specific cardinality and native
 dataset settings; it does not add a model taxonomy to core.
+Profile `shape` records only the target media kind and the roles present in a
+sample; it never encodes role counts. `role_limits` is the sole declaration of
+minimum and maximum multiplicity, and the same declaration is used for profile
+selection and projection validation.
 
 | Profile | Codec | Caption rule | Audio rule |
 |---|---|---|---|
 | `ordinary-image` | `plain-image-jsonl` | Apply Python `str.strip()` explicitly before writing the JSONL caption, matching pinned Musubi directory-caption behavior. Record the profile and `caption_transform: strip` in plan and input identity. HunyuanVideo accepts one-frame targets through this same profile. HunyuanVideo 1.5 accepts them only for T2V; I2V image-only data is rejected because the pinned cache path would condition on the sole target frame itself. | `unsupported`; any selected audio input is unrepresentable. |
 | `flux-kontext-control` | `image-control-jsonl` | Same explicit `strip` rule. | `unsupported`; any selected audio input is unrepresentable. |
+| `qwen-image-edit` | `image-control-jsonl` | Same explicit `strip` rule. Qwen-Image Edit `model_version=edit` requires exactly one control; `role_limits.control` is `(1, 1)`. | `unsupported`; any selected audio input is unrepresentable. |
+| `qwen-image-edit-multi-control` | `image-control-jsonl` | Same explicit `strip` rule. Edit-2509 and Edit-2511 accept one to three controls, so `role_limits.control` is `(1, 3)`. Multiple controls are emitted as contiguous `control_path_0` through `control_path_N`; three is the fixed documentation's confirmed upper bound even though the datasource can iterate farther. | `unsupported`; any selected audio input is unrepresentable. |
+| `flux2-image-references` | `image-control-jsonl` | Same explicit `strip` rule. FLUX.2 accepts one or more reference/control images. The fixed datasource, cache, and trainer consume a variable-length list and publish no finite model limit, so `role_limits.control` is explicitly `(1, unbounded)`. | `unsupported`; any selected audio input is unrepresentable. |
 | `wan-video` | `plain-video-jsonl` | Same explicit `strip` rule. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at HunyuanVideo's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `hunyuan-video-1.5-video` | `plain-video-jsonl` | Same explicit `strip` rule. Require explicit `target_frames` on the pinned 1+4n grid and freeze optional `source_fps`; the container preflight measures the generated JSONL at the profile's pinned 24fps before acquisition. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-video` | `plain-video-jsonl` | Same explicit `strip` rule. Normal FramePack fixes `fp_latent_window_size = 9`, defaults to the pinned recommendation `frame_extraction = full` with the frozen upstream default `max_frames = 129`, and preflights at 30fps before acquisition. Authors may explicitly choose `head` or another positive `max_frames`. `head` requires every `target_frames` value to be on the 1+4n grid and at least 37 frames; `full` mirrors the pinned full-video rounding and requires the resulting clip to contain one complete latent window. | `unsupported`; an audio input stops rather than being ignored. |
 | `framepack-f1-video` | `plain-video-jsonl` | Same dataset rules as `framepack-video`; the separate profile freezes the F1 sampling mode in input identity. | `unsupported`; an audio input stops rather than being ignored. |
-| `framepack-single-frame` | `image-control-jsonl` | Same explicit `strip` rule. The verified standard path requires exactly one target and one control image and freezes `fp_latent_window_size = 9`, `fp_1f_clean_indices = [0]`, `fp_1f_target_index = 9`, and `fp_1f_no_post = false` unless the three one-frame dataset options are explicitly set. Experimental multiple-control 1f-mc/kisekaeichi layouts remain unclaimed and stop rather than being flattened into this profile. | `unsupported`; an audio input stops rather than being ignored. |
+| `framepack-single-frame` | `image-control-jsonl` | Same explicit `strip` rule. The verified standard path requires exactly one target and one control image and freezes `fp_latent_window_size = 9`, `fp_1f_clean_indices = [0]`, `fp_1f_target_index = 9`, and `fp_1f_no_post = false` unless the three one-frame dataset options are explicitly set. | `unsupported`; an audio input stops rather than being ignored. |
+| `framepack-single-frame-multi-control` | `image-control-jsonl` | Same explicit `strip` rule. 1f-mc and kisekaeichi require two or more controls, an explicit index per control, and an explicit target index; `role_limits.control` is `(2, unbounded)` because the fixed trainer publishes no finite upper bound. Kisekaeichi training masks are the alpha channels of the control images; separate mask files belong to the inference CLI and are not dataset inputs. | `unsupported`; an audio input stops rather than being ignored. |
 | `h3-one-frame-fl2va` | `h3-one-frame-control-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-one-frame-plain` | `plain-image-jsonl` | Same explicit `strip` rule. | `unsupported` in one-frame mode. |
 | `h3-video-t2va`, `h3-video-fl2va`, video teacher profiles | `h3-video-jsonl` | Same explicit `strip` rule. H3 target videos are measured through the pinned timestamp-to-24fps loader; `source_fps` is not an H3 option. Plans warn outside the released 124-345 frame range. | An authored target `audio` role becomes explicit `audio_path`. Without one, preflight rejects a same-stem sidecar beside the resolved source path before allowing embedded audio or silence; pinned Musubi resolves the JSONL path before sidecar lookup. |
@@ -146,14 +154,19 @@ T2I or Single Frame task/mode and needs a separate verified profile. FramePack
 image datasets are likewise not ordinary images: pinned FramePack one-frame
 training requires an image target plus a start/control image and `--one_frame`
 (`docs/framepack_1f.md`, lines 86-100). This slice implements the standard
-one-target/one-control FramePack path; Wan Single Frame and the experimental
-multiple-control FramePack layouts remain mandatory migration work. Pinned
+one-target/one-control FramePack path and the explicit multiple-control 1f-mc
+and kisekaeichi path; Wan Single Frame remains mandatory migration work. Pinned
 `docs/dataset_config.md`, lines 499-540 defines the standard one-frame values,
 requires the number of control images to equal `fp_1f_clean_indices`, and
-documents the experimental multiple-control variants. Pinned
+documents the multiple-control variants without a finite upper bound. Pinned
 `src/musubi_tuner/dataset/datasources.py`, lines 338-381 normalizes and validates
 the generated JSONL control path, while `src/musubi_tuner/fpack_cache_latents.py`,
 lines 244-325 consumes the target/control pair and frozen index settings.
+Pinned `docs/dataset_config.md`, lines 349-372 and
+`src/musubi_tuner/cache_latents.py`, lines 208-230 establish that training masks
+are carried in each control image's alpha channel. The separate mask-file
+arguments documented in `docs/framepack_1f.md`, lines 240-262 are inference
+inputs, not fields accepted by the training dataset.
 FramePack normal/F1 remains a video dataset path. At pinned Musubi `4e7c714`,
 both paths require at least one full
 9-latent window: `src/musubi_tuner/fpack_cache_latents.py`, lines 60-69 raises
@@ -168,6 +181,17 @@ video JSONL. The prior optimizer smoke
 `runs/20260712-1655_musubi-real-smoke-framepack_ed86` used `full`,
 `max_frames = 37`, and `fp_latent_window_size = 9`; the new default therefore
 preserves its extraction method rather than the generic `head` default.
+
+For the shared numbered-control codec, pinned
+`src/musubi_tuner/dataset/datasources.py`, lines 360-388 normalizes contiguous
+`control_path_N` fields and lines 421-452 loads them in index order. Qwen-Image
+Edit's fixed source contract is `docs/dataset_config.md`, lines 596-616 and
+`docs/qwen_image.md`, lines 5-9: the original Edit model accepts one control;
+Edit-2509/2511 are confirmed through three, which is Kura's upper bound even
+though Musubi can iterate more. FLUX.2's fixed contract is
+`docs/dataset_config.md`, lines 643-651 and
+`src/musubi_tuner/dataset/image_video_dataset.py`, lines 370-377: it accepts a
+variable number of controls and the fixed version publishes no finite maximum.
 
 Pinned H3 reference loading rejects video references outside 2-15 seconds with
 an explicit error; it does not silently omit them. The source contract is

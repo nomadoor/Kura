@@ -80,6 +80,11 @@ MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _normalize_musubi_model_version(value: Any, *, default: str = "") -> str:
+    """Return the one normalized spelling used by Musubi projection and argv."""
+    return str(value or default).strip().lower().replace("_", "-")
+
+
 def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
     clean = _musubi_explicit_model_paths(override)
@@ -127,8 +132,8 @@ def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     architecture = _musubi_architecture(run)
     if architecture not in ("flux2", "flux_2"):
         return {}
-    model_version = str(override.get("model_version") or "").lower().replace("_", "-")
-    bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
+    model_version = _normalize_musubi_model_version(override.get("model_version"))
+    bundle = _normalize_musubi_model_version(override.get("model_bundle"), default="auto")
     if bundle in ("none", "off", "false"):
         return {}
     is_base_4b = (
@@ -327,7 +332,7 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
 
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
     override = _musubi_backend_override(run)
-    model_version = str(override.get("model_version") or "").lower().replace("_", "-")
+    model_version = _musubi_model_version(run, default="")
     if model_version:
         return model_version
 
@@ -346,10 +351,22 @@ def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
     raise ValueError("Musubi FLUX.2 requires backend.config.model_version or a recognized model.base/model_bundle; refusing to default to 4B")
 
 
+def _musubi_model_version(run: dict[str, Any], *, default: str = "original") -> str:
+    """Normalize the authored model version identically for every Musubi consumer."""
+    override = _musubi_backend_override(run)
+    return _normalize_musubi_model_version(
+        override.get("model_version"), default=default,
+    )
+
+
 def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     architecture = _musubi_architecture(run)
     override = _musubi_backend_override(run)
-    model_version = str(override.get("model_version") or "").lower().replace("_", "-")
+    model_version = (
+        _musubi_flux2_model_version(run)
+        if architecture in ("flux2", "flux_2")
+        else _musubi_model_version(run)
+    )
     model_base = str(run.get("model", {}).get("base") or "").lower().replace("_", "-")
     if model_version == "dev" or "flux.2-dev" in model_base or "flux2-dev" in model_base:
         text_encoder_format = "safetensors"

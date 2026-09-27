@@ -11,6 +11,7 @@ import tomllib
 from typing import Any
 
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
+from kura.backends.musubi_models import _musubi_model_version
 from kura.backends.shared import _datasets, _toml_scalar, _truthy
 from kura.fsio import atomic_write_text
 
@@ -50,13 +51,18 @@ def _plain_video_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], lis
 
 def _image_control_jsonl_row(context: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     row, references = _plain_image_jsonl_row(context)
-    control_path = context["control_paths"][0]
-    control_input_id = context["control_input_ids"][0]
-    row["control_path"] = f"/workspace/{control_path}"
-    references.insert(1, {
-        "kind": "path", "pointer": "/control_path",
-        "input_id": control_input_id, "path": control_path,
-    })
+    control_paths = context["control_paths"]
+    control_input_ids = context["control_input_ids"]
+    multiple = len(control_paths) > 1
+    for index, (control_path, control_input_id) in enumerate(
+        zip(control_paths, control_input_ids, strict=True)
+    ):
+        key = f"control_path_{index}" if multiple else "control_path"
+        row[key] = f"/workspace/{control_path}"
+        references.insert(1 + index, {
+            "kind": "path", "pointer": f"/{key}",
+            "input_id": control_input_id, "path": control_path,
+        })
     return row, references
 
 
@@ -209,7 +215,6 @@ _ORDINARY_IMAGE_ARCHITECTURES = (
 _H3_VIDEO_PROFILE_COMMON = {
     "architectures": ("minimax_h3", "minimaxh3"),
     "shape": ("video", "video-audio"),
-    "control_count": 0,
     "allowed_options": ("target_frames", "frame_extraction"),
     "required_options": ("target_frames",),
     "native_options": {"target_frames": None, "frame_extraction": "head"},
@@ -222,7 +227,6 @@ _PLAIN_VIDEO_PROFILE_COMMON = {
     "codec": "plain-video-jsonl",
     "shape": "video",
     "mode": {"one_frame": False},
-    "control_count": 0,
     "allowed_options": ("target_frames", "frame_extraction", "source_fps"),
     "required_options": ("target_frames",),
     "native_options": {"target_frames": None, "frame_extraction": "head", "source_fps": None},
@@ -252,8 +256,9 @@ MUSUBI_PROJECTION_PROFILES = {
         "mode": {"one_frame": False},
         "mode_by_architecture": {
             "hunyuan_video_1_5": {"effective_task": "t2v"},
+            "qwen_image": {"model_version": "original"},
+            "qwen": {"model_version": "original"},
         },
-        "control_count": 0,
         "allowed_options": (),
         "required_options": (),
         "native_options": {},
@@ -265,12 +270,44 @@ MUSUBI_PROJECTION_PROFILES = {
         "architectures": ("flux_kontext", "flux1_kontext"),
         "shape": "image-control",
         "mode": {"one_frame": False},
-        "control_count": 1,
         "allowed_options": ("control_resolution", "no_resize_control"),
         "required_options": (),
         "native_options": {"no_resize_control": False, "control_resolution": None},
         "native_string_fields": (),
         "role_limits": {"target": (1, 1), "control": (1, 1)},
+    },
+    "qwen-image-edit": {
+        "codec": "image-control-jsonl",
+        "architectures": ("qwen_image", "qwen"),
+        "shape": "image-control",
+        "mode": {"one_frame": False, "model_version": "edit"},
+        "allowed_options": ("control_resolution", "no_resize_control"),
+        "required_options": (),
+        "native_options": {"no_resize_control": False, "control_resolution": None},
+        "native_string_fields": (),
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+    },
+    "qwen-image-edit-multi-control": {
+        "codec": "image-control-jsonl",
+        "architectures": ("qwen_image", "qwen"),
+        "shape": "image-control",
+        "mode": {"one_frame": False, "model_version": ("edit-2509", "edit-2511")},
+        "allowed_options": ("control_resolution", "no_resize_control"),
+        "required_options": (),
+        "native_options": {"no_resize_control": False, "control_resolution": None},
+        "native_string_fields": (),
+        "role_limits": {"target": (1, 1), "control": (1, 3)},
+    },
+    "flux2-image-references": {
+        "codec": "image-control-jsonl",
+        "architectures": ("flux2", "flux_2"),
+        "shape": "image-control",
+        "mode": {"one_frame": False},
+        "allowed_options": ("control_resolution", "no_resize_control"),
+        "required_options": (),
+        "native_options": {"no_resize_control": False, "control_resolution": None},
+        "native_string_fields": (),
+        "role_limits": {"target": (1, 1), "control": (1, None)},
     },
     "wan-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
@@ -300,7 +337,6 @@ MUSUBI_PROJECTION_PROFILES = {
         "architectures": ("framepack", "frame_pack"),
         "shape": "image-control",
         "mode": {"one_frame": True, "f1": False},
-        "control_count": 1,
         "allowed_options": (
             "fp_1f_clean_indices", "fp_1f_target_index", "fp_1f_no_post",
         ),
@@ -315,12 +351,30 @@ MUSUBI_PROJECTION_PROFILES = {
         "control_index_option": "fp_1f_clean_indices",
         "role_limits": {"target": (1, 1), "control": (1, 1)},
     },
+    "framepack-single-frame-multi-control": {
+        "codec": "image-control-jsonl",
+        "architectures": ("framepack", "frame_pack"),
+        "shape": "image-control",
+        "mode": {"one_frame": True, "f1": False},
+        "allowed_options": (
+            "fp_1f_clean_indices", "fp_1f_target_index", "fp_1f_no_post",
+        ),
+        "required_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
+        "native_options": {
+            "fp_latent_window_size": FRAMEPACK_LATENT_WINDOW_SIZE,
+            "fp_1f_clean_indices": None,
+            "fp_1f_target_index": None,
+            "fp_1f_no_post": False,
+        },
+        "native_string_fields": (),
+        "control_index_option": "fp_1f_clean_indices",
+        "role_limits": {"target": (1, 1), "control": (2, None)},
+    },
     "h3-one-frame-fl2va": {
         "codec": "h3-one-frame-control-jsonl",
         "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image-control",
         "mode": {"one_frame": True, "effective_task": "fl2va"},
-        "control_count": 1,
         "allowed_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
         "required_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
         "native_options": {"fp_1f_clean_indices": None, "fp_1f_target_index": None},
@@ -333,7 +387,6 @@ MUSUBI_PROJECTION_PROFILES = {
         "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image",
         "mode": {"one_frame": True, "effective_task": "t2va", "teacher_conditions": None},
-        "control_count": 0,
         "allowed_options": (), "required_options": (), "native_options": {},
         "native_string_fields": (), "role_limits": {"target": (1, 1)},
     },
@@ -364,7 +417,6 @@ MUSUBI_PROJECTION_PROFILES = {
         "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image-references",
         "mode": {"one_frame": True, "effective_task": "ref2va", "teacher_conditions": None},
-        "control_count": 0,
         "allowed_options": (), "required_options": (), "native_options": {},
         "native_string_fields": (),
         "role_limits": {
@@ -388,7 +440,6 @@ MUSUBI_PROJECTION_PROFILES = {
         "codec": "h3-one-frame-reference-jsonl", "architectures": ("minimax_h3", "minimaxh3"),
         "shape": "image-references",
         "mode": {"one_frame": True, "effective_task": "ref2va", "teacher_conditions": "subject_ref"},
-        "control_count": 0,
         "allowed_options": (), "required_options": (), "native_options": {},
         "native_string_fields": (),
         "role_limits": {"target": (1, 1), "reference": (1, 9)},
@@ -563,6 +614,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     mode = {
         "one_frame": _truthy(override.get("one_frame")),
         "f1": _truthy(override.get("f1")),
+        "model_version": _musubi_model_version(run),
         "effective_task": _musubi_h3_effective_task(override),
         "teacher_conditions": (
             str(override.get("h3_teacher_conditions"))
@@ -574,12 +626,13 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
         dataset_id = str(dataset.get("id"))
-        shape, shape_examples = _musubi_dataset_shape(dataset)
+        shape, shape_examples, role_cardinalities = _musubi_dataset_shape(dataset)
         profile_name, profile = _select_musubi_projection_profile(
             architecture=architecture,
             shape=shape,
             mode=mode,
             shape_examples=shape_examples,
+            role_cardinalities=role_cardinalities,
         )
         projected.append(_project_musubi_jsonl_dataset(
             run=run,
@@ -592,17 +645,24 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     return {"schema_version": 1, "backend": "musubi-tuner", "datasets": projected}
 
 
-def _musubi_dataset_shape(dataset: dict[str, Any]) -> tuple[str, dict[str, list[str]]]:
+def _musubi_dataset_shape(
+    dataset: dict[str, Any],
+) -> tuple[str, dict[str, list[str]], dict[str, dict[str, int]]]:
     shape_samples: dict[str, list[str]] = {}
+    role_cardinalities: dict[str, dict[str, int]] = {}
     for sample in dataset.get("samples", []):
+        sample_id = str(sample.get("id"))
         references = sample.get("files", [])
         targets = [item for item in references if item.get("role") == "target"]
         controls = [item for item in references if item.get("role") == "control"]
         ordered_roles = [str(item.get("role")) for item in references]
+        role_cardinalities[sample_id] = {
+            role: ordered_roles.count(role) for role in sorted(set(ordered_roles))
+        }
         other_roles = [role for role in ordered_roles if role not in {"target", "control"}]
         if len(targets) != 1:
             sample_shape = f"target-count-{len(targets)}"
-            shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
+            shape_samples.setdefault(sample_shape, []).append(sample_id)
             continue
         suffix = Path(str(targets[0].get("path"))).suffix.lower()
         media_kind = "image" if suffix in IMAGE_SUFFIXES else "video" if suffix in VIDEO_SUFFIXES else f"extension:{suffix}"
@@ -614,18 +674,19 @@ def _musubi_dataset_shape(dataset: dict[str, Any]) -> tuple[str, dict[str, list[
         elif other_roles:
             sample_shape = "roles:" + ",".join(other_roles)
         else:
-            control_suffix = "" if not controls else "-control" if len(controls) == 1 else f"-controls-{len(controls)}"
+            control_suffix = "-control" if controls else ""
             sample_shape = media_kind + control_suffix
-        shape_samples.setdefault(sample_shape, []).append(str(sample.get("id")))
+        shape_samples.setdefault(sample_shape, []).append(sample_id)
     if not shape_samples:
-        return "empty", {}
+        return "empty", {}, role_cardinalities
     if len(shape_samples) != 1:
-        return "mixed:" + ",".join(sorted(shape_samples)), shape_samples
-    return next(iter(shape_samples)), shape_samples
+        return "mixed:" + ",".join(sorted(shape_samples)), shape_samples, role_cardinalities
+    return next(iter(shape_samples)), shape_samples, role_cardinalities
 
 
 def _select_musubi_projection_profile(
-    *, architecture: str, shape: str, mode: dict[str, Any], shape_examples: dict[str, list[str]],
+    *, architecture: str, shape: str, mode: dict[str, Any],
+    shape_examples: dict[str, list[str]], role_cardinalities: dict[str, dict[str, int]],
 ) -> tuple[str, dict[str, Any]]:
     matches = []
     for name, profile in MUSUBI_PROJECTION_PROFILES.items():
@@ -635,8 +696,19 @@ def _select_musubi_projection_profile(
         }
         if (
             architecture in profile["architectures"]
-            and (shape in profile["shape"] if isinstance(profile["shape"], tuple) else shape == profile["shape"])
-            and all(mode.get(key) == value for key, value in expected_mode.items())
+            and (
+                shape in profile["shape"]
+                if isinstance(profile["shape"], tuple)
+                else shape == profile["shape"]
+            )
+            and all(
+                mode.get(key) in value if isinstance(value, tuple) else mode.get(key) == value
+                for key, value in expected_mode.items()
+            )
+            and all(
+                not _musubi_role_cardinality_errors(counts, profile["role_limits"])
+                for counts in role_cardinalities.values()
+            )
         ):
             matches.append((name, profile))
     if len(matches) != 1:
@@ -655,12 +727,33 @@ def _select_musubi_projection_profile(
         minority = {
             sample_shape: shape_examples[sample_shape][:3] for sample_shape in minority_shapes
         }
-        detail = f"; minority sample IDs={minority!r}" if minority else ""
+        details = []
+        if minority:
+            details.append(f"minority sample IDs={minority!r}")
+        if role_cardinalities:
+            details.append(f"role cardinalities={role_cardinalities!r}")
+        detail = "; " + "; ".join(details) if details else ""
         raise ValueError(
             "no verified Musubi projection profile matches "
             f"architecture={architecture!r}, shape={shape!r}, mode={mode!r}{detail}"
         )
     return matches[0]
+
+
+def _musubi_role_cardinality_errors(
+    counts: dict[str, int], limits: dict[str, tuple[int, int | None]],
+) -> list[str]:
+    invalid = []
+    for role, count in counts.items():
+        bounds = limits.get(role)
+        if bounds is None or count < bounds[0] or (
+            bounds[1] is not None and count > bounds[1]
+        ):
+            invalid.append(f"{role}={count}")
+    for role, (minimum, _maximum) in limits.items():
+        if minimum and role not in counts:
+            invalid.append(f"{role}=0")
+    return invalid
 
 
 def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
@@ -698,14 +791,6 @@ def _musubi_profile_semantic(profile_name: str, profile: dict[str, Any], options
                 f"Musubi profile {profile_name} requires at least {minimum_target_frames} frames; "
                 f"invalid value(s): {too_short}"
             )
-    control_index_option = profile.get("control_index_option")
-    if isinstance(control_index_option, str):
-        indices = semantic.get(control_index_option)
-        if not isinstance(indices, list) or len(indices) != profile["control_count"]:
-            raise ValueError(
-                f"Musubi profile {profile_name} requires {control_index_option} to contain "
-                f"one index per control input"
-            )
     return semantic
 
 
@@ -734,14 +819,19 @@ def _project_musubi_jsonl_dataset(
         role_entries: dict[str, list[dict[str, Any]]] = {}
         for item in references:
             role_entries.setdefault(str(item.get("role")), []).append(item)
-        invalid_roles = []
-        for role, items in role_entries.items():
-            limits = profile["role_limits"].get(role)
-            if limits is None or not limits[0] <= len(items) <= limits[1]:
-                invalid_roles.append(f"{role}={len(items)}")
-        for role, (minimum, _maximum) in profile["role_limits"].items():
-            if minimum and role not in role_entries:
-                invalid_roles.append(f"{role}=0")
+        invalid_roles = _musubi_role_cardinality_errors(
+            {role: len(items) for role, items in role_entries.items()},
+            profile["role_limits"],
+        )
+        controls = role_entries.get("control", [])
+        control_index_option = profile.get("control_index_option")
+        if isinstance(control_index_option, str):
+            indices = semantic.get(control_index_option)
+            if not isinstance(indices, list) or len(indices) != len(controls):
+                invalid_roles.append(
+                    f"{control_index_option}={len(indices) if isinstance(indices, list) else 0} "
+                    f"for control={len(controls)}"
+                )
         caption = sample.get("caption")
         fallback = references[0].get("input_id") if references else None
         if sample.get("group") is not None or invalid_roles:
@@ -754,7 +844,6 @@ def _project_musubi_jsonl_dataset(
             })
             continue
         targets = role_entries["target"]
-        controls = role_entries.get("control", [])
         if not isinstance(caption, dict):
             unrepresentable.append({
                 "input_id": targets[0].get("input_id"),

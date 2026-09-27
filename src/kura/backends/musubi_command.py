@@ -16,7 +16,7 @@ from kura.backends.musubi_datasets import (
     _musubi_h3_effective_task,
     _write_musubi_dataset_config,
 )
-from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
+from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
@@ -285,7 +285,7 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
         raise ValueError("Musubi use_pinned_memory_for_block_swap requires blocks_to_swap > 0")
     if architecture not in ("flux2", "flux_2"):
         return
-    model_version = str(override.get("model_version") or "").lower()
+    model_version = _musubi_flux2_model_version(run)
     if "9b" not in model_version:
         return
     gpu = str(run.get("compute", {}).get("gpu") or "")
@@ -817,7 +817,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         argv = _script_command(commands, override, run)
     elif architecture in ("qwen_image", "qwen"):
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
-        model_version = str(override.get("model_version") or "original")
+        model_version = _musubi_model_version(run)
         train_argv = [
             *common, "src/musubi_tuner/qwen_image_train_network.py",
             "--dit", dit, "--vae", vae, "--text_encoder", text_encoder,
