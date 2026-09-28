@@ -98,6 +98,11 @@ def _finalize_dataset_handoff(
         lock_error = _redact_secret_text(str(exc))
     postflight_ref = f"realizations/{realization_id}.dataset-input-postflight.json"
     postflight_path = run_dir / postflight_ref
+    # status.json is projected only after both events are appended, so a
+    # matching projection proves they exist without rescanning events.jsonl.
+    # The scan remains only for a crash between the append and the projection.
+    announced = current.get("dataset_input_postflight")
+    announced = announced if isinstance(announced, dict) else {}
     if postflight_path.is_file():
         postflight = json.loads(postflight_path.read_text(encoding="utf-8"))
     else:
@@ -134,7 +139,7 @@ def _finalize_dataset_handoff(
                 "input_sha256": lock.get("input_sha256") if isinstance(lock, dict) else None,
             }
         _write_json(postflight_path, postflight)
-    if not _event_exists(
+    if announced.get("record") != postflight_ref and not _event_exists(
         run_dir, event="dataset_input_postflight", realization_id=realization_id, record=postflight_ref,
     ):
         append_run_event(run_dir, {
@@ -180,8 +185,12 @@ def _finalize_dataset_handoff(
             cleanup_ref = f"realizations/{realization_id}.dataset-view-cleanup-attempt-{_realization_id()}.json"
             cleanup_path = run_dir / cleanup_ref
         _write_json(cleanup_path, cleanup)
-    if cleanup_ref is not None and not _event_exists(
-        run_dir, event="dataset_view_cleanup", realization_id=realization_id, record=cleanup_ref,
+    if (
+        cleanup_ref is not None
+        and announced.get("cleanup_record") != cleanup_ref
+        and not _event_exists(
+            run_dir, event="dataset_view_cleanup", realization_id=realization_id, record=cleanup_ref,
+        )
     ):
         append_run_event(run_dir, {
             "event": "dataset_view_cleanup",

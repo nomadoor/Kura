@@ -394,21 +394,13 @@ is marked `migration: pending`; merge readiness must run
 
 ## Final integration cleanup ledger
 
-- Complete the structural cleanup bundle before RunPod selected-file transfer,
-  in separately reviewed commits ordered as follows: canonicalize Musubi
-  architecture aliases; close the AI-Toolkit non-strict projection path; add
-  one shared frozen-projection reader; choose one owner for view
-  materialization; remove unused compiler/writer parameters; and move
-  backend-specific plan facts behind an adapter-owned interface. The small
-  follow-ups listed below may be paired only when they touch the same seam.
+- Implement RunPod selected-file transfer for manifest-v2 runs through the
+  core projection reader: stage verifies source stat immediately before
+  transfer, the Pod verifies compile-time hashes, and launch keeps its
+  source-stat check as post-stage drift detection. Container preflight
+  records (including the Musubi video-frame record) must return with the
+  run's downloaded realizations.
 - The final pinned-image sd-scripts smoke records that
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Include a terminal run's remaining `cache/dataset-view` in `kura cleanup
-  runs` even when automatic removal was deferred for publication recovery and
-  the container later disappeared, leaving reconciliation at `unknown`.
-  Cleanup remains dry-run first and must identify the view as disposable rather
-  than deleting it automatically.
-- Avoid rescanning a run's complete `logs/events.jsonl` on every reconciliation
-  merely to decide whether one dataset postflight/cleanup event already exists.

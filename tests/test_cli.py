@@ -624,6 +624,60 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertTrue((run / "outputs").exists())
             self.assertFalse(payload["dry_run"])
 
+    def test_cleanup_runs_offers_only_disposable_dataset_view_remnants(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            dataset_file = root / "datasets" / "tiny" / "a.png"
+            dataset_file.parent.mkdir(parents=True)
+            dataset_file.write_bytes(b"image")
+            runs = {
+                "gone": ({"state": "unknown", "started": "2026-01-04T00:00:00+00:00"}, True),
+                "failed-cleanup": ({
+                    "state": "completed", "ended": "2026-01-03T00:00:00+00:00",
+                    "dataset_input_postflight": {"view_cleanup": "failed"},
+                }, True),
+                "deferred": ({
+                    "state": "completed", "ended": "2026-01-02T00:00:00+00:00",
+                    "recovery_required": True,
+                    "dataset_input_postflight": {"view_cleanup": "deferred"},
+                }, False),
+                "running": ({"state": "running", "started": "2026-01-01T00:00:00+00:00"}, False),
+            }
+            for run_id, (status, _) in runs.items():
+                view = root / "runs" / run_id / "cache" / "dataset-view" / "ai-toolkit" / "tiny"
+                view.mkdir(parents=True)
+                (view / "a.png").symlink_to(dataset_file)
+                (root / "runs" / run_id / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_cleanup(argparse.Namespace(target="runs", keep_last=30, delete_final_artifacts=False, yes=False))
+                payload = json.loads(stdout.getvalue())
+                run_actions = next(item for item in payload["actions"] if item.get("target") == "runs/*")["run_actions"]
+                offered = {item["id"] for item in run_actions if item["classification"] == "safe-run-dataset-view-remnant"}
+                self.assertEqual(code, 0)
+                self.assertEqual(offered, {run_id for run_id, (_, expected) in runs.items() if expected})
+                for run_id in runs:
+                    self.assertTrue((root / "runs" / run_id / "cache" / "dataset-view").is_dir())
+
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO),
+                ):
+                    self.assertEqual(cmd_cleanup(argparse.Namespace(target="runs", keep_last=30, delete_final_artifacts=False, yes=True)), 0)
+            finally:
+                os.chdir(previous)
+            self.assertFalse((root / "runs" / "gone" / "cache" / "dataset-view").exists())
+            self.assertTrue((root / "runs" / "deferred" / "cache" / "dataset-view").is_dir())
+            self.assertTrue(dataset_file.is_file())
+
     def test_cleanup_runs_requires_explicit_final_delete_for_whole_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -820,25 +820,33 @@ def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_art
     actions: list[dict[str, Any]] = []
     for item in runs:
         run_dir = item["path"]
-        postflight = item["status"].get("dataset_input_postflight") if isinstance(item.get("status"), dict) else None
-        failed_view = (
-            run_dir / "cache" / "dataset-view"
-            if isinstance(postflight, dict) and postflight.get("view_cleanup") == "failed"
-            else None
-        )
-        if item["id"] in keep_ids and item["state"] in states and failed_view is not None and failed_view.is_dir():
-            actions.append({
-                "id": item["id"],
-                "state": item["state"],
-                "classification": "safe-run-dataset-view-remnant",
-                "note": "Removes only a disposable dataset view left by failed automatic cleanup.",
-                "targets": [{
-                    "target": str(failed_view.relative_to(workspace)),
-                    "path": str(failed_view),
-                    "exists": True,
-                    "size_bytes": _path_size_bytes(failed_view),
-                }],
-            })
+        view = run_dir / "cache" / "dataset-view"
+        covered_by_transients = item["id"] not in keep_ids and item["state"] in states
+        if view.is_dir() and not covered_by_transients:
+            postflight = item["status"].get("dataset_input_postflight")
+            view_cleanup = postflight.get("view_cleanup") if isinstance(postflight, dict) else None
+            if item["state"] in states and view_cleanup == "failed":
+                note = "Removes only a disposable dataset view left by failed automatic cleanup."
+            elif item["state"] == "unknown":
+                note = (
+                    "Removes only a disposable dataset view whose automatic cleanup never ran "
+                    "because the container disappeared; launch rebuilds it from the frozen lock."
+                )
+            else:
+                note = None
+            if note is not None:
+                actions.append({
+                    "id": item["id"],
+                    "state": item["state"],
+                    "classification": "safe-run-dataset-view-remnant",
+                    "note": note,
+                    "targets": [{
+                        "target": str(view.relative_to(workspace)),
+                        "path": str(view),
+                        "exists": True,
+                        "size_bytes": _path_size_bytes(view),
+                    }],
+                })
         if item["id"] in keep_ids or item["state"] not in states:
             continue
         if delete_final_artifacts:

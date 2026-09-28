@@ -194,6 +194,35 @@ class LocalOutputPublicationTests(unittest.TestCase):
             self.assertEqual(second["dataset_input_postflight"], first["dataset_input_postflight"])
             self.assertFalse(view.parent.parent.exists())
 
+    def test_later_reconciles_do_not_rescan_events_and_never_duplicate_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            self._manifest_view(run_dir)
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            self._reconcile(run_dir)
+
+            with patch("kura.executors.docker._event_exists", side_effect=AssertionError("rescanned events")):
+                self._reconcile(run_dir)
+                self._reconcile(run_dir)
+
+            # A crash after the append but before the status projection falls
+            # back to the scan and still appends each event exactly once.
+            status_path = run_dir / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status.pop("dataset_input_postflight")
+            status_path.write_text(json.dumps(status), encoding="utf-8")
+            self._reconcile(run_dir)
+
+            events = [
+                json.loads(line)
+                for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            names = [item.get("event") for item in events]
+            self.assertEqual(names.count("dataset_input_postflight"), 1)
+            self.assertEqual(names.count("dataset_view_cleanup"), 1)
+
     def test_cleanup_failure_is_retried_on_later_reconcile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run(Path(directory))
@@ -249,6 +278,12 @@ class LocalOutputPublicationTests(unittest.TestCase):
                 if json.loads(line).get("event") != "dataset_input_postflight"
             ]
             events_path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+            # A crash between the record and its event also precedes the status
+            # projection, which is written last.
+            status_path = run_dir / "status.json"
+            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status.pop("dataset_input_postflight")
+            status_path.write_text(json.dumps(status), encoding="utf-8")
 
             second = self._reconcile(run_dir)
 
