@@ -51,6 +51,67 @@ def _safe_workspace_relative(value: Any, *, context: str) -> str:
     return path.as_posix()
 
 
+def _indexed_samples(
+    dataset_index: int, dataset_id: str, identity: dict[str, Any],
+    input_index: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Give each identity input a positional ID and record what it is."""
+    samples: list[dict[str, Any]] = []
+    for sample_index, sample in enumerate(identity["samples"]):
+        files: list[dict[str, Any]] = []
+        for file_index, reference in enumerate(sample["files"]):
+            input_id = f"d{dataset_index}:s{sample_index}:f{file_index}"
+            files.append({**reference, "input_id": input_id})
+            input_index[input_id] = {
+                "dataset": dataset_id,
+                "sample": sample["id"],
+                "kind": f"file[{file_index}] role={reference['role']}",
+                "binding_kind": f"file-role:{reference['role']}",
+                "manifest_position": file_index,
+                "container_source": f"/workspace/datasets/{dataset_id}/{reference['path']}",
+            }
+        caption_text = sample["caption"]
+        caption = None
+        if caption_text is not None:
+            caption_id = f"d{dataset_index}:s{sample_index}:caption"
+            caption = {"input_id": caption_id, "text": caption_text}
+            input_index[caption_id] = {
+                "dataset": dataset_id,
+                "sample": sample["id"],
+                "kind": "caption",
+                "binding_kind": "caption",
+                "text": caption_text,
+            }
+        samples.append({
+            "id": sample["id"], "group": sample.get("group"),
+            "files": files, "caption": caption,
+        })
+    return samples
+
+
+def _selection_from_lock(lock: dict[str, Any]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Rebuild the selection freeze verified, using only the frozen input lock."""
+    roots = lock["dataset_roots"]
+    identities = lock["semantic"]["datasets"]
+    if len(roots) != len(identities):
+        raise ValueError("frozen input lock dataset roots and identities differ")
+    input_index: dict[str, dict[str, Any]] = {}
+    datasets: list[dict[str, Any]] = []
+    for dataset_index, (root, identity) in enumerate(zip(roots, identities)):
+        dataset_id = root["dataset"]
+        prefix = root["logical"] + "/"
+        datasets.append({
+            "id": dataset_id,
+            "logical_root": root["logical"],
+            "physical_root": root["physical"],
+            "identity": identity,
+            "samples": _indexed_samples(dataset_index, dataset_id, identity, input_index),
+            "files": [item for item in lock["files"] if item["source"].startswith(prefix)],
+            "authoring_files": [item for item in lock["authoring_files"] if item["source"].startswith(prefix)],
+        })
+    return {"schema_version": 1, "run_id": lock["run_id"], "datasets": datasets}, input_index
+
+
 def _manifest_selection(run: dict[str, Any], workspace: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     authored = run.get("datasets")
     if not isinstance(authored, list) or not authored:
@@ -68,37 +129,7 @@ def _manifest_selection(run: dict[str, Any], workspace: Path) -> tuple[dict[str,
         logical_root = workspace / "datasets" / dataset_id
         physical_root = logical_root.resolve(strict=True)
         measured = measure_manifest(logical_root)
-        samples: list[dict[str, Any]] = []
-        for sample_index, sample in enumerate(measured["identity"]["samples"]):
-            files: list[dict[str, Any]] = []
-            for file_index, reference in enumerate(sample["files"]):
-                input_id = f"d{dataset_index}:s{sample_index}:f{file_index}"
-                item = {**reference, "input_id": input_id}
-                files.append(item)
-                input_index[input_id] = {
-                    "dataset": dataset_id,
-                    "sample": sample["id"],
-                    "kind": f"file[{file_index}] role={reference['role']}",
-                    "binding_kind": f"file-role:{reference['role']}",
-                    "manifest_position": file_index,
-                    "container_source": f"/workspace/datasets/{dataset_id}/{reference['path']}",
-                }
-            caption_text = sample["caption"]
-            caption = None
-            if caption_text is not None:
-                caption_id = f"d{dataset_index}:s{sample_index}:caption"
-                caption = {"input_id": caption_id, "text": caption_text}
-                input_index[caption_id] = {
-                    "dataset": dataset_id,
-                    "sample": sample["id"],
-                    "kind": "caption",
-                    "binding_kind": "caption",
-                    "text": caption_text,
-                }
-            samples.append({
-                "id": sample["id"], "group": sample.get("group"),
-                "files": files, "caption": caption,
-            })
+        samples = _indexed_samples(dataset_index, dataset_id, measured["identity"], input_index)
         files = []
         for item in measured["files"]:
             files.append({
@@ -1051,11 +1082,25 @@ def load_frozen_dataset_projection(
     dataset_ids: list[str] | tuple[str, ...] | None = None,
     required: bool = True,
 ) -> dict[str, Any] | None:
-    """Load the projection report frozen with this run's input lock.
+    """Load the projection report frozen with this run's input lock."""
+    handoff = load_frozen_dataset_handoff(
+        resolved_dir, backend=backend, dataset_ids=dataset_ids, required=required,
+    )
+    return None if handoff is None else handoff[1]
+
+
+def load_frozen_dataset_handoff(
+    resolved_dir: Path,
+    *,
+    backend: str | None = None,
+    dataset_ids: list[str] | tuple[str, ...] | None = None,
+    required: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Load the bound input lock and projection report written by freeze.
 
     The input lock's digest binds the report to the freeze that wrote it, so
     an altered or substituted file is rejected; the shared report validator
-    then checks the report itself.
+    then checks the report itself. This is the only reader of both locks.
     """
     projection_path = resolved_dir / "dataset-projection.lock.json"
     input_path = resolved_dir / "dataset-input.lock.json"
@@ -1088,14 +1133,26 @@ def load_frozen_dataset_projection(
         raise ValueError(
             f"frozen manifest projection belongs to backend {frozen_backend!r}, not {backend!r}"
         )
-    by_id = _validate_projection_report(report, str(frozen_backend))
-    if any(item["unrepresentable"] for item in by_id.values()):
-        raise ValueError("frozen manifest projection records unrepresentable inputs")
+    run_id = input_lock.get("run_id")
+    if not isinstance(run_id, str) or not run_id or PurePosixPath(run_id).name != run_id or run_id in {".", ".."}:
+        raise ValueError("frozen dataset handoff has an unsafe run id; recompile the run")
+    try:
+        selection, input_index = _selection_from_lock(input_lock)
+        verified_report = deepcopy(report)
+        expected = _verify_projection(
+            run_id, str(frozen_backend), selection, input_index, verified_report,
+        )
+    except (KeyError, TypeError, AttributeError) as error:
+        raise ValueError("frozen dataset handoff is malformed; recompile the run") from error
+    stored = {key: value for key, value in input_lock.items() if key != "projection_sha256"}
+    if expected != stored or verified_report != report:
+        raise ValueError("frozen dataset handoff does not re-verify against its input lock; recompile the run")
+    by_id = {item["id"]: item for item in report["datasets"]}
     if dataset_ids is not None:
         selected = list(dataset_ids)
         if len(selected) != len(set(selected)) or set(by_id) != set(selected):
             raise ValueError("frozen manifest projection does not match the selected datasets")
-    return report
+    return input_lock, report
 
 
 def freeze_dataset_handoff(
@@ -1104,6 +1161,21 @@ def freeze_dataset_handoff(
     """Measure v2 selection once, require a total projection, and freeze both locks."""
     selection, input_index = _manifest_selection(run, workspace)
     report = project(deepcopy(selection))
+    lock = _verify_projection(str(run.get("id")), backend, selection, input_index, report)
+    return _write_frozen_handoff(resolved, report, lock)
+
+
+def _verify_projection(
+    run_id: str, backend: str, selection: dict[str, Any],
+    input_index: dict[str, dict[str, Any]], report: Any,
+) -> dict[str, Any]:
+    """The single full check of a projection report; returns the input lock it proves.
+
+    Freeze runs it on a fresh report. The reader runs it again on the frozen
+    report with a selection rebuilt from the frozen lock, and requires the
+    result to equal that lock, so views, links, consumers, and write roots are
+    re-verified on every read without a second validator.
+    """
     by_id = _validate_projection_report(report, backend)
     selected_ids = [item["id"] for item in selection["datasets"]]
     if set(by_id) != set(selected_ids):
@@ -1125,7 +1197,7 @@ def freeze_dataset_handoff(
         dataset_represented: list[str] = []
         for projected_view in projected_views:
             view, _placements, represented = _validate_view(
-                str(run.get("id")), dataset, projected_view, native, input_index,
+                run_id, dataset, projected_view, native, input_index,
             )
             view_identity = (dataset["id"], view["id"])
             if view_identity in seen_view_ids:
@@ -1190,9 +1262,10 @@ def freeze_dataset_handoff(
         "datasets": [dataset["identity"] for dataset in selection["datasets"]],
         "projection": stable_projection,
     }
-    lock = {
+    return {
         "schema_version": 2,
         "backend": backend,
+        "run_id": run_id,
         "verification": "content-hash-at-compile",
         "files": all_files,
         "authoring_files": authoring_files,
@@ -1201,7 +1274,6 @@ def freeze_dataset_handoff(
         "input_sha256": _digest(semantic),
         "semantic": semantic,
     }
-    return _write_frozen_handoff(resolved, report, lock)
 
 
 def _write_frozen_handoff(

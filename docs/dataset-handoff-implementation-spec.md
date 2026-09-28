@@ -141,11 +141,14 @@ is not v2.
    entries that a trainer would silently ignore. It serializes the input lock
    and projection report immutably under `resolved/`, including the expected
    source-link paths and their container-resolvable targets. The input lock
-   records the projection report's digest. One core validator checks the
-   report's own structure both here and in `load_frozen_dataset_projection`,
-   the only reader; the digest additionally rejects a report that was altered
-   or substituted after freeze. The lock writer is private to freeze, and a
-   missing report is an error whenever the input lock records one.
+   records the projection report's digest. The only reader,
+   `load_frozen_dataset_handoff`, rebuilds the verified selection from the
+   input lock alone and reruns the same full projection verification freeze
+   uses, requiring the result to equal the stored lock; views, links,
+   consumers, and write roots are therefore re-verified on every read, and
+   the digest additionally rejects a report altered or substituted after
+   freeze. The lock writer is private to freeze, and a missing report is an
+   error whenever the input lock records one.
    Each projected dataset keeps three native forms on purpose: `semantic`
    (the run-independent part that enters input identity), `native_runtime`
    (run-owned paths), and `native` (the exact mapping handed to the trainer).

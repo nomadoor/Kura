@@ -160,7 +160,9 @@ class FrozenDatasetProjectionReaderTests(unittest.TestCase):
             ("minimal", {"backend": "ai-toolkit", "datasets": [{"id": "tiny"}]}, "invalid dataset projection report"),
             ("no views", None, "no run views"),
             ("native drift", None, "native handoff must be derived"),
-            ("unrepresentable", None, "records unrepresentable inputs"),
+            ("unrepresentable", None, "is unrepresentable: example"),
+            ("escaping view root", None, "view root|safe|escape|outside"),
+            ("rebound lock views", None, "does not re-verify"),
         )
         for name, report, message in malformed:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
@@ -172,8 +174,12 @@ class FrozenDatasetProjectionReaderTests(unittest.TestCase):
                         dataset["views"] = []
                     elif name == "native drift":
                         dataset["native"]["folder_path"] = "/workspace/datasets/tiny"
+                    elif name == "escaping view root":
+                        dataset["views"][0]["root"] = "../../escape"
+                    elif name == "rebound lock views":
+                        dataset["policy"]["profile"] = "tampered"
                     else:
-                        dataset["unrepresentable"] = [{"input_id": "x", "reason": "example"}]
+                        dataset["unrepresentable"] = [{"input_id": "d0:s0:f0", "reason": "example"}]
                 self._rebind(resolved, report)
                 with self.assertRaisesRegex(ValueError, message):
                     load_frozen_dataset_projection(resolved, backend="ai-toolkit", dataset_ids=["tiny"])

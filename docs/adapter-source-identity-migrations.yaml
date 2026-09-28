@@ -7,6 +7,81 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: handoff-read-reverification-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Re-verify a frozen dataset handoff on every read: the reader rebuilds
+      the verified selection from the input lock and reruns the same full
+      projection verification freeze uses, requiring the result to equal the
+      stored lock, so view roots, links, consumers, and write roots are
+      checked again after freeze. load_frozen_dataset_handoff returns the
+      bound lock and report together. Generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a8c9c3f36739571cea76f7743f0a98d5cd1223460e1fb5651864dc735e631012
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e5cfb85a372fdb83cc72e77545d18822922eceb9598cc4fba2f99a578e5d2140
+  - id: handoff-read-reverification-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Re-verify a frozen dataset handoff on every read: the reader rebuilds
+      the verified selection from the input lock and reruns the same full
+      projection verification freeze uses, requiring the result to equal the
+      stored lock, so view roots, links, consumers, and write roots are
+      checked again after freeze. load_frozen_dataset_handoff returns the
+      bound lock and report together. Generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c734002ff7831de82632b098d2d942ec0ea851ef82e0fd1093e7b141eda04302
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 9974b883ec01bbf28d687982c18986587ec8ee56d1469e53406bd540bc885b3f
+  - id: handoff-read-reverification-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Re-verify a frozen dataset handoff on every read: the reader rebuilds
+      the verified selection from the input lock and reruns the same full
+      projection verification freeze uses, requiring the result to equal the
+      stored lock, so view roots, links, consumers, and write roots are
+      checked again after freeze. load_frozen_dataset_handoff returns the
+      bound lock and report together. Generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d8c293a69381594327163385d8efe19cd47fcf53650d777abd9c826116f8cfce
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4fcce4be9f8cac5a425735ee7222c0ed4294966ae9594d8e576b34ac83b4768e
   - id: small-adapter-cleanups-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-

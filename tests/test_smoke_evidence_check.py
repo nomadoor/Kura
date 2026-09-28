@@ -23,7 +23,7 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         latest = next(
             item for item in migrations["records"]
             if item["id"]
-            == "small-adapter-cleanups-ai-toolkit-2026-09-28"
+            == "handoff-read-reverification-ai-toolkit-2026-09-28"
         )
 
         self.assertEqual(migration["backend"], record["backend"])
