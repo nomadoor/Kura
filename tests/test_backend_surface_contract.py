@@ -295,6 +295,13 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "num_frames": {"type": "integer", "minimum": 1},
             },
         )
+        ai_toolkit = backend_capabilities("ai-toolkit")
+        self.assertIn("flatten_groups", ai_toolkit["config_fields"])
+        self.assertIn("dataset_options", ai_toolkit["config_fields"])
+        self.assertEqual(
+            ai_toolkit["nested_config_fields"]["dataset_options.<dataset-id>"],
+            {"blocks": {"type": "list of group and num_repeats mappings"}},
+        )
         model_arch_choices = backend_capabilities("ai-toolkit")["config_value_choices"]["model_arch"]
         self.assertIn("sd1", model_arch_choices)
         self.assertIn("qwen_image_2", model_arch_choices)

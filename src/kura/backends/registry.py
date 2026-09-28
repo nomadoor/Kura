@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
@@ -100,7 +100,7 @@ def _compile_sd_scripts(run: dict[str, Any], resolved: Path, workspace: Path | N
 
 AI_TOOLKIT_SURFACE = BackendSurface(
     fields=frozenset({
-        "batch_size", "dataset_config", "gradient_accumulation_steps", "gradient_checkpointing",
+        "batch_size", "dataset_config", "dataset_options", "flatten_groups", "gradient_accumulation_steps", "gradient_checkpointing",
         "bypass_guidance_embedding", "extras_name_or_path", "learning_rate", "low_vram", "lr_scheduler", "mixed_precision", "model_arch", "model_edit",
         "network_alpha", "network_dim", "optimizer_type", "quantize", "quantize_te", "resolution",
         "save_every_n_steps", "save_last_n_steps",
@@ -117,7 +117,10 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         "list selected files in items.jsonl with role 'target', remove dataset_folder, "
         "and recompile",
     ),),
-    nested_config_fields={"dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS},
+    nested_config_fields={
+        "dataset_config": AI_TOOLKIT_DATASET_FIELD_SPECS,
+        **AI_TOOLKIT_DATASET_OPTION_CAPABILITIES,
+    },
     config_value_choices=(("model_arch", tuple(sorted(AI_TOOLKIT_PINNED_MODEL_ARCHS))),),
 )
 

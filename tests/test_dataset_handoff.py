@@ -1289,6 +1289,138 @@ class DatasetHandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "declare blocks or flatten_groups"):
             _resolve_ai_toolkit_projection_blocks(dataset, {}, flatten_groups=False)
 
+    def test_ai_toolkit_grouped_flattening_is_wired_to_the_public_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["flatten_groups"] = True
+            self.write_tiny_manifest(workspace, [
+                {"id": "a", "group": "first", "files": [
+                    {"type": "file", "role": "target", "path": "a.png"}],
+                 "caption": {"text": "first caption"}},
+                {"id": "b", "group": "second", "files": [
+                    {"type": "file", "role": "target", "path": "b.png"}],
+                 "caption": {"text": "second caption"}},
+            ], {"a.png": b"a", "b.png": b"b"})
+
+            run["backend"]["config"].pop("flatten_groups")
+            with self.assertRaisesRegex(ValueError, "declare blocks or flatten_groups"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+            run["backend"]["config"]["flatten_groups"] = True
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+
+        projected = lock["semantic"]["projection"][0]
+        self.assertTrue(projected["policy"]["flatten_groups"])
+        self.assertEqual(projected["policy"]["block_groups"], [None])
+        self.assertEqual(len(lock["views"]), 1)
+        self.assertEqual(len(lock["views"][0]["bindings"]), 2)
+
+    def test_ai_toolkit_group_blocks_drive_distinct_views_repeats_and_native_datasets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run.update({"model": {"base": "example/model"}, "recipe": {"steps": 1, "seed": 1}})
+            run["backend"]["config"]["dataset_options"] = {"tiny": {"blocks": [
+                {"group": "first", "num_repeats": 2},
+                {"group": "second", "num_repeats": 3},
+            ]}}
+            self.write_tiny_manifest(workspace, [
+                {"id": "a", "group": "first", "files": [
+                    {"type": "file", "role": "target", "path": "a.png"}],
+                 "caption": {"text": "first caption"}},
+                {"id": "b", "group": "second", "files": [
+                    {"type": "file", "role": "target", "path": "b.png"}],
+                 "caption": {"text": "second caption"}},
+            ], {"a.png": b"a", "b.png": b"b"})
+
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            projection = json.loads(
+                (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
+            )["datasets"][0]
+            process = yaml.safe_load(
+                (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+
+        self.assertEqual(len(lock["views"]), 2)
+        self.assertEqual([view["repeat"] for view in lock["views"]], [2, 3])
+        self.assertEqual(
+            [view["repeat_pointer"] for view in lock["views"]],
+            ["/datasets/0/num_repeats", "/datasets/1/num_repeats"],
+        )
+        self.assertEqual(
+            [item["num_repeats"] for item in projection["native"]["datasets"]],
+            [2, 3],
+        )
+        self.assertEqual(process["datasets"], projection["native"]["datasets"])
+        self.assertEqual(
+            projection["policy"]["block_settings"],
+            [{"num_repeats": 2}, {"num_repeats": 3}],
+        )
+
+    def test_ai_toolkit_selects_one_profile_before_partitioning_group_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"] = {
+                "model_arch": "flux_kontext",
+                "dataset_options": {"tiny": {"blocks": [
+                    {"group": "plain", "num_repeats": 1},
+                    {"group": "controlled", "num_repeats": 1},
+                ]}},
+            }
+            self.write_tiny_manifest(workspace, [
+                {"id": "plain", "group": "plain", "files": [
+                    {"type": "file", "role": "target", "path": "plain.png"}],
+                 "caption": {"text": "plain"}},
+                {"id": "controlled", "group": "controlled", "files": [
+                    {"type": "file", "role": "target", "path": "controlled.png"},
+                    {"type": "file", "role": "control", "path": "control.png"}],
+                 "caption": {"text": "controlled"}},
+            ], {
+                "plain.png": b"plain", "controlled.png": b"controlled",
+                "control.png": b"control",
+            })
+
+            with self.assertRaisesRegex(ValueError, "AI-Toolkit.*profile"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
+    def test_ai_toolkit_dataset_options_are_closed_and_reference_selected_datasets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"]["config"]["dataset_options"] = {"other": {"blocks": []}}
+            with self.assertRaisesRegex(ValueError, "names undeclared dataset"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+            run["backend"]["config"]["dataset_options"] = {"tiny": {"unknown": True}}
+            with self.assertRaisesRegex(ValueError, "unsupported key"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+            run["backend"]["config"].pop("dataset_options")
+            run["backend"]["config"]["flatten_groups"] = "yes"
+            with self.assertRaisesRegex(ValueError, "flatten_groups must be true or false"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit",
+                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
+                )
+
     def test_shared_partition_resolver_preserves_authored_order_and_flattening(self) -> None:
         dataset = {
             "id": "grouped",

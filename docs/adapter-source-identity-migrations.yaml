@@ -7,6 +7,76 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-explicit-group-blocks-existing-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Add explicit grouped-manifest block projection, typed repeat settings,
+      and nested semantic/runtime native verification. Existing evidence-scoped
+      runs use one ungrouped dataset with no dataset_options or flatten_groups,
+      for which the generated view, native dataset mapping, trainer command,
+      optimizer behavior, and publication contract remain unchanged. The
+      historical flat one-block projection is deliberately retained so an
+      unchanged dataset can Resume against its existing input identity; only
+      explicit authored blocks use the native dataset-list form, and that
+      compatibility boundary is isolated in named encode/decode helpers. This
+      migration does not claim runtime evidence for grouped blocks.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c8e52a2538ec44d8afa5993ed5bd5d7b51d8532e18936f25494adea6adc9ec72
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6ec7371bb302e6f8f26282107510dea095fc795f60117b5625943b85221dacae
+  - id: musubi-nested-native-verifier-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Generalize the shared projection verifier so semantic and runtime-only
+      leaves may be disjoint inside matching nested dataset containers. Musubi's
+      existing generated JSONL projections already produce the same verified
+      native TOML, commands, optimizer behavior, and artifacts; no Musubi
+      projection or runtime behavior changes in this transition.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a93e340f2b4f191eceb91a19c74c0faf746c9dab92b1123aa1d36108e192d241
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: cb39421edf298215f7198c85dacb04f12baa4a9ee77222c9cccfc01d402749b4
+  - id: sd-scripts-nested-native-verifier-existing-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Generalize the shared projection verifier so semantic and runtime-only
+      leaves may be disjoint inside matching nested dataset containers.
+      SD-scripts' existing generated subset projections keep the same verified
+      native TOML, commands, optimizer behavior, Resume state, and artifacts;
+      no SD-scripts projection or runtime behavior changes in this transition.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 666ae26034ee8cbde74958844a83db290bf258e203763b4c7e3688c5195c6aae
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c6dabd5ae21ec76069c71f93de886731d2d4ffe385948635437b254cd51f8a76
   - id: ai-toolkit-shared-caption-projection-verifier-existing-evidence-2026-09-28
     backend: ai-toolkit
     reason: >-

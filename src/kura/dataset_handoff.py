@@ -951,6 +951,28 @@ def _view_semantic(view: dict[str, Any]) -> dict[str, Any]:
     return stable
 
 
+def _merge_projection_native(semantic: Any, runtime: Any) -> Any:
+    """Merge disjoint semantic/runtime leaves through matching containers."""
+    if isinstance(semantic, dict) and isinstance(runtime, dict):
+        merged: dict[str, Any] = {}
+        for key in semantic.keys() | runtime.keys():
+            if key in semantic and key in runtime:
+                merged[key] = _merge_projection_native(semantic[key], runtime[key])
+            elif key in semantic:
+                merged[key] = deepcopy(semantic[key])
+            else:
+                merged[key] = deepcopy(runtime[key])
+        return merged
+    if isinstance(semantic, list) and isinstance(runtime, list):
+        if len(semantic) != len(runtime):
+            raise ValueError("semantic and runtime native lists differ in length")
+        return [
+            _merge_projection_native(semantic_item, runtime_item)
+            for semantic_item, runtime_item in zip(semantic, runtime)
+        ]
+    raise ValueError("semantic and runtime native leaves overlap")
+
+
 def freeze_dataset_handoff(
     run: dict[str, Any], workspace: Path, resolved: Path, *, backend: str, project: Project,
 ) -> dict[str, Any]:
@@ -998,8 +1020,16 @@ def freeze_dataset_handoff(
         native = projected.get("native")
         if not isinstance(native_runtime, dict) or not isinstance(native, dict):
             raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has an invalid native handoff")
-        overlap = set(projection_semantic) & set(native_runtime)
-        if overlap or native != {**projection_semantic, **native_runtime}:
+        try:
+            derived_native = _merge_projection_native(
+                projection_semantic, native_runtime,
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"{backend} projection for dataset {dataset['id']!r} native handoff must be derived "
+                "exactly from semantic and runtime-only fields"
+            ) from error
+        if native != derived_native:
             raise ValueError(
                 f"{backend} projection for dataset {dataset['id']!r} native handoff must be derived "
                 "exactly from semantic and runtime-only fields"

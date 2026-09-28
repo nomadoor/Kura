@@ -32,6 +32,12 @@ AI_TOOLKIT_DATASET_FIELD_SPECS = {
     "do_audio": {"type": "boolean"},
 }
 
+AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
+    "dataset_options.<dataset-id>": {
+        "blocks": {"type": "list of group and num_repeats mappings"},
+    },
+}
+
 # Registry snapshot from Kura image sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
 # (AI-Toolkit 0.13.18, embedded commit 31ddc709c35d3d3b820c636745397561f806b246).
 # It is the union of
@@ -322,6 +328,22 @@ class _AiToolkitProjectionBlock:
     num_repeats: int
     explicit: bool
 
+    def view_root(self, run_id: str, dataset_id: str) -> str:
+        base = f"runs/{run_id}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        return f"{base}/block-{self.index:03d}" if self.count > 1 else base
+
+    def view_id(self, dataset_id: str) -> str:
+        return (
+            f"ai-toolkit-{dataset_id}-block-{self.index:03d}"
+            if self.count > 1 else f"ai-toolkit-{dataset_id}"
+        )
+
+    @property
+    def native_pointer_prefix(self) -> str:
+        # Historical one-block locks used the native dataset mapping directly.
+        # Explicit blocks use the list accepted by process.datasets.
+        return f"/datasets/{self.index}" if self.explicit else ""
+
 
 def _select_ai_toolkit_projection_profile(
     *, architecture: str, dataset: dict[str, Any], dataset_config: dict[str, Any],
@@ -499,26 +521,363 @@ def _validate_ai_toolkit_profile_requirements(
     return resolved
 
 
+def _project_ai_toolkit_folder_block(
+    *, run: dict[str, Any], block: _AiToolkitProjectionBlock,
+    profile_name: str, profile: dict[str, Any], dataset_config: dict[str, Any],
+    effective_requirements: dict[str, Any], generated_controls: list[str],
+    allow_groups: bool,
+) -> dict[str, Any]:
+    """Project one already-resolved block using one dataset-level profile."""
+    dataset = block.dataset
+    dataset_id = dataset.get("id")
+    view_root = block.view_root(str(run["id"]), str(dataset_id))
+    pointer_prefix = block.native_pointer_prefix
+    control_mode = bool(profile["has_control"])
+    target_media = str(profile["target_media"])
+    video_mode = target_media == "video"
+    target_root = f"{view_root}/target" if control_mode else view_root
+    consumed: list[str] = []
+    unrepresentable: list[dict[str, str]] = []
+    links: list[dict[str, str]] = []
+    files: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
+    control_inputs: dict[int, list[str]] = {}
+    control_counts: dict[str, int] = {}
+    control_kinds: dict[str, tuple[str, ...]] = {}
+    for index, sample in enumerate(dataset.get("samples", [])):
+        group = sample.get("group")
+        if group is not None and not allow_groups:
+            unrepresentable.append({
+                "input_id": sample["caption"]["input_id"],
+                "reason": f"group {group!r} requires an explicit flattening decision",
+            })
+            continue
+        references = sample.get("files", [])
+        targets = [item for item in references if item.get("role") == "target"]
+        controls = [item for item in references if item.get("role") == "control"]
+        control_counts[str(sample.get("id"))] = len(controls)
+        kinds = tuple(_ai_toolkit_media_kind(item.get("path")) for item in controls)
+        control_kinds[str(sample.get("id"))] = kinds
+        control_order = profile["control_order"]
+        if control_order is not None:
+            if control_order != "image-then-video":
+                raise ValueError(
+                    f"AI-Toolkit profile {profile_name!r} has unsupported control order "
+                    f"{control_order!r}"
+                )
+            media_rank = {"image": 0, "video": 1}
+            ordered_kinds = tuple(
+                sorted(kinds, key=lambda kind: media_rank.get(kind, len(media_rank)))
+            )
+            if kinds != ordered_kinds:
+                raise ValueError(
+                    "AI-Toolkit profile requires image references before video references "
+                    f"in manifest order; sample {sample.get('id')!r} has {kinds!r}"
+                )
+        caption = sample.get("caption")
+        sample_tag_payload = {
+            "files": [
+                {"role": item.get("role"), "sha256": item.get("sha256")}
+                for item in references
+            ],
+            "caption": caption.get("text") if isinstance(caption, dict) else None,
+        }
+        content_tag = hashlib.sha256(
+            json.dumps(
+                sample_tag_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+        mode_label = target_media
+        for reference in targets:
+            suffix = Path(str(reference.get("path"))).suffix.lower()
+            if len(targets) != 1:
+                unrepresentable.append({
+                    "input_id": reference["input_id"],
+                    "reason": f"AI-Toolkit {mode_label} mode requires exactly one target per sample",
+                })
+            elif _ai_toolkit_media_kind(reference.get("path")) != target_media:
+                unrepresentable.append({
+                    "input_id": reference["input_id"],
+                    "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit {mode_label} mode",
+                })
+            else:
+                destination = f"{target_root}/{index:06d}-{content_tag}{suffix}"
+                links.append({
+                    "path": destination,
+                    "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
+                    "input_id": reference["input_id"],
+                })
+                consumed.append(reference["input_id"])
+        for control_index, reference in enumerate(controls):
+            suffix = Path(str(reference.get("path"))).suffix.lower()
+            if not control_mode:
+                unrepresentable.append({
+                    "input_id": reference["input_id"],
+                    "reason": "control input requires a verified AI-Toolkit control profile",
+                })
+            elif (
+                _ai_toolkit_media_kind(reference.get("path"))
+                not in profile["control_media"]
+            ):
+                unrepresentable.append({
+                    "input_id": reference["input_id"],
+                    "reason": f"control extension {suffix!r} is unsupported by AI-Toolkit {mode_label} control mode",
+                })
+            else:
+                control_root = f"{view_root}/control-{control_index}"
+                links.append({
+                    "path": f"{control_root}/{index:06d}-{content_tag}{suffix}",
+                    "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
+                    "input_id": reference["input_id"],
+                })
+                consumed.append(reference["input_id"])
+                control_inputs.setdefault(control_index, []).append(reference["input_id"])
+        for reference in references:
+            if reference.get("role") not in {"target", "control"}:
+                unrepresentable.append({
+                    "input_id": reference["input_id"],
+                "reason": f"role {reference.get('role')!r} is unsupported by AI-Toolkit {mode_label} mode",
+                })
+        if not isinstance(caption, dict) or caption.get("text") is None:
+            input_id = caption.get("input_id") if isinstance(caption, dict) else None
+            unrepresentable.append({
+                "input_id": input_id,
+                "reason": f"an absent caption cannot yet be represented losslessly in AI-Toolkit {mode_label} mode",
+            })
+        elif len(targets) == 1 and _ai_toolkit_media_kind(targets[0].get("path")) == target_media:
+            caption_path = f"{target_root}/{index:06d}-{content_tag}.txt"
+            files.append({
+                "path": caption_path,
+                "text": caption["text"],
+                "input_id": caption["input_id"],
+            })
+            consumed.append(caption["input_id"])
+            links_for_sample = [item for item in links if item["input_id"] == targets[0]["input_id"]]
+            if links_for_sample:
+                members = [
+                    {"input_id": targets[0]["input_id"], "root": target_root},
+                    {"input_id": caption["input_id"], "root": target_root},
+                ]
+                members.extend(
+                    {
+                        "input_id": reference["input_id"],
+                        "root": f"{view_root}/control-{control_index}",
+                        "slot": control_index,
+                    }
+                    for control_index, reference in enumerate(controls)
+                )
+                bindings.append({
+                    "rule": "same-relative-stem",
+                    "key": f"{index:06d}-{content_tag}",
+                    "members": members,
+                })
+    if profile["uniform_control_count"] and len(set(control_counts.values())) > 1:
+        rendered = ", ".join(
+            f"{sample_id}={count}" for sample_id, count in sorted(control_counts.items())
+        )
+        raise ValueError(
+            f"AI-Toolkit profile {profile_name!r} requires the same control slot count for every "
+            f"sample; observed {rendered}"
+        )
+    if profile["uniform_control_media"] and len(set(control_kinds.values())) > 1:
+        rendered = ", ".join(
+            f"{sample_id}={kinds!r}" for sample_id, kinds in sorted(control_kinds.items())
+        )
+        raise ValueError(
+            f"AI-Toolkit profile {profile_name!r} requires each reference slot to keep "
+            f"one media kind across samples; observed {rendered}"
+        )
+    semantic = {
+        "caption_ext": ".txt",
+        "cache_latents_to_disk": True,
+        **{
+            native_key: deepcopy(dataset_config[field])
+            for field, native_key in profile.get("native_options", {}).items()
+            if field in dataset_config
+        },
+        **({"controls": list(generated_controls)} if generated_controls else {}),
+        **({"num_repeats": block.num_repeats} if block.explicit else {}),
+    }
+    native_runtime: dict[str, Any] = {"folder_path": f"/workspace/{target_root}"}
+    if control_mode:
+        native_runtime["control_path"] = [
+            f"/workspace/{view_root}/control-{index}"
+            for index in sorted(control_inputs)
+        ]
+    consumers = [{
+        "id": "dataset",
+        "kind": "recursive-directory",
+        "native_pointer": pointer_prefix + "/folder_path",
+        "path": target_root,
+        "input_ids": [
+            input_id for input_id in consumed
+            if input_id not in {item for values in control_inputs.values() for item in values}
+        ],
+    }]
+    consumers.extend({
+        "id": f"control-{index}",
+        "kind": "recursive-directory",
+        "native_pointer": pointer_prefix + f"/control_path/{index}",
+        "path": f"{view_root}/control-{index}",
+        "input_ids": control_inputs[index],
+    } for index in sorted(control_inputs))
+    return {
+        "id": dataset_id,
+        "consumed": consumed,
+        "unrepresentable": unrepresentable,
+        "semantic": semantic,
+        "native_runtime": native_runtime,
+        "native": {**semantic, **native_runtime},
+        "native_string_fields": [
+            pointer_prefix + "/caption_ext",
+            *(
+                pointer_prefix + f"/controls/{index}"
+                for index in range(len(generated_controls))
+            ),
+        ],
+        "policy": {
+            "profile": profile_name,
+            "codec": profile["codec"],
+            "architecture_requirements": effective_requirements,
+            **(
+                {"control_selection": profile["control_selection"]}
+                if "control_selection" in profile else {}
+            ),
+            **(
+                {"control_order": profile["control_order"]}
+                if profile["control_order"] is not None else {}
+            ),
+            **(
+                {"generated_controls": list(generated_controls)}
+                if generated_controls else {}
+            ),
+            **(
+                {
+                    "do_i2v": bool(dataset_config.get("do_i2v")),
+                    "audio_selection": (
+                        "embedded-target-video"
+                        if dataset_config.get("do_audio") is True else "disabled"
+                    ),
+                }
+                if video_mode else {}
+            ),
+            "block_groups": [block.group],
+            "block_settings": [{"num_repeats": block.num_repeats}],
+        },
+        "views": [{
+            "id": block.view_id(str(dataset_id)),
+            "root": view_root,
+            "links": links,
+            "files": files,
+            "native_files": [],
+            "write_roots": [{
+                "path": target_root,
+                "native_pointer": pointer_prefix + "/folder_path",
+            }],
+            "consumers": consumers,
+            "repeat": block.num_repeats,
+            **({
+                "repeat_pointer": pointer_prefix + "/num_repeats",
+            } if block.explicit else {}),
+            "bindings": bindings,
+        }],
+    }
+
+
+def _ai_toolkit_projection_options(
+    run: dict[str, Any], selection: dict[str, Any],
+) -> tuple[bool, dict[str, dict[str, Any]]]:
+    override = _ai_toolkit_backend_override(run)
+    flatten_groups = override.get("flatten_groups", False)
+    if not isinstance(flatten_groups, bool):
+        raise ValueError("AI-Toolkit backend.config.flatten_groups must be true or false")
+    raw_options = override.get("dataset_options", {})
+    if not isinstance(raw_options, dict):
+        raise ValueError(
+            "AI-Toolkit backend.config.dataset_options must be a mapping keyed by dataset id"
+        )
+    selected_ids = {str(dataset.get("id")) for dataset in selection.get("datasets", [])}
+    undeclared = sorted(set(raw_options) - selected_ids)
+    if undeclared:
+        raise ValueError(
+            "AI-Toolkit backend.config.dataset_options names undeclared dataset(s): "
+            + ", ".join(undeclared)
+        )
+    options: dict[str, dict[str, Any]] = {}
+    for dataset_id, value in raw_options.items():
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"AI-Toolkit backend.config.dataset_options.{dataset_id} must be a mapping"
+            )
+        unsupported = sorted(set(value) - {"blocks"})
+        if unsupported:
+            raise ValueError(
+                f"AI-Toolkit backend.config.dataset_options.{dataset_id} contains unsupported key(s): "
+                + ", ".join(unsupported)
+            )
+        options[str(dataset_id)] = value
+    return flatten_groups, options
+
+
+def _combine_ai_toolkit_block_reports(
+    *, dataset_id: str, blocks: list[_AiToolkitProjectionBlock],
+    reports: list[dict[str, Any]], flatten_groups: bool,
+) -> dict[str, Any]:
+    """Combine block reports at the sole legacy-flat/native-list boundary."""
+    policy = deepcopy(reports[0]["policy"])
+    policy["block_groups"] = [block.group for block in blocks]
+    policy["block_settings"] = [
+        {"num_repeats": block.num_repeats} for block in blocks
+    ]
+    if flatten_groups:
+        policy["flatten_groups"] = True
+    common = {
+        "id": dataset_id,
+        "consumed": [input_id for report in reports for input_id in report["consumed"]],
+        "unrepresentable": [
+            issue for report in reports for issue in report["unrepresentable"]
+        ],
+        "native_string_fields": [
+            pointer for report in reports for pointer in report["native_string_fields"]
+        ],
+        "policy": policy,
+        "views": [report["views"][0] for report in reports],
+    }
+    if not blocks[0].explicit:
+        # Existing evidence and Resume identities use the historical flat
+        # single-dataset mapping. Its generated trainer YAML is also unchanged.
+        return {
+            **common,
+            "semantic": reports[0]["semantic"],
+            "native_runtime": reports[0]["native_runtime"],
+            "native": reports[0]["native"],
+        }
+    return {
+        **common,
+        "semantic": {"datasets": [report["semantic"] for report in reports]},
+        "native_runtime": {"datasets": [report["native_runtime"] for report in reports]},
+        "native": {"datasets": [report["native"] for report in reports]},
+    }
+
+
 def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
-    """Project the first lossless manifest path supported by the pinned image loader."""
+    """Project manifest datasets, including explicit group-to-block mappings."""
     override = _ai_toolkit_backend_override(run)
     if override.get("command") is not None:
         raise ValueError(
             "AI-Toolkit explicit command cannot yet prove a first-class manifest handoff"
         )
-    dataset_config = override.get("dataset_config")
-    if dataset_config is None:
-        dataset_config = {}
+    dataset_config = override.get("dataset_config") or {}
     if not isinstance(dataset_config, dict):
         raise ValueError("AI-Toolkit backend.config.dataset_config must be a mapping")
-    supported_dataset_options = {
-        "generated_controls", "num_frames", "fps", "do_i2v", "do_audio",
-    }
-    unsupported_dataset_options = sorted(set(dataset_config) - supported_dataset_options)
-    if unsupported_dataset_options:
+    unsupported = sorted(set(dataset_config) - set(AI_TOOLKIT_DATASET_FIELD_SPECS))
+    if unsupported:
         raise ValueError(
-            "AI-Toolkit manifest image projection does not yet support "
-            "backend.config.dataset_config key(s): " + ", ".join(unsupported_dataset_options)
+            "AI-Toolkit manifest projection does not support backend.config.dataset_config "
+            "key(s): " + ", ".join(unsupported)
         )
     architecture = _ai_toolkit_projection_architecture(run)
     generated_controls = dataset_config.get("generated_controls", [])
@@ -529,24 +888,18 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
     architecture_requirements = _validate_ai_toolkit_architecture_requirements(
         architecture, override,
     )
-    checked_profile_requirements: dict[str, dict[str, Any]] = {}
-    projected: list[dict[str, Any]] = []
+    flatten_groups, dataset_options = _ai_toolkit_projection_options(run, selection)
+    projected_datasets: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
+        dataset_id = str(dataset.get("id"))
         profile_name, profile = _select_ai_toolkit_projection_profile(
             architecture=architecture,
             dataset=dataset,
             dataset_config=dataset_config,
         )
-        if profile_name not in checked_profile_requirements:
-            checked_profile_requirements[profile_name] = (
-                _validate_ai_toolkit_profile_requirements(
-                    architecture, profile_name, override,
-                )
-            )
-        effective_requirements = {
-            **architecture_requirements,
-            **checked_profile_requirements[profile_name],
-        }
+        profile_requirements = _validate_ai_toolkit_profile_requirements(
+            architecture, profile_name, override,
+        )
         missing_options = sorted(
             field for field in profile.get("required_options", ())
             if field not in dataset_config
@@ -565,258 +918,32 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
                 + "; ".join(details)
             )
         blocks = _resolve_ai_toolkit_projection_blocks(
-            dataset, {}, flatten_groups=False,
+            dataset, dataset_options.get(dataset_id, {}),
+            flatten_groups=flatten_groups,
         )
-        assert len(blocks) == 1
-        dataset = blocks[0].dataset
-        dataset_id = dataset.get("id")
-        view_root = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
-        control_mode = bool(profile["has_control"])
-        target_media = str(profile["target_media"])
-        video_mode = target_media == "video"
-        target_root = f"{view_root}/target" if control_mode else view_root
-        consumed: list[str] = []
-        unrepresentable: list[dict[str, str]] = []
-        links: list[dict[str, str]] = []
-        files: list[dict[str, str]] = []
-        bindings: list[dict[str, Any]] = []
-        control_inputs: dict[int, list[str]] = {}
-        control_counts: dict[str, int] = {}
-        control_kinds: dict[str, tuple[str, ...]] = {}
-        for index, sample in enumerate(dataset.get("samples", [])):
-            group = sample.get("group")
-            if group is not None:
-                unrepresentable.append({
-                    "input_id": sample["caption"]["input_id"],
-                    "reason": f"group {group!r} requires an explicit flattening decision",
-                })
-                continue
-            references = sample.get("files", [])
-            targets = [item for item in references if item.get("role") == "target"]
-            controls = [item for item in references if item.get("role") == "control"]
-            control_counts[str(sample.get("id"))] = len(controls)
-            kinds = tuple(_ai_toolkit_media_kind(item.get("path")) for item in controls)
-            control_kinds[str(sample.get("id"))] = kinds
-            control_order = profile["control_order"]
-            if control_order is not None:
-                if control_order != "image-then-video":
-                    raise ValueError(
-                        f"AI-Toolkit profile {profile_name!r} has unsupported control order "
-                        f"{control_order!r}"
-                    )
-                media_rank = {"image": 0, "video": 1}
-                ordered_kinds = tuple(
-                    sorted(kinds, key=lambda kind: media_rank.get(kind, len(media_rank)))
-                )
-                if kinds != ordered_kinds:
-                    raise ValueError(
-                        "AI-Toolkit profile requires image references before video references "
-                        f"in manifest order; sample {sample.get('id')!r} has {kinds!r}"
-                    )
-            caption = sample.get("caption")
-            sample_tag_payload = {
-                "files": [
-                    {"role": item.get("role"), "sha256": item.get("sha256")}
-                    for item in references
-                ],
-                "caption": caption.get("text") if isinstance(caption, dict) else None,
-            }
-            content_tag = hashlib.sha256(
-                json.dumps(
-                    sample_tag_payload,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()[:12]
-            mode_label = target_media
-            for reference in targets:
-                suffix = Path(str(reference.get("path"))).suffix.lower()
-                if len(targets) != 1:
-                    unrepresentable.append({
-                        "input_id": reference["input_id"],
-                        "reason": f"AI-Toolkit {mode_label} mode requires exactly one target per sample",
-                    })
-                elif _ai_toolkit_media_kind(reference.get("path")) != target_media:
-                    unrepresentable.append({
-                        "input_id": reference["input_id"],
-                        "reason": f"target extension {suffix!r} is unsupported by AI-Toolkit {mode_label} mode",
-                    })
-                else:
-                    destination = f"{target_root}/{index:06d}-{content_tag}{suffix}"
-                    links.append({
-                        "path": destination,
-                        "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
-                        "input_id": reference["input_id"],
-                    })
-                    consumed.append(reference["input_id"])
-            for control_index, reference in enumerate(controls):
-                suffix = Path(str(reference.get("path"))).suffix.lower()
-                if not control_mode:
-                    unrepresentable.append({
-                        "input_id": reference["input_id"],
-                        "reason": "control input requires a verified AI-Toolkit control profile",
-                    })
-                elif (
-                    _ai_toolkit_media_kind(reference.get("path"))
-                    not in profile["control_media"]
-                ):
-                    unrepresentable.append({
-                        "input_id": reference["input_id"],
-                        "reason": f"control extension {suffix!r} is unsupported by AI-Toolkit {mode_label} control mode",
-                    })
-                else:
-                    control_root = f"{view_root}/control-{control_index}"
-                    links.append({
-                        "path": f"{control_root}/{index:06d}-{content_tag}{suffix}",
-                        "target": f"/workspace/datasets/{dataset_id}/{reference['path']}",
-                        "input_id": reference["input_id"],
-                    })
-                    consumed.append(reference["input_id"])
-                    control_inputs.setdefault(control_index, []).append(reference["input_id"])
-            for reference in references:
-                if reference.get("role") not in {"target", "control"}:
-                    unrepresentable.append({
-                        "input_id": reference["input_id"],
-                    "reason": f"role {reference.get('role')!r} is unsupported by AI-Toolkit {mode_label} mode",
-                    })
-            if not isinstance(caption, dict) or caption.get("text") is None:
-                input_id = caption.get("input_id") if isinstance(caption, dict) else None
-                unrepresentable.append({
-                    "input_id": input_id,
-                    "reason": f"an absent caption cannot yet be represented losslessly in AI-Toolkit {mode_label} mode",
-                })
-            elif len(targets) == 1 and _ai_toolkit_media_kind(targets[0].get("path")) == target_media:
-                caption_path = f"{target_root}/{index:06d}-{content_tag}.txt"
-                files.append({
-                    "path": caption_path,
-                    "text": caption["text"],
-                    "input_id": caption["input_id"],
-                })
-                consumed.append(caption["input_id"])
-                links_for_sample = [item for item in links if item["input_id"] == targets[0]["input_id"]]
-                if links_for_sample:
-                    members = [
-                        {"input_id": targets[0]["input_id"], "root": target_root},
-                        {"input_id": caption["input_id"], "root": target_root},
-                    ]
-                    members.extend(
-                        {
-                            "input_id": reference["input_id"],
-                            "root": f"{view_root}/control-{control_index}",
-                            "slot": control_index,
-                        }
-                        for control_index, reference in enumerate(controls)
-                    )
-                    bindings.append({
-                        "rule": "same-relative-stem",
-                        "key": f"{index:06d}-{content_tag}",
-                        "members": members,
-                    })
-        if profile["uniform_control_count"] and len(set(control_counts.values())) > 1:
-            rendered = ", ".join(
-                f"{sample_id}={count}" for sample_id, count in sorted(control_counts.items())
+        reports = [
+            _project_ai_toolkit_folder_block(
+                run=run,
+                block=block,
+                profile_name=profile_name,
+                profile=profile,
+                dataset_config=dataset_config,
+                effective_requirements={
+                    **architecture_requirements,
+                    **profile_requirements,
+                },
+                generated_controls=generated_controls,
+                allow_groups=flatten_groups or block.explicit,
             )
-            raise ValueError(
-                f"AI-Toolkit profile {profile_name!r} requires the same control slot count for every "
-                f"sample; observed {rendered}"
-            )
-        if profile["uniform_control_media"] and len(set(control_kinds.values())) > 1:
-            rendered = ", ".join(
-                f"{sample_id}={kinds!r}" for sample_id, kinds in sorted(control_kinds.items())
-            )
-            raise ValueError(
-                f"AI-Toolkit profile {profile_name!r} requires each reference slot to keep "
-                f"one media kind across samples; observed {rendered}"
-            )
-        semantic = {
-            "caption_ext": ".txt",
-            "cache_latents_to_disk": True,
-            **{
-                native_key: deepcopy(dataset_config[field])
-                for field, native_key in profile.get("native_options", {}).items()
-                if field in dataset_config
-            },
-            **({"controls": list(generated_controls)} if generated_controls else {}),
-        }
-        native_runtime: dict[str, Any] = {"folder_path": f"/workspace/{target_root}"}
-        if control_mode:
-            native_runtime["control_path"] = [
-                f"/workspace/{view_root}/control-{index}"
-                for index in sorted(control_inputs)
-            ]
-        consumers = [{
-            "id": "dataset",
-            "kind": "recursive-directory",
-            "native_pointer": "/folder_path",
-            "path": target_root,
-            "input_ids": [
-                input_id for input_id in consumed
-                if input_id not in {item for values in control_inputs.values() for item in values}
-            ],
-        }]
-        consumers.extend({
-            "id": f"control-{index}",
-            "kind": "recursive-directory",
-            "native_pointer": f"/control_path/{index}",
-            "path": f"{view_root}/control-{index}",
-            "input_ids": control_inputs[index],
-        } for index in sorted(control_inputs))
-        projected.append({
-            "id": dataset_id,
-            "consumed": consumed,
-            "unrepresentable": unrepresentable,
-            "semantic": semantic,
-            "native_runtime": native_runtime,
-            "native": {**semantic, **native_runtime},
-            "native_string_fields": [
-                "/caption_ext",
-                *(f"/controls/{index}" for index in range(len(generated_controls))),
-            ],
-            "policy": {
-                "profile": profile_name,
-                "codec": profile["codec"],
-                "architecture_requirements": effective_requirements,
-                **(
-                    {"control_selection": profile["control_selection"]}
-                    if "control_selection" in profile else {}
-                ),
-                **(
-                    {"control_order": profile["control_order"]}
-                    if profile["control_order"] is not None else {}
-                ),
-                **(
-                    {"generated_controls": list(generated_controls)}
-                    if generated_controls else {}
-                ),
-                **(
-                    {
-                        "do_i2v": bool(dataset_config.get("do_i2v")),
-                        "audio_selection": (
-                            "embedded-target-video"
-                            if dataset_config.get("do_audio") is True else "disabled"
-                        ),
-                    }
-                    if video_mode else {}
-                ),
-                "block_groups": [block.group for block in blocks],
-                "block_settings": [
-                    {"num_repeats": block.num_repeats} for block in blocks
-                ],
-            },
-            "views": [{
-                "id": f"ai-toolkit-{dataset_id}",
-                "root": view_root,
-                "links": links,
-                "files": files,
-                "native_files": [],
-                "write_roots": [{"path": target_root, "native_pointer": "/folder_path"}],
-                "consumers": consumers,
-                "repeat": 1,
-                "bindings": bindings,
-            }],
-        })
-    return {"schema_version": 1, "backend": "ai-toolkit", "datasets": projected}
+            for block in blocks
+        ]
+        projected_datasets.append(_combine_ai_toolkit_block_reports(
+            dataset_id=dataset_id,
+            blocks=blocks,
+            reports=reports,
+            flatten_groups=flatten_groups,
+        ))
+    return {"schema_version": 1, "backend": "ai-toolkit", "datasets": projected_datasets}
 
 
 def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
@@ -869,6 +996,7 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
             "AI-Toolkit MiniMax-H3 requires gradient_checkpointing=false with the pinned runtime; "
             "real A40 probes observed non-reentrant checkpoint recomputation tensor-count mismatches"
         )
+    _ai_toolkit_projection_options(run, {"datasets": _datasets(run)})
     dataset_config = native.get("dataset_config")
     if dataset_config is None:
         return
@@ -1056,6 +1184,31 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     return requirements
 
 
+def _ai_toolkit_frozen_native_blocks(
+    projected_dataset: dict[str, Any], dataset_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    """Decode the sole legacy-flat/native-list compatibility boundary."""
+    native = projected_dataset.get("native")
+    views = projected_dataset.get("views")
+    if not isinstance(native, dict):
+        raise ValueError(
+            f"AI-Toolkit frozen projection for dataset {dataset_id!r} has no native handoff"
+        )
+    nested = native.get("datasets")
+    wrapped = isinstance(nested, list)
+    native_datasets = nested if wrapped else [native]
+    if (
+        not isinstance(views, list)
+        or len(views) != len(native_datasets)
+        or any(not isinstance(view, dict) for view in views)
+        or any(not isinstance(item, dict) for item in native_datasets)
+    ):
+        raise ValueError(
+            f"AI-Toolkit frozen projection for dataset {dataset_id!r} has inconsistent blocks"
+        )
+    return native_datasets, views, wrapped
+
+
 def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
     """Write AI-Toolkit native YAML for configured training runs."""
     del strict
@@ -1079,36 +1232,35 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
         projected_datasets = []
         for dataset_id in dataset_ids:
             projected_dataset = projected_by_id[dataset_id]
-            native_dataset = projected_dataset.get("native")
-            if not isinstance(native_dataset, dict):
-                raise ValueError(f"AI-Toolkit frozen projection for dataset {dataset_id!r} has no native handoff")
-            views = projected_dataset.get("views")
-            view = views[0] if isinstance(views, list) and len(views) == 1 and isinstance(views[0], dict) else None
-            consumers = view.get("consumers") if isinstance(view, dict) else None
-            control_paths = native_dataset.get("control_path", [])
-            if not isinstance(control_paths, list):
-                control_paths = [control_paths]
-            expected_consumers = {
-                "/folder_path": native_dataset.get("folder_path"),
-                **{
-                    f"/control_path/{index}": path
-                    for index, path in enumerate(control_paths)
-                },
-            }
-            actual_consumers = {
-                item.get("native_pointer"): f"/workspace/{item.get('path')}"
-                for item in consumers or [] if isinstance(item, dict)
-            }
-            if (
-                not isinstance(view, dict)
-                or not isinstance(consumers, list)
-                or any(item.get("kind") != "recursive-directory" for item in consumers)
-                or actual_consumers != expected_consumers
-            ):
-                raise ValueError(
-                    f"AI-Toolkit frozen projection for dataset {dataset_id!r} bypasses its run-owned view"
-                )
-            projected_datasets.append(deepcopy(native_dataset))
+            native_datasets, views, wrapped = _ai_toolkit_frozen_native_blocks(
+                projected_dataset, str(dataset_id),
+            )
+            for index, (view, native_dataset) in enumerate(zip(views, native_datasets)):
+                consumers = view.get("consumers")
+                control_paths = native_dataset.get("control_path", [])
+                if not isinstance(control_paths, list):
+                    control_paths = [control_paths]
+                prefix = f"/datasets/{index}" if wrapped else ""
+                expected_consumers = {
+                    f"{prefix}/folder_path": native_dataset.get("folder_path"),
+                    **{
+                        f"{prefix}/control_path/{control_index}": path
+                        for control_index, path in enumerate(control_paths)
+                    },
+                }
+                actual_consumers = {
+                    item.get("native_pointer"): f"/workspace/{item.get('path')}"
+                    for item in consumers or [] if isinstance(item, dict)
+                }
+                if (
+                    not isinstance(consumers, list)
+                    or any(item.get("kind") != "recursive-directory" for item in consumers)
+                    or actual_consumers != expected_consumers
+                ):
+                    raise ValueError(
+                        f"AI-Toolkit frozen projection for dataset {dataset_id!r} bypasses its run-owned view"
+                    )
+                projected_datasets.append(deepcopy(native_dataset))
     native = override.get("native_config")
     if isinstance(native, dict):
         native_train = native.get("train")
