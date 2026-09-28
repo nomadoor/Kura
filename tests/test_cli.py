@@ -25,7 +25,6 @@ from unittest.mock import Mock, patch
 
 import yaml
 
-from kura.dataset_handoff import write_frozen_dataset_handoff
 from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolkit_dataset
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
@@ -47,6 +46,9 @@ from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_d
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 class InitCommandTests(unittest.TestCase):
@@ -3879,27 +3881,9 @@ class AiToolkitBackendTests(unittest.TestCase):
         }
 
     def _write_frozen_projection(self, run: dict[str, object], destination: Path) -> str:
-        dataset_id = str(run["datasets"][0]["id"])
-        selection = {"datasets": [{
-            "id": dataset_id,
-            "samples": [{
-                "id": "sample",
-                "files": [{
-                    "input_id": f"{dataset_id}:sample:target:0",
-                    "role": "target",
-                    "path": "sample.png",
-                    "sha256": "1" * 64,
-                }],
-                "caption": {
-                    "input_id": f"{dataset_id}:sample:caption",
-                    "text": "caption",
-                },
-            }],
-        }]}
-        lock = project_ai_toolkit_dataset(run, selection)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        write_frozen_dataset_handoff(destination.parent, lock, {"schema_version": 2})
-        return lock["datasets"][0]["native"]["folder_path"]
+        report = freeze_fixture(run, destination.parent)
+        return report["datasets"][0]["native"]["folder_path"]
 
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4023,28 +4007,10 @@ class AiToolkitBackendTests(unittest.TestCase):
 
 class MusubiBackendTests(unittest.TestCase):
     def _write_frozen_projection(self, run: dict[str, Any], destination: Path) -> None:
-        dataset_id = str(run["datasets"][0]["id"])
         architecture = str(run.get("backend", {}).get("config", {}).get("architecture") or "")
-        target_path = "sample.mp4" if architecture in {"minimax_h3", "minimaxh3"} else "sample.png"
-        selection = {"datasets": [{
-            "id": dataset_id,
-            "samples": [{
-                "id": "sample",
-                "files": [{
-                    "input_id": f"{dataset_id}:sample:target:0",
-                    "role": "target",
-                    "path": target_path,
-                    "sha256": "1" * 64,
-                }],
-                "caption": {
-                    "input_id": f"{dataset_id}:sample:caption",
-                    "text": "caption",
-                },
-            }],
-        }]}
-        write_frozen_dataset_handoff(
-            destination.parent, project_musubi_dataset(run, selection), {"schema_version": 2},
-        )
+        target = "sample.mp4" if architecture in {"minimax_h3", "minimaxh3"} else "sample.png"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        freeze_fixture(run, destination.parent, target=target)
 
     def _run(self) -> dict[str, object]:
         return {

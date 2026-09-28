@@ -988,6 +988,62 @@ def _merge_projection_native(semantic: Any, runtime: Any) -> Any:
     raise ValueError("semantic and runtime native leaves overlap")
 
 
+def _validate_projection_report(report: Any, backend: str) -> dict[str, dict[str, Any]]:
+    """Check one projection report's own structure; return datasets by id.
+
+    This is the single schema check for projection reports. Freeze runs it
+    before its selection, view, and consumption checks; every reader runs it
+    again on the frozen file.
+    """
+    if not isinstance(report, dict) or report.get("schema_version") != 1 or report.get("backend") != backend:
+        raise ValueError(f"{backend} returned an invalid dataset projection report")
+    projected_datasets = report.get("datasets")
+    if not isinstance(projected_datasets, list):
+        raise ValueError(f"{backend} projection report must contain datasets")
+    by_id: dict[str, dict[str, Any]] = {}
+    for projected in projected_datasets:
+        dataset_id = projected.get("id") if isinstance(projected, dict) else None
+        if not isinstance(dataset_id, str) or not dataset_id or dataset_id in by_id:
+            raise ValueError(f"{backend} projection has a missing or duplicate dataset id")
+        failures = projected.get("unrepresentable")
+        if not isinstance(failures, list) or not all(
+            isinstance(failure, dict) and isinstance(failure.get("reason"), str) for failure in failures
+        ):
+            raise ValueError(f"{backend} projection has an invalid unrepresentable input list")
+        consumed = projected.get("consumed")
+        if not isinstance(consumed, list) or not all(isinstance(item, str) for item in consumed):
+            raise ValueError(f"{backend} projection consumed inputs must be a list of IDs")
+        if not isinstance(projected.get("semantic"), dict):
+            raise ValueError(f"{backend} projection for dataset {dataset_id!r} has no stable semantic identity")
+        policy = projected.get("policy")
+        if policy is not None and not isinstance(policy, dict):
+            raise ValueError(f"{backend} projection for dataset {dataset_id!r} has an invalid projection policy")
+        native_runtime = projected.get("native_runtime")
+        native = projected.get("native")
+        if not isinstance(native_runtime, dict) or not isinstance(native, dict):
+            raise ValueError(f"{backend} projection for dataset {dataset_id!r} has an invalid native handoff")
+        try:
+            derived_native = _merge_projection_native(projected["semantic"], native_runtime)
+        except ValueError as error:
+            raise ValueError(
+                f"{backend} projection for dataset {dataset_id!r} native handoff must be derived "
+                "exactly from semantic and runtime-only fields"
+            ) from error
+        if native != derived_native:
+            raise ValueError(
+                f"{backend} projection for dataset {dataset_id!r} native handoff must be derived "
+                "exactly from semantic and runtime-only fields"
+            )
+        string_fields = projected.get("native_string_fields")
+        if not isinstance(string_fields, list) or not all(isinstance(item, str) for item in string_fields):
+            raise ValueError(f"{backend} projection for dataset {dataset_id!r} has invalid native string fields")
+        views = projected.get("views")
+        if not isinstance(views, list) or not views or not all(isinstance(view, dict) for view in views):
+            raise ValueError(f"backend projection for dataset {dataset_id!r} has no run views")
+        by_id[dataset_id] = projected
+    return by_id
+
+
 def load_frozen_dataset_projection(
     resolved_dir: Path,
     *,
@@ -995,40 +1051,49 @@ def load_frozen_dataset_projection(
     dataset_ids: list[str] | tuple[str, ...] | None = None,
     required: bool = True,
 ) -> dict[str, Any] | None:
-    """Load the projection report that freeze_dataset_handoff verified and wrote.
+    """Load the projection report frozen with this run's input lock.
 
-    The report schema is checked once, when it is frozen.  Readers prove that
-    the file is that verified report by matching the digest recorded in the
-    input lock written alongside it; they do not re-derive the schema.
+    The input lock's digest binds the report to the freeze that wrote it, so
+    an altered or substituted file is rejected; the shared report validator
+    then checks the report itself.
     """
     projection_path = resolved_dir / "dataset-projection.lock.json"
+    input_path = resolved_dir / "dataset-input.lock.json"
+    try:
+        input_lock = json.loads(input_path.read_text(encoding="utf-8")) if input_path.is_file() else None
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("dataset input lock is unreadable") from error
+    bound_digest = input_lock.get("projection_sha256") if isinstance(input_lock, dict) else None
     if not projection_path.is_file():
+        if bound_digest is not None:
+            raise ValueError("frozen manifest projection is missing although the input lock records one; recompile the run")
         if not required:
             return None
         owner = backend or "dataset"
         raise ValueError(f"{owner} first-class compile requires a frozen manifest projection")
-    input_path = resolved_dir / "dataset-input.lock.json"
     try:
         report = json.loads(projection_path.read_text(encoding="utf-8"))
-        input_lock = json.loads(input_path.read_text(encoding="utf-8")) if input_path.is_file() else None
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError("frozen manifest projection or its input lock is unreadable") from error
+        raise ValueError("frozen manifest projection is unreadable") from error
     if (
         not isinstance(input_lock, dict)
         or input_lock.get("schema_version") != 2
-        or input_lock.get("projection_sha256") != _digest(report)
+        or bound_digest != _digest(report)
     ):
         raise ValueError(
             "frozen manifest projection was not written by the verified dataset handoff; recompile the run"
         )
-    if backend is not None and report.get("backend") != backend:
+    frozen_backend = report.get("backend") if isinstance(report, dict) else None
+    if backend is not None and frozen_backend != backend:
         raise ValueError(
-            f"frozen manifest projection belongs to backend {report.get('backend')!r}, not {backend!r}"
+            f"frozen manifest projection belongs to backend {frozen_backend!r}, not {backend!r}"
         )
+    by_id = _validate_projection_report(report, str(frozen_backend))
+    if any(item["unrepresentable"] for item in by_id.values()):
+        raise ValueError("frozen manifest projection records unrepresentable inputs")
     if dataset_ids is not None:
         selected = list(dataset_ids)
-        frozen = [item["id"] for item in report["datasets"]]
-        if len(selected) != len(set(selected)) or set(frozen) != set(selected):
+        if len(selected) != len(set(selected)) or set(by_id) != set(selected):
             raise ValueError("frozen manifest projection does not match the selected datasets")
     return report
 
@@ -1039,17 +1104,7 @@ def freeze_dataset_handoff(
     """Measure v2 selection once, require a total projection, and freeze both locks."""
     selection, input_index = _manifest_selection(run, workspace)
     report = project(deepcopy(selection))
-    if not isinstance(report, dict) or report.get("schema_version") != 1 or report.get("backend") != backend:
-        raise ValueError(f"{backend} returned an invalid dataset projection report")
-    projected_datasets = report.get("datasets")
-    if not isinstance(projected_datasets, list):
-        raise ValueError(f"{backend} projection report must contain datasets")
-    by_id: dict[str, dict[str, Any]] = {}
-    for projected in projected_datasets:
-        dataset_id = projected.get("id") if isinstance(projected, dict) else None
-        if not isinstance(dataset_id, str) or dataset_id in by_id:
-            raise ValueError(f"{backend} projection has a missing or duplicate dataset id")
-        by_id[dataset_id] = projected
+    by_id = _validate_projection_report(report, backend)
     selected_ids = [item["id"] for item in selection["datasets"]]
     if set(by_id) != set(selected_ids):
         raise ValueError(f"{backend} projection dataset selection differs from run datasets")
@@ -1060,43 +1115,11 @@ def freeze_dataset_handoff(
     seen_view_roots: set[str] = set()
     for dataset in selection["datasets"]:
         projected = by_id[dataset["id"]]
-        failures = projected.get("unrepresentable", [])
-        if not isinstance(failures, list):
-            raise ValueError(f"{backend} projection unrepresentable inputs must be a list")
-        for failure in failures:
-            if not isinstance(failure, dict) or not isinstance(failure.get("reason"), str):
-                raise ValueError(f"{backend} projection has an invalid unrepresentable input")
+        for failure in projected["unrepresentable"]:
             raise _projection_error(input_index, failure.get("input_id"), failure["reason"])
-        dataset_consumed = projected.get("consumed")
-        if not isinstance(dataset_consumed, list) or not all(isinstance(item, str) for item in dataset_consumed):
-            raise ValueError(f"{backend} projection consumed inputs must be a list of IDs")
-        projection_semantic = projected.get("semantic")
-        if not isinstance(projection_semantic, dict):
-            raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has no stable semantic identity")
-        projection_policy = projected.get("policy")
-        if projection_policy is not None and not isinstance(projection_policy, dict):
-            raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has an invalid projection policy")
-        native_runtime = projected.get("native_runtime")
-        native = projected.get("native")
-        if not isinstance(native_runtime, dict) or not isinstance(native, dict):
-            raise ValueError(f"{backend} projection for dataset {dataset['id']!r} has an invalid native handoff")
-        try:
-            derived_native = _merge_projection_native(
-                projection_semantic, native_runtime,
-            )
-        except ValueError as error:
-            raise ValueError(
-                f"{backend} projection for dataset {dataset['id']!r} native handoff must be derived "
-                "exactly from semantic and runtime-only fields"
-            ) from error
-        if native != derived_native:
-            raise ValueError(
-                f"{backend} projection for dataset {dataset['id']!r} native handoff must be derived "
-                "exactly from semantic and runtime-only fields"
-            )
-        projected_views = projected.get("views")
-        if not isinstance(projected_views, list) or not projected_views:
-            raise ValueError(f"backend projection for dataset {dataset['id']!r} has no run views")
+        dataset_consumed = projected["consumed"]
+        native = projected["native"]
+        projected_views = projected["views"]
         consumed.extend(dataset_consumed)
         dataset_views: list[dict[str, Any]] = []
         dataset_represented: list[str] = []
@@ -1178,13 +1201,13 @@ def freeze_dataset_handoff(
         "input_sha256": _digest(semantic),
         "semantic": semantic,
     }
-    return write_frozen_dataset_handoff(resolved, report, lock)
+    return _write_frozen_handoff(resolved, report, lock)
 
 
-def write_frozen_dataset_handoff(
+def _write_frozen_handoff(
     resolved: Path, report: dict[str, Any], lock: dict[str, Any],
 ) -> dict[str, Any]:
-    """Write a verified projection report and bind it to its input lock by digest."""
+    """Write the report freeze just verified and bind it to its input lock by digest."""
     bound = {**lock, "projection_sha256": _digest(report)}
     resolved.mkdir(parents=True, exist_ok=True)
     atomic_write_json(resolved / "dataset-projection.lock.json", report)

@@ -7,6 +7,75 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: projection-report-validator-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Check projection report structure in one core validator used both when
+      freeze_dataset_handoff writes the report and when the frozen report is
+      read; the input-lock digest remains the tamper check. The lock writer is
+      private to freeze. Valid public compile output is unchanged; malformed
+      reports are rejected even when their digest is rebound.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 854a3c0c3f90f2e27521f45c2a16f5e0bc5d9bd33a644f5ad4a0c1c1f1cc4b8c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d2b5efa58eb1619cfd23c078ea656a2236b73ffc102618f364d7e986c326a442
+  - id: projection-report-validator-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Check projection report structure in one core validator used both when
+      freeze_dataset_handoff writes the report and when the frozen report is
+      read; the input-lock digest remains the tamper check. The lock writer is
+      private to freeze. Valid public compile output is unchanged; malformed
+      reports are rejected even when their digest is rebound.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 971518ecfcff3197aaa6b8f9f3c003ebed1760ba2e1d17a9d16f3e177c8fed28
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7b5cbf79ff21623ca5fd48676d4595f5fb3359f30539a2332b567636165e3fa5
+  - id: projection-report-validator-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Check projection report structure in one core validator used both when
+      freeze_dataset_handoff writes the report and when the frozen report is
+      read; the input-lock digest remains the tamper check. The lock writer is
+      private to freeze. Valid public compile output is unchanged; malformed
+      reports are rejected even when their digest is rebound.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 33058fdf52200309e6c5dc05b9f8941979aeaea148f538d979b1acf2b4fd01ef
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b6320be3d1cc8f4600972658b5525f7dfba623b8ba9e4b0118d5bfac19777d6a
   - id: unused-compile-parameters-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-

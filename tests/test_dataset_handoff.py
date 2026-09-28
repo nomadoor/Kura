@@ -7,6 +7,7 @@ from copy import deepcopy
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -49,11 +50,14 @@ from kura.backends.dataset_profiles import (
 from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architecture, musubi_native_dataset_architecture
 from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
-from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views, write_frozen_dataset_handoff
-from kura.dataset_handoff import local_training_mounts
+from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views
+from kura.dataset_handoff import _digest, local_training_mounts
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
 from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, format_run_plan, plan_run
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 def _musubi_native_block(projected: dict, index: int = 0) -> dict:
@@ -96,31 +100,29 @@ def _musubi_video_preflight_env(run: dict, destination: Path) -> dict[str, str]:
 
 class FrozenDatasetProjectionReaderTests(unittest.TestCase):
     @staticmethod
-    def _report(backend: str = "ai-toolkit") -> dict:
-        semantic = {"caption_ext": ".txt"}
-        runtime = {"folder_path": "/workspace/runs/example/cache/dataset-view/tiny"}
-        return {
-            "schema_version": 1,
-            "backend": backend,
-            "datasets": [{
-                "id": "tiny",
-                "consumed": ["tiny:sample:target:0"],
-                "unrepresentable": [],
-                "semantic": semantic,
-                "native_runtime": runtime,
-                "native": {**semantic, **runtime},
-                "native_string_fields": ["/caption_ext"],
-                "policy": {"profile": "ordinary-image"},
-                "views": [{"id": "primary"}],
-            }],
+    def _frozen(directory: str) -> tuple[dict, Path]:
+        run = {
+            "id": "example",
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl"}},
+            "datasets": [{"id": "tiny"}],
         }
+        resolved = Path(directory) / "runs" / "example" / "resolved"
+        resolved.mkdir(parents=True)
+        freeze_fixture(run, resolved)
+        return run, resolved
 
-    def test_reader_owns_location_schema_backend_and_selection(self) -> None:
+    @staticmethod
+    def _rebind(resolved: Path, report: object) -> None:
+        """Rewrite both files consistently, as a tampering tool could."""
+        input_path = resolved / "dataset-input.lock.json"
+        input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+        input_lock["projection_sha256"] = _digest(report)
+        (resolved / "dataset-projection.lock.json").write_text(json.dumps(report), encoding="utf-8")
+        input_path.write_text(json.dumps(input_lock), encoding="utf-8")
+
+    def test_reader_owns_location_backend_and_selection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "runs" / "example"
-            resolved = run_dir / "resolved"
-            resolved.mkdir(parents=True)
-            write_frozen_dataset_handoff(resolved, self._report(), {"schema_version": 2})
+            _, resolved = self._frozen(directory)
 
             report = load_frozen_dataset_projection(
                 resolved, backend="ai-toolkit", dataset_ids=["tiny"],
@@ -136,7 +138,7 @@ class FrozenDatasetProjectionReaderTests(unittest.TestCase):
                     resolved, backend="ai-toolkit", dataset_ids=["other"],
                 )
 
-    def test_reader_rejects_pre_manifest_minimal_reports_for_every_backend(self) -> None:
+    def test_reader_rejects_unbound_minimal_reports_for_every_backend(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
             resolved = run_dir / "resolved"
@@ -151,6 +153,37 @@ class FrozenDatasetProjectionReaderTests(unittest.TestCase):
                         load_frozen_dataset_projection(
                             resolved, backend=backend, dataset_ids=["tiny"],
                         )
+
+    def test_reader_validates_a_report_even_when_its_digest_is_rebound(self) -> None:
+        malformed = (
+            ("minimal", {"backend": "ai-toolkit", "datasets": [{"id": "tiny"}]}, "invalid dataset projection report"),
+            ("no views", None, "no run views"),
+            ("native drift", None, "native handoff must be derived"),
+            ("unrepresentable", None, "records unrepresentable inputs"),
+        )
+        for name, report, message in malformed:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                _, resolved = self._frozen(directory)
+                if report is None:
+                    report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
+                    dataset = report["datasets"][0]
+                    if name == "no views":
+                        dataset["views"] = []
+                    elif name == "native drift":
+                        dataset["native"]["folder_path"] = "/workspace/datasets/tiny"
+                    else:
+                        dataset["unrepresentable"] = [{"input_id": "x", "reason": "example"}]
+                self._rebind(resolved, report)
+                with self.assertRaisesRegex(ValueError, message):
+                    load_frozen_dataset_projection(resolved, backend="ai-toolkit", dataset_ids=["tiny"])
+
+    def test_optional_reader_rejects_a_missing_bound_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, resolved = self._frozen(directory)
+            (resolved / "dataset-projection.lock.json").unlink()
+
+            with self.assertRaisesRegex(ValueError, "missing although the input lock records one"):
+                load_frozen_dataset_projection(resolved, required=False)
 
 
 def _musubi_semantic_block(projected: dict, index: int = 0) -> dict:
@@ -3877,14 +3910,13 @@ class DatasetHandoffTests(unittest.TestCase):
             runtime["image_directory"] = "/workspace/datasets/tiny"
             consumer = dataset["views"][0]["consumers"][0]
             consumer.update({"kind": "directory", "native_pointer": "/datasets/0/image_directory"})
-            # Rebind the altered report so the writer's own guard is exercised.
-            input_lock = json.loads((resolved / "dataset-input.lock.json").read_text(encoding="utf-8"))
-            write_frozen_dataset_handoff(resolved, projection, input_lock)
-
+            # A narrow writer unit test: hand the altered report straight to the
+            # writer instead of forging a verified lock.
             with self.assertRaisesRegex(ValueError, "bypasses its verified source"):
-                _write_musubi_dataset_config(
+                _write_musubi_dataset_config_impl(
                     run,
                     resolved / "musubi" / "dataset.toml",
+                    projection=projection,
                 )
 
     def test_musubi_caption_strip_is_visible_and_manifest_text_remains_identity(self) -> None:
@@ -5823,18 +5855,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 }},
                 "datasets": [{"id": "clips"}],
             }
-            selection = {"datasets": [{
-                "id": "clips",
-                "samples": [{
-                    "id": "clip",
-                    "files": [{
-                        "input_id": "clips:clip:target:0", "role": "target",
-                        "path": "clip.mp4", "sha256": "1" * 64,
-                    }],
-                    "caption": {"input_id": "clips:clip:caption", "text": "caption"},
-                }],
-            }]}
-            write_frozen_dataset_handoff(resolved, project_musubi_dataset(run, selection), {"schema_version": 2})
+            freeze_fixture(run, resolved, target="clip.mp4")
 
             checks = _dataset_runtime_checks(run_dir)
             output = format_run_plan({
@@ -5893,18 +5914,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 }},
                 "datasets": [{"id": "clips"}],
             }
-            selection = {"datasets": [{
-                "id": "clips",
-                "samples": [{
-                    "id": "clip",
-                    "files": [{
-                        "input_id": "clips:clip:target:0", "role": "target",
-                        "path": "clip.mp4", "sha256": "1" * 64,
-                    }],
-                    "caption": {"input_id": "clips:clip:caption", "text": "caption"},
-                }],
-            }]}
-            write_frozen_dataset_handoff(resolved, project_musubi_dataset(run, selection), {"schema_version": 2})
+            freeze_fixture(run, resolved, target="clip.mp4")
 
             checks = _dataset_runtime_checks(run_dir)
 

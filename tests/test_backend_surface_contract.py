@@ -11,18 +11,21 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
-
-import yaml
 import unittest
 
-from kura.dataset_handoff import write_frozen_dataset_handoff
+import yaml
+
 from kura.backends import BACKENDS, BackendAdapter, backend_capabilities, validate_backend_config
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
 from kura.backends.musubi_command import _script_command as musubi_script_command
 from kura.cli import cmd_run_capabilities, cmd_run_compile, cmd_run_plan
 from kura.init_templates import cmd_init
 from kura.media_types import frozen_suffixes
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 class BackendSurfaceContractTests(unittest.TestCase):
@@ -43,69 +46,13 @@ class BackendSurfaceContractTests(unittest.TestCase):
         target: str,
         controls: tuple[str, ...] = (),
     ) -> dict[str, object]:
-        dataset_id = str(run["datasets"][0]["id"])
-        files = [{
-            "input_id": f"{dataset_id}:sample:target:0",
-            "role": "target",
-            "path": target,
-            "sha256": "1" * 64,
-        }]
-        files.extend({
-            "input_id": f"{dataset_id}:sample:control:{index}",
-            "role": "control",
-            "path": path,
-            "sha256": str(index + 2) * 64,
-        } for index, path in enumerate(controls))
-        selection = {"datasets": [{
-            "id": dataset_id,
-            "samples": [{
-                "id": "sample",
-                "files": files,
-                "caption": {"input_id": f"{dataset_id}:sample:caption", "text": "caption"},
-            }],
-        }]}
-        projection = BACKENDS["ai-toolkit"].project_dataset(run, selection)
-        resolved.mkdir(parents=True, exist_ok=True)
-        write_frozen_dataset_handoff(resolved, projection, {"schema_version": 2})
-        return projection
+        return freeze_fixture(run, resolved, target=target, controls=controls)
 
     def _write_musubi_projection(self, run: dict[str, object], resolved: Path) -> None:
-        dataset_id = str(run["datasets"][0]["id"])
-        selection = {"datasets": [{
-            "id": dataset_id,
-            "samples": [{
-                "id": "sample",
-                "files": [{
-                    "input_id": f"{dataset_id}:sample:target:0",
-                    "role": "target",
-                    "path": "sample.png",
-                    "sha256": "1" * 64,
-                }],
-                "caption": {"input_id": f"{dataset_id}:sample:caption", "text": "caption"},
-            }],
-        }]}
-        lock = BACKENDS["musubi-tuner"].project_dataset(run, selection)
-        resolved.mkdir(parents=True, exist_ok=True)
-        write_frozen_dataset_handoff(resolved, lock, {"schema_version": 2})
+        freeze_fixture(run, resolved)
 
     def _write_sd_scripts_projection(self, run: dict[str, object], resolved: Path) -> None:
-        dataset_id = str(run["datasets"][0]["id"])
-        selection = {"datasets": [{
-            "id": dataset_id,
-            "samples": [{
-                "id": "sample",
-                "files": [{
-                    "input_id": f"{dataset_id}:sample:target:0",
-                    "role": "target",
-                    "path": "sample.png",
-                    "sha256": "1" * 64,
-                }],
-                "caption": {"input_id": f"{dataset_id}:sample:caption", "text": "caption"},
-            }],
-        }]}
-        lock = BACKENDS["sd-scripts"].project_dataset(run, selection)
-        resolved.mkdir(parents=True, exist_ok=True)
-        write_frozen_dataset_handoff(resolved, lock, {"schema_version": 2})
+        freeze_fixture(run, resolved)
 
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

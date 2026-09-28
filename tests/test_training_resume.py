@@ -18,7 +18,6 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.dataset_handoff import write_frozen_dataset_handoff
 from kura.cli import cmd_run_resume
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, compile_ai_toolkit, command_ai_toolkit, project_ai_toolkit_dataset, training_state_contract_ai_toolkit
 from kura.backends.sd_scripts import training_state_contract_sd_scripts
@@ -31,6 +30,9 @@ from kura.run_commands.plan import format_run_plan
 from kura.run_envelope import resume_intent, training_state_policy
 from kura.media_types import frozen_suffixes
 from kura.training_artifacts import compile_resume_lock, load_training_state, publish_completed_training_states, publish_training_state, recipe_fingerprint, select_training_state, verify_training_state
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 def _safetensors_bytes(content: bytes) -> bytes:
@@ -91,26 +93,8 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
 
 class TrainingStateArtifactTests(unittest.TestCase):
     def _write_ai_toolkit_projection(self, run: dict[str, object], destination: Path) -> None:
-        dataset_id = str(run["datasets"][0]["id"])
-        selection = {"datasets": [{
-            "id": dataset_id,
-            "samples": [{
-                "id": "sample",
-                "files": [{
-                    "input_id": f"{dataset_id}:sample:target:0",
-                    "role": "target",
-                    "path": "sample.png",
-                    "sha256": "1" * 64,
-                }],
-                "caption": {
-                    "input_id": f"{dataset_id}:sample:caption",
-                    "text": "caption",
-                },
-            }],
-        }]}
-        lock = project_ai_toolkit_dataset(run, selection)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        write_frozen_dataset_handoff(destination.parent, lock, {"schema_version": 2})
+        freeze_fixture(run, destination.parent)
 
     def test_ai_toolkit_h3_command_requires_a_nonzero_lora_update(self) -> None:
         run = {

@@ -141,10 +141,11 @@ is not v2.
    entries that a trainer would silently ignore. It serializes the input lock
    and projection report immutably under `resolved/`, including the expected
    source-link paths and their container-resolvable targets. The input lock
-   records the projection report's digest. The report schema is checked only
-   here, when it is written; every later reader goes through
-   `load_frozen_dataset_projection`, which accepts only the report matching
-   that digest instead of re-validating the schema.
+   records the projection report's digest. One core validator checks the
+   report's own structure both here and in `load_frozen_dataset_projection`,
+   the only reader; the digest additionally rejects a report that was altered
+   or substituted after freeze. The lock writer is private to freeze, and a
+   missing report is an error whenever the input lock records one.
 4. `plan` reads the lock and compares current source stat/inventory and, when
    materialized, the view's source-link paths and targets without
    re-hashing the dataset. It shows selection, effective captions, group and

@@ -23,7 +23,7 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         latest = next(
             item for item in migrations["records"]
             if item["id"]
-            == "unused-compile-parameters-ai-toolkit-2026-09-28"
+            == "projection-report-validator-ai-toolkit-2026-09-28"
         )
 
         self.assertEqual(migration["backend"], record["backend"])
