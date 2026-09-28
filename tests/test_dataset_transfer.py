@@ -23,6 +23,7 @@ from kura.dataset_transfer import (
     estimate_transfer,
     verify_stage_matches_compile,
     write_transfer_archive,
+    write_transfer_manifest,
 )
 from kura.executors.runpod import stage_runpod
 
@@ -292,6 +293,56 @@ class DatasetTransferTests(unittest.TestCase):
                         verify_stage_matches_compile(root, run_dir, run, record)
                     restore()
             verify_stage_matches_compile(root, run_dir, run, record)
+
+    def test_launch_rejects_a_record_and_manifest_rewritten_together(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, run = self._compiled(root)
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            archive = run_dir / record["archive"]
+            original = archive.read_bytes()
+
+            def rewrite_entry(field: str, value: object) -> dict:
+                altered = json.loads(json.dumps(record))
+                altered["entries"][0][field] = value
+                return altered
+
+            def with_payload_bytes(value: int) -> dict:
+                altered = json.loads(json.dumps(record))
+                altered["payload_bytes"] = value
+                return altered
+
+            def with_member_swapped() -> dict:
+                # A consistent forgery: rewrite the tar with other content of the
+                # same size and update every digest in the record and manifest.
+                altered = json.loads(json.dumps(record))
+                source = next(item for item in altered["entries"] if item["namespace"] == "source")
+                forged_content = b"X" * source["size"]
+                buffer = io.BytesIO()
+                with tarfile.open(archive) as original_tar, tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as forged:
+                    for member in original_tar.getmembers():
+                        data = original_tar.extractfile(member).read()
+                        if member.name == source["archive_name"]:
+                            data = forged_content
+                        forged.addfile(member, io.BytesIO(data))
+                archive.write_bytes(buffer.getvalue())
+                altered["tar_bytes"] = len(buffer.getvalue())
+                altered["archive_sha256"] = hashlib.sha256(buffer.getvalue()).hexdigest()
+                return altered
+
+            forgeries = {
+                "entry size": lambda: rewrite_entry("size", record["entries"][0]["size"] + 1),
+                "archive name": lambda: rewrite_entry("archive_name", "envelope/elsewhere"),
+                "payload bytes": lambda: with_payload_bytes(record["payload_bytes"] + 1),
+                "member content": with_member_swapped,
+            }
+            for name, forge in forgeries.items():
+                with self.subTest(forgery=name):
+                    altered = forge()
+                    write_transfer_manifest(run_dir / record["manifest"], altered)
+                    with self.assertRaisesRegex(ValueError, "stage it again"):
+                        verify_stage_matches_compile(root, run_dir, run, altered)
+                    archive.write_bytes(original)
 
     def test_stage_stops_when_local_space_is_insufficient(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

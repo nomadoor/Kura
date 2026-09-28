@@ -201,21 +201,24 @@ def _padded(size: int) -> int:
     return -(-size // tarfile.BLOCKSIZE) * tarfile.BLOCKSIZE
 
 
-def estimate_transfer(inventory: dict[str, Any]) -> dict[str, int]:
-    """Return payload bytes and the exact uncompressed tar size for sized entries.
+def _tar_bytes(members: list[tuple[str, int]]) -> int:
+    """The exact size of the reproducible PAX tar holding these (name, size) members."""
+    total = sum(
+        len(_tar_info(name, size).tobuf(tarfile.PAX_FORMAT, tarfile.ENCODING, "surrogateescape")) + _padded(size)
+        for name, size in members
+    )
+    total += 2 * tarfile.BLOCKSIZE
+    return -(-total // tarfile.RECORDSIZE) * tarfile.RECORDSIZE
 
-    Envelope entries are measured from the current files; the estimate is the
-    tar the stage would write if nothing changes before it runs.
-    """
-    payload = 0
-    archive = 0
-    for item in inventory["entries"]:
-        size = item["size"] if isinstance(item["size"], int) else _entry_stat(item).st_size
-        payload += size
-        header = _tar_info(item["archive_name"], size).tobuf(tarfile.PAX_FORMAT, tarfile.ENCODING, "surrogateescape")
-        archive += len(header) + _padded(size)
-    archive += 2 * tarfile.BLOCKSIZE
-    archive = -(-archive // tarfile.RECORDSIZE) * tarfile.RECORDSIZE
+
+def estimate_transfer(inventory: dict[str, Any]) -> dict[str, int]:
+    """Return payload bytes and the exact uncompressed tar size of an inventory."""
+    members = [
+        (item["archive_name"], item["size"] if isinstance(item["size"], int) else _entry_stat(item).st_size)
+        for item in inventory["entries"]
+    ]
+    payload = sum(size for _, size in members)
+    archive = _tar_bytes(members)
     return {
         "payload_bytes": payload,
         "tar_bytes": archive,
@@ -328,31 +331,51 @@ def write_transfer_archive(
     }
 
 
+_ENTRY_KEYS = ("namespace", "archive_name", "destination", "size", "sha256")
+
+
+def _proven_entry(item: dict[str, Any]) -> dict[str, Any]:
+    """The entry a correct stage records for this inventory item."""
+    return {
+        "namespace": item["namespace"],
+        "archive_name": item["archive_name"],
+        "destination": item["destination"],
+        "size": item["size"] if isinstance(item["size"], int) else _entry_stat(item).st_size,
+        "sha256": item["sha256"] if item["sha256"] is not None else _sha256_entry(item),
+    }
+
+
 def verify_stage_matches_compile(workspace: Path, run_dir: Path, run: dict[str, Any], record: dict[str, Any]) -> None:
     """Allow a remote launch only when the staged transfer is exactly this compile.
 
-    Both halves are checked before a Pod exists: the record must describe the
-    current compile, and the tar and manifest on disk must be the ones the
-    record proves.
+    Every recorded fact is recomputed from the current compile and compared
+    exactly, and the tar on disk is read once to prove each member's name,
+    type, size, and content and the archive digest, all before a Pod exists.
     """
-    _verify_staged_files(run_dir, record)
     current = build_transfer_inventory(workspace, run_dir, run)
-    for key in ("schema_version", "input_sha256", "projection_sha256", "resume"):
-        if record.get(key) != current[key]:
+    entries = [_proven_entry(item) for item in current["entries"]]
+    payload = sum(item["size"] for item in entries)
+    tar_bytes = _tar_bytes([(item["archive_name"], item["size"]) for item in entries])
+    expected = {
+        "executor": "runpod",
+        "storage_mode": "upload",
+        "transfer": "selected-files",
+        "schema_version": TRANSFER_SCHEMA_VERSION,
+        "run_id": run_dir.name,
+        "input_sha256": current["input_sha256"],
+        "projection_sha256": current["projection_sha256"],
+        "resume": current["resume"],
+        "local_source_stat_verification": "matched",
+        "entries": entries,
+        "payload_bytes": payload,
+        "total_bytes": payload,
+        "tar_bytes": tar_bytes,
+        "remote_peak_bytes": tar_bytes + payload,
+    }
+    for key, value in expected.items():
+        if record.get(key) != value:
             raise ValueError(f"staged transfer {key} differs from the compiled run; stage it again")
-    staged = record.get("entries")
-    if not isinstance(staged, list) or [item.get("destination") for item in staged] != [
-        item["destination"] for item in current["entries"]
-    ]:
-        raise ValueError("staged transfer inventory differs from the compiled run; stage it again")
-    for staged_item, item in zip(staged, current["entries"]):
-        expected_sha = item["sha256"]
-        if expected_sha is None:
-            expected_sha = _sha256_entry(item)
-        if staged_item.get("namespace") != item["namespace"] or staged_item.get("sha256") != expected_sha:
-            raise ValueError(
-                f"staged transfer entry differs from the compiled run: {item['destination']}; stage it again"
-            )
+    _verify_staged_files(run_dir, record)
 
 
 _MANIFEST_KEYS = (
@@ -381,11 +404,35 @@ def _verify_staged_files(run_dir: Path, record: dict[str, Any]) -> None:
     archive = _staged_file(run_dir, record.get("archive"), name)
     if archive.stat().st_size != record.get("tar_bytes"):
         raise ValueError("staged transfer archive size differs from its record; stage it again")
-    digest = hashlib.sha256()
+    entries = record["entries"]
     with os.fdopen(_open_beneath(str(archive.parent), archive.name), "rb") as handle:
-        for chunk in iter(lambda: handle.read(_CHUNK), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != record.get("archive_sha256"):
+        reader = _HashingReader(handle)
+        try:
+            with tarfile.open(fileobj=reader, mode="r|") as stream:
+                members = iter(stream)
+                for item in entries:
+                    member = next(members, None)
+                    if (
+                        member is None
+                        or member.name != item["archive_name"]
+                        or not member.isreg()
+                        or member.size != item["size"]
+                        or (member.mtime, member.uid, member.gid, member.mode) != (0, 0, 0, 0o644)
+                    ):
+                        raise ValueError(f"staged transfer archive member differs: {item['archive_name']}; stage it again")
+                    extracted = stream.extractfile(member)
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: extracted.read(_CHUNK), b""):
+                        digest.update(chunk)
+                    if digest.hexdigest() != item["sha256"]:
+                        raise ValueError(f"staged transfer archive member content differs: {item['archive_name']}; stage it again")
+                if next(members, None) is not None:
+                    raise ValueError("staged transfer archive has extra members; stage it again")
+        except tarfile.TarError as error:
+            raise ValueError("staged transfer archive is not a readable tar; stage it again") from error
+        while reader.read(_CHUNK):
+            pass
+    if reader.digest.hexdigest() != record.get("archive_sha256"):
         raise ValueError("staged transfer archive content differs from its record; stage it again")
     manifest = _staged_file(run_dir, record.get("manifest"), f"kura-upload-{run_dir.name}.manifest.json")
     try:
