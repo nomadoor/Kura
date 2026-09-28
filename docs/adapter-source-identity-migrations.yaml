@@ -7,6 +7,75 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: manifest-lf-only-jsonl-ai-toolkit-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Parse authored items.jsonl rows through one shared physical-LF helper in
+      manifest validation, legacy draft import, observation, and inspection.
+      Existing evidence manifests do not contain raw Unicode line separators
+      inside JSON strings, so their selected inputs, captions, generated views,
+      commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e91a3116d3cb6ad8d15de894774bd4d8e82d132548921f7f855dde158aec2667
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: db487458367bf608096ae2dcc646b62dc5f6eb3a023d24590fefe33a5ec78f11
+  - id: manifest-lf-only-jsonl-musubi-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Parse authored items.jsonl rows through one shared physical-LF helper in
+      manifest validation, legacy draft import, observation, and inspection.
+      Existing evidence manifests do not contain raw Unicode line separators
+      inside JSON strings, so their selected inputs, captions, generated JSONL,
+      native TOML, commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2ec4e3c55e04902229821e0ded33fb10e7002f4b6933621f9a9c6d07363ecf6b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: ec77b8ccc4fcbcfa8e4bd85f8e0dacc416e054806e9328d5f45ad8bf9d0e2501
+  - id: manifest-lf-only-jsonl-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Parse authored items.jsonl rows through one shared physical-LF helper in
+      manifest validation, legacy draft import, observation, and inspection.
+      Existing evidence manifests do not contain raw Unicode line separators
+      inside JSON strings, so their selected inputs, captions, generated views,
+      native TOML, commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 96de098507d38d8d7a5b909b765071e9dc6c10c56e24c5f6984e5a1be0f7d2b2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 476412572349a1f5016211a2bb2559ae91d38a5528801f107aa7e3a2e7e2e16d
   - id: ai-toolkit-dataset-profile-source-identity-2026-09-28
     backend: ai-toolkit
     reason: >-

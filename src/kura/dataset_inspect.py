@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from kura.dataset_jsonl import items_jsonl_rows
+
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
@@ -153,7 +155,7 @@ def _load_items_jsonl(path: Path) -> list[dict[str, Any]]:
         return []
     records: list[dict[str, Any]] = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = items_jsonl_rows(path.read_text(encoding="utf-8"))
     except OSError:
         return []
     for number, line in enumerate(lines, 1):

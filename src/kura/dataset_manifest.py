@@ -15,6 +15,8 @@ from typing import Any
 
 import yaml
 
+from kura.dataset_jsonl import items_jsonl_rows
+
 
 MEDIA_SUFFIXES = {
     ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp",
@@ -252,7 +254,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
     measured_files: dict[str, dict[str, Any]] = {}
     semantic_samples: list[dict[str, Any]] = []
     count = 0
-    for number, line in enumerate(items_text.splitlines(), 1):
+    for number, line in enumerate(items_jsonl_rows(items_text), 1):
         context = f"items.jsonl:{number}"
         if not line.strip():
             raise ValueError(f"{context}: blank lines are not allowed")
@@ -484,7 +486,7 @@ def _legacy_draft_rows(path: Path, issues: list[str]) -> dict[str, dict[str, Any
     rows: dict[str, dict[str, Any]] = {}
     ambiguous_paths: set[str] = set()
     with path.open("r", encoding="utf-8", newline="") as stream:
-        for number, line in enumerate(stream.read().splitlines(), 1):
+        for number, line in enumerate(items_jsonl_rows(stream.read()), 1):
             if not line.strip():
                 issues.append(f"items.jsonl:{number}: blank legacy row was not imported")
                 continue

@@ -39,6 +39,24 @@ class DatasetManifestTests(unittest.TestCase):
             (dataset / "a.png").write_bytes(b"image")
             self.assertEqual(self.validate(dataset)[0], 0)
 
+    def test_manifest_jsonl_uses_only_lf_as_the_row_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = self.make_dataset(Path(directory), [])
+            caption = "first\u2028second"
+            row = {
+                "id": "a",
+                "files": [{"type": "file", "role": "target", "path": "a.png"}],
+                "caption": {"text": caption},
+            }
+            (dataset / "items.jsonl").write_text(
+                json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8",
+            )
+            (dataset / "a.png").write_bytes(b"image")
+
+            measured = measure_manifest(dataset)
+
+            self.assertEqual(measured["identity"]["samples"][0]["caption"], caption)
+
     def test_legacy_row_is_not_v2(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dataset = self.make_dataset(Path(directory), [
@@ -227,6 +245,23 @@ class DatasetManifestTests(unittest.TestCase):
                 "caption": {"text": "Vivi, full body"},
             }])
             self.assertNotIn("not imported", " ".join(preview["issues"]))
+
+    def test_legacy_importer_uses_only_lf_as_the_row_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "legacy-unicode-line"
+            dataset.mkdir()
+            caption = "first\u2028second"
+            (dataset / "a.png").write_bytes(b"image")
+            (dataset / "dataset.yaml").write_text("id: legacy-unicode-line\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text(
+                json.dumps({"id": "a", "path": "a.png", "caption": caption}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            preview = draft_manifest(dataset)
+
+            self.assertEqual(preview["items"][0]["caption"], {"text": caption})
+            self.assertEqual(preview["issues"], [])
 
     def test_caption_file_preserves_crlf_after_utf8_decode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

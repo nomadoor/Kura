@@ -50,6 +50,31 @@ class DatasetInspectTests(unittest.TestCase):
         self.assertEqual(report["paired_control"]["missing_source_count"], 0)
         self.assertEqual(report["observations"]["condition_counts"], {"control": 1})
 
+    def test_inspect_preserves_unicode_line_separator_in_v2_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "typed"
+            dataset.mkdir(parents=True)
+            caption = "first\u2028second"
+            (dataset / "target.png").write_bytes(png_bytes(1, 1))
+            (dataset / "dataset.yaml").write_text(
+                "id: typed\nitems_schema_version: 2\n", encoding="utf-8",
+            )
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "target",
+                "files": [{"type": "file", "role": "target", "path": "target.png"}],
+                "caption": {"text": caption},
+            }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            report = inspect_dataset("typed", workspace=root)
+
+        self.assertEqual(report["items_jsonl"], {"records": 1, "parse_errors": 0})
+        self.assertEqual(report["captions"]["total"], 1)
+        self.assertEqual(report["captions"]["empty"], 0)
+        self.assertNotIn("invalid_items_jsonl", {
+            item.get("code") for item in report["structural_findings"]
+        })
+
     def test_image_only_declared_layout_is_not_paired_control(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

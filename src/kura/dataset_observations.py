@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from kura.dataset_inspect import _image_size
+from kura.dataset_jsonl import items_jsonl_rows
 
 
 IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
@@ -108,7 +109,7 @@ def _jsonl_records(path: Path) -> tuple[list[tuple[int, dict[str, Any]]], list[d
     issues: list[dict[str, Any]] = []
     if not path.is_file():
         return records, issues
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, line in enumerate(items_jsonl_rows(path.read_text(encoding="utf-8")), 1):
         if not line.strip():
             continue
         try:

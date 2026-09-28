@@ -22,7 +22,7 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         migration = next(item for item in migrations["records"] if item["id"] == "ai-toolkit-registered-selector-validation-sd1-2026-09-23")
         latest = next(
             item for item in migrations["records"]
-            if item["id"] == "ai-toolkit-dataset-profile-source-identity-2026-09-28"
+            if item["id"] == "manifest-lf-only-jsonl-ai-toolkit-evidence-2026-09-28"
         )
 
         self.assertEqual(migration["backend"], record["backend"])

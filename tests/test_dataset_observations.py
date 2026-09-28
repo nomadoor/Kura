@@ -40,6 +40,27 @@ class DatasetObservationTests(unittest.TestCase):
         self.assertEqual(result["observations"]["condition_counts"], {"control": 1})
         self.assertEqual(result["observations"]["aspect_ratio_mismatches"], {"control": 1})
 
+    def test_v2_observation_preserves_unicode_line_separator_in_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caption = "first\u2028second"
+            (root / "target.png").write_bytes(PNG_1X1)
+            (root / "dataset.yaml").write_text(
+                "id: typed\nitems_schema_version: 2\n", encoding="utf-8",
+            )
+            (root / "items.jsonl").write_text(json.dumps({
+                "id": "target",
+                "files": [{"type": "file", "role": "target", "path": "target.png"}],
+                "caption": {"text": caption},
+            }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            result = observe_dataset(root)
+
+        self.assertEqual(result["samples"][0]["caption"], caption)
+        self.assertNotIn("invalid_items_jsonl", {
+            item.get("code") for item in result["structural_findings"]
+        })
+
     def test_colocated_sidecar_layout_normalizes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
