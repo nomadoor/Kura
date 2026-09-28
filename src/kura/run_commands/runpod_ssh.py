@@ -37,7 +37,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
 from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, run_events
-from kura.run_commands.common import _safe_error
+from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
 from kura.runtime_io import validated_write_roots
@@ -557,10 +557,20 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     published_states = [select_training_state(run_dir.parent.parent, run_id)]
                 except ValueError:
                     published_states = []
+            state_sync_error: str | None = None
             if state_capture_required and not published_states:
-                raise ValueError(
-                    "downloaded run snapshot has no valid training-state artifact; "
-                    "keep the Pod until recovery files are inspected or downloaded"
+                if exit_code == 0:
+                    # A completed trainer must leave a durable state; keep the Pod.
+                    raise ValueError(
+                        "downloaded run snapshot has no valid training-state artifact; "
+                        "keep the Pod until recovery files are inspected or downloaded"
+                    )
+                # A failed trainer may never have written state. The snapshot
+                # already holds everything the Pod had, so holding the Pod
+                # would only bill; record the gap as Docker does.
+                state_sync_error = (
+                    "remote run failed and its downloaded snapshot has no valid training-state artifact; "
+                    "inspect the backend state output before relying on Resume"
                 )
             outputs = materialize_primary_outputs(output_dir)
             publication_manifest: str | None = None
@@ -625,6 +635,8 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     status["dataset_input_postflight"] = input_postflight
                 status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
+                if state_sync_error is not None:
+                    status["training_state_sync_error"] = state_sync_error
                 status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
                 status.pop("publication_error", None)
                 if publication_manifest:
@@ -1622,8 +1634,17 @@ def _runpod_remote_job_script(
     write_roots: list[dict[str, str]] | None = None,
     transfer_manifest: str | None = None,
     transfer_manifest_sha256: str | None = None,
+    command_env: dict[str, str] | None = None,
 ) -> str:
     declared_roots = write_roots or []
+    # An SSH session does not inherit the Pod's create-time environment, so
+    # the frozen command's env is exported here; Kura's own values below win.
+    command_exports = []
+    for key, value in sorted((command_env or {}).items()):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str):
+            raise ValueError(f"frozen command env has an invalid entry: {key!r}")
+        command_exports.append(f"export {key}={shlex.quote(value)}")
+    command_env_block = "\n".join(command_exports)
     if transfer_manifest is None:
         receive_inputs = (
             f'tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?'
@@ -1669,6 +1690,7 @@ trap cleanup EXIT
 if [ -f "$secret_file" ]; then
   . "$secret_file"
 fi
+{command_env_block}
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 export KURA_WORKSPACE={shlex.quote(workspace)}
 export KURA_RUN_ID={shlex.quote(run_id)}
@@ -1864,7 +1886,10 @@ def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
         verify_pinned_transfer(
             run_dir.parent.parent, run_dir, locked_run, stage, pinned_manifest, remote_manifest_sha256,
         )
+    frozen = _load_frozen_command(run_dir, _load_yaml(run_dir / "resolved" / "manifest.lock.yaml"))
+    command_env = frozen.get("env") if isinstance(frozen.get("env"), dict) else {}
     return {
+        "command_env": command_env,
         "stage": stage, "archive_path": archive_path, "archive_name": archive_name, "status": status,
         "realization": realization, "realization_ref": realization_ref, "workspace": workspace,
         "run_id": run_id, "cwd": cwd, "argv": argv, "selected_files": selected_files,
@@ -1886,6 +1911,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     selected_files = prepared_upload["selected_files"]
     pinned_manifest = prepared_upload["pinned_manifest"]
     remote_manifest_sha256 = prepared_upload["remote_manifest_sha256"]
+    command_env = prepared_upload["command_env"]
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
     remote_archive = f"{remote_dir}/{archive_name}"
@@ -1939,6 +1965,7 @@ chmod 600 {shlex.quote(remote_secret_path)}
         write_roots=realization.get("write_roots"),
         transfer_manifest=remote_manifest,
         transfer_manifest_sha256=remote_manifest_sha256,
+        command_env=command_env,
     )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"

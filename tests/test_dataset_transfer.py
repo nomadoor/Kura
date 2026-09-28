@@ -537,6 +537,7 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
 
     def _run_job(
         self, pod: Path, remote_dir: Path, record: dict, command: str = "touch trainer-started",
+        command_env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 
@@ -551,6 +552,7 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             command=command,
             transfer_manifest=str(remote_dir / Path(record["manifest"]).name),
             transfer_manifest_sha256=self.manifest_sha256,
+            command_env=command_env,
         )
         return subprocess.run(["sh", "-c", script], text=True, capture_output=True, check=False)
 
@@ -580,6 +582,22 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             self.assertEqual(proof["view_links"], sum(len(view["links"]) for view in lock["views"]))
             self.assertIn("datasets/tiny/a.png", proof["source_baseline"])
             self.assertFalse((pod / ".kura-transfer").exists() and any((pod / ".kura-transfer").iterdir()))
+
+    def test_the_trainer_sees_the_frozen_command_env_under_kura_owned_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pod, remote_dir, record = self._pod(Path(directory))
+            command = (
+                "sh -c 'test \"$KURA_MUSUBI_IMAGE_SUFFIXES\" = \"[.png]\" "
+                "&& test \"$KURA_WORKSPACE\" = \"" + str(pod) + "\" && touch trainer-started'"
+            )
+
+            result = self._run_job(pod, remote_dir, record, command=command, command_env={
+                "KURA_MUSUBI_IMAGE_SUFFIXES": "[.png]",
+                "KURA_WORKSPACE": "/somewhere-else",
+            })
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((pod / "trainer-started").exists())
 
     def test_any_verification_failure_publishes_nothing_and_never_starts_the_trainer(self) -> None:
         def corrupt_byte(remote_dir: Path, record: dict) -> None:
