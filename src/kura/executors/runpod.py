@@ -662,10 +662,12 @@ def _remote_postflight(path: Path) -> tuple[str, str, str]:
 
 def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: dict[str, Any]) -> None:
     """Append the postflight event once for ``ref``."""
-    # status.json is projected after the event, so a matching projection proves
-    # it exists; otherwise scan once, which covers a crash between the two.
+    # A projection proves the event exists only when it says the event was
+    # recorded; otherwise scan, which also backfills an event whose append
+    # failed earlier or was lost in a crash before the projection.
     announced = _load_status(run_dir).get("dataset_input_postflight")
-    if not (isinstance(announced, dict) and announced.get("record") == ref) and not _event_exists(
+    proven = isinstance(announced, dict) and announced.get("record") == ref and announced.get("event_recorded") is True
+    if not proven and not _event_exists(
         run_dir, event="dataset_input_postflight", realization_id=realization_id, record=ref,
     ):
         append_run_event(run_dir, {
@@ -790,7 +792,9 @@ def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realizat
     errors = [detail] if detail else []
     try:
         _announce_postflight(run_dir, realization_id, ref, record)
+        projection["event_recorded"] = True
     except (OSError, ValueError) as event_error:
+        projection["event_recorded"] = False
         errors.append(f"the postflight event could not be appended: {_redact_secret_text(str(event_error))}")
     if errors:
         projection["error"] = "; ".join(errors)

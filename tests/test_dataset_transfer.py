@@ -892,6 +892,25 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
                 self.assertTrue((run_dir / projected["record"]).is_file())
                 self.assertIn("event could not be appended", projected["error"])
                 self.assertNotIn("could not be written", projected["error"])
+                self.assertIs(projected["event_recorded"], False)
+
+                # The retry, with the failed projection in status, backfills the event once.
+                status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                status["dataset_input_postflight"] = projected
+                (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                retried = project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+                status["dataset_input_postflight"] = retried
+                (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+                self.assertIs(retried["event_recorded"], True)
+                if content is None:
+                    # The same record is kept; only its missing event is backfilled.
+                    self.assertEqual(retried["record"], projected["record"])
+                # A malformed local record stays malformed, so each attempt
+                # writes its own append-only uncheckable record instead.
+                events = [item for item in run_events_of(run_dir) if item.get("event") == "dataset_input_postflight"]
+                self.assertEqual(len([item for item in events if item.get("record") == retried["record"]]), 1)
 
 
 def run_events_of(run_dir: Path) -> list[dict]:
