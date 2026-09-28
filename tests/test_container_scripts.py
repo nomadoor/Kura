@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 from dataclasses import replace
 import io
@@ -16,6 +17,7 @@ from unittest.mock import patch
 from kura.container_scripts import script_source
 from kura.backends import BACKENDS, BackendSurface
 from kura.init_templates import SD_SCRIPTS_DOCKERFILE_TEMPLATE, SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE
+import kura.provenance as provenance
 from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
 
 
@@ -129,6 +131,139 @@ class ContainerScriptTests(unittest.TestCase):
             changed = adapter_source_identity("ai-toolkit")["value"]
 
         self.assertNotEqual(baseline, changed)
+
+    def test_ai_toolkit_adapter_identity_includes_dataset_profiles(self) -> None:
+        baseline = adapter_source_identity("ai-toolkit")["value"]
+        original = Path.read_bytes
+
+        def changed_helper(path):
+            payload = original(path)
+            return payload + (b"changed" if path.name == "dataset_profiles.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_helper):
+            changed = adapter_source_identity("ai-toolkit")["value"]
+
+        self.assertNotEqual(baseline, changed)
+
+    def test_adapter_identities_cover_imported_backend_dependencies(self) -> None:
+        package_root = Path(provenance.__file__).resolve().parent
+        backend_root = package_root / "backends"
+        container_root = package_root / "container_scripts"
+        seeds = {
+            "ai-toolkit": [backend_root / "ai_toolkit.py"],
+            "musubi-tuner": sorted(backend_root.glob("musubi_*.py")),
+            "sd-scripts": sorted(backend_root.glob("sd_scripts*.py")),
+        }
+        uncovered: list[str] = []
+
+        def top_level_definitions(path: Path) -> dict[str, ast.AST]:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            definitions: dict[str, ast.AST] = {}
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    definitions[node.name] = node
+                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            definitions[target.id] = node
+            return definitions
+
+        def closure_names(path: Path, root: str) -> set[str]:
+            definitions = top_level_definitions(path)
+            pending = [root]
+            closure: set[str] = set()
+            while pending:
+                name = pending.pop()
+                if name in closure or name not in definitions:
+                    continue
+                closure.add(name)
+                pending.extend(
+                    child.id for child in ast.walk(definitions[name])
+                    if isinstance(child, ast.Name)
+                    and isinstance(child.ctx, ast.Load)
+                    and child.id in definitions
+                )
+            return closure
+
+        def probe_symbol_source(path: Path, symbol: str) -> bytes:
+            text = path.read_text(encoding="utf-8")
+            node = top_level_definitions(path)[symbol]
+            source = ast.get_source_segment(text, node)
+            assert source is not None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                marker = f"def {node.name}"
+                changed = source.replace(marker, f"def  {node.name}", 1)
+            elif isinstance(node, ast.ClassDef):
+                marker = f"class {node.name}"
+                changed = source.replace(marker, f"class  {node.name}", 1)
+            else:
+                separator = source.index("=") + 1
+                changed = source[:separator] + " " + source[separator:]
+            assert changed != source
+            return text.replace(source, changed, 1).encode("utf-8")
+
+        for backend, initial_paths in seeds.items():
+            module_paths: set[Path] = set()
+            imported_symbols: set[tuple[Path, str]] = set()
+            runtime_paths: set[Path] = set()
+            pending = list(initial_paths)
+            while pending:
+                path = pending.pop()
+                if path in module_paths:
+                    continue
+                module_paths.add(path)
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom) and node.module == "kura.backends.shared":
+                        imported_symbols.update((backend_root / "shared.py", alias.name) for alias in node.names)
+                    elif isinstance(node, ast.ImportFrom) and node.module == "kura.run_envelope":
+                        imported_symbols.update((package_root / "run_envelope.py", alias.name) for alias in node.names)
+                    elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("kura.backends."):
+                        dependency = backend_root / f"{node.module.rsplit('.', 1)[-1]}.py"
+                        if dependency.is_file() and dependency.name not in {"shared.py", "registry.py"}:
+                            pending.append(dependency)
+                    elif (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == "script_source"
+                        and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str)
+                    ):
+                        runtime_paths.add(container_root / node.args[0].value)
+
+            baseline = adapter_source_identity(backend)["value"]
+            original_read_bytes = Path.read_bytes
+            for dependency in sorted(module_paths | runtime_paths):
+                def changed_file(path: Path, *, target: Path = dependency) -> bytes:
+                    payload = original_read_bytes(path)
+                    return payload + (b"\n# identity coverage probe\n" if path == target else b"")
+
+                with patch.object(Path, "read_bytes", changed_file):
+                    if adapter_source_identity(backend)["value"] == baseline:
+                        uncovered.append(f"{backend}: file {dependency.relative_to(package_root)}")
+
+            original_source_symbol = provenance._source_symbol
+            for dependency, symbol in sorted(imported_symbols, key=lambda item: (str(item[0]), item[1])):
+                def changed_symbol(path: Path, name: str, *, target: Path = dependency, target_name: str = symbol) -> bytes:
+                    payload = original_source_symbol(path, name)
+                    return payload + (b"\n# identity coverage probe\n" if path == target and name == target_name else b"")
+
+                with patch.object(provenance, "_source_symbol", changed_symbol):
+                    if adapter_source_identity(backend)["value"] == baseline:
+                        uncovered.append(f"{backend}: symbol {dependency.relative_to(package_root)}:{symbol}")
+                for closure_symbol in sorted(closure_names(dependency, symbol)):
+                    def changed_closure_file(path: Path, *, target: Path = dependency, target_name: str = closure_symbol) -> bytes:
+                        return probe_symbol_source(target, target_name) if path == target else original_read_bytes(path)
+
+                    with patch.object(Path, "read_bytes", changed_closure_file):
+                        if adapter_source_identity(backend)["value"] == baseline:
+                            uncovered.append(
+                                f"{backend}: closure {dependency.relative_to(package_root)}:{symbol}->{closure_symbol}"
+                            )
+
+        self.assertEqual([], uncovered, "adapter source identity misses imported dependencies:\n" + "\n".join(uncovered))
 
     def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
         baseline = adapter_source_identity("sd-scripts")["value"]

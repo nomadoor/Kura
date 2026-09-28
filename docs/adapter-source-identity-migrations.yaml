@@ -7,6 +7,77 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-dataset-profile-source-identity-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Include the shared dataset profile implementation and the imported run
+      envelope symbols, including their same-module dependency closures, in
+      AI-Toolkit's adapter source identity. AI-Toolkit already consumed these
+      helpers when the recorded evidence ran; this change corrects provenance
+      coverage without changing generated views, native configuration,
+      commands, optimizer behavior, artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 41798b56aa222b023c589c401276a79202a00a0bfaf307865f1852e0a3744903
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e91a3116d3cb6ad8d15de894774bd4d8e82d132548921f7f855dde158aec2667
+  - id: musubi-imported-helper-source-identity-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Include the imported shared _int_or_none helper and imported run envelope
+      symbols, including their same-module dependency closures, in Musubi's
+      adapter source identity. Musubi already consumed these helpers when the
+      recorded evidence ran; this change corrects provenance coverage without
+      changing generated JSONL, native TOML, commands, optimizer behavior,
+      artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 43e465592863ad9d463ebce101e137a578bb761d88939560c29cacee055395b7
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2ec4e3c55e04902229821e0ded33fb10e7002f4b6933621f9a9c6d07363ecf6b
+  - id: sd-scripts-run-envelope-source-identity-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Include the imported run envelope symbols and their same-module
+      dependency closures in sd-scripts' adapter source identity. sd-scripts
+      already consumed these helpers when the recorded evidence ran; this
+      change corrects provenance coverage without changing generated views,
+      native TOML, commands, optimizer behavior, artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 590650fb193552ed9fe1df85b5c86363e78d9861494d163f6192308df1a4b0fa
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 96de098507d38d8d7a5b909b765071e9dc6c10c56e24c5f6984e5a1be0f7d2b2
   - id: runpod-manifest-v2-early-rejection-ai-toolkit-evidence-2026-09-28
     backend: ai-toolkit
     reason: >-

@@ -34,13 +34,42 @@ def _source_symbol(path: Path, symbol: str) -> bytes:
     payload = path.read_bytes()
     text = payload.decode("utf-8")
     tree = ast.parse(text, filename=str(path))
-    matches = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == symbol]
-    if len(matches) != 1:
+    definitions: dict[str, list[ast.AST]] = {}
+    for node in tree.body:
+        names: list[str] = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.extend(target.id for target in targets if isinstance(target, ast.Name))
+        for name in names:
+            definitions.setdefault(name, []).append(node)
+    if len(definitions.get(symbol, [])) != 1:
         raise ValueError(f"source identity symbol {symbol!r} was not found exactly once in {path.name}")
-    source = ast.get_source_segment(text, matches[0])
-    if source is None:
-        raise ValueError(f"source identity symbol {symbol!r} has no source segment in {path.name}")
-    return source.encode("utf-8")
+    pending = [symbol]
+    closure: dict[str, ast.AST] = {}
+    while pending:
+        name = pending.pop()
+        if name in closure:
+            continue
+        matches = definitions.get(name, [])
+        if len(matches) != 1:
+            raise ValueError(f"source identity dependency {name!r} was not found exactly once in {path.name}")
+        node = matches[0]
+        closure[name] = node
+        pending.extend(
+            child.id for child in ast.walk(node)
+            if isinstance(child, ast.Name)
+            and isinstance(child.ctx, ast.Load)
+            and child.id in definitions
+        )
+    parts: list[bytes] = []
+    for name, node in sorted(closure.items()):
+        source = ast.get_source_segment(text, node)
+        if source is None:
+            raise ValueError(f"source identity symbol {name!r} has no source segment in {path.name}")
+        parts.append(name.encode("utf-8") + b"\0" + source.encode("utf-8"))
+    return b"\0".join(parts)
 
 
 def legacy_adapter_source_identity(backend_name: str) -> dict[str, str]:
@@ -80,9 +109,19 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     container_root = package_root / "container_scripts"
     shared = backend_root / "shared.py"
     registry = backend_root / "registry.py"
+    run_envelope = package_root / "run_envelope.py"
     if backend_name == "ai-toolkit":
-        paths = [backend_root / "ai_toolkit.py"]
-        symbols = [(shared, name) for name in ("_datasets", "_script_command")]
+        paths = [
+            backend_root / "ai_toolkit.py",
+            backend_root / "dataset_profiles.py",
+        ]
+        symbols = [
+            *((shared, name) for name in ("_datasets", "_script_command")),
+            *((run_envelope, name) for name in (
+                "backend_config", "resume_intent", "run_executor",
+                "training_state_policy", "validated_recipe",
+            )),
+        ]
         runtime_paths = [
             container_root / "ai_toolkit_state.py",
             container_root / "ai_toolkit_video_assert.py",
@@ -98,9 +137,12 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
             (shared, name)
             for name in (
                 "_datasets", "_toml_scalar", "_script_command", "_truthy",
-                "_extra_args", "_reject_owned_extra_args", "_append_flag",
+                "_extra_args", "_reject_owned_extra_args", "_append_flag", "_int_or_none",
             )
         ]
+        symbols.extend((run_envelope, name) for name in (
+            "backend_config", "resume_intent", "training_state_policy", "validated_recipe",
+        ))
         runtime_paths = [
             container_root / name
             for name in ("hf_download.py", "musubi_dataset_assert.py", "prune_checkpoints.py", "safetensors_validator.py", "training_state_verify.py")
@@ -117,6 +159,9 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
                 "_extra_args", "_reject_owned_extra_args", "_int_or_none", "_append_flag",
             )
         ]
+        symbols.extend((run_envelope, name) for name in (
+            "backend_config", "resume_intent", "training_state_policy", "validated_recipe",
+        ))
         runtime_paths = [
             container_root / name
             for name in (
