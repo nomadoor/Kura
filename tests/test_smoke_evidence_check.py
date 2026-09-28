@@ -23,7 +23,7 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         latest = next(
             item for item in migrations["records"]
             if item["id"]
-            == "runpod-selected-file-transfer-ai-toolkit-2026-09-28"
+            == "ai-toolkit-audio-preflight-transform-ai-toolkit-2026-09-28"
         )
 
         self.assertEqual(migration["backend"], record["backend"])

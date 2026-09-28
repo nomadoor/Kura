@@ -74,7 +74,9 @@ def _probe_with_pinned_loader(path: Path, native: dict) -> None:
     # This intentionally invokes the pinned trainer's own video/audio loader.
     # The small spatial crop limits preflight memory without changing frame or
     # audio selection.
+    from torchvision import transforms
     from toolkit.config_modules import DatasetConfig
+    from toolkit.data_loader import RescaleTransform
     from toolkit.data_transfer_object.data_loader import FileItemDTO
 
     config = DatasetConfig(**native)
@@ -82,7 +84,11 @@ def _probe_with_pinned_loader(path: Path, native: dict) -> None:
         path=str(path), dataset_config=config, dataset_root=str(path.parent),
         scale_to_width=64, scale_to_height=64, crop_width=64, crop_height=64,
     )
-    item.load_and_process_video(None)
+    # The pinned dataset (toolkit/data_loader.py) always hands video loading a
+    # tensor transform; without one the loader cannot stack frames at all.
+    # Model-specific normalization does not affect audio extraction, so the
+    # model-independent form is used.
+    item.load_and_process_video(transforms.Compose([transforms.ToTensor(), RescaleTransform()]))
     audio = getattr(item, "audio_tensor", None)
     if audio is None or not callable(getattr(audio, "numel", None)) or audio.numel() <= 0:
         raise ValueError("the pinned AI-Toolkit loader produced no usable audio tensor")

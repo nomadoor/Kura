@@ -373,22 +373,46 @@ class ContainerScriptTests(unittest.TestCase):
                 calls.append(("load", transform))
                 self.audio_tensor = FakeAudio()
 
+        class FakeToTensor:
+            pass
+
+        class FakeRescale:
+            pass
+
+        class FakeCompose:
+            def __init__(self, steps):
+                self.steps = steps
+
         config_module = ModuleType("toolkit.config_modules")
         config_module.DatasetConfig = FakeDatasetConfig
         data_module = ModuleType("toolkit.data_transfer_object.data_loader")
         data_module.FileItemDTO = FakeFileItem
+        loader_module = ModuleType("toolkit.data_loader")
+        loader_module.RescaleTransform = FakeRescale
+        torchvision_module = ModuleType("torchvision")
+        transforms_module = ModuleType("torchvision.transforms")
+        transforms_module.Compose = FakeCompose
+        transforms_module.ToTensor = FakeToTensor
+        torchvision_module.transforms = transforms_module
         with patch.dict(sys.modules, {
             "toolkit": ModuleType("toolkit"),
             "toolkit.config_modules": config_module,
+            "toolkit.data_loader": loader_module,
             "toolkit.data_transfer_object": ModuleType("toolkit.data_transfer_object"),
             "toolkit.data_transfer_object.data_loader": data_module,
+            "torchvision": torchvision_module,
+            "torchvision.transforms": transforms_module,
         }):
             namespace["_probe_with_pinned_loader"](
                 Path("/workspace/view/clip.mp4"),
                 {"num_frames": 49, "fps": 24, "do_audio": True},
             )
 
-        self.assertEqual(calls[1], ("load", None))
+        # The pinned loader cannot stack frames without its dataset's tensor
+        # transform (observed in a real container: "expected Tensor ... got Image").
+        transform = calls[1][1]
+        self.assertIsInstance(transform, FakeCompose)
+        self.assertEqual([type(step) for step in transform.steps], [FakeToTensor, FakeRescale])
         self.assertEqual(calls[0][1]["scale_to_width"], 64)
 
     def test_ai_toolkit_audio_preflight_records_and_rejects_missing_audio(self) -> None:
@@ -442,11 +466,21 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_REALIZATION_ID": "r1",
                 "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
             }
+            loader_module = ModuleType("toolkit.data_loader")
+            loader_module.RescaleTransform = object
+            transforms_module = ModuleType("torchvision.transforms")
+            transforms_module.Compose = lambda steps: steps
+            transforms_module.ToTensor = object
+            torchvision_module = ModuleType("torchvision")
+            torchvision_module.transforms = transforms_module
             with patch.dict(sys.modules, {
                 "toolkit": ModuleType("toolkit"),
                 "toolkit.config_modules": config_module,
+                "toolkit.data_loader": loader_module,
                 "toolkit.data_transfer_object": ModuleType("toolkit.data_transfer_object"),
                 "toolkit.data_transfer_object.data_loader": data_module,
+                "torchvision": torchvision_module,
+                "torchvision.transforms": transforms_module,
             }), patch.dict(os.environ, environment), patch.object(
                 sys, "argv", ["ai_toolkit_video_assert.py", str(config)],
             ):

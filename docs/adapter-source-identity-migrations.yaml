@@ -7,6 +7,31 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-audio-preflight-transform-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      The AI-Toolkit embedded-audio preflight now passes the pinned dataset's
+      tensor transform (ToTensor plus the pinned RescaleTransform) to
+      FileItemDTO.load_and_process_video. With no transform the pinned loader
+      cannot stack video frames, so the previous preflight rejected every
+      video, with or without audio; a real container smoke exposed this.
+      Training commands are otherwise unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
   - id: runpod-selected-file-transfer-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-
