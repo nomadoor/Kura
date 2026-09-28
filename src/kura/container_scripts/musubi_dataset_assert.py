@@ -115,11 +115,29 @@ def input_context_by_view_path():
     return contexts
 
 
+def audio_sidecar_index(audio_suffixes):
+    """Return a lookup of same-stem audio files that scans each directory once."""
+    by_directory = {}
+
+    def sidecars(video):
+        directory = video.parent
+        if directory not in by_directory:
+            index = {}
+            for candidate in directory.iterdir():
+                if candidate.is_file() and candidate.suffix.lower() in audio_suffixes:
+                    index.setdefault(candidate.stem, []).append(candidate)
+            by_directory[directory] = index
+        return sorted(by_directory[directory].get(video.stem, []))
+
+    return sidecars
+
+
 def video_frame_preflight(entries, config_path, audio_suffixes):
     try:
         from musubi_tuner.dataset.media_utils import load_video
     except (ImportError, ModuleNotFoundError) as exc:
         die(f"pinned Musubi video loader is unavailable: {exc}")
+    audio_sidecars = audio_sidecar_index(audio_suffixes)
     architecture = os.environ.get("KURA_MUSUBI_ARCHITECTURE")
     native_dataset_architecture = os.environ.get("KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE")
     profiles = os.environ.get("KURA_MUSUBI_PROFILES")
@@ -161,12 +179,7 @@ def video_frame_preflight(entries, config_path, audio_suffixes):
             try:
                 if strict_timestamp_fps and not video_input.get("explicit_audio"):
                     resolved_video = video.resolve()
-                    sidecars = sorted(
-                        candidate for candidate in resolved_video.parent.iterdir()
-                        if candidate.is_file()
-                        and candidate.stem == resolved_video.stem
-                        and candidate.suffix.lower() in audio_suffixes
-                    )
+                    sidecars = audio_sidecars(resolved_video)
                     if sidecars:
                         raise ValueError(
                             "implicit same-stem audio sidecar beside the resolved JSONL video path: "

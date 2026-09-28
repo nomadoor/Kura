@@ -17,6 +17,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.backends.ai_toolkit import (
+    AI_TOOLKIT_FOLDER_CODECS,
     AI_TOOLKIT_PROJECTION_PROFILES,
     _ai_toolkit_projection_architecture,
     _resolve_ai_toolkit_projection_blocks,
@@ -888,7 +889,8 @@ class DatasetHandoffTests(unittest.TestCase):
         for name, profile in AI_TOOLKIT_PROJECTION_PROFILES.items():
             with self.subTest(profile=name):
                 self.assertIn(profile["target_media"], {"image", "video"})
-                self.assertIsInstance(profile["has_control"], bool)
+                self.assertIn(profile["codec"], AI_TOOLKIT_FOLDER_CODECS)
+                self.assertNotIn("has_control", profile)
                 self.assertIsInstance(profile["uniform_control_count"], bool)
                 self.assertIsInstance(profile["uniform_control_media"], bool)
         self.assertTrue(
@@ -896,7 +898,7 @@ class DatasetHandoffTests(unittest.TestCase):
         )
         ref2va = AI_TOOLKIT_PROJECTION_PROFILES["ref2va-video-control"]
         self.assertEqual(ref2va["target_media"], "video")
-        self.assertTrue(ref2va["has_control"])
+        self.assertEqual(ref2va["codec"], "paired-media-folders")
         self.assertEqual(ref2va["control_media"], ("image", "video"))
         self.assertTrue(ref2va["uniform_control_count"])
         self.assertTrue(ref2va["uniform_control_media"])

@@ -146,6 +146,12 @@ is not v2.
    the only reader; the digest additionally rejects a report that was altered
    or substituted after freeze. The lock writer is private to freeze, and a
    missing report is an error whenever the input lock records one.
+   Each projected dataset keeps three native forms on purpose: `semantic`
+   (the run-independent part that enters input identity), `native_runtime`
+   (run-owned paths), and `native` (the exact mapping handed to the trainer).
+   `native` is derivable, but it is the auditable answer to "what did Kura
+   hand over"; the shared validator proves `native` equals the merge of the
+   other two at freeze and at every read, so the copy cannot drift.
 4. `plan` reads the lock and compares current source stat/inventory and, when
    materialized, the view's source-link paths and targets without
    re-hashing the dataset. It shows selection, effective captions, group and

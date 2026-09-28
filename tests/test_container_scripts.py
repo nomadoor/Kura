@@ -723,6 +723,30 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertNotIn("source_fps", calls[0][3])
             self.assertEqual(calls[0][3]["bucket_reso"], (64, 64))
 
+    def test_musubi_audio_sidecar_lookup_scans_each_directory_once(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("musubi_dataset_assert.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index in range(20):
+                (root / f"clip{index}.mp4").write_bytes(b"video")
+            (root / "clip3.wav").write_bytes(b"audio")
+            (root / "clip3.txt").write_text("caption", encoding="utf-8")
+            lookup = namespace["audio_sidecar_index"](frozenset({".wav"}))
+            original = Path.iterdir
+            scans: list[Path] = []
+
+            def counting_iterdir(path: Path):
+                scans.append(path)
+                return original(path)
+
+            with patch.object(Path, "iterdir", counting_iterdir):
+                found = {index: lookup(root / f"clip{index}.mp4") for index in range(20)}
+
+            self.assertEqual(scans, [root])
+            self.assertEqual(found[3], [root / "clip3.wav"])
+            self.assertTrue(all(found[index] == [] for index in found if index != 3))
+
     def test_musubi_h3_preflight_rejects_an_implicit_sidecar_beside_the_symlink_target(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("musubi_dataset_assert.py"), namespace)

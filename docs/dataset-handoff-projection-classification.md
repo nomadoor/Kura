@@ -405,11 +405,6 @@ is marked `migration: pending`; merge readiness must run
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Resolve three smaller adapter cleanup questions: avoid rescanning an audio
-  sidecar parent directory once per video in `musubi_dataset_assert`; decide
-  and document whether all three frozen forms (`semantic`, `native_runtime`,
-  and `native`) remain necessary; and replace AI-Toolkit's incidental codec
-  label with one that names the actual trainer handoff contract.
 - Update `kura dataset inspect` to render manifest-v2 typed video targets and
   typed caption references without reporting a present caption as missing.
   Strict validation, projection, and execution already use the typed manifest;

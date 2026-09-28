@@ -7,6 +7,53 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: small-adapter-cleanups-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Make the AI-Toolkit folder codec the single field that decides whether
+      control folders are projected, removing the parallel has_control flag,
+      and scan each Musubi video directory once when rejecting implicit audio
+      sidecars. Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fdfe8708f56743644b28604f3ccb7140d8ffdf3a89fdbdf35272e13bdae19ae
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a8c9c3f36739571cea76f7743f0a98d5cd1223460e1fb5651864dc735e631012
+  - id: small-adapter-cleanups-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Make the AI-Toolkit folder codec the single field that decides whether
+      control folders are projected, removing the parallel has_control flag,
+      and scan each Musubi video directory once when rejecting implicit audio
+      sidecars. Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: bd9699d11a0d422d8b9ce878a22acb24bf7914226c5c742c57ce2ee94f24853e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c734002ff7831de82632b098d2d942ec0ea851ef82e0fd1093e7b141eda04302
   - id: plan-facts-adapter-hooks-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-

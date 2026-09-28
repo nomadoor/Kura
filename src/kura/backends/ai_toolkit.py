@@ -73,6 +73,15 @@ def _ai_toolkit_media_kind(path: object) -> str:
     return "unsupported"
 
 
+# The trainer handoff each profile uses. A codec names the native folder
+# contract, and is the only field that decides whether control folders exist.
+AI_TOOLKIT_FOLDER_CODECS = {
+    # folder_path: targets with same-stem caption files.
+    "media-folder": {"control_folders": False},
+    # folder_path plus ordered control_path folders paired by relative stem.
+    "paired-media-folders": {"control_folders": True},
+}
+
 AI_TOOLKIT_PROJECTION_PROFILES = {
     "ordinary-image": {
         "architectures": (
@@ -83,7 +92,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         ),
         "shape": "image",
         "target_media": "image",
-        "has_control": False,
         "control_media": (),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -107,7 +115,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("flex2",),
         "shape": "image",
         "target_media": "image",
-        "has_control": False,
         "control_media": (),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -126,7 +133,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("flux_kontext", "hidream_e1", "qwen_image_edit"),
         "shape": "image-control",
         "target_media": "image",
-        "has_control": True,
         "control_media": ("image",),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -145,7 +151,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("qwen_image_edit_plus",),
         "shape": "image-control",
         "target_media": "image",
-        "has_control": True,
         "control_media": ("image",),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -167,7 +172,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         ),
         "shape": "image-control",
         "target_media": "image",
-        "has_control": True,
         "control_media": ("image",),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -186,7 +190,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("qwen_image_2",),
         "shape": "image-control",
         "target_media": "image",
-        "has_control": True,
         "control_media": ("image",),
         "uniform_control_count": True,
         "uniform_control_media": False,
@@ -205,7 +208,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("minimax_h3_ref2va",),
         "shape": "image-control",
         "target_media": "image",
-        "has_control": True,
         "control_media": ("image",),
         "uniform_control_count": True,
         "uniform_control_media": True,
@@ -224,7 +226,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("flex2",),
         "shape": "image-control",
         "target_media": "image",
-        "has_control": True,
         "control_media": ("image",),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -247,7 +248,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("ltx2.5", "minimax_h3"),
         "shape": "video",
         "target_media": "video",
-        "has_control": False,
         "control_media": (),
         "uniform_control_count": False,
         "uniform_control_media": False,
@@ -274,7 +274,6 @@ AI_TOOLKIT_PROJECTION_PROFILES = {
         "architectures": ("minimax_h3_ref2va",),
         "shape": "video-control",
         "target_media": "video",
-        "has_control": True,
         "control_media": ("image", "video"),
         "uniform_control_count": True,
         "uniform_control_media": True,
@@ -536,7 +535,7 @@ def _project_ai_toolkit_folder_block(
     dataset_id = dataset.get("id")
     view_root = block.view_root(str(run["id"]), str(dataset_id))
     pointer_prefix = block.native_pointer_prefix
-    control_mode = bool(profile["has_control"])
+    control_mode = AI_TOOLKIT_FOLDER_CODECS[profile["codec"]]["control_folders"]
     target_media = str(profile["target_media"])
     video_mode = target_media == "video"
     target_root = f"{view_root}/target" if control_mode else view_root
