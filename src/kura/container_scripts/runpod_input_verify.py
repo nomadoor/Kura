@@ -1,0 +1,271 @@
+"""Verify a selected-file transfer on the Pod before any model acquisition.
+
+Usage: runpod_input_verify.py <archive> <manifest> <manifest-sha256>
+
+The controller passes the manifest's SHA-256 inside the job script it sends,
+so the manifest itself is bound before anything else is trusted.
+
+The archive is streamed once into a fresh staging directory. Each member must
+be exactly the manifest entry at the same position (name, regular type, size,
+fixed metadata, SHA-256), and the whole archive must match the manifest's size
+and digest. The staged run envelope's input lock must match the manifest's
+input and projection digests. Only then are the verified trees renamed into
+the workspace, the frozen dataset views are created from that lock, and their
+exact link and generated-file inventory is checked. A realization record is
+written on success and on failure; failure exits non-zero so the job never
+reaches the trainer.
+"""
+
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tarfile
+from datetime import datetime
+from pathlib import Path, PurePosixPath
+
+CHUNK = 1024 * 1024
+CONTAINER_WORKSPACE = "/workspace/"
+
+
+class TransferError(Exception):
+    pass
+
+
+def safe_relative(value):
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or "\x00" in value
+        or value.startswith("/")
+        or any(part in ("", ".", "..") for part in value.split("/"))
+    ):
+        raise TransferError(f"unsafe transfer path: {value!r}")
+    return value
+
+
+def digest_json(value):
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+class HashingReader:
+    def __init__(self, handle):
+        self.handle = handle
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size=-1):
+        data = self.handle.read(size)
+        self.digest.update(data)
+        self.size += len(data)
+        return data
+
+
+def write_new_file(path, reader, expected_size):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    digest = hashlib.sha256()
+    written = 0
+    with os.fdopen(descriptor, "wb") as handle:
+        for chunk in iter(lambda: reader.read(CHUNK), b""):
+            digest.update(chunk)
+            written += len(chunk)
+            handle.write(chunk)
+    if written != expected_size:
+        raise TransferError(f"member size differs while extracting: {path}")
+    return digest.hexdigest()
+
+
+def extract_verified(archive_path, manifest, staging):
+    entries = manifest["entries"]
+    with open(archive_path, "rb") as raw:
+        reader = HashingReader(raw)
+        try:
+            with tarfile.open(fileobj=reader, mode="r|") as stream:
+                members = iter(stream)
+                for entry in entries:
+                    member = next(members, None)
+                    if (
+                        member is None
+                        or member.name != entry["archive_name"]
+                        or member.name != f"{entry['namespace']}/{entry['destination']}"
+                        or not member.isreg()
+                        or member.size != entry["size"]
+                        or (member.mtime, member.uid, member.gid, member.mode) != (0, 0, 0, 0o644)
+                    ):
+                        raise TransferError(f"archive member differs from the manifest: {entry['archive_name']}")
+                    destination = safe_relative(entry["destination"])
+                    digest = write_new_file(staging / destination, stream.extractfile(member), entry["size"])
+                    if digest != entry["sha256"]:
+                        raise TransferError(f"archive member content differs from the manifest: {destination}")
+                if next(members, None) is not None:
+                    raise TransferError("archive has members the manifest does not list")
+        except tarfile.TarError as error:
+            raise TransferError(f"archive is not a readable tar: {error}") from error
+        while reader.read(CHUNK):
+            pass
+    if reader.size != manifest["tar_bytes"] or reader.digest.hexdigest() != manifest["archive_sha256"]:
+        raise TransferError("archive size or digest differs from the manifest")
+
+
+def check_envelope(staging, manifest, run_id):
+    resolved = staging / "runs" / run_id / "resolved"
+    lock = json.loads((resolved / "dataset-input.lock.json").read_text(encoding="utf-8"))
+    report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
+    if (
+        lock.get("input_sha256") != manifest["input_sha256"]
+        or lock.get("projection_sha256") != manifest["projection_sha256"]
+        or digest_json(report) != manifest["projection_sha256"]
+        or lock.get("run_id") != run_id
+    ):
+        raise TransferError("staged input lock differs from the transfer manifest")
+    return lock
+
+
+def publish(staging, workspace, run_id):
+    """Rename each verified top-level tree into place; never merge into existing paths."""
+    moves = [
+        (staging / "runs" / run_id / "run.yaml", workspace / "runs" / run_id / "run.yaml"),
+        (staging / "runs" / run_id / "resolved", workspace / "runs" / run_id / "resolved"),
+        (staging / "datasets", workspace / "datasets"),
+        (staging / "artifacts", workspace / "artifacts"),
+    ]
+    staged_runs = {path.name for path in (staging / "runs").iterdir()} if (staging / "runs").is_dir() else set()
+    if staged_runs - {run_id} or {path.name for path in staging.iterdir()} - {"runs", "datasets", "artifacts"}:
+        raise TransferError("staging contains a tree outside the declared namespaces")
+    moves = [(source, target) for source, target in moves if source.exists()]
+    # Check every target first so a refusal publishes nothing.
+    for _, target in moves:
+        if target.exists() or target.is_symlink():
+            raise TransferError(f"transfer target already exists: {target.relative_to(workspace)}")
+    for source, target in moves:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(source, target)
+
+
+def materialize_views(workspace, lock, run_id):
+    datasets = workspace / "datasets"
+    view_prefix = f"runs/{run_id}/cache/dataset-view/"
+    links = 0
+    generated = 0
+    for view in lock["views"]:
+        root_relative = safe_relative(view["root"])
+        if not root_relative.startswith(view_prefix):
+            raise TransferError(f"view root is outside the run-owned view area: {root_relative}")
+        root = workspace / root_relative
+        if root.exists() or root.is_symlink():
+            raise TransferError(f"view root already exists: {root_relative}")
+        root.mkdir(parents=True)
+        expected_links = {}
+        for link in view["links"]:
+            path = safe_relative(link["path"])
+            target = link["target"]
+            if not path.startswith(root_relative + "/") or not target.startswith(CONTAINER_WORKSPACE + "datasets/"):
+                raise TransferError(f"view link is outside its view or dataset area: {path}")
+            local_target = workspace / safe_relative(target[len(CONTAINER_WORKSPACE):])
+            resolved = Path(os.path.realpath(local_target))
+            if not resolved.is_relative_to(Path(os.path.realpath(datasets))) or not resolved.is_file():
+                raise TransferError(f"view link target is not a transferred dataset file: {path}")
+            (workspace / path).parent.mkdir(parents=True, exist_ok=True)
+            (workspace / path).symlink_to(target)
+            expected_links[path] = target
+        expected_files = {}
+        for item in [*view.get("files", []), *view.get("native_files", [])]:
+            path = safe_relative(item["path"])
+            if not path.startswith(root_relative + "/"):
+                raise TransferError(f"generated view file is outside its view: {path}")
+            data = item["text"].encode("utf-8")
+            (workspace / path).parent.mkdir(parents=True, exist_ok=True)
+            with os.fdopen(os.open(workspace / path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644), "wb") as handle:
+                handle.write(data)
+            expected_files[path] = data
+        actual_links = {}
+        actual_files = set()
+        for path in root.rglob("*"):
+            relative = path.relative_to(workspace).as_posix()
+            if path.is_symlink():
+                actual_links[relative] = os.readlink(path)
+            elif path.is_file():
+                actual_files.add(relative)
+            elif not path.is_dir():
+                raise TransferError(f"view contains an unexpected entry: {relative}")
+        if actual_links != expected_links or actual_files != set(expected_files):
+            raise TransferError(f"view inventory differs from the frozen lock: {root_relative}")
+        for relative, data in expected_files.items():
+            if (workspace / relative).read_bytes() != data:
+                raise TransferError(f"generated view file differs: {relative}")
+        links += len(expected_links)
+        generated += len(expected_files)
+    return links, generated
+
+
+def source_baseline(workspace, manifest):
+    baseline = {}
+    for entry in manifest["entries"]:
+        if entry["namespace"] == "source":
+            observed = (workspace / entry["destination"]).stat()
+            baseline[entry["destination"]] = {"size": observed.st_size, "mtime_ns": observed.st_mtime_ns}
+    return baseline
+
+
+def main():
+    archive_path, manifest_path, manifest_sha256 = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+    workspace = Path(os.environ["KURA_WORKSPACE"])
+    run_id = os.environ["KURA_RUN_ID"]
+    realization_id = os.environ["KURA_REALIZATION_ID"]
+    record_path = workspace / "runs" / run_id / "realizations" / f"{realization_id}.runpod-input.json"
+    staging = workspace / ".kura-transfer" / run_id / "staging"
+    record = {
+        "schema_version": 1,
+        "realization_id": realization_id,
+        "started_at": datetime.now().astimezone().isoformat(),
+    }
+    try:
+        manifest_bytes = manifest_path.read_bytes()
+        if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha256:
+            raise TransferError("transfer manifest differs from the one the controller verified")
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+        if manifest.get("schema_version") != 1 or manifest.get("run_id") != run_id:
+            raise TransferError("transfer manifest does not belong to this run")
+        record.update({
+            "archive_sha256": manifest["archive_sha256"],
+            "input_sha256": manifest["input_sha256"],
+            "projection_sha256": manifest["projection_sha256"],
+        })
+        if staging.exists():
+            raise TransferError("transfer staging directory already exists")
+        staging.mkdir(parents=True)
+        extract_verified(archive_path, manifest, staging)
+        lock = check_envelope(staging, manifest, run_id)
+        publish(staging, workspace, run_id)
+        links, generated = materialize_views(workspace, lock, run_id)
+        archive_path.unlink()
+        shutil.rmtree(staging.parent)
+        usage = shutil.disk_usage(workspace)
+        record.update({
+            "status": "verified",
+            "entries": len(manifest["entries"]),
+            "payload_bytes": manifest["payload_bytes"],
+            "content_verification": "sha256-per-file-and-archive",
+            "view_link_verification": "matched",
+            "view_links": links,
+            "generated_view_files": generated,
+            "source_baseline": source_baseline(workspace, manifest),
+            "disk": {"total_bytes": usage.total, "used_bytes": usage.used, "free_bytes": usage.free},
+        })
+    except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
+        record.update({"status": "failed", "error": f"{type(error).__name__}: {error}"})
+    record["finished_at"] = datetime.now().astimezone().isoformat()
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if record["status"] != "verified":
+        print(f"[kura] selected-file transfer verification failed: {record['error']}", file=sys.stderr)
+        sys.exit(1)
+    print(f"[kura] selected-file transfer verified: {record['entries']} files, {record['view_links']} view links")
+
+
+if __name__ == "__main__":
+    main()

@@ -24,6 +24,8 @@ from typing import Any
 
 import yaml
 
+from kura.container_scripts import script_source
+
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.fsio import atomic_write_json
@@ -1611,8 +1613,25 @@ def _runpod_remote_job_script(
     cwd: str,
     command: str,
     write_roots: list[dict[str, str]] | None = None,
+    transfer_manifest: str | None = None,
+    transfer_manifest_sha256: str | None = None,
 ) -> str:
     declared_roots = write_roots or []
+    if transfer_manifest is None:
+        receive_inputs = (
+            f'tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?'
+        )
+    else:
+        # Selected-file transfers are verified before anything reaches the
+        # workspace; a failure leaves exit_code non-zero so the trainer (and
+        # its model acquisition) never starts.
+        receive_inputs = (
+            f"python - {shlex.quote(remote_archive)} {shlex.quote(transfer_manifest)} "
+            f"{shlex.quote(str(transfer_manifest_sha256))} "
+            f">> \"$KURA_LOG_PATH\" 2>&1 <<'KURA_RUNPOD_INPUT_VERIFY' || exit_code=$?\n"
+            f"{script_source('runpod_input_verify.py')}\n"
+            "KURA_RUNPOD_INPUT_VERIFY"
+        )
     paths = validated_write_roots(
         {"env": {item["env"]: item["path"] for item in declared_roots}, "write_roots": declared_roots},
         workspace_path=workspace,
@@ -1709,7 +1728,7 @@ collect_runtime_diagnostics() {{
 export KURA_CGROUP_OOM_KILL_BEFORE=$(read_oom_kill)
 collect_runtime_diagnostics before_backend
 exit_code=0
-tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?
+{receive_inputs}
 if [ "$exit_code" -eq 0 ]; then
   cd {shlex.quote(cwd)} || exit_code=$?
 fi
@@ -1791,23 +1810,40 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     argv = realization.get("backend_command")
     if not isinstance(workspace, str) or not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
         raise ValueError("latest realization has no runnable RunPod command")
+    selected_files = stage.get("transfer") == "selected-files"
+    if selected_files and workspace != "/workspace":
+        # Frozen view links target /workspace/datasets/...; another root would
+        # leave every link dangling.
+        raise ValueError("selected-file RunPod transfer requires KURA_WORKSPACE=/workspace")
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
-    remote_archive = f"{workspace}/{archive_name}"
-    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(workspace)}"], context="ssh workspace preparation")
+    remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
+    remote_archive = f"{remote_dir}/{archive_name}"
+    remote_manifest: str | None = None
+    remote_manifest_sha256: str | None = None
+    uploads = [(archive_path, remote_archive)]
+    if selected_files:
+        manifest = stage.get("manifest")
+        if not isinstance(manifest, str) or not (run_dir / manifest).is_file():
+            raise ValueError("latest RunPod stage has no transfer manifest")
+        remote_manifest = f"{remote_dir}/{Path(manifest).name}"
+        remote_manifest_sha256 = hashlib.sha256((run_dir / manifest).read_bytes()).hexdigest()
+        uploads.append((run_dir / manifest, remote_manifest))
+    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_dir)}"], context="ssh workspace preparation")
     if prepared.returncode:
         raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
-    scp = [
-        "scp",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-P", str(details["port"]),
-        "-i", str(details["key"]),
-        str(archive_path),
-        f"root@{details['ip']}:{remote_archive}",
-    ]
-    uploaded = _run_bounded(scp, context="scp upload")
-    if uploaded.returncode:
-        raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
+    for local, remote in uploads:
+        scp = [
+            "scp",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-P", str(details["port"]),
+            "-i", str(details["key"]),
+            str(local),
+            f"root@{details['ip']}:{remote}",
+        ]
+        uploaded = _run_bounded(scp, context="scp upload")
+        if uploaded.returncode:
+            raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
     command = " ".join(shlex.quote(arg) for arg in argv)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
     secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
@@ -1835,6 +1871,8 @@ chmod 600 {shlex.quote(remote_secret_path)}
         cwd=cwd,
         command=command,
         write_roots=realization.get("write_roots"),
+        transfer_manifest=remote_manifest,
+        transfer_manifest_sha256=remote_manifest_sha256,
     )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"

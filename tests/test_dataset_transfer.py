@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -31,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
-class DatasetTransferTests(unittest.TestCase):
+class _CompiledRunFixture:
     @staticmethod
     def _config() -> dict:
         return {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}
@@ -93,6 +94,8 @@ class DatasetTransferTests(unittest.TestCase):
         (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
         return run_dir, run
 
+
+class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
     def test_inventory_selects_only_locked_files_in_explicit_namespaces(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -377,6 +380,121 @@ class DatasetTransferTests(unittest.TestCase):
         self.assertIn("RunPod selected-file transfer:", output)
         for label in ("payload", "tar", "local_stage_free", "pod_peak"):
             self.assertRegex(output, rf"\n    {label}\s+\S")
+
+
+
+class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
+    """The Pod-side receive path, exercised through the generated job script."""
+
+    def _pod(self, root: Path) -> tuple[Path, Path, dict]:
+        run_dir, run = self._compiled(root / "local")
+        record = stage_runpod(workspace=root / "local", run_dir=run_dir, config=self._config())
+        pod = root / "pod"
+        remote_dir = pod / ".kura-transfer" / "example"
+        remote_dir.mkdir(parents=True)
+        (remote_dir / record["archive_name"]).write_bytes((run_dir / record["archive"]).read_bytes())
+        manifest_bytes = (run_dir / record["manifest"]).read_bytes()
+        (remote_dir / Path(record["manifest"]).name).write_bytes(manifest_bytes)
+        # What the controller embeds: the digest of the manifest it verified.
+        self.manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        return pod, remote_dir, record
+
+    def _run_job(self, pod: Path, remote_dir: Path, record: dict) -> subprocess.CompletedProcess[str]:
+        from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+
+        script = _runpod_remote_job_script(
+            workspace=str(pod),
+            run_id="example",
+            realization_id="real-1",
+            remote_secret_path=str(pod / "no-secrets.env"),
+            archive_name=record["archive_name"],
+            remote_archive=str(remote_dir / record["archive_name"]),
+            cwd=str(pod),
+            command="touch trainer-started",
+            transfer_manifest=str(remote_dir / Path(record["manifest"]).name),
+            transfer_manifest_sha256=self.manifest_sha256,
+        )
+        return subprocess.run(["sh", "-c", script], text=True, capture_output=True, check=False)
+
+    def _verify_record(self, pod: Path) -> dict:
+        return json.loads(
+            (pod / "runs" / "example" / "realizations" / "real-1.runpod-input.json").read_text(encoding="utf-8")
+        )
+
+    def test_verified_transfer_publishes_inputs_and_views_before_the_trainer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pod, remote_dir, record = self._pod(Path(directory))
+
+            result = self._run_job(pod, remote_dir, record)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((pod / "trainer-started").exists())
+            proof = self._verify_record(pod)
+            self.assertEqual(proof["status"], "verified")
+            self.assertEqual(proof["archive_sha256"], record["archive_sha256"])
+            self.assertEqual((pod / "datasets" / "tiny" / "a.png").read_bytes(), b"selected image")
+            self.assertFalse((pod / "datasets" / "tiny" / "unselected.bin").exists())
+            self.assertTrue((pod / "runs" / "example" / "resolved" / "dataset-input.lock.json").is_file())
+            lock = json.loads((pod / "runs" / "example" / "resolved" / "dataset-input.lock.json").read_text(encoding="utf-8"))
+            for view in lock["views"]:
+                for link in view["links"]:
+                    self.assertEqual(os.readlink(pod / link["path"]), link["target"])
+            self.assertEqual(proof["view_links"], sum(len(view["links"]) for view in lock["views"]))
+            self.assertIn("datasets/tiny/a.png", proof["source_baseline"])
+            self.assertFalse((pod / ".kura-transfer").exists() and any((pod / ".kura-transfer").iterdir()))
+
+    def test_any_verification_failure_publishes_nothing_and_never_starts_the_trainer(self) -> None:
+        def corrupt_byte(remote_dir: Path, record: dict) -> None:
+            archive = remote_dir / record["archive_name"]
+            data = bytearray(archive.read_bytes())
+            data[1024] ^= 0xFF
+            archive.write_bytes(bytes(data))
+
+        def extra_entry(remote_dir: Path, record: dict) -> None:
+            manifest_path = remote_dir / Path(record["manifest"]).name
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["entries"].append(dict(manifest["entries"][-1], archive_name="source/datasets/tiny/extra"))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+        def wrong_input_digest(remote_dir: Path, record: dict) -> None:
+            # Even a manifest rebound to its own new digest must match the envelope.
+            manifest_path = remote_dir / Path(record["manifest"]).name
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["input_sha256"] = "sha256:" + "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+        def occupied_target(remote_dir: Path, record: dict) -> None:
+            (remote_dir.parent.parent / "datasets").mkdir()
+
+        def swapped_manifest(remote_dir: Path, record: dict) -> None:
+            manifest_path = remote_dir / Path(record["manifest"]).name
+            manifest_path.write_text(manifest_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+        cases = {
+            "swapped manifest": swapped_manifest,
+            "corrupt byte": corrupt_byte,
+            "extra manifest entry": extra_entry,
+            "wrong input digest": wrong_input_digest,
+            "occupied target": occupied_target,
+        }
+        for name, tamper in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                pod, remote_dir, record = self._pod(Path(directory))
+                tamper(remote_dir, record)
+
+                result = self._run_job(pod, remote_dir, record)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((pod / "trainer-started").exists())
+                self.assertEqual(self._verify_record(pod)["status"], "failed")
+                self.assertFalse((pod / "runs" / "example" / "resolved").exists())
+                if name != "occupied target":
+                    self.assertFalse((pod / "datasets").exists())
+                exits = list((pod / "runs" / "example" / "realizations").glob("remote-exit-*.json"))
+                self.assertEqual(len(exits), 1)
+                self.assertNotEqual(json.loads(exits[0].read_text(encoding="utf-8"))["exit_code"], 0)
 
 
 if __name__ == "__main__":

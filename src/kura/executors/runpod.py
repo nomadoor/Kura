@@ -679,6 +679,8 @@ def launch_runpod(
     if secret_keys:
         raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))
     transfer_codes: dict[str, str] = {}
+    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file() and settings["storage_mode"] != "upload":
+        raise ValueError("manifest-v2 RunPod runs require runpod.storage_mode=upload for the verified selected-file transfer")
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is disabled until object-store credentials can be injected without Pod environment variables")
     elif settings["storage_mode"] == "upload":
