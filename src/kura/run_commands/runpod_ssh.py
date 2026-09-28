@@ -25,6 +25,8 @@ from typing import Any
 import yaml
 
 from kura.container_scripts import script_source
+from kura.executors.runpod import finalize_runpod_dataset_handoff
+from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
@@ -615,7 +617,15 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 if isinstance(configured_steps, int) and configured_steps > 0:
                     steps = configured_steps
 
+            realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
+            input_postflight = (
+                finalize_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
+                if isinstance(realization_ref, str) else None
+            )
+
             def mutate(status: dict[str, Any]) -> None:
+                if input_postflight is not None:
+                    status["dataset_input_postflight"] = input_postflight
                 status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
                 status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
@@ -1621,16 +1631,29 @@ def _runpod_remote_job_script(
         receive_inputs = (
             f'tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?'
         )
+        inputs_postflight = ""
     else:
         # Selected-file transfers are verified before anything reaches the
         # workspace; a failure leaves exit_code non-zero so the trainer (and
         # its model acquisition) never starts.
+        verifier = script_source("runpod_input_verify.py")
+        media = shlex.quote(frozen_suffixes(KNOWN_MEDIA_SUFFIXES))
         receive_inputs = (
+            f"export KURA_KNOWN_MEDIA_SUFFIXES={media}\n"
             f"python - {shlex.quote(remote_archive)} {shlex.quote(transfer_manifest)} "
             f"{shlex.quote(str(transfer_manifest_sha256))} "
             f">> \"$KURA_LOG_PATH\" 2>&1 <<'KURA_RUNPOD_INPUT_VERIFY' || exit_code=$?\n"
-            f"{script_source('runpod_input_verify.py')}\n"
-            "KURA_RUNPOD_INPUT_VERIFY"
+            f"{verifier}\n"
+            "KURA_RUNPOD_INPUT_VERIFY\n"
+            "inputs_verified=$exit_code"
+        )
+        # Runs after the trainer whatever its exit code; it only records drift.
+        inputs_postflight = (
+            'if [ "$inputs_verified" -eq 0 ]; then\n'
+            "python - --postflight >> \"$KURA_LOG_PATH\" 2>&1 <<'KURA_RUNPOD_INPUT_POSTFLIGHT' || true\n"
+            f"{verifier}\n"
+            "KURA_RUNPOD_INPUT_POSTFLIGHT\n"
+            "fi"
         )
     paths = validated_write_roots(
         {"env": {item["env"]: item["path"] for item in declared_roots}, "write_roots": declared_roots},
@@ -1737,6 +1760,7 @@ if [ "$exit_code" -eq 0 ]; then
   exit_code=$?
 fi
 collect_runtime_diagnostics after_backend
+{inputs_postflight}
 export KURA_CGROUP_OOM_KILL_AFTER=$(read_oom_kill)
 export KURA_CGROUP_MEMORY_PEAK=$(read_memory_peak)
 export KURA_EXIT_CODE="$exit_code"

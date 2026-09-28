@@ -313,13 +313,7 @@ def launch_run(
         input_lock = None
         input_path = run_dir / "resolved" / "dataset-input.lock.json"
         if input_path.is_file():
-            from kura.dataset_handoff import require_dataset_transfer_supported
-
             input_lock = json.loads(input_path.read_text(encoding="utf-8"))
-            require_dataset_transfer_supported(
-                executor=executor,
-                input_schema_version=input_lock.get("schema_version"),
-            )
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
         spec = _load_frozen_command(run_dir, locked)

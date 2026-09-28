@@ -23,6 +23,7 @@ from kura.dataset_handoff import (
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
+    dataset_input_drift_warning,
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
     MIN_FREE_SPACE_GIB,
@@ -201,14 +202,7 @@ def _finalize_dataset_handoff(
             **({"path": cleanup["path"]} if isinstance(cleanup.get("path"), str) else {}),
         })
 
-    warning = None
-    if postflight["status"] == "changed":
-        warning = (
-            "inputs changed between compile and post-training observation; "
-            "the exact change time is unknown"
-        )
-    elif postflight["status"] == "uncheckable":
-        warning = "post-training input verification was unavailable; reproducibility is not confirmed"
+    warning = dataset_input_drift_warning(postflight["status"])
     projected = {
         "status": postflight["status"],
         "record": postflight_ref,

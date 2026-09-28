@@ -72,6 +72,18 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
+def dataset_input_drift_warning(status: str) -> str | None:
+    """The reproducibility warning a post-training input observation projects."""
+    if status == "changed":
+        return (
+            "inputs changed between compile and post-training observation; "
+            "the exact change time is unknown"
+        )
+    if status == "uncheckable":
+        return "post-training input verification was unavailable; reproducibility is not confirmed"
+    return None
+
+
 def append_run_event(run_dir: Path, event: dict[str, Any], *, best_effort: bool = False) -> bool:
     path = run_dir / "logs" / "events.jsonl"
     try:

@@ -22,7 +22,7 @@ import yaml
 from kura import __version__
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
-from kura.dataset_handoff import freeze_dataset_handoff, require_dataset_transfer_supported
+from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
@@ -543,7 +543,6 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         )
         input_lock = None
         if adapter.project_dataset is not None and not explicit_native_command:
-            require_dataset_transfer_supported(executor=declared_executor, input_schema_version=2)
             input_lock = freeze_dataset_handoff(
                 locked,
                 _workspace(),

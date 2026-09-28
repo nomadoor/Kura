@@ -182,8 +182,46 @@ def materialize_views(workspace, lock, run_id):
             with os.fdopen(os.open(workspace / path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644), "wb") as handle:
                 handle.write(data)
             expected_files[path] = data
+        links += len(expected_links)
+        generated += len(expected_files)
+    changes = view_changes(workspace, lock)
+    if changes:
+        raise TransferError("view inventory differs from the frozen lock: " + "; ".join(changes[:5]))
+    return links, generated
+
+
+def media_suffixes():
+    """Kura's frozen media vocabulary, passed by the controller; required."""
+    try:
+        values = json.loads(os.environ["KURA_KNOWN_MEDIA_SUFFIXES"])
+    except (KeyError, ValueError) as error:
+        raise TransferError(f"KURA_KNOWN_MEDIA_SUFFIXES is missing or invalid: {error}") from error
+    if not isinstance(values, list) or not values or not all(isinstance(item, str) for item in values):
+        raise TransferError("KURA_KNOWN_MEDIA_SUFFIXES must be a non-empty suffix list")
+    return frozenset(values)
+
+
+def view_changes(workspace, lock):
+    """Compare every view's exact link and generated-file inventory with the lock.
+
+    Trainers may write caches beside view files, so only an unexpected media
+    file counts as drift among regular files.
+    """
+    suffixes = media_suffixes()
+    changes = []
+    for view in lock["views"]:
+        root_relative = safe_relative(view["root"])
+        root = workspace / root_relative
+        expected_links = {link["path"]: link["target"] for link in view["links"]}
+        expected_files = {
+            item["path"]: item["text"].encode("utf-8")
+            for item in [*view.get("files", []), *view.get("native_files", [])]
+        }
         actual_links = {}
         actual_files = set()
+        if not root.is_dir() or root.is_symlink():
+            changes.append(f"missing view root: {root_relative}")
+            continue
         for path in root.rglob("*"):
             relative = path.relative_to(workspace).as_posix()
             if path.is_symlink():
@@ -191,15 +229,19 @@ def materialize_views(workspace, lock, run_id):
             elif path.is_file():
                 actual_files.add(relative)
             elif not path.is_dir():
-                raise TransferError(f"view contains an unexpected entry: {relative}")
-        if actual_links != expected_links or actual_files != set(expected_files):
-            raise TransferError(f"view inventory differs from the frozen lock: {root_relative}")
-        for relative, data in expected_files.items():
-            if (workspace / relative).read_bytes() != data:
-                raise TransferError(f"generated view file differs: {relative}")
-        links += len(expected_links)
-        generated += len(expected_files)
-    return links, generated
+                changes.append(f"unexpected view entry: {relative}")
+        for path in sorted(set(expected_links) | set(actual_links)):
+            if expected_links.get(path) != actual_links.get(path):
+                changes.append(f"view link differs: {path}")
+        for path in sorted(set(expected_files) - actual_files):
+            changes.append(f"missing generated view file: {path}")
+        for path in sorted(actual_files - set(expected_files)):
+            if Path(path).suffix.lower() in suffixes:
+                changes.append(f"unexpected regular media in view: {path}")
+        for path in sorted(set(expected_files) & actual_files):
+            if (workspace / path).read_bytes() != expected_files[path]:
+                changes.append(f"generated view file differs: {path}")
+    return changes
 
 
 def source_baseline(workspace, manifest):
@@ -211,7 +253,53 @@ def source_baseline(workspace, manifest):
     return baseline
 
 
+def postflight():
+    """After the trainer: re-check views and transferred sources; never fails the run."""
+    workspace = Path(os.environ["KURA_WORKSPACE"])
+    run_id = os.environ["KURA_RUN_ID"]
+    realization_id = os.environ["KURA_REALIZATION_ID"]
+    realizations = workspace / "runs" / run_id / "realizations"
+    record = {"schema_version": 1, "realization_id": realization_id, "observed_at": datetime.now().astimezone().isoformat()}
+    try:
+        verified = json.loads((realizations / f"{realization_id}.runpod-input.json").read_text(encoding="utf-8"))
+        if verified.get("status") != "verified":
+            raise TransferError("inputs were never verified for this realization")
+        lock = json.loads((workspace / "runs" / run_id / "resolved" / "dataset-input.lock.json").read_text(encoding="utf-8"))
+        source_changes = []
+        for destination, baseline in sorted(verified["source_baseline"].items()):
+            try:
+                observed = (workspace / safe_relative(destination)).stat()
+            except OSError:
+                source_changes.append(f"missing transferred source: {destination}")
+                continue
+            if {"size": observed.st_size, "mtime_ns": observed.st_mtime_ns} != baseline:
+                source_changes.append(f"transferred source changed: {destination}")
+        link_changes = view_changes(workspace, lock)
+        record.update({
+            "status": "changed" if source_changes or link_changes else "matched",
+            "source_stat_verification": "changed" if source_changes else "matched",
+            "view_link_verification": "changed" if link_changes else "matched",
+            "source_changes": source_changes,
+            "view_changes": link_changes,
+        })
+    except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
+        record.update({
+            "status": "uncheckable",
+            "source_stat_verification": "uncheckable",
+            "view_link_verification": "uncheckable",
+            "error": f"{type(error).__name__}: {error}",
+        })
+    realizations.mkdir(parents=True, exist_ok=True)
+    (realizations / f"{realization_id}.runpod-input-postflight.json").write_text(
+        json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+    )
+    print(f"[kura] selected-file transfer postflight: {record['status']}")
+
+
 def main():
+    if sys.argv[1:] == ["--postflight"]:
+        postflight()
+        return
     archive_path, manifest_path, manifest_sha256 = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
     workspace = Path(os.environ["KURA_WORKSPACE"])
     run_id = os.environ["KURA_RUN_ID"]

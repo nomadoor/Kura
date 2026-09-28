@@ -14,9 +14,10 @@ draft run plan: measure GPU stock/price
 record the selected GPU and immediate/wait capacity policy
 compile
 final run plan and one approval
-stage upload bundle
-launch disposable Pod
+stage upload bundle (manifest-v2: selected files only, hashed against the lock)
+launch disposable Pod (manifest-v2: staged archive re-proven against the compile first)
 upload over SSH
+verify inputs on the Pod before model acquisition (manifest-v2)
 run backend command detached from SSH control
 poll remote logs/exit record
 verify terminal manifest and download only the snapshot delta
@@ -41,7 +42,13 @@ stop Pod
 - `--hold-for 30m`: normal post-download review window.
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.
-- `runpod.storage_mode: upload`: no Network Volume by default.
+- `runpod.storage_mode: upload`: no Network Volume by default. Manifest-v2
+  runs require it: their inputs arrive only through the verified
+  selected-file transfer. A Pod-side verification failure writes
+  `realizations/<id>.runpod-input.json` with `status: failed`, never starts the
+  trainer, and the normal download-then-stop path still runs. If stage or
+  launch says "stage it again", the compile or staged files changed; rerun the
+  stage rather than editing any staged file.
 - Treat configured GPU candidates as workspace policy, not durable skill
   knowledge. Inspect current availability and price before selecting one.
   After that choice, compile the run and inspect the compiled resource plan

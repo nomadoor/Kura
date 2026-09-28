@@ -7,6 +7,72 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-selected-file-transfer-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Lift the manifest-v2 RunPod rejection now that the selected-file
+      transfer is verified at stage, before Pod creation, and on the Pod;
+      remove the rejection helper from the shared dataset handoff module.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e5cfb85a372fdb83cc72e77545d18822922eceb9598cc4fba2f99a578e5d2140
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+  - id: runpod-selected-file-transfer-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Lift the manifest-v2 RunPod rejection now that the selected-file
+      transfer is verified at stage, before Pod creation, and on the Pod;
+      remove the rejection helper from the shared dataset handoff module.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 9974b883ec01bbf28d687982c18986587ec8ee56d1469e53406bd540bc885b3f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+  - id: runpod-selected-file-transfer-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Lift the manifest-v2 RunPod rejection now that the selected-file
+      transfer is verified at stage, before Pod creation, and on the Pod;
+      remove the rejection helper from the shared dataset handoff module.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4fcce4be9f8cac5a425735ee7222c0ed4294966ae9594d8e576b34ac83b4768e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
   - id: handoff-read-reverification-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-

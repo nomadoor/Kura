@@ -21,11 +21,12 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
+from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, verify_stage_matches_compile, write_transfer_archive, write_transfer_manifest
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
-from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
 class RunPodAPIError(ValueError):
@@ -622,6 +623,81 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     return record
 
 
+def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
+    """Bring the Pod's input records home and project post-training input drift once.
+
+    Remote records are copied into ``realizations/`` without overwriting a
+    record that already exists. The local source stat check is combined with
+    the Pod's own postflight; drift is recorded as a warning and never fails
+    the run or its published output.
+    """
+    if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        return None
+    local = run_dir / "realizations"
+    local.mkdir(exist_ok=True)
+    remote = downloaded_run / "realizations"
+    conflicts: list[str] = []
+    for record in sorted(remote.glob("*.json")) if remote.is_dir() else []:
+        target = local / record.name
+        if not target.exists():
+            shutil.copyfile(record, target)
+        elif target.read_bytes() != record.read_bytes():
+            conflicts.append(record.name)
+    postflight_ref = f"realizations/{realization_id}.dataset-input-postflight.json"
+    postflight_path = run_dir / postflight_ref
+    if postflight_path.is_file():
+        postflight = json.loads(postflight_path.read_text(encoding="utf-8"))
+    else:
+        workspace = run_dir.parent.parent
+        try:
+            lock, _ = load_frozen_dataset_handoff(run_dir / "resolved")
+            source_changes = inspect_dataset_sources(workspace, lock)
+            local_status = "changed" if source_changes else "matched"
+        except (OSError, ValueError) as exc:
+            source_changes, local_status = [_redact_secret_text(str(exc))], "uncheckable"
+        remote_path = local / f"{realization_id}.runpod-input-postflight.json"
+        try:
+            remote_postflight = json.loads(remote_path.read_text(encoding="utf-8"))
+            remote_status = remote_postflight.get("status")
+        except (OSError, json.JSONDecodeError):
+            remote_postflight, remote_status = {}, "uncheckable"
+        if remote_status not in {"matched", "changed"}:
+            remote_status = "uncheckable"
+        statuses = {local_status, remote_status}
+        status = "uncheckable" if "uncheckable" in statuses else "changed" if "changed" in statuses else "matched"
+        postflight = {
+            "schema_version": 1,
+            "realization_id": realization_id,
+            "observed_at": _now(),
+            "status": status,
+            "source_stat_verification": local_status,
+            "source_changes": source_changes,
+            "remote_record": f"realizations/{remote_path.name}",
+            "remote_source_stat_verification": remote_postflight.get("source_stat_verification", "uncheckable"),
+            "remote_view_link_verification": remote_postflight.get("view_link_verification", "uncheckable"),
+            **({"record_conflicts": conflicts} if conflicts else {}),
+        }
+        _write_json(postflight_path, postflight)
+    current = _load_status(run_dir)
+    announced = current.get("dataset_input_postflight")
+    if not (isinstance(announced, dict) and announced.get("record") == postflight_ref):
+        append_run_event(run_dir, {
+            "event": "dataset_input_postflight",
+            "timestamp": postflight["observed_at"],
+            "realization_id": realization_id,
+            "record": postflight_ref,
+            "status": postflight["status"],
+        })
+    warning = dataset_input_drift_warning(postflight["status"])
+    return {
+        "status": postflight["status"],
+        "record": postflight_ref,
+        # A Pod is discarded with its disposable view; nothing is left to clean.
+        "view_cleanup": "not-required",
+        **({"warning": warning} if warning else {}),
+    }
+
+
 def _runpod_state(pod: dict[str, Any]) -> tuple[str, int | None]:
     desired = pod.get("desiredStatus")
     if desired == "RUNNING":
@@ -699,6 +775,14 @@ def launch_runpod(
         upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
         download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
         transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
+        if stage.get("transfer") == "selected-files":
+            # Verified above, before the Pod exists.
+            transfer_codes.update({
+                "stage": stage_ref,
+                "archive_sha256": stage["archive_sha256"],
+                "input_sha256": stage["input_sha256"],
+                "verification": "stage-matches-compile-before-pod-creation",
+            })
         runtime_env.update({
             "KURA_UPLOAD_CODE": upload_code,
             "KURA_DOWNLOAD_CODE": download_code,

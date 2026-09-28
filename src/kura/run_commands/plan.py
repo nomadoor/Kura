@@ -23,7 +23,6 @@ from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
     load_frozen_dataset_projection,
-    require_dataset_transfer_supported,
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
@@ -955,12 +954,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     plan_executor = run_executor(run)
     input_path = run_dir / "resolved" / "dataset-input.lock.json"
-    if plan_executor == "runpod" and input_path.is_file():
-        input_lock = json.loads(input_path.read_text(encoding="utf-8"))
-        require_dataset_transfer_supported(
-            executor=plan_executor,
-            input_schema_version=input_lock.get("schema_version"),
-        )
     run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     contract_path = run_dir / "resolved" / "dataset-observations.lock.yaml"

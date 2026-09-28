@@ -25,6 +25,8 @@ COMFYUI_PREPARE_PATH = ROOT / "docker" / "comfyui" / "kura_comfy_prepare.py"
 SECRET_OPTIONAL = {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "KURA_REMOTE_NOTIFY_NTFY"}
 DEFAULTED_OPTIONAL = {"COMFYUI_ROOT", "SD_SCRIPTS_ROOT"}
 RETRY_OPTIONAL = {"KURA_HF_DOWNLOAD_ATTEMPTS", "KURA_HF_DOWNLOAD_POLL_SEC", "KURA_HF_DOWNLOAD_NO_PROGRESS_SEC"}
+# Supplied by the RunPod job script to its selected-file transfer verifier.
+TRANSFER_SCOPED = {"KURA_KNOWN_MEDIA_SUFFIXES"}
 BACKEND_SCOPED = {
     "KURA_AI_TOOLKIT_VIDEO_SUFFIXES",
     "KURA_MUSUBI_AUDIO_SUFFIXES",
@@ -82,6 +84,7 @@ def required_env_names(paths: list[Path]) -> set[str]:
         if name not in DEFAULTED_OPTIONAL
         and name not in RETRY_OPTIONAL
         and name not in BACKEND_SCOPED
+        and name not in TRANSFER_SCOPED
         and name not in SECRET_OPTIONAL
         and not name.startswith("KURA_NTFY_")
     }
@@ -254,6 +257,18 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             "HF_HOME", "HF_HUB_CACHE", "KURA_REALIZATION_ID", "KURA_RUN_ID", "KURA_WORKSPACE", "KURA_WORKSPACE_PATH_MAPS",
         })
         self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HUB_CACHE", "KURA_WORKSPACE"})
+
+    def test_runpod_job_script_supplies_the_transfer_scoped_env(self) -> None:
+        from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+
+        script = _runpod_remote_job_script(
+            workspace="/workspace", run_id="r", realization_id="x", remote_secret_path="/tmp/s",
+            archive_name="a.tar", remote_archive="/workspace/.kura-transfer/r/a.tar", cwd="/opt/tool",
+            command="true", transfer_manifest="/workspace/.kura-transfer/r/m.json",
+            transfer_manifest_sha256="0" * 64,
+        )
+        for name in TRANSFER_SCOPED:
+            self.assertIn(f"export {name}=", script)
 
     def test_local_docker_env_satisfies_container_script_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

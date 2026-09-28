@@ -109,11 +109,14 @@ author's responsibility.
 | ⚠️ | Only the stated subset is covered |
 | ❌ | Outside the current Kura training contract |
 
-Manifest-v2 first-class dataset projection is temporarily local-Docker only.
-RunPod compilation, planning, and staging reject these runs until Kura transfers
-only the selected files and verifies their compile-time hashes on the Pod. Older
-RunPod evidence below records the execution contract that was verified at that
-time; it does not claim that the new manifest-v2 transfer path is implemented.
+Manifest-v2 RunPod runs use a verified selected-file transfer: stage archives
+only the files the frozen handoff selected, proving each file's compile-time
+SHA-256 while writing; launch re-proves the staged archive against the compile
+before a Pod exists; the Pod verifies every file and the archive, publishes the
+verified tree, and builds the frozen views before model acquisition. This path
+is covered by tests only; older RunPod evidence below records the execution
+contract verified at that time and does not cover it until an approved RunPod
+smoke is recorded.
 
 ## Support matrix
 

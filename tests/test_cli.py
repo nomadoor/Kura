@@ -304,7 +304,7 @@ class InitCommandTests(unittest.TestCase):
 
             self.assertIn("path must stay inside the dataset directory", stderr.getvalue())
 
-    def test_run_compile_rejects_provider_only_manifest_v2_runpod_before_freezing_resolved_inputs(self) -> None:
+    def test_provider_only_manifest_v2_runpod_compiles_and_plans_the_selected_transfer(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -333,15 +333,28 @@ class InitCommandTests(unittest.TestCase):
                 run["recipe"] = {"steps": 1, "seed": 1}
                 run["compute"] = {"provider": "runpod", "gpu": "NVIDIA A40"}
                 run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
+                (dataset / "unselected.bin").write_bytes(b"x" * 4096)
                 stderr = io.StringIO()
-                with patch("sys.stderr", stderr):
+                with patch("sys.stderr", stderr), patch("sys.stdout", io.StringIO()):
                     code = cmd_run_compile(argparse.Namespace(run_id=run_id))
+                self.assertEqual(code, 0, stderr.getvalue())
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"size": None, "error": "offline"}):
+                    payload = plan_run(run_id)
+                    locked = yaml.safe_load((root / "runs" / run_id / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+                    disk = _runpod_launch_disk_preflight(locked, {"container_disk_gb": 50}, {"bytes": 0})
             finally:
                 os.chdir(previous)
 
-            self.assertEqual(code, 1)
-            self.assertIn("selected-file transfer", stderr.getvalue())
-            self.assertFalse((root / "runs" / run_id / "resolved").exists())
+            transfer = payload["dataset_input"]["runpod_transfer"]
+            self.assertEqual(transfer["payload_bytes"] > 0, True)
+            self.assertEqual(transfer["remote_peak_bytes"], transfer["tar_bytes"] + transfer["payload_bytes"])
+            self.assertEqual(disk["estimates"]["input_transfer"], transfer)
+            self.assertGreaterEqual(disk["estimated_write_bytes"], transfer["remote_peak_bytes"])
+            from kura.dataset_transfer import build_transfer_inventory
+
+            inventory = build_transfer_inventory(root, root / "runs" / run_id, locked)
+            sources = [item["destination"] for item in inventory["entries"] if item["namespace"] == "source"]
+            self.assertEqual(sources, ["datasets/tiny/images/001.png"])
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6066,56 +6079,6 @@ class DockerLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(launch.call_args.kwargs["image"], "frozen/image@sha256:1234")
-
-    def test_runpod_launch_rejects_manifest_v2_before_inspecting_dataset_sources(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "example"
-            (run_dir / "resolved").mkdir(parents=True)
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "compiled"}), encoding="utf-8",
-            )
-            manifest = {
-                "id": "example",
-                "type": "train",
-                "compute": {"provider": "runpod"},
-                "backend": {"name": "ai-toolkit", "config": {}},
-            }
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
-                yaml.safe_dump(manifest), encoding="utf-8",
-            )
-            (run_dir / "resolved" / "backend-command.lock.json").write_text(
-                json.dumps({
-                    "backend": "ai-toolkit",
-                    "adapter_source": {"kind": "test", "value": "test"},
-                    "cwd": "/workspace",
-                    "argv": ["true"],
-                    "env": {},
-                }),
-                encoding="utf-8",
-            )
-            (run_dir / "resolved" / "dataset-input.lock.json").write_text(
-                json.dumps({"schema_version": 2}), encoding="utf-8",
-            )
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
-            previous = Path.cwd()
-            try:
-                os.chdir(root)
-                with (
-                    patch("kura.run_commands.launch.observe_run", return_value={"state": "compiled"}),
-                    patch("kura.run_commands.launch.collect_run_preflight", return_value=[]) as preflight,
-                    patch("kura.dataset_handoff.inspect_dataset_sources") as inspect_sources,
-                    patch("sys.stderr", new_callable=io.StringIO) as stderr,
-                ):
-                    self.assertEqual(
-                        launch_run("example", executor="runpod", dry_run=True), 1,
-                    )
-            finally:
-                os.chdir(previous)
-
-            preflight.assert_not_called()
-            inspect_sources.assert_not_called()
-            self.assertIn("selected-file transfer", stderr.getvalue())
 
     def test_runpod_resume_launch_rejects_missing_compile_time_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

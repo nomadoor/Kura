@@ -23,20 +23,6 @@ from kura.paths import to_workspace_relative
 Project = Callable[[dict[str, Any]], dict[str, Any]]
 _PORTABLE_STAT = ("size", "mtime_ns", "ctime_ns")
 _EXTENSION_LITERAL = re.compile(r"^\.[A-Za-z0-9]+$")
-RUNPOD_MANIFEST_V2_UNSUPPORTED = (
-    "RunPod selected-file transfer for manifest-v2 datasets is not implemented; "
-    "use executor.name=docker until selected-file transfer and Pod-side hash "
-    "verification are available"
-)
-
-
-def require_dataset_transfer_supported(*, executor: str, input_schema_version: Any) -> None:
-    """Reject unsupported transfers before legacy whole-dataset staging can run."""
-
-    if executor == "runpod" and input_schema_version == 2:
-        raise ValueError(RUNPOD_MANIFEST_V2_UNSUPPORTED)
-
-
 def _digest(value: Any) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()

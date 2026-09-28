@@ -383,6 +383,39 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
 
 
 
+    def test_launch_refuses_v2_without_a_verified_selected_file_stage_before_any_api_call(self) -> None:
+        from kura.executors.runpod import launch_runpod
+
+        spec = {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, _ = self._compiled(root)
+            cases = {
+                "no stage": ({"storage_mode": "upload"}, None, "staging first"),
+                "legacy stage": ({"storage_mode": "upload"}, {"storage_mode": "upload", "archive_name": "old.tar.gz"}, "selected-file stage"),
+                "container disk": ({"storage_mode": "container_disk"}, None, "storage_mode=upload"),
+            }
+            for name, (settings, stage, message) in cases.items():
+                with self.subTest(case=name):
+                    status = {"state": "compiled"}
+                    if stage is not None:
+                        (run_dir / "realizations").mkdir(exist_ok=True)
+                        (run_dir / "realizations" / "stage-old.json").write_text(json.dumps(stage), encoding="utf-8")
+                        status["last_stage"] = "realizations/stage-old.json"
+                    (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                    with (
+                        patch("kura.executors.runpod._runpod_request") as request,
+                        patch("kura.executors.runpod._runpod_graphql") as graphql,
+                        self.assertRaisesRegex(ValueError, message),
+                    ):
+                        launch_runpod(
+                            run_dir=run_dir, spec=spec, image="registry/image:tag",
+                            config={**self._config(), **settings}, yes=True,
+                        )
+                    request.assert_not_called()
+                    graphql.assert_not_called()
+
+
 class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
     """The Pod-side receive path, exercised through the generated job script."""
 
@@ -399,7 +432,9 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
         self.manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
         return pod, remote_dir, record
 
-    def _run_job(self, pod: Path, remote_dir: Path, record: dict) -> subprocess.CompletedProcess[str]:
+    def _run_job(
+        self, pod: Path, remote_dir: Path, record: dict, command: str = "touch trainer-started",
+    ) -> subprocess.CompletedProcess[str]:
         from kura.run_commands.runpod_ssh import _runpod_remote_job_script
 
         script = _runpod_remote_job_script(
@@ -410,7 +445,7 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             archive_name=record["archive_name"],
             remote_archive=str(remote_dir / record["archive_name"]),
             cwd=str(pod),
-            command="touch trainer-started",
+            command=command,
             transfer_manifest=str(remote_dir / Path(record["manifest"]).name),
             transfer_manifest_sha256=self.manifest_sha256,
         )
@@ -495,6 +530,102 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
                 exits = list((pod / "runs" / "example" / "realizations").glob("remote-exit-*.json"))
                 self.assertEqual(len(exits), 1)
                 self.assertNotEqual(json.loads(exits[0].read_text(encoding="utf-8"))["exit_code"], 0)
+
+
+    def _postflight(self, pod: Path) -> dict:
+        return json.loads(
+            (pod / "runs" / "example" / "realizations" / "real-1.runpod-input-postflight.json").read_text(encoding="utf-8")
+        )
+
+    def test_postflight_records_matched_inputs_even_when_the_trainer_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pod, remote_dir, record = self._pod(Path(directory))
+
+            result = self._run_job(pod, remote_dir, record, command="sh -c 'exit 3'")
+
+            self.assertEqual(result.returncode, 3)
+            postflight = self._postflight(pod)
+            self.assertEqual(postflight["status"], "matched")
+            self.assertEqual(postflight["view_link_verification"], "matched")
+
+    def test_postflight_records_drift_without_changing_the_trainer_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pod, remote_dir, record = self._pod(Path(directory))
+            lock_view = "runs/example/cache/dataset-view"
+            command = (
+                f"printf changed >> {pod}/datasets/tiny/a.png && "
+                f"touch {pod}/{lock_view}/ai-toolkit/tiny/stray.png && "
+                f"touch {pod}/{lock_view}/ai-toolkit/tiny/_latent_cache.safetensors.json"
+            )
+
+            result = self._run_job(pod, remote_dir, record, command=command)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            postflight = self._postflight(pod)
+            self.assertEqual(postflight["status"], "changed")
+            self.assertEqual(postflight["source_changes"], ["transferred source changed: datasets/tiny/a.png"])
+            self.assertEqual(len(postflight["view_changes"]), 1)
+            self.assertIn("stray.png", postflight["view_changes"][0])
+
+
+class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
+    def _downloaded(self, root: Path, remote_status: str) -> tuple[Path, Path]:
+        run_dir, _ = self._compiled(root)
+        (run_dir / "status.json").write_text(json.dumps({
+            "state": "running", "last_realization": "realizations/real-1.json",
+        }), encoding="utf-8")
+        downloaded = run_dir / "downloads" / "example"
+        (downloaded / "realizations").mkdir(parents=True)
+        (downloaded / "realizations" / "real-1.runpod-input.json").write_text(
+            json.dumps({"status": "verified"}), encoding="utf-8",
+        )
+        (downloaded / "realizations" / "real-1.runpod-input-postflight.json").write_text(json.dumps({
+            "status": remote_status,
+            "source_stat_verification": remote_status,
+            "view_link_verification": "matched",
+        }), encoding="utf-8")
+        return run_dir, downloaded
+
+    def test_download_promotes_records_and_projects_postflight_once(self) -> None:
+        from kura.executors.runpod import finalize_runpod_dataset_handoff
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "matched")
+
+            first = finalize_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            status["dataset_input_postflight"] = first
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            second = finalize_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+            self.assertEqual(first, second)
+            self.assertEqual(first["status"], "matched")
+            self.assertNotIn("warning", first)
+            self.assertTrue((run_dir / "realizations" / "real-1.runpod-input.json").is_file())
+            events = [
+                json.loads(line)
+                for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual([item["event"] for item in events].count("dataset_input_postflight"), 1)
+
+    def test_local_or_remote_drift_projects_a_warning_and_never_overwrites_records(self) -> None:
+        from kura.executors.runpod import finalize_runpod_dataset_handoff
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "changed")
+            (run_dir / "realizations").mkdir(exist_ok=True)
+            (run_dir / "realizations" / "real-1.runpod-input.json").write_text("local", encoding="utf-8")
+            (Path(directory) / "datasets" / "tiny" / "a.png").write_bytes(b"edited after compile")
+
+            projected = finalize_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+            self.assertEqual(projected["status"], "changed")
+            self.assertIn("inputs changed", projected["warning"])
+            record = json.loads((run_dir / projected["record"]).read_text(encoding="utf-8"))
+            self.assertEqual(record["source_stat_verification"], "changed")
+            self.assertEqual(record["remote_source_stat_verification"], "changed")
+            self.assertEqual(record["record_conflicts"], ["real-1.runpod-input.json"])
+            self.assertEqual((run_dir / "realizations" / "real-1.runpod-input.json").read_text(encoding="utf-8"), "local")
 
 
 if __name__ == "__main__":
