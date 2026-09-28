@@ -32,7 +32,10 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
     directory_files = {role: _indexed_images(path) for role, path in directories.items() if role != "caption"}
     caption_files = _indexed_captions(directories.get("caption"))
 
-    if records:
+    manifest_v2 = metadata.get("items_schema_version") == 2
+    if records and manifest_v2:
+        samples = [_sample_from_v2_record(root, numbered) for numbered in records]
+    elif records:
         samples = [_sample_from_record(root, (number, item), directory_files, caption_files) for number, item in records]
     else:
         target_files = directory_files.get("target", {})
@@ -61,9 +64,18 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
         if not sample.get("caption") and not sample.get("caption_path"):
             missing_captions += 1
         target_aspect = _aspect(sample.get("target_size"))
-        for role, value in sample.get("conditions", {}).items():
+        condition_files = sample.pop("_condition_files", None)
+        conditions = condition_files if isinstance(condition_files, list) else [
+            {"role": role, **value}
+            for role, value in sample.get("conditions", {}).items()
+            if isinstance(value, dict)
+        ]
+        for value in conditions:
+            role = value.get("role")
+            if not isinstance(role, str):
+                continue
             condition_counts[role] += 1
-            condition_aspect = _aspect(value.get("size") if isinstance(value, dict) else None)
+            condition_aspect = _aspect(value.get("size"))
             if target_aspect is not None and condition_aspect is not None and abs(target_aspect - condition_aspect) > 1e-6:
                 aspect_mismatches[role] += 1
 
@@ -191,6 +203,64 @@ def _sample_from_record(
         "conditions": conditions,
         "caption": caption,
         "caption_path": _relative(root, caption_path) if caption_path is not None else None,
+        "_issues": issues,
+    }
+
+
+def _sample_from_v2_record(
+    root: Path, numbered: tuple[int, dict[str, Any]],
+) -> dict[str, Any]:
+    number, item = numbered
+    sample_id = str(item.get("id") or number)
+    issues: list[dict[str, Any]] = []
+    normalized_files: list[dict[str, Any]] = []
+    for index, reference in enumerate(item.get("files") if isinstance(item.get("files"), list) else []):
+        if not isinstance(reference, dict):
+            issues.append({"code": "invalid_file_reference", "sample": sample_id, "index": index})
+            continue
+        role = reference.get("role")
+        raw_path = reference.get("path")
+        if not isinstance(role, str) or not role or not isinstance(raw_path, str):
+            issues.append({"code": "invalid_file_reference", "sample": sample_id, "index": index})
+            continue
+        path = _record_path(root, raw_path, sample_id, role, issues)
+        normalized_files.append({
+            "role": role,
+            "path": _relative(root, path) if path is not None else raw_path,
+            "size": _size_list(path),
+        })
+    targets = [value for value in normalized_files if value["role"] == "target"]
+    conditions = [value for value in normalized_files if value["role"] != "target"]
+    caption: str | None = None
+    caption_path: str | None = None
+    raw_caption = item.get("caption")
+    if isinstance(raw_caption, dict) and isinstance(raw_caption.get("text"), str):
+        caption = raw_caption["text"]
+    elif isinstance(raw_caption, dict) and isinstance(raw_caption.get("file"), dict):
+        raw_path = raw_caption["file"].get("path")
+        path = _record_path(root, raw_path, sample_id, "caption", issues)
+        if path is not None:
+            caption_path = _relative(root, path)
+            try:
+                caption = path.read_bytes().decode("utf-8")
+            except (OSError, UnicodeDecodeError):
+                issues.append({"code": "unreadable_caption", "sample": sample_id, "path": raw_path})
+    elif raw_caption is not None:
+        issues.append({"code": "invalid_caption", "sample": sample_id})
+    if not targets:
+        issues.append({"code": "missing_target", "sample": sample_id})
+    return {
+        "id": sample_id,
+        "target": targets[0]["path"] if targets else None,
+        "target_size": targets[0]["size"] if targets else None,
+        "files": normalized_files,
+        "conditions": {
+            value["role"]: {"path": value["path"], "size": value["size"]}
+            for value in conditions
+        },
+        "caption": caption,
+        "caption_path": caption_path,
+        "_condition_files": conditions,
         "_issues": issues,
     }
 

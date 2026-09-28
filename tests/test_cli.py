@@ -347,6 +347,8 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(contract_lock["schema_version"], 1)
             self.assertEqual(contract_lock["datasets"][0]["dataset"], "tiny")
             self.assertEqual(contract_lock["datasets"][0]["observations"]["sample_count"], 1)
+            self.assertEqual(contract_lock["datasets"][0]["observations"]["captions_present"], 1)
+            self.assertEqual(contract_lock["datasets"][0]["observations"]["captions_missing"], 0)
             input_lock = json.loads((root / "runs" / run_id / "resolved" / "dataset-input.lock.json").read_text(encoding="utf-8"))
             self.assertEqual(input_lock["schema_version"], 2)
             self.assertEqual(input_lock["backend"], "ai-toolkit")

@@ -38,6 +38,13 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
     from kura.dataset_observations import observe_dataset
 
     observation = observe_dataset(dataset_path)
+    manifest_v2 = metadata.get("items_schema_version") == 2
+    observed_samples = observation.get("samples") if isinstance(observation.get("samples"), list) else []
+    if manifest_v2:
+        captions = [
+            sample.get("caption") if isinstance(sample.get("caption"), str) else ""
+            for sample in observed_samples if isinstance(sample, dict)
+        ]
 
     return {
         "dataset": {
@@ -47,12 +54,17 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
             "items_jsonl": (dataset_path / "items.jsonl").is_file(),
         },
         "images": {
-            "items_jsonl_count": _items_image_count(records),
+            "items_jsonl_count": (
+                _v2_target_image_count(observed_samples) if manifest_v2 else _items_image_count(records)
+            ),
             "directory_count": len(images),
             "resolution": _resolution_summary(images),
         },
         "captions": _caption_summary(captions, trigger_word=trigger_word),
-        "paired_control": _paired_summary(dataset_path, records, metadata),
+        "paired_control": _paired_summary(
+            dataset_path, records, metadata,
+            observed_samples=observed_samples if manifest_v2 else None,
+        ),
         "observations": observation["observations"],
         "structural_findings": observation["structural_findings"],
         "videos": _video_summary(videos),
@@ -172,6 +184,17 @@ def _items_image_count(records: list[dict[str, Any]]) -> int:
     return count
 
 
+def _v2_target_image_count(samples: list[Any]) -> int:
+    return sum(
+        1
+        for sample in samples if isinstance(sample, dict)
+        for reference in sample.get("files", []) if isinstance(reference, dict)
+        if reference.get("role") == "target"
+        and isinstance(reference.get("path"), str)
+        and Path(reference["path"]).suffix.lower() in IMAGE_SUFFIXES
+    )
+
+
 def _caption_text(item: dict[str, Any]) -> str:
     value = item.get("caption")
     return value if isinstance(value, str) else ""
@@ -287,7 +310,32 @@ def _webp_size(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def _paired_summary(dataset_path: Path, records: list[dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+def _paired_summary(
+    dataset_path: Path, records: list[dict[str, Any]], metadata: dict[str, Any],
+    *, observed_samples: list[Any] | None = None,
+) -> dict[str, Any]:
+    if observed_samples is not None:
+        typed_samples = [sample for sample in observed_samples if isinstance(sample, dict)]
+        roles = [
+            {reference.get("role") for reference in sample.get("files", []) if isinstance(reference, dict)}
+            for sample in typed_samples
+        ]
+        source_roles = {"source", "control", "reference"}
+        source_count = sum(1 for present in roles if present & source_roles)
+        target_count = sum(1 for present in roles if "target" in present)
+        applicable = bool(source_count or _declares_paired_control(metadata))
+        dir_summary = _paired_directory_summary(dataset_path, metadata)
+        return {
+            "applicable": applicable,
+            "source_count": source_count if applicable else None,
+            "target_count": target_count if applicable else None,
+            "missing_source_count": sum(1 for present in roles if "target" in present and not present & source_roles) if applicable else None,
+            "missing_target_count": sum(1 for present in roles if present & source_roles and "target" not in present) if applicable else None,
+            "directory_source_count": dir_summary["source_count"],
+            "directory_target_count": dir_summary["target_count"],
+            "directory_missing_source_count": dir_summary["missing_source_count"] if applicable else None,
+            "directory_missing_target_count": dir_summary["missing_target_count"] if applicable else None,
+        }
     source_items = [item for item in records if _first_present(item, SOURCE_KEYS)]
     target_items = [item for item in records if _first_present(item, TARGET_KEYS)]
     dir_summary = _paired_directory_summary(dataset_path, metadata)

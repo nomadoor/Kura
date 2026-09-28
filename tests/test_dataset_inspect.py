@@ -20,6 +20,36 @@ def png_bytes(width: int, height: int) -> bytes:
 
 
 class DatasetInspectTests(unittest.TestCase):
+    def test_inspect_reports_v2_typed_inputs_and_caption_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "typed"
+            dataset.mkdir(parents=True)
+            (dataset / "target.png").write_bytes(png_bytes(2, 1))
+            (dataset / "control.png").write_bytes(png_bytes(1, 1))
+            (dataset / "caption.txt").write_text("hello", encoding="utf-8")
+            (dataset / "dataset.yaml").write_text(
+                "id: typed\nitems_schema_version: 2\n", encoding="utf-8",
+            )
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "pair",
+                "files": [
+                    {"type": "file", "role": "target", "path": "target.png"},
+                    {"type": "file", "role": "control", "path": "control.png"},
+                ],
+                "caption": {"file": {"type": "file", "path": "caption.txt"}},
+            }) + "\n", encoding="utf-8")
+
+            report = inspect_dataset("typed", workspace=root)
+
+        self.assertEqual(report["images"]["items_jsonl_count"], 1)
+        self.assertEqual(report["captions"]["total"], 1)
+        self.assertEqual(report["captions"]["empty"], 0)
+        self.assertEqual(report["paired_control"]["source_count"], 1)
+        self.assertEqual(report["paired_control"]["target_count"], 1)
+        self.assertEqual(report["paired_control"]["missing_source_count"], 0)
+        self.assertEqual(report["observations"]["condition_counts"], {"control": 1})
+
     def test_image_only_declared_layout_is_not_paired_control(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

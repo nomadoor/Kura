@@ -15,6 +15,31 @@ PNG_1X1 = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + (1).to_bytes(4, "big") + (1).to_b
 
 
 class DatasetObservationTests(unittest.TestCase):
+    def test_v2_manifest_observes_typed_roles_and_effective_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "target.png").write_bytes(PNG_2X1)
+            (root / "control.png").write_bytes(PNG_1X1)
+            (root / "dataset.yaml").write_text(
+                "id: typed\nitems_schema_version: 2\n", encoding="utf-8",
+            )
+            (root / "items.jsonl").write_text(json.dumps({
+                "id": "pair",
+                "files": [
+                    {"type": "file", "role": "target", "path": "target.png"},
+                    {"type": "file", "role": "control", "path": "control.png"},
+                ],
+                "caption": {"text": "hello"},
+            }) + "\n", encoding="utf-8")
+
+            result = observe_dataset(root)
+
+        self.assertEqual(result["samples"][0]["target"], "target.png")
+        self.assertEqual(result["samples"][0]["caption"], "hello")
+        self.assertEqual(result["observations"]["captions_missing"], 0)
+        self.assertEqual(result["observations"]["condition_counts"], {"control": 1})
+        self.assertEqual(result["observations"]["aspect_ratio_mismatches"], {"control": 1})
+
     def test_colocated_sidecar_layout_normalizes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
