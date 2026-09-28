@@ -18,7 +18,7 @@ from kura.backends.shared import _datasets, _script_command
 from kura.container_scripts import script_source
 from kura.fsio import atomic_write_yaml
 from kura.provenance import artifact_pinning
-from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 
 
 AI_TOOLKIT_DATASET_FIELD_SPECS = {
@@ -1381,8 +1381,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     if command is None:
         runner_env = {"SEED": str(recipe["seed"]), "MODELS_PATH": model_cache}
         output_contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
-        compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-        cwd = "/app/ai-toolkit" if compute.get("executor") == "runpod" else "/opt/ai-toolkit"
+        cwd = "/app/ai-toolkit" if run_executor(run) == "runpod" else "/opt/ai-toolkit"
         config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"
         dataset_config = override.get("dataset_config")
         audio_preflight = (

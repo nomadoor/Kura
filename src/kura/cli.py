@@ -22,7 +22,7 @@ import yaml
 from kura import __version__
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
-from kura.dataset_handoff import freeze_dataset_handoff
+from kura.dataset_handoff import freeze_dataset_handoff, require_dataset_transfer_supported
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
@@ -34,7 +34,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -136,7 +136,7 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     capacity = compute.get("capacity")
     if capacity is not None:
-        if compute.get("executor") != "runpod":
+        if run_executor(run) != "runpod":
             raise ValueError("compute.capacity is only valid for RunPod runs")
         if not isinstance(capacity, dict):
             raise ValueError("compute.capacity must be a mapping")
@@ -484,7 +484,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             dataset_observations.append(projection)
         resolved.mkdir(exist_ok=True)
         source_identity = adapter_source_identity(backend.get("name"))
-        declared_executor = (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker"
+        declared_executor = run_executor(run)
         config = _workspace_config()
         runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
         default_images = runpod_config.get("default_image") if isinstance(runpod_config.get("default_image"), dict) else {}
@@ -531,6 +531,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         )
         input_lock = None
         if adapter.project_dataset is not None and not explicit_native_command:
+            require_dataset_transfer_supported(executor=declared_executor, input_schema_version=2)
             input_lock = freeze_dataset_handoff(
                 locked,
                 _workspace(),

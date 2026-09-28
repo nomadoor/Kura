@@ -20,7 +20,11 @@ import yaml
 
 from kura.backends import get_backend, validate_backend_config
 from kura.backends.musubi_datasets import MUSUBI_DATASET_GENERAL_DEFAULTS
-from kura.dataset_handoff import inspect_dataset_sources, inspect_dataset_view
+from kura.dataset_handoff import (
+    inspect_dataset_sources,
+    inspect_dataset_view,
+    require_dataset_transfer_supported,
+)
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -32,7 +36,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
 from kura.run_commands.experiment import experiment_context, format_experiment_context
-from kura.run_envelope import backend_config, common_recipe, resume_intent, training_state_policy
+from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state
 
 
@@ -160,7 +164,7 @@ def _runpod_planning_gpus(compute: dict[str, Any], config: dict[str, Any]) -> tu
 
 def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any] | None:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    executor = run_executor(run)
     if executor != "runpod":
         return None
     selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
@@ -227,7 +231,7 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     display = adapter_display if isinstance(adapter_display, dict) else _adapter_display(run)
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    executor = run_executor(run)
     requirements = model_requirements(run, download_estimate)
     return {
         "hardware": {"local_gpu": _local_gpu_payload()},
@@ -271,7 +275,6 @@ def _checkpoint_retention_policy_present(important_config: dict[str, Any]) -> bo
 def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> list[str]:
     run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
-    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     warnings: list[str] = []
     steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important_config.get("save_every_n_steps"))
@@ -285,7 +288,7 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:
             warnings.append(f"sampling cadence may create about {expected_samples} sample batches")
-    if compute.get("executor") in (None, "docker"):
+    if run_executor(run) == "docker":
         warnings.append("local Docker launch requires a disk preflight; default minimum free space is 100GiB unless docker.min_free_gb is configured")
     return warnings
 
@@ -479,8 +482,7 @@ def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | N
 
 
 def _download_estimate_workspace(run: dict[str, Any], workspace: Path, *, executor: str | None = None) -> Path | None:
-    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    resolved_executor = executor or run_executor(run)
     if resolved_executor == "runpod":
         return None
     return workspace
@@ -718,8 +720,7 @@ def collect_run_preflight(
     download_estimate: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     workspace_config = config if isinstance(config, dict) else {}
-    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    resolved_executor = executor or run_executor(run)
     estimate = download_estimate or _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)))
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
@@ -979,6 +980,14 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    plan_executor = run_executor(run)
+    input_path = run_dir / "resolved" / "dataset-input.lock.json"
+    if plan_executor == "runpod" and input_path.is_file():
+        input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+        require_dataset_transfer_supported(
+            executor=plan_executor,
+            input_schema_version=input_lock.get("schema_version"),
+        )
     run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     contract_path = run_dir / "resolved" / "dataset-observations.lock.yaml"
@@ -1014,7 +1023,6 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         datasets.append(dataset_payload)
 
     dataset_input_payload = None
-    input_path = run_dir / "resolved" / "dataset-input.lock.json"
     if input_path.is_file():
         input_lock = json.loads(input_path.read_text(encoding="utf-8"))
         if input_lock.get("schema_version") == 2:
@@ -1185,7 +1193,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "revision": model.get("revision") if isinstance(model, dict) else None,
         },
         "compute": {
-            "executor": compute.get("executor") if isinstance(compute, dict) else None,
+            "executor": plan_executor,
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
             "capacity": compute.get("capacity") if isinstance(compute.get("capacity"), dict) else None,
         },

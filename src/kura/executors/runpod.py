@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
+from kura.dataset_handoff import require_dataset_transfer_supported
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
@@ -526,6 +527,18 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     settings = _runpod_settings(config)
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
+    input_path = run_dir / "resolved" / "dataset-input.lock.json"
+    if input_path.is_file():
+        try:
+            input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("cannot stage invalid dataset input lock") from exc
+        if not isinstance(input_lock, dict):
+            raise ValueError("cannot stage invalid dataset input lock")
+        require_dataset_transfer_supported(
+            executor="runpod",
+            input_schema_version=input_lock.get("schema_version"),
+        )
     raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
     ids = list(dict.fromkeys(item for item in raw_ids if item))
     try:

@@ -50,7 +50,7 @@ from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff
 from kura.dataset_handoff import local_training_mounts
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
-from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, format_run_plan
+from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, format_run_plan, plan_run
 
 
 def _musubi_native_block(projected: dict, index: int = 0) -> dict:
@@ -5888,7 +5888,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 "schema_version": 2,
                 "type": "train",
                 "model": {"base": "example/model"},
-                "compute": {"executor": "docker"},
+                "compute": {"executor": "runpod"},
                 "backend": {"name": "ai-toolkit", "config": {"command": {
                     "cwd": "/app/ai-toolkit", "argv": ["python", "custom.py"], "env": {},
                 }}},
@@ -5918,6 +5918,34 @@ class DatasetHandoffTests(unittest.TestCase):
             lock = json.loads((run_dir / "resolved" / "dataset-input.lock.json").read_text(encoding="utf-8"))
             self.assertEqual(lock["verification"], "unverified-native-source")
             self.assertFalse((run_dir / "resolved" / "dataset-projection.lock.json").exists())
+
+    def test_run_plan_rejects_existing_manifest_v2_runpod_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, _ = self.make_run(workspace)
+            run.update({
+                "schema_version": 2,
+                "type": "train",
+                "model": {"base": "example/model"},
+                "recipe": {"steps": 1, "seed": 1},
+                "compute": {"executor": "runpod"},
+                "recovery": {"training_state": {"enabled": False}},
+            })
+            run_dir = workspace / "runs" / "example"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True, exist_ok=True)
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            (resolved / "dataset-input.lock.json").write_text(
+                json.dumps({"schema_version": 2, "views": []}), encoding="utf-8",
+            )
+
+            with (
+                patch("kura.run_commands.plan._require_workspace", return_value=workspace),
+                patch("kura.run_commands.plan._run_path", return_value=run_dir),
+            ):
+                with self.assertRaisesRegex(ValueError, "selected-file transfer"):
+                    plan_run("example")
 
     def test_ai_toolkit_strict_compile_uses_only_the_frozen_projection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

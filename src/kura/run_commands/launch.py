@@ -31,6 +31,7 @@ from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
+from kura.run_envelope import run_executor
 
 
 def run_remote(
@@ -181,7 +182,7 @@ def execute_run(
         print(f"cannot execute run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
     compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    executor = run_executor(locked)
     if executor == "runpod":
         capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
         frozen_wait = capacity.get("timeout", "24h") if capacity.get("mode", "immediate") == "wait" else "0"
@@ -288,8 +289,7 @@ def launch_run(
             if not dry_run:
                 _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
             return 1
-    compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
-    compiled_executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    compiled_executor = run_executor(locked)
     if executor != compiled_executor:
         print(
             f"cannot launch run: manifest was compiled for executor.name={compiled_executor}; "
@@ -310,18 +310,27 @@ def launch_run(
         stale_capacity_wait = status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict)
         if status.get("state") not in allowed_states and not stale_capacity_wait:
             raise ValueError("run must be compiled before launch")
+        input_lock = None
+        input_path = run_dir / "resolved" / "dataset-input.lock.json"
+        if input_path.is_file():
+            from kura.dataset_handoff import require_dataset_transfer_supported
+
+            input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+            require_dataset_transfer_supported(
+                executor=executor,
+                input_schema_version=input_lock.get("schema_version"),
+            )
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
         spec = _load_frozen_command(run_dir, locked)
-        input_path = run_dir / "resolved" / "dataset-input.lock.json"
-        if input_path.is_file():
-            from kura.dataset_handoff import inspect_dataset_sources, materialize_dataset_view
+        if isinstance(input_lock, dict):
+            from kura.dataset_handoff import (
+                inspect_dataset_sources,
+                materialize_dataset_view,
+            )
 
-            input_lock = json.loads(input_path.read_text(encoding="utf-8"))
             if input_lock.get("schema_version") == 2:
                 changes = inspect_dataset_sources(_workspace(), input_lock)
-                if executor == "runpod":
-                    raise ValueError("manifest-v2 selective RunPod transfer is not implemented yet")
                 if changes:
                     raise ValueError(
                         "compiled dataset input changed; recompile the run: " + "; ".join(changes[:5])

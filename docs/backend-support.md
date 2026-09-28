@@ -109,6 +109,12 @@ author's responsibility.
 | ⚠️ | Only the stated subset is covered |
 | ❌ | Outside the current Kura training contract |
 
+Manifest-v2 first-class dataset projection is temporarily local-Docker only.
+RunPod compilation, planning, and staging reject these runs until Kura transfers
+only the selected files and verifies their compile-time hashes on the Pod. Older
+RunPod evidence below records the execution contract that was verified at that
+time; it does not claim that the new manifest-v2 transfer path is implemented.
+
 ## Support matrix
 
 | Backend | Model family | Adapter | Status | Verified scope |

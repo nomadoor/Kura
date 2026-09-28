@@ -26,6 +26,18 @@ _TRAINER_MEDIA_SUFFIXES = frozenset({
     ".mov", ".mp3", ".mp4", ".ogg", ".png", ".wav", ".webm", ".webp",
 })
 _EXTENSION_LITERAL = re.compile(r"^\.[A-Za-z0-9]+$")
+RUNPOD_MANIFEST_V2_UNSUPPORTED = (
+    "RunPod selected-file transfer for manifest-v2 datasets is not implemented; "
+    "use executor.name=docker until selected-file transfer and Pod-side hash "
+    "verification are available"
+)
+
+
+def require_dataset_transfer_supported(*, executor: str, input_schema_version: Any) -> None:
+    """Reject unsupported transfers before legacy whole-dataset staging can run."""
+
+    if executor == "runpod" and input_schema_version == 2:
+        raise ValueError(RUNPOD_MANIFEST_V2_UNSUPPORTED)
 
 
 def _digest(value: Any) -> str:

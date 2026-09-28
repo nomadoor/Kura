@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from kura.run_envelope import run_executor
+
 
 _FACT_ORDER = (
     "backend",
@@ -101,7 +103,7 @@ def _display_mapping(run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
         "resolution": first(display.get("resolution"), config.get("resolution")),
         "optimizer": first(display.get("optimizer"), config.get("optimizer_type")),
         "precision": first(display.get("precision"), config.get("mixed_precision")),
-        "executor": compute.get("executor"),
+        "executor": run_executor(run),
         "gpu": compute.get("gpu"),
         "datasets": [item.get("id") for item in datasets if isinstance(item, dict) and item.get("id")],
     }
