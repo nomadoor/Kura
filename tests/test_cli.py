@@ -6880,32 +6880,6 @@ class RunPodLifecycleTests(unittest.TestCase):
         (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
         stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._config())
 
-    def test_stage_runpod_rejects_manifest_v2_before_creating_archive(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = self._run_dir(root)
-            (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
-            (run_dir / "resolved").mkdir(exist_ok=True)
-            (run_dir / "resolved" / "manifest.lock.yaml").write_text(
-                "id: example\n", encoding="utf-8",
-            )
-            (run_dir / "resolved" / "dataset-input.lock.json").write_text(
-                json.dumps({"schema_version": 2}), encoding="utf-8",
-            )
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            (dataset / "unselected.bin").write_bytes(b"must-not-be-archived")
-
-            with patch("kura.executors.runpod.tarfile.open") as archive:
-                with self.assertRaisesRegex(ValueError, "selected-file transfer"):
-                    stage_runpod(
-                        workspace=root,
-                        run_dir=run_dir,
-                        dataset_id="tiny",
-                        config=self._config(),
-                    )
-            archive.assert_not_called()
-
     def test_launch_runpod_non_tty_requires_yes_before_any_runpod_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))

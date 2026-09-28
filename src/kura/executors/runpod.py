@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
-from kura.dataset_handoff import require_dataset_transfer_supported
+from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, verify_stage_matches_compile, write_transfer_archive, write_transfer_manifest
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
@@ -522,31 +522,64 @@ def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
     return client, settings
 
 
+def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
+    """Stage exactly the files a manifest-v2 run's frozen handoff selected."""
+    inventory = build_transfer_inventory(workspace, run_dir, run)
+    estimate = estimate_transfer(inventory)
+    transfer_dir = run_dir / "transfer"
+    transfer_dir.mkdir(exist_ok=True)
+    free = shutil.disk_usage(transfer_dir).free
+    if free < estimate["local_stage_free_bytes"]:
+        raise ValueError(
+            f"RunPod stage needs {estimate['local_stage_free_bytes']} bytes free in {transfer_dir}, "
+            f"but only {free} bytes are available"
+        )
+    archive_name = f"kura-upload-{run_dir.name}.tar"
+    archive_path = transfer_dir / archive_name
+    manifest_path = transfer_dir / f"kura-upload-{run_dir.name}.manifest.json"
+    proof = write_transfer_archive(workspace, run_dir, inventory, archive_path)
+    write_transfer_manifest(manifest_path, proof)
+    record = {
+        "timestamp": _now(),
+        "executor": "runpod",
+        "storage_mode": "upload",
+        "transfer": "selected-files",
+        "archive": str(archive_path.relative_to(run_dir)),
+        "archive_name": archive_name,
+        "manifest": str(manifest_path.relative_to(run_dir)),
+        "total_bytes": proof["payload_bytes"],
+        "remote_peak_bytes": proof["tar_bytes"] + proof["payload_bytes"],
+        **proof,
+    }
+    stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
+    stage_path.parent.mkdir(exist_ok=True)
+    _write_json(stage_path, record)
+    status = _load_status(run_dir)
+    status["last_stage"] = str(stage_path.relative_to(run_dir))
+    _write_status(run_dir, status)
+    append_run_event(run_dir, {
+        "event": "run_staged",
+        **{key: value for key, value in record.items() if key != "entries"},
+        "files": len(record["entries"]),
+    })
+    return record
+
+
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
     """Explicitly upload the compiled inputs needed by a RunPod Pod."""
     settings = _runpod_settings(config)
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
-    input_path = run_dir / "resolved" / "dataset-input.lock.json"
-    if input_path.is_file():
-        try:
-            input_lock = json.loads(input_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError("cannot stage invalid dataset input lock") from exc
-        if not isinstance(input_lock, dict):
-            raise ValueError("cannot stage invalid dataset input lock")
-        require_dataset_transfer_supported(
-            executor="runpod",
-            input_schema_version=input_lock.get("schema_version"),
-        )
-    raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
-    ids = list(dict.fromkeys(item for item in raw_ids if item))
     try:
         run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError("cannot stage invalid resolved manifest") from exc
     if not isinstance(run, dict):
         raise ValueError("cannot stage invalid resolved manifest")
+    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        return _stage_selected_files(workspace=workspace, run_dir=run_dir, run=run)
+    raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
+    ids = list(dict.fromkeys(item for item in raw_ids if item))
     dependency = resume_artifact_directory(workspace, run)
     sources = [run_dir / "run.yaml", run_dir / "resolved", *(workspace / "datasets" / item for item in ids)]
     if dependency is not None:
@@ -656,6 +689,11 @@ def launch_runpod(
         stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
         if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
             raise ValueError("latest stage is not a runpod upload bundle")
+        if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+            if stage.get("transfer") != "selected-files":
+                raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
+            run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            verify_stage_matches_compile(run_dir.parent.parent, run_dir, run, stage)
         upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
         download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
         transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}

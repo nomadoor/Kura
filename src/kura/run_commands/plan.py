@@ -32,6 +32,7 @@ from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
+from kura.dataset_transfer import build_transfer_inventory, estimate_transfer
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
@@ -766,20 +767,42 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
     container_disk_bytes = container_disk_gib * 1024**3
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
     disk_cache_estimate = _disk_cache_estimate(run)
-    estimated_write_bytes = int(download_estimate.get("bytes") or 0) + int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0)
+    transfer_estimate = _runpod_input_transfer_estimate(run)
+    estimated_write_bytes = (
+        int(download_estimate.get("bytes") or 0)
+        + int(checkpoint_estimate.get("bytes") or 0)
+        + int(disk_cache_estimate.get("bytes") or 0)
+        + int((transfer_estimate or {}).get("remote_peak_bytes") or 0)
+    )
     if estimated_write_bytes > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
         required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
         raise ValueError(
             f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
-            "(model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
+            "(selected input transfer, model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
             "safety.allow_runpod_disk_risk: true if intentional"
         )
     return {
         "container_disk_gib": container_disk_gib,
         "container_disk_bytes": container_disk_bytes,
         "estimated_write_bytes": estimated_write_bytes,
-        "estimates": {"model_downloads": download_estimate, "musubi_downloads": download_estimate, "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate},
+        "estimates": {
+            "model_downloads": download_estimate, "musubi_downloads": download_estimate,
+            "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate,
+            "input_transfer": transfer_estimate,
+        },
     }
+
+
+def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | None:
+    """Size the selected-file transfer of a compiled manifest-v2 run."""
+    run_id = run.get("id")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    run_dir = _run_path(run_id)
+    if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        return None
+    inventory = build_transfer_inventory(run_dir.parent.parent, run_dir, run, verify_resume=False)
+    return estimate_transfer(inventory)
 
 
 def _local_launch_disk_preflight(
@@ -1025,6 +1048,9 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
                 "postflight": postflight,
                 "runtime_checks": _dataset_runtime_checks(run_dir),
                 "general_resolution": _general_resolution(run),
+                "runpod_transfer": (
+                    _runpod_input_transfer_estimate(run) if plan_executor == "runpod" else None
+                ),
             }
         else:
             dataset_input_payload = {
@@ -1390,6 +1416,13 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                         f"    - group {_format_plan_value(group)}: repeats "
                         f"{_format_plan_value(setting.get('num_repeats'))}{resolution_text}"
                     )
+        transfer = dataset_input.get("runpod_transfer")
+        if isinstance(transfer, dict):
+            lines.append("  - RunPod selected-file transfer:")
+            _append_kv(lines, "payload", _format_bytes(transfer.get("payload_bytes")), indent=4)
+            _append_kv(lines, "tar", _format_bytes(transfer.get("tar_bytes")), indent=4)
+            _append_kv(lines, "local_stage_free", _format_bytes(transfer.get("local_stage_free_bytes")), indent=4)
+            _append_kv(lines, "pod_peak", _format_bytes(transfer.get("remote_peak_bytes")), indent=4)
         for check in dataset_input.get("runtime_checks", []):
             if not isinstance(check, dict):
                 continue

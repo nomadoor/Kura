@@ -400,6 +400,10 @@ is marked `migration: pending`; merge readiness must run
   source-stat check as post-stage drift detection. Container preflight
   records (including the Musubi video-frame record) must return with the
   run's downloaded realizations.
+- When R-4 lifts the manifest-v2 RunPod rejection, add an integration test
+  that goes from a real compile fixture through `kura run plan` transfer sizing
+  and the RunPod disk preflight; today those paths are unreachable behind the
+  rejection and only the formatter is covered.
 - The final pinned-image sd-scripts smoke records that
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
