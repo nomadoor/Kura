@@ -783,7 +783,7 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
         return run_dir, downloaded
 
     def test_download_promotes_records_and_projects_postflight_once(self) -> None:
-        from kura.executors.runpod import finalize_runpod_dataset_handoff
+        from kura.executors.runpod import project_runpod_dataset_handoff as finalize_runpod_dataset_handoff
 
         with tempfile.TemporaryDirectory() as directory:
             run_dir, downloaded = self._downloaded(Path(directory), "matched")
@@ -811,7 +811,7 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             self.assertEqual([item["event"] for item in events].count("dataset_input_postflight"), 1)
 
     def test_local_or_remote_drift_projects_a_warning_and_never_overwrites_records(self) -> None:
-        from kura.executors.runpod import finalize_runpod_dataset_handoff
+        from kura.executors.runpod import project_runpod_dataset_handoff as finalize_runpod_dataset_handoff
 
         with tempfile.TemporaryDirectory() as directory:
             run_dir, downloaded = self._downloaded(Path(directory), "changed")
@@ -875,6 +875,23 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             self.assertEqual(projected["status"], "uncheckable")
             self.assertNotIn("record", projected)
             self.assertIn("could not be written", projected["error"])
+
+
+    def test_an_event_failure_never_hides_a_written_record(self) -> None:
+        from kura.executors.runpod import project_runpod_dataset_handoff
+
+        for name, content in {"normal record": None, "fallback record": "[]"}.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                run_dir, downloaded = self._downloaded(Path(directory), "matched")
+                if content is not None:
+                    (run_dir / "realizations").mkdir(exist_ok=True)
+                    (run_dir / "realizations" / "real-1.dataset-input-postflight.json").write_text(content, encoding="utf-8")
+                with patch("kura.executors.runpod.append_run_event", side_effect=OSError("events log unwritable")):
+                    projected = project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+                self.assertTrue((run_dir / projected["record"]).is_file())
+                self.assertIn("event could not be appended", projected["error"])
+                self.assertNotIn("could not be written", projected["error"])
 
 
 def run_events_of(run_dir: Path) -> list[dict]:

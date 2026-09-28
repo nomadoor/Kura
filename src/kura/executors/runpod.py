@@ -660,8 +660,8 @@ def _remote_postflight(path: Path) -> tuple[str, str, str]:
     return status, sources, links
 
 
-def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: dict[str, Any]) -> dict[str, Any]:
-    """Append the event once and return the status projection that refers to ``ref``."""
+def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: dict[str, Any]) -> None:
+    """Append the postflight event once for ``ref``."""
     # status.json is projected after the event, so a matching projection proves
     # it exists; otherwise scan once, which covers a crash between the two.
     announced = _load_status(run_dir).get("dataset_input_postflight")
@@ -675,6 +675,9 @@ def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: d
             "record": ref,
             "status": record["status"],
         })
+
+
+def _postflight_projection(ref: str, record: dict[str, Any]) -> dict[str, Any]:
     warning = dataset_input_drift_warning(record["status"])
     return {
         "status": record["status"],
@@ -685,14 +688,17 @@ def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: d
     }
 
 
-def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
-    """Bring the Pod's input records home and project post-training input drift once.
+def finalize_runpod_dataset_handoff(
+    run_dir: Path, downloaded_run: Path, realization_id: str,
+) -> tuple[str, dict[str, Any]] | None:
+    """Bring the Pod's input records home and write the post-training input record.
 
     Remote records are copied into ``realizations/`` without overwriting a
     record that already exists. The local source stat check is combined with
     the Pod's own postflight. Records read from outside are validated here;
     any problem is raised as ``ValueError`` or ``OSError`` for
-    ``project_runpod_dataset_handoff`` to record as uncheckable.
+    ``project_runpod_dataset_handoff`` to record as uncheckable. Returns the
+    record reference and content; announcing it is the caller's separate step.
     """
     if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
         return None
@@ -742,7 +748,7 @@ def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realiza
             **({"record_conflicts": conflicts} if conflicts else {}),
         }
         _write_json(postflight_path, postflight)
-    return _announce_postflight(run_dir, realization_id, postflight_ref, postflight)
+    return postflight_ref, postflight
 
 
 def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
@@ -753,28 +759,42 @@ def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realizat
     ``uncheckable`` record and event; status alone carries it only when even
     that record cannot be written.
     """
+    detail: str | None = None
     try:
-        return finalize_runpod_dataset_handoff(run_dir, downloaded_run, realization_id)
+        finalized = finalize_runpod_dataset_handoff(run_dir, downloaded_run, realization_id)
+        if finalized is None:
+            return None
+        ref, record = finalized
     except (OSError, ValueError) as exc:
         detail = _redact_secret_text(str(exc))
-    ref = f"realizations/{realization_id}.dataset-input-postflight-uncheckable-{_realization_id()}.json"
-    record = {
-        "schema_version": 1,
-        "realization_id": realization_id,
-        "observed_at": _now(),
-        "status": "uncheckable",
-        "error": detail,
-    }
-    try:
-        _write_json(run_dir / ref, record)
-        return {**_announce_postflight(run_dir, realization_id, ref, record), "error": detail}
-    except (OSError, ValueError) as write_error:
-        return {
+        ref = f"realizations/{realization_id}.dataset-input-postflight-uncheckable-{_realization_id()}.json"
+        record = {
+            "schema_version": 1,
+            "realization_id": realization_id,
+            "observed_at": _now(),
             "status": "uncheckable",
-            "view_cleanup": "not-required",
-            "warning": dataset_input_drift_warning("uncheckable"),
-            "error": f"{detail}; the uncheckable record could not be written: {_redact_secret_text(str(write_error))}",
+            "error": detail,
         }
+        try:
+            _write_json(run_dir / ref, record)
+        except OSError as write_error:
+            return {
+                "status": "uncheckable",
+                "view_cleanup": "not-required",
+                "warning": dataset_input_drift_warning("uncheckable"),
+                "error": f"{detail}; the uncheckable record could not be written: {_redact_secret_text(str(write_error))}",
+            }
+    # The record exists from here on; status always refers to it, and a missing
+    # event is noted rather than hiding the record.
+    projection = _postflight_projection(ref, record)
+    errors = [detail] if detail else []
+    try:
+        _announce_postflight(run_dir, realization_id, ref, record)
+    except (OSError, ValueError) as event_error:
+        errors.append(f"the postflight event could not be appended: {_redact_secret_text(str(event_error))}")
+    if errors:
+        projection["error"] = "; ".join(errors)
+    return projection
 
 
 def _runpod_state(pod: dict[str, Any]) -> tuple[str, int | None]:
