@@ -165,7 +165,7 @@ def publish(staging, workspace, run_id):
 
 
 def materialize_views(workspace, lock, run_id, created):
-    """Create each frozen view; append every root it creates to ``created``."""
+    """Create each frozen view; append the highest directory each view creates to ``created``."""
     datasets = workspace / "datasets"
     view_prefix = f"runs/{run_id}/cache/dataset-view/"
     links = 0
@@ -177,8 +177,13 @@ def materialize_views(workspace, lock, run_id, created):
         root = workspace / root_relative
         if root.exists() or root.is_symlink():
             raise TransferError(f"view root already exists: {root_relative}")
+        # Record the highest directory this attempt creates, so rollback
+        # removes the intermediate directories too.
+        top = root
+        while not top.parent.exists():
+            top = top.parent
         root.mkdir(parents=True)
-        created.append(root)
+        created.append(top)
         expected_links = {}
         for link in view["links"]:
             path = safe_relative(link["path"])
@@ -361,35 +366,58 @@ def main():
         created_views = []
         try:
             links, generated = materialize_views(workspace, lock, run_id, created_views)
-        except (TransferError, OSError, KeyError, TypeError, ValueError):
-            # Remove only the view roots this attempt created, then unpublish.
-            for root in reversed(created_views):
-                shutil.rmtree(root)
-            undo()
+            usage = shutil.disk_usage(workspace)
+            record.update({
+                "status": "verified",
+                "entries": len(manifest["entries"]),
+                "payload_bytes": manifest["payload_bytes"],
+                "content_verification": "sha256-per-file-and-archive",
+                "view_link_verification": "matched",
+                "view_links": links,
+                "generated_view_files": generated,
+                "source_baseline": source_baseline(workspace, manifest),
+                "disk": {"total_bytes": usage.total, "used_bytes": usage.used, "free_bytes": usage.free},
+                "finished_at": datetime.now().astimezone().isoformat(),
+            })
+            # Commit point: once this record exists the inputs are published.
+            write_record(record_path, record)
+        except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
+            # Remove only the view roots this attempt created, then unpublish,
+            # so the workspace holds none of this attempt and it can retry.
+            try:
+                for root in reversed(created_views):
+                    shutil.rmtree(root)
+                undo()
+            except OSError as rollback_error:
+                raise TransferError(f"{error}; rollback also failed: {rollback_error}") from error
             raise
-        archive_path.unlink()
-        shutil.rmtree(staging.parent)
-        usage = shutil.disk_usage(workspace)
-        record.update({
-            "status": "verified",
-            "entries": len(manifest["entries"]),
-            "payload_bytes": manifest["payload_bytes"],
-            "content_verification": "sha256-per-file-and-archive",
-            "view_link_verification": "matched",
-            "view_links": links,
-            "generated_view_files": generated,
-            "source_baseline": source_baseline(workspace, manifest),
-            "disk": {"total_bytes": usage.total, "used_bytes": usage.used, "free_bytes": usage.free},
-        })
     except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
-        record.update({"status": "failed", "error": f"{type(error).__name__}: {error}"})
-    record["finished_at"] = datetime.now().astimezone().isoformat()
-    record_path.parent.mkdir(parents=True, exist_ok=True)
-    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    if record["status"] != "verified":
+        record.update({
+            "status": "failed",
+            "error": f"{type(error).__name__}: {error}",
+            "finished_at": datetime.now().astimezone().isoformat(),
+        })
+        write_record(record_path, record)
         print(f"[kura] selected-file transfer verification failed: {record['error']}", file=sys.stderr)
         sys.exit(1)
+    # After the commit: removing the uploaded tar and staging only frees disk,
+    # so a failure here is logged and never turns a verified transfer into a failure.
+    for label, cleanup in (("archive", archive_path.unlink), ("staging", lambda: shutil.rmtree(staging.parent))):
+        try:
+            cleanup()
+        except OSError as cleanup_error:
+            print(f"[kura] transfer {label} cleanup skipped: {cleanup_error}", file=sys.stderr)
     print(f"[kura] selected-file transfer verified: {record['entries']} files, {record['view_links']} view links")
+
+
+def write_record(path, record):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    with open(temporary, "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
 
 
 if __name__ == "__main__":

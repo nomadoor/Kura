@@ -473,6 +473,48 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             sleep.assert_not_called()
 
 
+    def test_any_pre_ssh_preparation_failure_is_a_refusal_before_upload(self) -> None:
+        from kura.dataset_transfer import TransferRefused, pin_transfer_manifest
+        from kura.run_commands.runpod_ssh import _runpod_run_over_ssh
+
+        def prepared(root: Path) -> Path:
+            run_dir, run = self._compiled(root)
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            pinned = "realizations/real-1.transfer-manifest.json"
+            digest = pin_transfer_manifest(root, run_dir, run, record, run_dir / pinned)
+            (run_dir / "realizations" / "real-1.json").write_text(json.dumps({
+                "id": "real-1",
+                "request": {"env": {"KURA_WORKSPACE": "/workspace"}},
+                "container_cwd": "/opt/tool",
+                "backend_command": ["python", "train.py"],
+                "transfer": {"stage": status["last_stage"], "pinned_manifest": pinned, "manifest_sha256": digest},
+            }), encoding="utf-8")
+            status["last_realization"] = "realizations/real-1.json"
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            return run_dir
+
+        def remove_archive(run_dir: Path) -> None:
+            stage = json.loads((run_dir / json.loads((run_dir / "status.json").read_text())["last_stage"]).read_text())
+            (run_dir / stage["archive"]).unlink()
+
+        cases = {
+            "missing archive": remove_archive,
+            "missing pin": lambda run_dir: (run_dir / "realizations" / "real-1.transfer-manifest.json").unlink(),
+            "missing resolved manifest": lambda run_dir: (run_dir / "resolved" / "manifest.lock.yaml").unlink(),
+        }
+        for name, damage in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                run_dir = prepared(Path(directory))
+                damage(run_dir)
+                with (
+                    patch("kura.run_commands.runpod_ssh._runpod_ssh_details") as ssh,
+                    self.assertRaises(TransferRefused),
+                ):
+                    _runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=0)
+                ssh.assert_not_called()
+
+
 class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
     """The Pod-side receive path, exercised through the generated job script."""
 
@@ -685,6 +727,33 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             self.assertTrue((pod / "datasets" / "tiny" / "a.png").is_file())
 
 
+    def test_failure_after_views_exist_rolls_back_and_keeps_the_upload_for_retry(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("runpod_input_verify.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            pod, remote_dir, record = self._pod(Path(directory))
+            env = {
+                "KURA_WORKSPACE": str(pod), "KURA_RUN_ID": "example", "KURA_REALIZATION_ID": "real-1",
+                "KURA_KNOWN_MEDIA_SUFFIXES": json.dumps([".png"]),
+            }
+            argv = ["verify", str(remote_dir / record["archive_name"]),
+                    str(remote_dir / Path(record["manifest"]).name), self.manifest_sha256]
+            real_baseline = namespace["source_baseline"]
+            namespace["source_baseline"] = lambda *args: (_ for _ in ()).throw(OSError("simulated baseline failure"))
+            with patch.dict(os.environ, env), patch.object(sys, "argv", argv), self.assertRaises(SystemExit):
+                namespace["main"]()
+            self.assertEqual(self._verify_record(pod)["status"], "failed")
+            for published in ("runs/example/resolved", "runs/example/run.yaml", "datasets", "runs/example/cache/dataset-view"):
+                self.assertFalse((pod / published).exists(), published)
+            self.assertTrue((remote_dir / record["archive_name"]).is_file())
+
+            namespace["source_baseline"] = real_baseline
+            with patch.dict(os.environ, env), patch.object(sys, "argv", argv):
+                namespace["main"]()
+            self.assertEqual(self._verify_record(pod)["status"], "verified")
+            self.assertFalse((remote_dir / record["archive_name"]).exists())
+
+
 class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
     def _downloaded(self, root: Path, remote_status: str) -> tuple[Path, Path]:
         run_dir, _ = self._compiled(root)
@@ -762,7 +831,8 @@ class RunEventReaderTests(unittest.TestCase):
                 "event": "dataset_input_postflight", "realization_id": "r", "record": "realizations/r.json",
                 "detail": "path\u2029with separator",
             })
-            (run_dir / "logs" / "events.jsonl").open("a", encoding="utf-8").write("not json\n")
+            with (run_dir / "logs" / "events.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write("not json\n")
 
             self.assertTrue(_event_exists(
                 run_dir, event="dataset_input_postflight", realization_id="r", record="realizations/r.json",

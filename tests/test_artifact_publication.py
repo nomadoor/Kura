@@ -508,6 +508,43 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertEqual(status["publication_state"], "completed")
             self.assertEqual(status["publication_manifest"], "realizations/launch.publication.json")
 
+    def test_input_postflight_failure_never_blocks_download_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            downloaded = run_dir / "downloads" / "example"
+            (downloaded / "outputs").mkdir(parents=True)
+            (downloaded / "realizations").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "realizations").mkdir()
+            (downloaded / "outputs" / "example.safetensors").write_bytes(_safetensors_bytes())
+            (downloaded / "realizations" / "remote-exit-20260101.json").write_text(
+                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8",
+            )
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},
+            }), encoding="utf-8")
+            (run_dir / "realizations" / "launch.json").write_text(json.dumps({"id": "launch"}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "state": "running", "pod_id": "pod-1", "last_realization": "realizations/launch.json",
+            }), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch(
+                    "kura.run_commands.runpod_ssh.finalize_runpod_dataset_handoff",
+                    side_effect=OSError("disk full while promoting records"),
+                ):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "completed")
+            self.assertEqual(status["dataset_input_postflight"]["status"], "uncheckable")
+            self.assertIn("reproducibility is not confirmed", status["dataset_input_postflight"]["warning"])
+
     def test_download_does_not_complete_when_adapter_is_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

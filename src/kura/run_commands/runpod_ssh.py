@@ -36,7 +36,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, run_events
+from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, dataset_input_drift_warning, run_events
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
@@ -615,10 +615,20 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     steps = configured_steps
 
             realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
-            input_postflight = (
-                finalize_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
-                if isinstance(realization_ref, str) else None
-            )
+            try:
+                input_postflight = (
+                    finalize_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
+                    if isinstance(realization_ref, str) else None
+                )
+            except (OSError, ValueError) as exc:
+                # Input drift is a warning; failing to record it must never
+                # block the download that lets the Pod be stopped.
+                input_postflight = {
+                    "status": "uncheckable",
+                    "view_cleanup": "not-required",
+                    "warning": dataset_input_drift_warning("uncheckable"),
+                    "error": _safe_error(exc),
+                }
 
             def mutate(status: dict[str, Any]) -> None:
                 if input_postflight is not None:
@@ -1811,7 +1821,21 @@ exit "$exit_code"
 """.strip()
 
 
-def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+def _prepare_remote_upload(run_dir: Path) -> dict[str, Any]:
+    """Decide everything the upload needs before the first SSH action.
+
+    Nothing has run on the Pod yet, so any failure here is a refusal: the
+    caller stops the unused Pod instead of leaving it billing.
+    """
+    try:
+        return _prepare_remote_upload_unchecked(run_dir)
+    except TransferRefused:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
+        raise TransferRefused(f"remote job preparation failed before upload: {_safe_error(error)}") from error
+
+
+def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
     stage = _latest_runpod_stage(run_dir)
     archive = stage.get("archive")
     archive_name = stage.get("archive_name")
@@ -1819,7 +1843,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
         raise ValueError("latest RunPod stage has no upload archive")
     archive_path = run_dir / archive
     if not archive_path.is_file():
-        raise ValueError(f"upload archive is missing: {archive_path}")
+        raise TransferRefused(f"upload archive is missing: {archive_path}")
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     realization_ref = status.get("last_realization")
     if not isinstance(realization_ref, str):
@@ -1850,6 +1874,28 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
         verify_pinned_transfer(
             run_dir.parent.parent, run_dir, locked_run, stage, pinned_manifest, remote_manifest_sha256,
         )
+    return {
+        "stage": stage, "archive_path": archive_path, "archive_name": archive_name, "status": status,
+        "realization": realization, "realization_ref": realization_ref, "workspace": workspace,
+        "run_id": run_id, "cwd": cwd, "argv": argv, "selected_files": selected_files,
+        "pinned_manifest": pinned_manifest, "remote_manifest_sha256": remote_manifest_sha256,
+    }
+
+
+def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+    prepared_upload = _prepare_remote_upload(run_dir)
+    status = prepared_upload["status"]
+    realization = prepared_upload["realization"]
+    realization_ref = prepared_upload["realization_ref"]
+    workspace = prepared_upload["workspace"]
+    run_id = prepared_upload["run_id"]
+    cwd = prepared_upload["cwd"]
+    argv = prepared_upload["argv"]
+    archive_path = prepared_upload["archive_path"]
+    archive_name = prepared_upload["archive_name"]
+    selected_files = prepared_upload["selected_files"]
+    pinned_manifest = prepared_upload["pinned_manifest"]
+    remote_manifest_sha256 = prepared_upload["remote_manifest_sha256"]
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
     remote_archive = f"{remote_dir}/{archive_name}"
