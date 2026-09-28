@@ -50,6 +50,36 @@ class DatasetInspectTests(unittest.TestCase):
         self.assertEqual(report["paired_control"]["missing_source_count"], 0)
         self.assertEqual(report["observations"]["condition_counts"], {"control": 1})
 
+    def test_inspect_reports_v2_typed_video_targets_and_caption_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            dataset = workspace / "datasets" / "clips"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("id: clips\nitems_schema_version: 2\n", encoding="utf-8")
+            for name in ("a.mp4", "b.mov", "unlisted.mp4"):
+                (dataset / name).write_bytes(b"video")
+            (dataset / "a.txt").write_text("a caption\n", encoding="utf-8")
+            rows = [
+                {"id": "a", "files": [{"type": "file", "role": "target", "path": "a.mp4"}],
+                 "caption": {"file": {"type": "file", "path": "a.txt"}}},
+                {"id": "b", "files": [{"type": "file", "role": "target", "path": "b.mov"}],
+                 "caption": {"text": "b caption"}},
+            ]
+            (dataset / "items.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+            )
+
+            report = inspect_dataset("clips", workspace=workspace)
+            text = format_dataset_inspect(report)
+
+            self.assertEqual(report["videos"]["items_jsonl_count"], 2)
+            self.assertEqual(report["videos"]["count"], 3)
+            self.assertEqual(report["images"]["items_jsonl_count"], 0)
+            self.assertEqual(report["captions"]["empty"], 0)
+            self.assertEqual(report["observations"]["captions_missing"], 0)
+            self.assertIn("videos.items_jsonl_count: 2", text)
+            self.assertIn("videos.directory_count: 3", text)
+
     def test_inspect_preserves_unicode_line_separator_in_v2_caption(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

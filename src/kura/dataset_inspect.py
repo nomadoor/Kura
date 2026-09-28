@@ -55,7 +55,7 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
         },
         "images": {
             "items_jsonl_count": (
-                _v2_target_image_count(observed_samples) if manifest_v2 else _items_image_count(records)
+                _v2_target_count(observed_samples, KNOWN_IMAGE_SUFFIXES) if manifest_v2 else _items_image_count(records)
             ),
             "directory_count": len(images),
             "resolution": _resolution_summary(images),
@@ -67,7 +67,12 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
         ),
         "observations": observation["observations"],
         "structural_findings": observation["structural_findings"],
-        "videos": _video_summary(videos),
+        "videos": {
+            **_video_summary(videos),
+            "items_jsonl_count": (
+                _v2_target_count(observed_samples, KNOWN_VIDEO_SUFFIXES) if manifest_v2 else None
+            ),
+        },
         "items_jsonl": {
             "records": len(records),
             "parse_errors": sum(1 for item in records if item.get("_parse_error")),
@@ -134,7 +139,9 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
     for code, count in sorted(finding_codes.items()):
         lines.append(f"  structural_findings.{code}: {count}")
     videos = report.get("videos") if isinstance(report.get("videos"), dict) else {}
-    lines.append(f"  videos.count: {videos.get('count')}")
+    if videos.get("items_jsonl_count") is not None:
+        lines.append(f"  videos.items_jsonl_count: {videos.get('items_jsonl_count')}")
+    lines.append(f"  videos.directory_count: {videos.get('count')}")
     return "\n".join(lines)
 
 
@@ -184,14 +191,14 @@ def _items_image_count(records: list[dict[str, Any]]) -> int:
     return count
 
 
-def _v2_target_image_count(samples: list[Any]) -> int:
+def _v2_target_count(samples: list[Any], suffixes: frozenset[str]) -> int:
     return sum(
         1
         for sample in samples if isinstance(sample, dict)
         for reference in sample.get("files", []) if isinstance(reference, dict)
         if reference.get("role") == "target"
         and isinstance(reference.get("path"), str)
-        and Path(reference["path"]).suffix.lower() in KNOWN_IMAGE_SUFFIXES
+        and Path(reference["path"]).suffix.lower() in suffixes
     )
 
 

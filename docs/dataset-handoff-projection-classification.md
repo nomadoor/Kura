@@ -405,11 +405,6 @@ is marked `migration: pending`; merge readiness must run
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Update `kura dataset inspect` to render manifest-v2 typed video targets and
-  typed caption references without reporting a present caption as missing.
-  Strict validation, projection, and execution already use the typed manifest;
-  this is a legacy inspection-display mismatch and must be removed before the
-  final merge.
 - Include a terminal run's remaining `cache/dataset-view` in `kura cleanup
   runs` even when automatic removal was deferred for publication recovery and
   the container later disappeared, leaving reconciliation at `unknown`.
