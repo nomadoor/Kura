@@ -8,7 +8,23 @@ from pathlib import Path
 import sys
 
 
-VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".webm", ".mkv", ".wmv", ".m4v", ".flv"}
+def _frozen_suffixes(name: str) -> frozenset[str]:
+    try:
+        values = json.loads(os.environ[name])
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"AI-Toolkit embedded-audio preflight requires valid {name}: {exc}")
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(
+            isinstance(value, str)
+            and value.startswith(".")
+            and value == value.lower()
+            for value in values
+        )
+    ):
+        raise SystemExit(f"AI-Toolkit embedded-audio preflight requires {name} to be a non-empty suffix list")
+    return frozenset(values)
 
 
 def _record_path() -> Path:
@@ -47,10 +63,10 @@ def _input_contexts() -> dict[str, dict]:
     return contexts
 
 
-def _video_paths(folder: Path) -> list[Path]:
+def _video_paths(folder: Path, suffixes: frozenset[str]) -> list[Path]:
     return sorted(
         path for path in folder.rglob("*")
-        if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
+        if path.is_file() and path.suffix.lower() in suffixes
     )
 
 
@@ -82,6 +98,7 @@ def main() -> None:
     processes = payload.get("config", {}).get("process", []) if isinstance(payload, dict) else []
     process = processes[0] if isinstance(processes, list) and processes else {}
     datasets = process.get("datasets", []) if isinstance(process, dict) else []
+    video_suffixes = _frozen_suffixes("KURA_AI_TOOLKIT_VIDEO_SUFFIXES")
     contexts = _input_contexts()
     results = []
     failures = []
@@ -92,7 +109,7 @@ def main() -> None:
         if not isinstance(folder, str):
             failures.append({"dataset_index": dataset_index, "error": "folder_path is missing"})
             continue
-        videos = _video_paths(Path(folder))
+        videos = _video_paths(Path(folder), video_suffixes)
         if not videos:
             failures.append({"dataset_index": dataset_index, "error": "no selected video files"})
             continue

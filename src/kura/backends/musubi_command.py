@@ -12,13 +12,17 @@ from kura.container_scripts import script_source
 from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths
 from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _reject_owned_extra_args, _script_command as _shared_script_command, _truthy
 from kura.backends.musubi_datasets import (
+    MUSUBI_AUDIO_SUFFIXES,
     FRAMEPACK_LATENT_WINDOW_SIZE,
+    MUSUBI_IMAGE_SUFFIXES,
+    MUSUBI_VIDEO_SUFFIXES,
     _musubi_h3_effective_task,
     _write_musubi_dataset_config,
 )
 from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
+from kura.media_types import frozen_suffixes
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
 
@@ -1321,6 +1325,11 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         raise _unsupported_musubi_adapter_error(architecture)
 
     env = _backend_env("Musubi Tuner", override)
+    env.update({
+        "KURA_MUSUBI_IMAGE_SUFFIXES": frozen_suffixes(MUSUBI_IMAGE_SUFFIXES),
+        "KURA_MUSUBI_VIDEO_SUFFIXES": frozen_suffixes(MUSUBI_VIDEO_SUFFIXES),
+        "KURA_MUSUBI_AUDIO_SUFFIXES": frozen_suffixes(MUSUBI_AUDIO_SUFFIXES),
+    })
     result = {
         "cwd": "/opt/musubi-tuner", "argv": argv, "env": env,
         "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},

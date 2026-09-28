@@ -13,13 +13,27 @@ from pathlib import Path
 import tomllib
 
 
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
-VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
-AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
-
-
 def die(message):
     raise SystemExit(f"[kura] {message}")
+
+
+def frozen_suffixes(name):
+    try:
+        values = json.loads(os.environ[name])
+    except (KeyError, json.JSONDecodeError) as exc:
+        die(f"Musubi dataset preflight requires valid {name}: {exc}")
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(
+            isinstance(value, str)
+            and value.startswith(".")
+            and value == value.lower()
+            for value in values
+        )
+    ):
+        die(f"Musubi dataset preflight requires {name} to be a non-empty suffix list")
+    return frozenset(values)
 
 
 def media_count(directory, suffixes, label):
@@ -101,7 +115,7 @@ def input_context_by_view_path():
     return contexts
 
 
-def video_frame_preflight(entries, config_path):
+def video_frame_preflight(entries, config_path, audio_suffixes):
     try:
         from musubi_tuner.dataset.media_utils import load_video
     except (ImportError, ModuleNotFoundError) as exc:
@@ -150,7 +164,7 @@ def video_frame_preflight(entries, config_path):
                         candidate for candidate in resolved_video.parent.iterdir()
                         if candidate.is_file()
                         and candidate.stem == resolved_video.stem
-                        and candidate.suffix.lower() in AUDIO_SUFFIXES
+                        and candidate.suffix.lower() in audio_suffixes
                     )
                     if sidecars:
                         raise ValueError(
@@ -280,6 +294,9 @@ def main():
     datasets = config.get("datasets")
     if not isinstance(datasets, list) or not datasets:
         die(f"Musubi dataset config has no [[datasets]] entries: {config_path}")
+    image_suffixes = frozen_suffixes("KURA_MUSUBI_IMAGE_SUFFIXES")
+    video_suffixes = frozen_suffixes("KURA_MUSUBI_VIDEO_SUFFIXES")
+    audio_suffixes = frozen_suffixes("KURA_MUSUBI_AUDIO_SUFFIXES")
     summary = []
     video_entries = []
     for index, item in enumerate(datasets, start=1):
@@ -290,13 +307,13 @@ def main():
         image_jsonl_file = item.get("image_jsonl_file")
         video_jsonl_file = item.get("video_jsonl_file")
         if isinstance(image_directory, str) and image_directory:
-            count = media_count(Path(image_directory), IMAGE_SUFFIXES, "image_directory")
+            count = media_count(Path(image_directory), image_suffixes, "image_directory")
             if count <= 0:
                 die(f"Musubi dataset entry #{index} has no images in image_directory: {image_directory}")
             summary.append({"index": index, "image_directory": image_directory, "images": count})
             continue
         if isinstance(video_directory, str) and video_directory:
-            count = media_count(Path(video_directory), VIDEO_SUFFIXES, "video_directory")
+            count = media_count(Path(video_directory), video_suffixes, "video_directory")
             if count <= 0:
                 die(f"Musubi dataset entry #{index} has no videos in video_directory: {video_directory}")
             target_frames = item.get("target_frames")
@@ -311,7 +328,7 @@ def main():
                 "video_directory": video_directory,
                 "videos": sorted(
                     video for video in Path(video_directory).iterdir()
-                    if video.is_file() and video.suffix.lower() in VIDEO_SUFFIXES
+                    if video.is_file() and video.suffix.lower() in video_suffixes
                 ),
                 "target_frames": target_frames,
                 "frame_extraction": item.get("frame_extraction"),
@@ -355,7 +372,7 @@ def main():
             continue
         summary.append({"index": index, "source": "unknown; deferred to Musubi"})
     if video_entries:
-        record = video_frame_preflight(video_entries, config_path)
+        record = video_frame_preflight(video_entries, config_path, audio_suffixes)
         print(
             f"[kura] musubi video frame preflight passed "
             f"{json.dumps({'videos': len(record['videos']), 'record': str(realization_record_path())}, ensure_ascii=False)}",

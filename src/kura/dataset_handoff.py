@@ -16,15 +16,12 @@ import yaml
 
 from kura.dataset_manifest import measure_manifest
 from kura.fsio import atomic_write_json
+from kura.media_types import KNOWN_MEDIA_SUFFIXES
 from kura.paths import to_workspace_relative
 
 
 Project = Callable[[dict[str, Any]], dict[str, Any]]
 _PORTABLE_STAT = ("size", "mtime_ns", "ctime_ns")
-_TRAINER_MEDIA_SUFFIXES = frozenset({
-    ".avif", ".avi", ".bmp", ".flac", ".gif", ".jpeg", ".jpg", ".m4v", ".mkv",
-    ".mov", ".mp3", ".mp4", ".ogg", ".png", ".wav", ".webm", ".webp",
-})
 _EXTENSION_LITERAL = re.compile(r"^\.[A-Za-z0-9]+$")
 RUNPOD_MANIFEST_V2_UNSUPPORTED = (
     "RunPod selected-file transfer for manifest-v2 datasets is not implemented; "
@@ -373,7 +370,7 @@ def _looks_like_path(value: str) -> bool:
         return True
     if value.startswith(".") and _EXTENSION_LITERAL.fullmatch(value) is None:
         return True
-    return PurePosixPath(value).suffix.lower() in _TRAINER_MEDIA_SUFFIXES
+    return PurePosixPath(value).suffix.lower() in KNOWN_MEDIA_SUFFIXES
 
 
 def _validate_native_string_classification(
@@ -1240,7 +1237,7 @@ def _view_requires_rebuild(workspace: Path, view: dict[str, Any]) -> bool:
         if (
             path.is_file()
             and not path.is_symlink()
-            and path.suffix.lower() in _TRAINER_MEDIA_SUFFIXES
+            and path.suffix.lower() in KNOWN_MEDIA_SUFFIXES
             and relative not in expected_generated
         ):
             return True
@@ -1282,7 +1279,7 @@ def inspect_dataset_view(workspace: Path, lock: dict[str, Any]) -> list[str]:
                 if (
                     path.is_file()
                     and not path.is_symlink()
-                    and path.suffix.lower() in _TRAINER_MEDIA_SUFFIXES
+                    and path.suffix.lower() in KNOWN_MEDIA_SUFFIXES
                     and relative not in expected_generated
                 ):
                     changes.append(f"unexpected regular media in view: {relative}")

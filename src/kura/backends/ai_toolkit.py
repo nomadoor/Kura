@@ -17,6 +17,7 @@ from kura.backends.dataset_profiles import (
 from kura.backends.shared import _datasets, _script_command
 from kura.container_scripts import script_source
 from kura.fsio import atomic_write_yaml
+from kura.media_types import frozen_suffixes
 from kura.provenance import artifact_pinning
 from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 
@@ -55,16 +56,18 @@ AI_TOOLKIT_PINNED_MODEL_ARCHS = frozenset({
     "wan22_14b_i2v", "wan22_5b", "yue2", "zeta_chroma", "zimage", "zimage_l2p",
 })
 
-_AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
-_AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
+# Pinned AI-Toolkit 31ddc709, toolkit/data_loader.py:36-38. These
+# are the folder loader's exact lowercase extension lists.
+AI_TOOLKIT_IMAGE_SUFFIXES = frozenset({".jpeg", ".jpg", ".png", ".webp"})
+AI_TOOLKIT_VIDEO_SUFFIXES = frozenset({".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".webm", ".wmv"})
 
 
 def _ai_toolkit_media_kind(path: object) -> str:
     """Return the backend-local media kind used by projection profiles."""
     suffix = Path(str(path)).suffix.lower()
-    if suffix in _AI_TOOLKIT_IMAGE_SUFFIXES:
+    if suffix in AI_TOOLKIT_IMAGE_SUFFIXES:
         return "image"
-    if suffix in _AI_TOOLKIT_VIDEO_SUFFIXES:
+    if suffix in AI_TOOLKIT_VIDEO_SUFFIXES:
         return "video"
     return "unsupported"
 
@@ -351,8 +354,8 @@ def _select_ai_toolkit_projection_profile(
     """Select one fixed-source dataset contract without creating its view."""
     shape, examples, cardinalities = classify_dataset_shape(
         dataset,
-        image_suffixes=_AI_TOOLKIT_IMAGE_SUFFIXES,
-        video_suffixes=_AI_TOOLKIT_VIDEO_SUFFIXES,
+        image_suffixes=AI_TOOLKIT_IMAGE_SUFFIXES,
+        video_suffixes=AI_TOOLKIT_VIDEO_SUFFIXES,
     )
     try:
         return select_projection_profile(
@@ -1379,7 +1382,11 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     model_cache = "/workspace/cache/ai-toolkit/models"
     write_roots = [{"role": "model-cache", "path": model_cache, "env": "MODELS_PATH"}]
     if command is None:
-        runner_env = {"SEED": str(recipe["seed"]), "MODELS_PATH": model_cache}
+        runner_env = {
+            "SEED": str(recipe["seed"]),
+            "MODELS_PATH": model_cache,
+            "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+        }
         output_contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
         cwd = "/app/ai-toolkit" if run_executor(run) == "runpod" else "/opt/ai-toolkit"
         config_path = f"/workspace/runs/{run['id']}/resolved/ai-toolkit.yaml"

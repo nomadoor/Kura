@@ -21,7 +21,10 @@ from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
 
 
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+# Pinned sd-scripts 6721028, library/dataset.py:70-93. AVIF is a
+# conditional entry gated by importing pillow_avif; P2-7 verifies whether that
+# dependency exists in Kura's pinned image before this capability is finalized.
+SD_SCRIPTS_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"})
 
 
 def _sd_scripts_caption_projection(
@@ -483,7 +486,7 @@ def _sd_scripts_profile(
     architecture = str(native.get("architecture") or "")
     training_mode = str(native.get("mode") or "lora")
     shape, examples, cardinalities = classify_dataset_shape(
-        dataset, image_suffixes=IMAGE_SUFFIXES, video_suffixes=set(),
+        dataset, image_suffixes=SD_SCRIPTS_IMAGE_SUFFIXES, video_suffixes=set(),
     )
     return select_projection_profile(
         backend="sd-scripts",

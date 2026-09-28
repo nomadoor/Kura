@@ -178,6 +178,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     paths.extend([
         package_root / "dataset_handoff.py",
         package_root / "dataset_jsonl.py",
+        package_root / "media_types.py",
         package_root / "dataset_manifest.py",
     ])
     missing = [path for path in [*paths, *runtime_paths] if not path.is_file()]

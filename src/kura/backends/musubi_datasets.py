@@ -22,11 +22,14 @@ from kura.backends.musubi_models import _musubi_model_version
 from kura.backends.musubi_native_selectors import musubi_native_task, musubi_native_task_profile
 from kura.backends.shared import _datasets, _toml_scalar, _truthy
 from kura.fsio import atomic_write_text
-
-
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
-VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
-AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
+# Pinned Musubi 4e7c714: dataset/media_utils.py:22-54 and
+# dataset/audio_utils.py:15. JXL remains excluded because its loader entries
+# are conditional on optional plugins not installed by Kura's pinned image.
+MUSUBI_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"})
+MUSUBI_VIDEO_SUFFIXES = frozenset({
+    ".avi", ".flv", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv",
+})
+MUSUBI_AUDIO_SUFFIXES = frozenset({".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"})
 MUSUBI_CAPTION_TRANSFORM = "strip"
 FRAMEPACK_LATENT_WINDOW_SIZE = 9
 MUSUBI_DATASET_GENERAL_DEFAULTS = {
@@ -194,7 +197,7 @@ def _h3_reference_jsonl_row(
     context: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, str]]]:
     target_suffix = Path(context["target_path"]).suffix.lower()
-    if target_suffix in IMAGE_SUFFIXES:
+    if target_suffix in MUSUBI_IMAGE_SUFFIXES:
         row, reported = _plain_image_jsonl_row(context)
     else:
         row, reported = _plain_video_jsonl_row(context)
@@ -221,11 +224,11 @@ def _h3_reference_jsonl_row(
                 "input_id": item["input_id"], "path": item["view_path"],
             })
             continue
-        if suffix in IMAGE_SUFFIXES:
+        if suffix in MUSUBI_IMAGE_SUFFIXES:
             kind = "image"
-        elif suffix in VIDEO_SUFFIXES:
+        elif suffix in MUSUBI_VIDEO_SUFFIXES:
             kind = "video"
-        elif suffix in AUDIO_SUFFIXES:
+        elif suffix in MUSUBI_AUDIO_SUFFIXES:
             kind = "audio"
         else:
             raise ValueError(f"Musubi H3 reference has unsupported extension {suffix!r}")
@@ -913,7 +916,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     for dataset in selection.get("datasets", []):
         dataset_id = str(dataset.get("id"))
         shape, shape_examples, role_cardinalities = classify_dataset_shape(
-            dataset, image_suffixes=IMAGE_SUFFIXES, video_suffixes=VIDEO_SUFFIXES,
+            dataset, image_suffixes=MUSUBI_IMAGE_SUFFIXES, video_suffixes=MUSUBI_VIDEO_SUFFIXES,
         )
         profile_name, profile = select_projection_profile(
             backend="Musubi",
@@ -1065,7 +1068,7 @@ def _project_musubi_jsonl_block(
         assert isinstance(caption, dict)  # profile caption contract is checked before blocks
         target = targets[0]
         target_suffixes = [Path(str(item.get("path"))).suffix.lower() for item in targets]
-        expected_target_suffixes = VIDEO_SUFFIXES if transport == "video_jsonl_file" else IMAGE_SUFFIXES
+        expected_target_suffixes = MUSUBI_VIDEO_SUFFIXES if transport == "video_jsonl_file" else MUSUBI_IMAGE_SUFFIXES
         if any(suffix not in expected_target_suffixes for suffix in target_suffixes):
             unrepresentable.append({
                 "input_id": target.get("input_id"),
@@ -1077,7 +1080,7 @@ def _project_musubi_jsonl_block(
             continue
         control_suffixes = [Path(str(control.get("path"))).suffix.lower() for control in controls]
         control_media = profile.get("control_media", "image")
-        expected_control_suffixes = VIDEO_SUFFIXES if control_media == "video" else IMAGE_SUFFIXES
+        expected_control_suffixes = MUSUBI_VIDEO_SUFFIXES if control_media == "video" else MUSUBI_IMAGE_SUFFIXES
         if any(suffix not in expected_control_suffixes for suffix in control_suffixes):
             unrepresentable.append({
                 "input_id": fallback,

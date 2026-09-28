@@ -12,9 +12,7 @@ from typing import Any
 import yaml
 
 from kura.dataset_jsonl import items_jsonl_rows
-
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
-VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
+from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_VIDEO_SUFFIXES
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 
@@ -33,8 +31,8 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
 
     metadata = _load_dataset_yaml(dataset_path / "dataset.yaml")
     records = _load_items_jsonl(dataset_path / "items.jsonl")
-    images = [path for path in _iter_files(dataset_path) if path.suffix.lower() in IMAGE_SUFFIXES]
-    videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in VIDEO_SUFFIXES]
+    images = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_IMAGE_SUFFIXES]
+    videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_VIDEO_SUFFIXES]
     captions = [_caption_text(item) for item in records]
     trigger_word = metadata.get("trigger_word") if isinstance(metadata.get("trigger_word"), str) else None
     from kura.dataset_observations import observe_dataset
@@ -181,7 +179,7 @@ def _items_image_count(records: list[dict[str, Any]]) -> int:
     count = 0
     for item in records:
         values = [item.get(key) for key in TARGET_KEYS]
-        if any(isinstance(value, str) and Path(value).suffix.lower() in IMAGE_SUFFIXES for value in values):
+        if any(isinstance(value, str) and Path(value).suffix.lower() in KNOWN_IMAGE_SUFFIXES for value in values):
             count += 1
     return count
 
@@ -193,7 +191,7 @@ def _v2_target_image_count(samples: list[Any]) -> int:
         for reference in sample.get("files", []) if isinstance(reference, dict)
         if reference.get("role") == "target"
         and isinstance(reference.get("path"), str)
-        and Path(reference["path"]).suffix.lower() in IMAGE_SUFFIXES
+        and Path(reference["path"]).suffix.lower() in KNOWN_IMAGE_SUFFIXES
     )
 
 
@@ -397,7 +395,7 @@ def _paired_directory_summary(dataset_path: Path, metadata: dict[str, Any]) -> d
 def _images_under_first_existing(directories: list[Path]) -> list[Path]:
     for directory in directories:
         if directory.is_dir():
-            return [path for path in _iter_files(directory) if path.suffix.lower() in IMAGE_SUFFIXES]
+            return [path for path in _iter_files(directory) if path.suffix.lower() in KNOWN_IMAGE_SUFFIXES]
     return []
 
 

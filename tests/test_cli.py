@@ -25,6 +25,8 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
+from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
@@ -32,6 +34,7 @@ from kura.run_commands.runpod_ssh import _extract_snapshot_delta_archive, _link_
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
+from kura.media_types import frozen_suffixes
 from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error, _runpod_request
 from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
@@ -3921,7 +3924,11 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(command["argv"][:2], ["python", "-c"])
         self.assertIn("hook_before_train_loop", command["argv"][2])
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
-        self.assertEqual(command["env"], {"SEED": "42", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
+        self.assertEqual(command["env"], {
+            "SEED": "42",
+            "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
+            "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+        })
 
     def test_provider_only_runpod_command_uses_runpod_working_directory(self) -> None:
         run = self._run()
@@ -4362,7 +4369,12 @@ class MusubiBackendTests(unittest.TestCase):
 
         command = command_musubi_tuner(run)
 
-        self.assertEqual(command["env"], {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+        self.assertEqual(command["env"], {
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "KURA_MUSUBI_IMAGE_SUFFIXES": frozen_suffixes(MUSUBI_IMAGE_SUFFIXES),
+            "KURA_MUSUBI_VIDEO_SUFFIXES": frozen_suffixes(MUSUBI_VIDEO_SUFFIXES),
+            "KURA_MUSUBI_AUDIO_SUFFIXES": frozen_suffixes(MUSUBI_AUDIO_SUFFIXES),
+        })
 
     def test_command_musubi_rejects_secret_generated_env(self) -> None:
         run = self._run()

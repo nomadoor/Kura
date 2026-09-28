@@ -16,12 +16,9 @@ from typing import Any
 import yaml
 
 from kura.dataset_jsonl import items_jsonl_rows
+from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_MEDIA_SUFFIXES
 
 
-MEDIA_SUFFIXES = {
-    ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp",
-    ".mp4", ".mov", ".mkv", ".webm", ".avi", ".wav", ".flac", ".mp3", ".ogg",
-}
 ORDINARY_DATASET_SUFFIXES = {".caption", ".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"}
 IGNORED_DATASET_DIRECTORIES = {"_latent_cache", ".git", ".cache", "cache"}
 
@@ -352,7 +349,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         raise ValueError("items.jsonl contains no items")
     unlisted = []
     for path in root.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in MEDIA_SUFFIXES:
+        if not path.is_file() or path.suffix.lower() not in KNOWN_MEDIA_SUFFIXES:
             continue
         logical = path.relative_to(root).as_posix()
         try:
@@ -376,7 +373,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
             logical in selected
             or _is_excluded(logical, excluded_files, excluded_directories)
             or path.name in {"dataset.yaml", "items.jsonl"}
-            or path.suffix.lower() in MEDIA_SUFFIXES | ORDINARY_DATASET_SUFFIXES
+            or path.suffix.lower() in KNOWN_MEDIA_SUFFIXES | ORDINARY_DATASET_SUFFIXES
             or any(part.startswith(".") or part in IGNORED_DATASET_DIRECTORIES for part in path.relative_to(root).parts[:-1])
         ):
             continue
@@ -421,7 +418,7 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
         if folder.is_dir():
             images = sorted(
                 (path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in
-                 {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}),
+                 KNOWN_IMAGE_SUFFIXES),
                 key=lambda path: path.name,
             )
             if images:

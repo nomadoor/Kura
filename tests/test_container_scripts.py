@@ -16,9 +16,19 @@ from unittest.mock import patch
 
 from kura.container_scripts import script_source
 from kura.backends import BACKENDS, BackendSurface
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
+from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES
 from kura.init_templates import SD_SCRIPTS_DOCKERFILE_TEMPLATE, SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE
+from kura.media_types import frozen_suffixes
 import kura.provenance as provenance
 from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
+
+
+MUSUBI_MEDIA_ENV = {
+    "KURA_MUSUBI_IMAGE_SUFFIXES": frozen_suffixes(MUSUBI_IMAGE_SUFFIXES),
+    "KURA_MUSUBI_VIDEO_SUFFIXES": frozen_suffixes(MUSUBI_VIDEO_SUFFIXES),
+    "KURA_MUSUBI_AUDIO_SUFFIXES": frozen_suffixes(MUSUBI_AUDIO_SUFFIXES),
+}
 
 
 class ContainerScriptTests(unittest.TestCase):
@@ -73,6 +83,42 @@ class ContainerScriptTests(unittest.TestCase):
         with patch.object(Path, "read_bytes", changed_truthy):
             self.assertEqual(ai_baseline, adapter_source_identity("ai-toolkit")["value"])
             self.assertNotEqual(musubi_baseline, adapter_source_identity("musubi-tuner")["value"])
+
+    def test_adapter_identity_tracks_core_media_registry(self) -> None:
+        baseline = {
+            name: adapter_source_identity(name)["value"]
+            for name in ("ai-toolkit", "musubi-tuner", "sd-scripts")
+        }
+        original = Path.read_bytes
+
+        def changed_registry(path):
+            payload = original(path)
+            return payload + (b"\n# changed media registry\n" if path.name == "media_types.py" else b"")
+
+        with patch.object(Path, "read_bytes", changed_registry):
+            changed = {name: adapter_source_identity(name)["value"] for name in baseline}
+
+        for name in baseline:
+            self.assertNotEqual(baseline[name], changed[name], name)
+
+    def test_adapter_identity_tracks_backend_loader_suffix_sets(self) -> None:
+        cases = (
+            ("ai-toolkit", "ai_toolkit.py", b"AI_TOOLKIT_VIDEO_SUFFIXES"),
+            ("musubi-tuner", "musubi_datasets.py", b"MUSUBI_VIDEO_SUFFIXES"),
+            ("sd-scripts", "sd_scripts_datasets.py", b"SD_SCRIPTS_IMAGE_SUFFIXES"),
+        )
+        original = Path.read_bytes
+        for backend, filename, marker in cases:
+            with self.subTest(backend=backend):
+                baseline = adapter_source_identity(backend)["value"]
+
+                def changed_suffixes(path, *, target=filename, needle=marker):
+                    payload = original(path)
+                    return payload.replace(needle, needle + b"_CHANGED", 1) if path.name == target else payload
+
+                with patch.object(Path, "read_bytes", changed_suffixes):
+                    changed = adapter_source_identity(backend)["value"]
+                self.assertNotEqual(baseline, changed)
 
     def test_adapter_identity_tracks_declared_surface(self) -> None:
         baseline = adapter_source_identity("ai-toolkit")
@@ -394,6 +440,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video",
                 "KURA_REALIZATION_ID": "r1",
+                "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
             }
             with patch.dict(sys.modules, {
                 "toolkit": ModuleType("toolkit"),
@@ -425,7 +472,7 @@ class ContainerScriptTests(unittest.TestCase):
 
             count = namespace["media_count"](
                 root,
-                namespace["VIDEO_SUFFIXES"],
+                MUSUBI_VIDEO_SUFFIXES,
                 "video_directory",
             )
 
@@ -480,6 +527,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.media_utils": media_utils,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "realization-1",
@@ -541,6 +589,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.media_utils": media_utils,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "realization-2",
@@ -598,6 +647,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.architectures": architectures,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "framepack-full",
@@ -643,6 +693,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.media_utils": media_utils,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "h3-realization",
@@ -694,6 +745,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.media_utils": media_utils,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "h3-sidecar",
@@ -733,9 +785,9 @@ class ContainerScriptTests(unittest.TestCase):
             )
             output = io.StringIO()
 
-            with patch.object(sys, "argv", ["musubi_dataset_assert.py", str(config)]), patch(
-                "sys.stdout", output,
-            ):
+            with patch.dict(os.environ, MUSUBI_MEDIA_ENV, clear=True), patch.object(
+                sys, "argv", ["musubi_dataset_assert.py", str(config)],
+            ), patch("sys.stdout", output):
                 namespace["main"]()
 
         self.assertIn('"images": 1', output.getvalue())
@@ -770,6 +822,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.media_utils": media_utils,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(root),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "jsonl-realization",
@@ -848,6 +901,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "musubi_tuner.dataset.media_utils": media_utils,
             }
             env = {
+                **MUSUBI_MEDIA_ENV,
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "fun-control",

@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.cli import cmd_run_resume
-from kura.backends.ai_toolkit import compile_ai_toolkit, command_ai_toolkit, training_state_contract_ai_toolkit
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, compile_ai_toolkit, command_ai_toolkit, training_state_contract_ai_toolkit
 from kura.backends.sd_scripts import training_state_contract_sd_scripts
 from kura.container_scripts import script_source
 from kura.executors.docker import reconcile_docker
@@ -28,6 +28,7 @@ from kura.executors.runpod import stage_runpod
 from kura.run_commands.runpod_ssh import _download_run_unlocked, _local_reusable_training_state_sources, _pull_remote_training_state_items, _same_remote_training_state_version
 from kura.run_commands.plan import format_run_plan
 from kura.run_envelope import resume_intent, training_state_policy
+from kura.media_types import frozen_suffixes
 from kura.training_artifacts import compile_resume_lock, load_training_state, publish_completed_training_states, publish_training_state, recipe_fingerprint, select_training_state, verify_training_state
 
 
@@ -244,7 +245,11 @@ class TrainingStateArtifactTests(unittest.TestCase):
         }
         command = command_ai_toolkit(run)
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
-        self.assertEqual(command["env"], {"SEED": "1", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
+        self.assertEqual(command["env"], {
+            "SEED": "1",
+            "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
+            "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+        })
 
     def test_ai_toolkit_accumulated_training_does_not_capture_mislabeled_optimizer_updates(self) -> None:
         run = {

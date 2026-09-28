@@ -11,9 +11,7 @@ import yaml
 
 from kura.dataset_inspect import _image_size
 from kura.dataset_jsonl import items_jsonl_rows
-
-
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+from kura.media_types import KNOWN_IMAGE_SUFFIXES
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 CONDITION_KEYS = {
     "source": ("source", "source_path"),
@@ -129,7 +127,7 @@ def _layout_directories(root: Path, layout: dict[str, Any]) -> dict[str, Path]:
     layout_root = _safe_path(root, layout.get("root") or ".")
     if "target" not in result:
         for candidate in (root / "images", root / "image", layout_root, root):
-            if candidate.is_dir() and any(path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES for path in candidate.iterdir()):
+            if candidate.is_dir() and any(path.is_file() and path.suffix.lower() in KNOWN_IMAGE_SUFFIXES for path in candidate.iterdir()):
                 result["target"] = candidate
                 break
     if "caption" not in result and "target" in result:
@@ -159,7 +157,7 @@ def _indexed_images(path: Path | None) -> dict[str, Path]:
         return {}
     result: dict[str, Path] = {}
     for item in sorted(path.iterdir()):
-        if not item.is_file() or item.suffix.lower() not in IMAGE_SUFFIXES:
+        if not item.is_file() or item.suffix.lower() not in KNOWN_IMAGE_SUFFIXES:
             continue
         if item.stem in result:
             raise ValueError(f"ambiguous dataset image stem {item.stem!r} in {path}")

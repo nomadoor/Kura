@@ -7,6 +7,75 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: frozen-ai-toolkit-loader-suffix-capability-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Separate Kura's broad media vocabulary from the pinned trainer's loader
+      capability and freeze AI-Toolkit's exact video suffix set into the
+      resolved command consumed by embedded-audio preflight. Existing evidence
+      uses suffixes already accepted by the pinned loader, so selected inputs,
+      trainer behavior, artifacts, and publication are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fbcac30c03f5d6731874dd1bfecfe31134ea43dddd53a4d5f871ac63358b53c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 889ae4cf3219db78e69cd48e08625299f8edc22026f89a9a7c55007f2e9ad907
+  - id: frozen-musubi-loader-suffix-capability-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Freeze the pinned Musubi image, video, and audio loader suffix sets into
+      the resolved command and make container preflight consume only those
+      values. The video set now mirrors every unconditional extension in the
+      pinned loader. Existing evidence uses previously accepted image, MP4, or
+      WebM inputs, so its native configuration and runtime behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 76947fec6a0cbc0b9fdaeb97ffbfb5239805f2bd3359a9d36c8aada834cd322e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 73835bbdacd307886443379fafdb13c5819c7846ee8521cae1f12dc7e0fefe41
+  - id: core-media-vocabulary-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Separate Kura's broad media vocabulary from SD-scripts' pinned loader
+      capability and record the pinned-source origin beside that backend set.
+      Existing evidence uses extensions already accepted by the pinned loader,
+      so selected inputs, generated views, native configuration, and artifacts
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 470b99fd2364210f7aa643fabfcceb4e402c8cf2d639d14a623d7e79fde7d2f8
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f483e359a4a21d293bd0f561f3e1ee0e9278cd4ad9b3883dcd665ed2c79ac2cf
   - id: ai-toolkit-audio-preflight-sample-context-evidence-2026-09-28
     backend: ai-toolkit
     reason: >-

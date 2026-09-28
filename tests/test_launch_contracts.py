@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends import command_musubi_tuner
-from kura.backends.musubi_datasets import MUSUBI_PROJECTION_PROFILES
-from kura.backends.ai_toolkit import command_ai_toolkit
+from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_PROJECTION_PROFILES, MUSUBI_VIDEO_SUFFIXES
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, command_ai_toolkit
 from kura.executors.docker import docker_command
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
 from kura.run_commands.common import _load_frozen_command
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+from kura.media_types import frozen_suffixes
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,10 +26,14 @@ SECRET_OPTIONAL = {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "KURA_REMOTE_NOTIFY_NTFY
 DEFAULTED_OPTIONAL = {"COMFYUI_ROOT", "SD_SCRIPTS_ROOT"}
 RETRY_OPTIONAL = {"KURA_HF_DOWNLOAD_ATTEMPTS", "KURA_HF_DOWNLOAD_POLL_SEC", "KURA_HF_DOWNLOAD_NO_PROGRESS_SEC"}
 BACKEND_SCOPED = {
+    "KURA_AI_TOOLKIT_VIDEO_SUFFIXES",
+    "KURA_MUSUBI_AUDIO_SUFFIXES",
     "KURA_MUSUBI_ARCHITECTURE",
+    "KURA_MUSUBI_IMAGE_SUFFIXES",
     "KURA_MUSUBI_TARGET_FPS",
     "KURA_MUSUBI_FPS_RESAMPLE_MODE",
     "KURA_MUSUBI_PROFILES",
+    "KURA_MUSUBI_VIDEO_SUFFIXES",
 }
 
 
@@ -173,6 +178,21 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         self.assertEqual(spec["output_contract"], {
             "required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}],
         })
+        self.assertEqual(spec["env"]["KURA_MUSUBI_IMAGE_SUFFIXES"], frozen_suffixes(MUSUBI_IMAGE_SUFFIXES))
+        self.assertEqual(spec["env"]["KURA_MUSUBI_VIDEO_SUFFIXES"], frozen_suffixes(MUSUBI_VIDEO_SUFFIXES))
+        self.assertEqual(spec["env"]["KURA_MUSUBI_AUDIO_SUFFIXES"], frozen_suffixes(MUSUBI_AUDIO_SUFFIXES))
+
+    def test_ai_toolkit_builtin_command_freezes_video_suffixes(self) -> None:
+        spec = command_ai_toolkit({
+            "id": "contract-run",
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl"}},
+        })
+        self.assertEqual(
+            spec["env"]["KURA_AI_TOOLKIT_VIDEO_SUFFIXES"],
+            frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+        )
 
     def test_musubi_h3_guidance_cache_is_a_writable_run_cache(self) -> None:
         spec = command_musubi_tuner({
