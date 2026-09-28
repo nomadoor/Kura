@@ -55,9 +55,9 @@ checked rather than assumed covered by the removed workspace bind.
    `/workspace/artifacts/training-state/<id>/` from a read-only mount of only
    the selected artifact: AI-Toolkit, sd-scripts, and Musubi passed.
 2. MiniMax-H3 guidance precaching writes the unconditional cache under
-   `runs/<id>/cache/musubi/` while `resolved/` stays read-only: the compiled
-   command targets that path; the RunPod container smoke awaits owner cost
-   approval.
+   `runs/<id>/cache/musubi/`, and training reads it from there; `resolved/` is
+   not a write target. Proven on an A40 RunPod smoke; the read-only
+   `resolved/` mount itself is proven by the local Docker smokes.
 3. Each backend with a workspace local-path model mounts the exact model input
    read-only with no workspace bind: AI-Toolkit, sd-scripts, and Musubi
    passed. A missing or uncovered local path stops before Docker starts.

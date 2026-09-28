@@ -173,6 +173,36 @@ musubi_manifest_v2:
     logical_steps: 1 to 2
     postflight: matched
     publication: completed
+musubi_minimax_h3_guidance_cache_runpod:
+  adapter_source: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+  image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+  gpu: NVIDIA A40 (SECURE, 0.49 USD/h)
+  mode: one-frame text-to-image, guidance loss (scale 4.0, sigma_min 0.15)
+  dataset: flux2-klein-tiny (1 image) through the image JSONL handoff and selected-file transfer
+  defects_found:
+    - run_id: 20260929-0211_h3-guidance-cache-runpod-approved_2afd
+      observation: >-
+        The RunPod SSH job did not export the frozen command env, so the Musubi
+        dataset preflight stopped before model acquisition on a missing
+        KURA_MUSUBI_IMAGE_SUFFIXES. The download then refused to complete a
+        failed run without training state and held the Pod for about 35
+        minutes (about 0.33 USD).
+      fix_commits: [5a32712, e19a05e]
+  run_id: 20260929-0302_h3-guidance-cache-runpod-retry_c1ca
+  pod_input_verification: {status: verified, entries: 13, view_links: 1}
+  model_download: 42.5 GB on the Pod (explicitly allowed)
+  uncond_cache: /workspace/runs/20260929-0302_h3-guidance-cache-runpod-retry_c1ca/cache/musubi/minimax-h3-uncond.safetensors
+  uncond_cache_note: >-
+    Written by the cache step and read by training; resolved/ is not a write
+    target. The read-only resolved/ mount itself is proven by the local Docker
+    smokes; a disposable Pod has no bind mounts.
+  optimizer_steps: 1
+  training_state: state-step-00000001-e6decb9ee902 (best_effort_resume)
+  local_postflight: {status: matched, event_recorded: true}
+  publication: completed
+  pod_lifetime: about 20 minutes (07:36 to 07:56 JST)
+  pod_stopped: true
+  pods_after: 0
 scope: >-
   Proves the final manifest-v2 handoff end to end on real trainers: the
   AI-Toolkit trainer reads Kura's run-owned view for root-level and images/

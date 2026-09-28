@@ -12,6 +12,25 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      architecture: minimax_h3
+      mode: one-frame-text-to-image-guidance-loss
+      executor: runpod
+      transport: selected-file transfer with image JSONL
+      uncond_cache: runs/<id>/cache/musubi/minimax-h3-uncond.safetensors
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
   - id: sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
     backend: sd-scripts
     adapter_source:
