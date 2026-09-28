@@ -76,22 +76,6 @@ def write_record(payload):
     os.replace(temporary, path)
 
 
-def sample_id_for_input(input_id, semantic):
-    if not isinstance(input_id, str):
-        return None
-    parts = input_id.split(":")
-    if len(parts) < 2 or not parts[0].startswith("d") or not parts[1].startswith("s"):
-        return None
-    try:
-        dataset_index = int(parts[0][1:])
-        sample_index = int(parts[1][1:])
-        sample = semantic["datasets"][dataset_index]["samples"][sample_index]
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None
-    sample_id = sample.get("id") if isinstance(sample, dict) else None
-    return sample_id if isinstance(sample_id, str) else None
-
-
 def input_context_by_view_path():
     workspace = os.environ.get("KURA_WORKSPACE")
     run_id = os.environ.get("KURA_RUN_ID")
@@ -102,7 +86,6 @@ def input_context_by_view_path():
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    semantic = lock.get("semantic") if isinstance(lock, dict) else None
     contexts = {}
     for view in lock.get("views", []) if isinstance(lock, dict) else []:
         for link in view.get("links", []) if isinstance(view, dict) else []:
@@ -112,7 +95,8 @@ def input_context_by_view_path():
                 continue
             contexts[str(Path(workspace) / path)] = {
                 "source": target,
-                "sample_id": sample_id_for_input(link.get("input_id"), semantic),
+                "dataset_id": link.get("dataset"),
+                "sample_id": link.get("sample"),
             }
     return contexts
 

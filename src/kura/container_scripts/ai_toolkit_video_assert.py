@@ -38,19 +38,12 @@ def _input_contexts() -> dict[str, dict]:
         for link in view.get("links", []) if isinstance(view, dict) else []:
             path = link.get("path")
             if isinstance(path, str):
-                contexts[f"/workspace/{path}"] = {
+                contexts[str(workspace / path)] = {
                     "input_id": link.get("input_id"),
+                    "dataset_id": link.get("dataset"),
+                    "sample_id": link.get("sample"),
                     "source": link.get("target"),
                 }
-    semantic = payload.get("semantic") if isinstance(payload, dict) else None
-    samples = {}
-    for dataset in semantic.get("datasets", []) if isinstance(semantic, dict) else []:
-        for sample in dataset.get("samples", []) if isinstance(dataset, dict) else []:
-            for item in sample.get("files", []) if isinstance(sample, dict) else []:
-                if isinstance(item, dict) and isinstance(item.get("input_id"), str):
-                    samples[item["input_id"]] = sample.get("id")
-    for context in contexts.values():
-        context["sample_id"] = samples.get(context.get("input_id"))
     return contexts
 
 

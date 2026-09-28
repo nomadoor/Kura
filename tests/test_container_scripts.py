@@ -377,6 +377,19 @@ class ContainerScriptTests(unittest.TestCase):
                 "          num_frames: 49\n          fps: 24\n          do_audio: true\n",
                 encoding="utf-8",
             )
+            resolved = workspace / "runs" / "video" / "resolved"
+            (resolved / "dataset-input.lock.json").write_text(json.dumps({
+                "semantic": {"datasets": [{"dataset": "clips", "samples": [
+                    {"id": "clip-sample"},
+                ]}]},
+                "views": [{"links": [{
+                    "path": str((view / "clip.mp4").relative_to(workspace)),
+                    "target": "/workspace/datasets/clips/clip.mp4",
+                    "input_id": "opaque-input",
+                    "dataset": "clips",
+                    "sample": "clip-sample",
+                }]}],
+            }), encoding="utf-8")
             environment = {
                 "KURA_WORKSPACE": str(workspace),
                 "KURA_RUN_ID": "video",
@@ -399,6 +412,8 @@ class ContainerScriptTests(unittest.TestCase):
             )
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["videos"][0]["status"], "unusable")
+        self.assertEqual(record["videos"][0]["sample_id"], "clip-sample")
+        self.assertEqual(record["videos"][0]["source"], "/workspace/datasets/clips/clip.mp4")
 
     def test_musubi_dataset_assert_counts_video_inputs(self) -> None:
         namespace = {"__name__": "__test__"}
@@ -447,8 +462,8 @@ class ContainerScriptTests(unittest.TestCase):
                     {"id": "sample-one"}, {"id": "sample-two"},
                 ]}]},
                 "views": [{"links": [
-                    {"path": str(first.relative_to(workspace)), "target": "/workspace/datasets/clips/one.mp4", "input_id": "d0:s0:f0"},
-                    {"path": str(second.relative_to(workspace)), "target": "/workspace/datasets/clips/two.mp4", "input_id": "d0:s1:f0"},
+                    {"path": str(first.relative_to(workspace)), "target": "/workspace/datasets/clips/one.mp4", "input_id": "opaque-one", "dataset": "clips", "sample": "sample-one"},
+                    {"path": str(second.relative_to(workspace)), "target": "/workspace/datasets/clips/two.mp4", "input_id": "opaque-two", "dataset": "clips", "sample": "sample-two"},
                 ]}],
             }), encoding="utf-8")
             media_utils = ModuleType("musubi_tuner.dataset.media_utils")
@@ -806,12 +821,16 @@ class ContainerScriptTests(unittest.TestCase):
                     {
                         "path": str(target.relative_to(workspace)),
                         "target": "/workspace/datasets/clips/target.mp4",
-                        "input_id": "d0:s0:f0",
+                        "input_id": "opaque-target",
+                        "dataset": "clips",
+                        "sample": "pair",
                     },
                     {
                         "path": str(control.relative_to(workspace)),
                         "target": "/workspace/datasets/clips/control.mp4",
-                        "input_id": "d0:s0:f1",
+                        "input_id": "opaque-control",
+                        "dataset": "clips",
+                        "sample": "pair",
                     },
                 ]}],
             }), encoding="utf-8")

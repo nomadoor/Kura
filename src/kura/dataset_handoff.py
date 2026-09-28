@@ -757,7 +757,13 @@ def _validate_view(
             raise ValueError(f"projection places input {input_id!r} more than once")
         seen_paths.add(path)
         placements[input_id] = path
-        links.append({"path": path, "target": target, "input_id": input_id})
+        links.append({
+            "path": path,
+            "target": target,
+            "input_id": input_id,
+            "dataset": identity["dataset"],
+            "sample": identity["sample"],
+        })
     files: list[dict[str, str]] = []
     for index, generated in enumerate(view.get("files", [])):
         if not isinstance(generated, dict):

@@ -165,6 +165,8 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(view["repeat"], 2)
             self.assertEqual(len(view["links"]), 1)
             self.assertEqual(len(view["files"]), 1)
+            self.assertEqual(lock["views"][0]["links"][0]["dataset"], "tiny")
+            self.assertEqual(lock["views"][0]["links"][0]["sample"], "a")
             self.assertEqual(
                 Path(view["links"][0]["path"]).stem,
                 Path(view["files"][0]["path"]).stem,

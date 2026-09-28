@@ -7,6 +7,74 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: ai-toolkit-audio-preflight-sample-context-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Record dataset and sample identity directly on each verified view link,
+      then resolve audio-preflight diagnostics from those explicit fields
+      instead of decoding the core's internal input-ID format.
+      Existing evidence-scoped runs do not enable the embedded-audio preflight,
+      so their selected inputs, generated views, commands, artifacts, and
+      cleanup behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: db487458367bf608096ae2dcc646b62dc5f6eb3a023d24590fefe33a5ec78f11
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fbcac30c03f5d6731874dd1bfecfe31134ea43dddd53a4d5f871ac63358b53c
+  - id: explicit-view-link-sample-context-musubi-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Record dataset and sample identity directly on each verified view link,
+      then consume those explicit fields in the Musubi video preflight instead
+      of decoding the core's internal input-ID format. Existing evidence sees
+      the same selected inputs and diagnostics, so native configuration,
+      commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: ec77b8ccc4fcbcfa8e4bd85f8e0dacc416e054806e9328d5f45ad8bf9d0e2501
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 76947fec6a0cbc0b9fdaeb97ffbfb5239805f2bd3359a9d36c8aada834cd322e
+  - id: explicit-view-link-sample-context-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Record dataset and sample identity directly on each verified view link.
+      The added lock metadata does not change SD-scripts' selected inputs,
+      generated views, native TOML, commands, artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 476412572349a1f5016211a2bb2559ae91d38a5528801f107aa7e3a2e7e2e16d
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 470b99fd2364210f7aa643fabfcceb4e402c8cf2d639d14a623d7e79fde7d2f8
   - id: manifest-lf-only-jsonl-ai-toolkit-evidence-2026-09-28
     backend: ai-toolkit
     reason: >-
