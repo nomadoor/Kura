@@ -1279,9 +1279,7 @@ def _validate_musubi_architecture_requirements(
 
 def _write_musubi_dataset_config(
     run: dict[str, Any], destination: Path, *, projection: dict[str, Any],
-    workspace: Path | None = None, strict: bool = False,
 ) -> None:
-    del workspace, strict
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
     if not datasets:

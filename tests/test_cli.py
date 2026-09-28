@@ -3968,7 +3968,7 @@ class AiToolkitBackendTests(unittest.TestCase):
                 json.dumps(legacy_lock), encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
-                compile_ai_toolkit(run, destination, strict=False)
+                compile_ai_toolkit(run, destination)
 
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()
@@ -4217,7 +4217,7 @@ class MusubiBackendTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
 
-            command = compile_musubi_tuner(run, destination, workspace=Path(directory), strict=True)
+            command = compile_musubi_tuner(run, destination)
 
             self.assertFalse((destination / "dataset.toml").exists())
             self.assertFalse((destination / "model-bundle.lock.yaml").exists())

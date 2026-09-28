@@ -561,7 +561,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
                 "input_sha256": None,
             }
             atomic_write_json(resolved / "dataset-input.lock.json", input_lock)
-        command_spec = adapter.compile(locked, resolved, _workspace(), True)
+        command_spec = adapter.compile(locked, resolved)
         compile_resume_lock(
             _workspace(),
             locked,

@@ -718,10 +718,8 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
 
 def write_sd_scripts_dataset_config(
     run: dict[str, Any], destination: Path, *, projection: dict[str, Any],
-    workspace: Path | None, strict: bool,
 ) -> dict[str, Any]:
     """Write only the native TOML already frozen and verified by core."""
-    del workspace, strict
     projected = projection["datasets"]
     selected_ids = [str(item.get("id")) for item in _datasets(run)]
     by_id = {

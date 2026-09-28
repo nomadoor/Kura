@@ -7,6 +7,72 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: unused-compile-parameters-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Remove the workspace and strict parameters that the compiler and dataset
+      config writer accepted and immediately discarded. The frozen projection
+      is the only compile input; generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: dc13c116488bf74f5062878f0d79e2521a3021fa74226b54ef986b5c4b5e990f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 854a3c0c3f90f2e27521f45c2a16f5e0bc5d9bd33a644f5ad4a0c1c1f1cc4b8c
+  - id: unused-compile-parameters-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Remove the workspace and strict parameters that the compiler and dataset
+      config writer accepted and immediately discarded. The frozen projection
+      is the only compile input; generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c36e64bb5a2fd59a58332cd04dd85212155dfec44be8c0ade5cfb8f29a0e14a2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 971518ecfcff3197aaa6b8f9f3c003ebed1760ba2e1d17a9d16f3e177c8fed28
+  - id: unused-compile-parameters-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Remove the workspace and strict parameters that the compiler and dataset
+      config writer accepted and immediately discarded. The frozen projection
+      is the only compile input; generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 30ff71d0ab94d978a61afaf93692477b87d4b9a677f9ce0c575860235fb2cef5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 33058fdf52200309e6c5dc05b9f8941979aeaea148f538d979b1acf2b4fd01ef
   - id: core-frozen-projection-reader-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-

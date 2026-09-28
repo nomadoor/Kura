@@ -113,7 +113,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.subTest(backend=name):
                     run = {"backend": {"name": name, "config": {"kura_unknown_sentinel": True}}}
                     with self.assertRaisesRegex(ValueError, "kura_unknown_sentinel"):
-                        adapter.compile(run, Path(directory) / name, Path(directory), False)
+                        adapter.compile(run, Path(directory) / name)
 
     def test_musubi_and_sd_scripts_reject_legacy_minimal_projection_locks(self) -> None:
         runs = {
@@ -155,7 +155,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                         "datasets": [{"id": "tiny", "native": {}, "views": [{}]}],
                     }), encoding="utf-8")
                     with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
-                        BACKENDS[backend].compile(run, resolved, root, False)
+                        BACKENDS[backend].compile(run, resolved)
 
     def test_plausible_general_ml_substitutions_name_the_fix(self) -> None:
         for name in BACKENDS:
@@ -529,7 +529,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.subTest(backend=name, field=next(reversed(config))):
                     run = {"backend": {"name": name, "config": config}}
                     with self.assertRaisesRegex(ValueError, "not applicable"):
-                        BACKENDS[name].compile(run, root / name, root, False)
+                        BACKENDS[name].compile(run, root / name)
 
     def test_sd_scripts_rejects_declared_fields_on_the_wrong_mode(self) -> None:
         cases = (
@@ -649,7 +649,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self._write_ai_toolkit_projection(run, Path(directory))
             with self.assertRaisesRegex(ValueError, "duplicates backend.config.model_arch"):
-                BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+                BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
     def test_ai_toolkit_rejects_sd15_before_compiling_native_config(self) -> None:
         run = {
@@ -660,7 +660,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
             with self.assertRaisesRegex(ValueError, "sd15.*sd1"):
-                BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+                BACKENDS["ai-toolkit"].compile(run, destination)
             self.assertFalse((destination / "ai-toolkit.yaml").exists())
 
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
@@ -693,7 +693,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
             self._write_ai_toolkit_projection(run, destination)
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            BACKENDS["ai-toolkit"].compile(run, destination)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
             self.assertEqual(process["model"]["arch"], "sd1")
 
@@ -707,7 +707,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "recipe": {"steps": 1, "seed": 1},
                 }
                 self._write_ai_toolkit_projection(run, destination)
-                BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+                BACKENDS["ai-toolkit"].compile(run, destination)
                 process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                 self.assertEqual(process["model"]["arch"], arch)
 
@@ -759,7 +759,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "gradient_checkpointing=false"):
-                BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+                BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
     def test_ai_toolkit_flex2_bypass_guidance_is_typed_and_compiled(self) -> None:
         run = {
@@ -773,7 +773,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
             self._write_ai_toolkit_projection(run, destination)
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            BACKENDS["ai-toolkit"].compile(run, destination)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
                 "config"
             ]["process"][0]
@@ -801,7 +801,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
             self._write_ai_toolkit_projection(run, destination)
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            BACKENDS["ai-toolkit"].compile(run, destination)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
                 "config"
             ]["process"][0]
@@ -837,7 +837,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self._write_ai_toolkit_manifest_projection(
                 run, destination, target="sample.png", controls=("control.png",),
             )
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            BACKENDS["ai-toolkit"].compile(run, destination)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
                 "config"
             ]["process"][0]
@@ -894,7 +894,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 }
                 destination = Path(directory) / "ai-toolkit"
                 self._write_ai_toolkit_projection(run, destination)
-                command = BACKENDS["ai-toolkit"].compile(run, destination, Path(directory), False)
+                command = BACKENDS["ai-toolkit"].compile(run, destination)
                 process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                 self.assertEqual(process, {
                     "type": "sd_trainer", "training_folder": f"/workspace/runs/{run_id}/outputs", "device": "cuda:0",
@@ -938,7 +938,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self._write_ai_toolkit_manifest_projection(
                 run, root, target="sample.mp4",
             )
-            BACKENDS["ai-toolkit"].compile(run, root, root, False)
+            BACKENDS["ai-toolkit"].compile(run, root)
             process = yaml.safe_load(
                 (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
             )["config"]["process"][0]
@@ -961,7 +961,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self._write_ai_toolkit_manifest_projection(
                 run, root, target="sample.png", controls=("control.png",),
             )
-            BACKENDS["ai-toolkit"].compile(run, root, root, False)
+            BACKENDS["ai-toolkit"].compile(run, root)
             process = yaml.safe_load(
                 (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
             )["config"]["process"][0]
@@ -994,7 +994,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self._write_ai_toolkit_manifest_projection(
                     run, root, target=target, controls=controls,
                 )
-                BACKENDS["ai-toolkit"].compile(run, root, root, False)
+                BACKENDS["ai-toolkit"].compile(run, root)
                 process = yaml.safe_load(
                     (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
                 )["config"]["process"][0]
@@ -1025,7 +1025,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "recipe": {"steps": 1, "seed": 1},
                 }
                 self._write_ai_toolkit_manifest_projection(run, root, target=target)
-                BACKENDS["ai-toolkit"].compile(run, root, root, False)
+                BACKENDS["ai-toolkit"].compile(run, root)
                 process = yaml.safe_load(
                     (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
                 )["config"]["process"][0]
@@ -1051,7 +1051,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 run = deepcopy(base)
                 run["backend"]["config"]["dataset_config"] = {field: value}
                 with self.assertRaisesRegex(ValueError, expected):
-                    BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+                    BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
     def test_musubi_escape_hatches_cannot_shadow_declared_fields(self) -> None:
         base = {
@@ -1067,7 +1067,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             run = json.loads(json.dumps(base))
             run["backend"]["config"].update({"blocks_to_swap": 1, "extra_args": ["--blocks_to_swap", "2"]})
             with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
-                BACKENDS["musubi-tuner"].compile(run, root / "args", root, False)
+                BACKENDS["musubi-tuner"].compile(run, root / "args")
 
             run = json.loads(json.dumps(base))
             run["backend"]["config"].update({
@@ -1077,7 +1077,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "extra_args": ["--block_swap_h2d_only"],
             })
             with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
-                BACKENDS["musubi-tuner"].compile(run, root / "h2d", root, False)
+                BACKENDS["musubi-tuner"].compile(run, root / "h2d")
 
     def test_declared_ordinary_values_reach_each_adapter_artifact(self) -> None:
         runs = {
@@ -1112,7 +1112,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                         self._write_musubi_projection(run, root / name)
                     elif name == "sd-scripts":
                         self._write_sd_scripts_projection(run, root / name)
-                    spec = BACKENDS[name].compile(run, root / name, root, False)
+                    spec = BACKENDS[name].compile(run, root / name)
                     if name == "ai-toolkit":
                         compiled = yaml.safe_load((root / "ai-toolkit" / "ai-toolkit.yaml").read_text(encoding="utf-8"))
                         self.assertEqual(compiled["config"]["process"][0]["train"]["optimizer"], "adamw8bit")

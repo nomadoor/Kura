@@ -405,9 +405,6 @@ is marked `migration: pending`; merge readiness must run
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Remove unused `workspace` and `strict` parameters from backend compiler and
-  dataset-config writer interfaces where they are accepted and immediately
-  discarded. Preserve a parameter only when its contract has a real consumer.
 - Keep backend-specific planning facts out of `plan.py`. Define an
   adapter-owned planning-facts interface for values such as sd-scripts disk
   cache estimates, Musubi video-frame checks, and Musubi dataset defaults;

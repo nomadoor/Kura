@@ -190,7 +190,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
     return _shared_script_command(commands, step_name="musubi")
 
 
-def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
+def compile_musubi_tuner(run: dict[str, Any], destination: Path) -> dict[str, Any]:
     """Write Musubi Tuner native dataset TOML and a readable command manifest."""
     destination.mkdir(parents=True, exist_ok=True)
     explicit_command = _musubi_backend_override(run).get("command") is not None
@@ -205,7 +205,7 @@ def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: P
         command["env"].update(_musubi_video_preflight_env(run, projection))
         _write_musubi_dataset_config(
             run, destination / "dataset.toml",
-            projection=projection, workspace=workspace, strict=strict,
+            projection=projection,
         )
     if not explicit_command:
         atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))

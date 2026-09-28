@@ -1213,9 +1213,8 @@ def _ai_toolkit_frozen_native_blocks(
     return native_datasets, views, wrapped
 
 
-def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
+def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]:
     """Write AI-Toolkit native YAML for configured training runs."""
-    del strict
     override = _ai_toolkit_backend_override(run)
     recipe = validated_recipe(run, required=override.get("command") is None)
     model = run.get("model", {})

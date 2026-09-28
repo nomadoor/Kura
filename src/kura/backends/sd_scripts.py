@@ -478,7 +478,7 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def compile_sd_scripts(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
+def compile_sd_scripts(run: dict[str, Any], destination: Path) -> dict[str, Any]:
     native = sd_scripts_native(run)
     destination.mkdir(parents=True, exist_ok=True)
     if native.get("command") is not None:
@@ -494,7 +494,7 @@ def compile_sd_scripts(run: dict[str, Any], destination: Path, *, workspace: Pat
     assert projection is not None
     write_sd_scripts_dataset_config(
         run, destination / "dataset.toml",
-        projection=projection, workspace=workspace, strict=strict,
+        projection=projection,
     )
     atomic_write_yaml(destination / "model-bundle.lock.yaml", sd_scripts_model_lock(run))
     state_contract = training_state_contract_sd_scripts(run)

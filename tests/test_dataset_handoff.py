@@ -274,7 +274,7 @@ class DatasetHandoffTests(unittest.TestCase):
             materialize_dataset_view(root, lock)
             destination = resolved / "sd-scripts" / "dataset.toml"
             write_sd_scripts_dataset_config(
-                run, destination, workspace=root, strict=True,
+                run, destination,
             )
 
             projected = json.loads(
@@ -539,7 +539,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["policy"]["subsets"][0]["group"], "paired")
             destination = resolved / "sd-scripts" / "dataset.toml"
             self.assertEqual(
-                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
+                write_sd_scripts_dataset_config(run, destination),
                 projected["native"],
             )
 
@@ -584,7 +584,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(len(lock["views"]), 2)
             destination = resolved / "sd-scripts" / "dataset.toml"
             self.assertEqual(
-                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
+                write_sd_scripts_dataset_config(run, destination),
                 projected["native"],
             )
 
@@ -627,7 +627,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(lock["semantic"]["projection"][0]["policy"], projected["policy"])
             destination = resolved / "sd-scripts" / "dataset.toml"
             self.assertEqual(
-                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True),
+                write_sd_scripts_dataset_config(run, destination),
                 projected["native"],
             )
 
@@ -890,7 +890,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 backend="ai-toolkit",
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
             projected = json.loads(
                 (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
             )["datasets"][0]
@@ -940,7 +940,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 run, workspace, resolved, backend="ai-toolkit",
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
             projection = json.loads(
                 (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
             )["datasets"][0]
@@ -1011,7 +1011,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 run, workspace, resolved, backend="ai-toolkit",
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
             projection = json.loads(
                 (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
             )["datasets"][0]
@@ -1112,7 +1112,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 run, workspace, resolved, backend="ai-toolkit",
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
             projected = json.loads(
                 (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
             )["datasets"][0]
@@ -1166,7 +1166,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 run, workspace, resolved, backend="ai-toolkit",
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
             process = yaml.safe_load(
                 (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
             )["config"]["process"][0]
@@ -1327,7 +1327,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
             compile_ai_toolkit(
-                run, resolved / "ai-toolkit", workspace=workspace, strict=True,
+                run, resolved / "ai-toolkit",
             )
             process = yaml.safe_load(
                 (resolved / "ai-toolkit.yaml").read_text(encoding="utf-8")
@@ -1466,7 +1466,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 run, workspace, resolved, backend="ai-toolkit",
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
             projection = json.loads(
                 (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
             )["datasets"][0]
@@ -3179,8 +3179,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
@@ -3552,7 +3550,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
                 materialize_dataset_view(workspace, lock)
                 _write_musubi_dataset_config(
-                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                    run, resolved / "musubi" / "dataset.toml",
                 )
 
                 projection = lock["semantic"]["projection"][0]
@@ -3614,7 +3612,7 @@ class DatasetHandoffTests(unittest.TestCase):
             )
             materialize_dataset_view(workspace, lock)
             _write_musubi_dataset_config(
-                run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                run, resolved / "musubi" / "dataset.toml",
             )
 
             projection = lock["semantic"]["projection"][0]
@@ -3671,7 +3669,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
                 materialize_dataset_view(workspace, lock)
                 _write_musubi_dataset_config(
-                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                    run, resolved / "musubi" / "dataset.toml",
                 )
 
                 projection = lock["semantic"]["projection"][0]
@@ -3715,7 +3713,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
                 materialize_dataset_view(workspace, lock)
                 _write_musubi_dataset_config(
-                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                    run, resolved / "musubi" / "dataset.toml",
                 )
                 projection = lock["semantic"]["projection"][0]
                 self.assertEqual(projection["policy"]["profile"], expected_profile)
@@ -3887,8 +3885,6 @@ class DatasetHandoffTests(unittest.TestCase):
                 _write_musubi_dataset_config(
                     run,
                     resolved / "musubi" / "dataset.toml",
-                    workspace=workspace,
-                    strict=True,
                 )
 
     def test_musubi_caption_strip_is_visible_and_manifest_text_remains_identity(self) -> None:
@@ -3941,8 +3937,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
@@ -4137,8 +4131,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
@@ -4259,8 +4251,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
@@ -4561,8 +4551,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
@@ -4748,7 +4736,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
                 materialize_dataset_view(workspace, lock)
                 _write_musubi_dataset_config(
-                    run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                    run, resolved / "musubi" / "dataset.toml",
                 )
 
                 projected = json.loads(
@@ -4894,8 +4882,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             report = json.loads((resolved / "dataset-projection.lock.json").read_text(encoding="utf-8"))
@@ -4973,8 +4959,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             projected = json.loads(
@@ -5013,8 +4997,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             projected = json.loads(
@@ -5127,8 +5109,6 @@ class DatasetHandoffTests(unittest.TestCase):
                 _write_musubi_dataset_config(
                     run,
                     resolved / "musubi" / "dataset.toml",
-                    workspace=workspace,
-                    strict=True,
                 )
 
                 projected = json.loads(
@@ -5247,8 +5227,6 @@ class DatasetHandoffTests(unittest.TestCase):
             _write_musubi_dataset_config(
                 run,
                 resolved / "musubi" / "dataset.toml",
-                workspace=workspace,
-                strict=True,
             )
 
             projected = json.loads(
@@ -5436,8 +5414,6 @@ class DatasetHandoffTests(unittest.TestCase):
                 _write_musubi_dataset_config(
                     run,
                     resolved / "musubi" / "dataset.toml",
-                    workspace=workspace,
-                    strict=True,
                 )
                 projected = json.loads(
                     (resolved / "dataset-projection.lock.json").read_text(encoding="utf-8")
@@ -5556,7 +5532,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 project=lambda selection: project_musubi_dataset(run, selection),
             )
             _write_musubi_dataset_config(
-                run, resolved / "musubi" / "dataset.toml", workspace=workspace, strict=True,
+                run, resolved / "musubi" / "dataset.toml",
             )
 
             projected = json.loads(
@@ -6134,7 +6110,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 project=lambda selection: project_ai_toolkit_dataset(run, selection),
             )
 
-            compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+            compile_ai_toolkit(run, resolved / "ai-toolkit")
 
             native = yaml.safe_load((resolved / "ai-toolkit.yaml").read_text(encoding="utf-8"))
             self.assertEqual(
@@ -6165,7 +6141,7 @@ class DatasetHandoffTests(unittest.TestCase):
             projection_path.write_text(json.dumps(projection), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
-                compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+                compile_ai_toolkit(run, resolved / "ai-toolkit")
 
     def test_frozen_projection_reader_requires_the_bound_input_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

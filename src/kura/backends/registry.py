@@ -19,7 +19,7 @@ from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_
 from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
 
 
-Compile = Callable[[dict[str, Any], Path, Path | None, bool], dict[str, Any]]
+Compile = Callable[[dict[str, Any], Path], dict[str, Any]]
 ProjectDataset = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
@@ -104,19 +104,19 @@ class BackendAdapter:
     default_ports: tuple[str, ...] = ("22/tcp",)
 
 
-def _compile_ai(run: dict[str, Any], resolved: Path, workspace: Path | None, strict: bool) -> dict[str, Any]:
+def _compile_ai(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
     validate_backend_config(run)
-    return compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=strict)
+    return compile_ai_toolkit(run, resolved / "ai-toolkit")
 
 
-def _compile_musubi(run: dict[str, Any], resolved: Path, workspace: Path | None, strict: bool) -> dict[str, Any]:
+def _compile_musubi(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
     validate_backend_config(run)
-    return compile_musubi_tuner(run, resolved / "musubi", workspace=workspace, strict=strict)
+    return compile_musubi_tuner(run, resolved / "musubi")
 
 
-def _compile_sd_scripts(run: dict[str, Any], resolved: Path, workspace: Path | None, strict: bool) -> dict[str, Any]:
+def _compile_sd_scripts(run: dict[str, Any], resolved: Path) -> dict[str, Any]:
     validate_backend_config(run)
-    return compile_sd_scripts(run, resolved / "sd-scripts", workspace=workspace, strict=strict)
+    return compile_sd_scripts(run, resolved / "sd-scripts")
 
 
 AI_TOOLKIT_SURFACE = BackendSurface(
