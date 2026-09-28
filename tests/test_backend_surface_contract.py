@@ -29,33 +29,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self,
         run: dict[str, object],
         resolved: Path,
-        *,
-        native: dict[str, object] | None = None,
     ) -> None:
-        dataset_id = str(run["datasets"][0]["id"])
-        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
-        frozen = native or {
-            "folder_path": f"/workspace/{view}",
-            "caption_ext": ".txt",
-            "cache_latents_to_disk": True,
-        }
-        lock = {
-            "backend": "ai-toolkit",
-            "datasets": [{
-                "id": dataset_id,
-                "native": frozen,
-                "views": [{
-                    "consumers": [{
-                        "kind": "recursive-directory",
-                        "native_pointer": "/folder_path",
-                        "path": view,
-                    }],
-                }],
-            }],
-        }
-        resolved.mkdir(parents=True, exist_ok=True)
-        (resolved / "dataset-projection.lock.json").write_text(
-            json.dumps(lock), encoding="utf-8",
+        self._write_ai_toolkit_manifest_projection(
+            run, resolved, target="sample.png",
         )
 
     def _write_ai_toolkit_manifest_projection(
@@ -66,24 +42,25 @@ class BackendSurfaceContractTests(unittest.TestCase):
         target: str,
         controls: tuple[str, ...] = (),
     ) -> dict[str, object]:
+        dataset_id = str(run["datasets"][0]["id"])
         files = [{
-            "input_id": "tiny:sample:target:0",
+            "input_id": f"{dataset_id}:sample:target:0",
             "role": "target",
             "path": target,
             "sha256": "1" * 64,
         }]
         files.extend({
-            "input_id": f"tiny:sample:control:{index}",
+            "input_id": f"{dataset_id}:sample:control:{index}",
             "role": "control",
             "path": path,
             "sha256": str(index + 2) * 64,
         } for index, path in enumerate(controls))
         selection = {"datasets": [{
-            "id": "tiny",
+            "id": dataset_id,
             "samples": [{
                 "id": "sample",
                 "files": files,
-                "caption": {"input_id": "tiny:sample:caption", "text": "caption"},
+                "caption": {"input_id": f"{dataset_id}:sample:caption", "text": "caption"},
             }],
         }]}
         projection = BACKENDS["ai-toolkit"].project_dataset(run, selection)
@@ -732,7 +709,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertRegex(error.getvalue(), "sd15.*sd1")
             self.assertFalse((run_dir / "resolved" / "backend-command.lock.json").exists())
 
-    def test_ai_toolkit_native_model_arch_remains_an_unvalidated_escape_hatch(self) -> None:
+    def test_ai_toolkit_native_model_arch_cannot_claim_first_class_manifest_projection(self) -> None:
         run = {
             "id": "custom-arch", "backend": {"name": "ai-toolkit", "config": {
                 "native_config": {"model": {"arch": "custom_extension_arch"}},
@@ -742,10 +719,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
-            self._write_ai_toolkit_projection(run, destination)
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
-            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
-            self.assertEqual(process["model"]["arch"], "custom_extension_arch")
+            with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile"):
+                self._write_ai_toolkit_projection(run, destination)
 
     def test_ai_toolkit_minimax_h3_rejects_gradient_checkpointing_for_pinned_runtime(self) -> None:
         run = {
@@ -833,7 +808,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
-            self._write_ai_toolkit_projection(run, destination)
+            self._write_ai_toolkit_manifest_projection(
+                run, destination, target="sample.png", controls=("control.png",),
+            )
             BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
                 "config"
@@ -1079,7 +1056,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
     def test_declared_ordinary_values_reach_each_adapter_artifact(self) -> None:
         runs = {
             "ai-toolkit": {
-                "id": "surface-ai", "backend": {"name": "ai-toolkit", "config": {"optimizer_type": "adamw8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2}},
+                "id": "surface-ai", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "optimizer_type": "adamw8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2}},
                 "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
             "musubi-tuner": {

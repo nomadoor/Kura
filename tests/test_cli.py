@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from copy import deepcopy
 import hashlib
 import io
 import importlib.util
@@ -25,7 +26,7 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
-from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolkit_dataset
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
@@ -3870,7 +3871,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         return {
             "id": "ai-toolkit-example",
             "type": "train",
-            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False}},
+            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"model_arch": "flux2_klein_4b", "network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False}},
             "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
             "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
             "recipe": {"steps": 1, "seed": 42},
@@ -3878,29 +3879,28 @@ class AiToolkitBackendTests(unittest.TestCase):
 
     def _write_frozen_projection(self, run: dict[str, object], destination: Path) -> str:
         dataset_id = str(run["datasets"][0]["id"])
-        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
-        native = {
-            "folder_path": f"/workspace/{view}",
-            "caption_ext": ".txt",
-            "cache_latents_to_disk": True,
-        }
-        lock = {
-            "backend": "ai-toolkit",
-            "datasets": [{
-                "id": dataset_id,
-                "native": native,
-                "views": [{"consumers": [{
-                    "kind": "recursive-directory",
-                    "native_pointer": "/folder_path",
-                    "path": view,
-                }]}],
+        selection = {"datasets": [{
+            "id": dataset_id,
+            "samples": [{
+                "id": "sample",
+                "files": [{
+                    "input_id": f"{dataset_id}:sample:target:0",
+                    "role": "target",
+                    "path": "sample.png",
+                    "sha256": "1" * 64,
+                }],
+                "caption": {
+                    "input_id": f"{dataset_id}:sample:caption",
+                    "text": "caption",
+                },
             }],
-        }
+        }]}
+        lock = project_ai_toolkit_dataset(run, selection)
         destination.parent.mkdir(parents=True, exist_ok=True)
         (destination.parent / "dataset-projection.lock.json").write_text(
             json.dumps(lock), encoding="utf-8",
         )
-        return native["folder_path"]
+        return lock["datasets"][0]["native"]["folder_path"]
 
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3943,6 +3943,34 @@ class AiToolkitBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires a frozen manifest projection"):
                 compile_ai_toolkit(self._run(), Path(directory) / "ai-toolkit")
 
+    def test_compile_rejects_legacy_minimal_projection_lock(self) -> None:
+        run = self._run()
+        dataset_id = str(run["datasets"][0]["id"])
+        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        legacy_lock = {
+            "backend": "ai-toolkit",
+            "datasets": [{
+                "id": dataset_id,
+                "native": {
+                    "folder_path": f"/workspace/{view}",
+                    "caption_ext": ".txt",
+                    "cache_latents_to_disk": True,
+                },
+                "views": [{"consumers": [{
+                    "kind": "recursive-directory",
+                    "native_pointer": "/folder_path",
+                    "path": view,
+                }]}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            (destination.parent / "dataset-projection.lock.json").write_text(
+                json.dumps(legacy_lock), encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "manifest projection schema"):
+                compile_ai_toolkit(run, destination, strict=False)
+
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()
         run["recipe"]["steps"] = 100
@@ -3967,20 +3995,22 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertIn("state-1", command["argv"][2] + " ".join(command["argv"][3:]))
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
-        run = self._run()
+        projection_run = self._run()
+        run = deepcopy(projection_run)
         run["backend"] = {"name": "ai-toolkit", "config": {"native_config": ["not", "a", "mapping"]}}
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
-            self._write_frozen_projection(run, destination)
+            self._write_frozen_projection(projection_run, destination)
             with self.assertRaisesRegex(ValueError, "backend.config.native_config"):
                 compile_ai_toolkit(run, destination)
 
     def test_compile_rejects_native_steps_that_duplicate_recipe(self) -> None:
-        run = self._run()
+        projection_run = self._run()
+        run = deepcopy(projection_run)
         run["backend"]["config"]["native_config"] = {"train": {"steps": 2}}
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
-            self._write_frozen_projection(run, destination)
+            self._write_frozen_projection(projection_run, destination)
             with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
                 compile_ai_toolkit(run, destination)
 

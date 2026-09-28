@@ -19,7 +19,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.cli import cmd_run_resume
-from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, compile_ai_toolkit, command_ai_toolkit, training_state_contract_ai_toolkit
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, compile_ai_toolkit, command_ai_toolkit, project_ai_toolkit_dataset, training_state_contract_ai_toolkit
 from kura.backends.sd_scripts import training_state_contract_sd_scripts
 from kura.container_scripts import script_source
 from kura.executors.docker import reconcile_docker
@@ -91,23 +91,23 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
 class TrainingStateArtifactTests(unittest.TestCase):
     def _write_ai_toolkit_projection(self, run: dict[str, object], destination: Path) -> None:
         dataset_id = str(run["datasets"][0]["id"])
-        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
-        lock = {
-            "backend": "ai-toolkit",
-            "datasets": [{
-                "id": dataset_id,
-                "native": {
-                    "folder_path": f"/workspace/{view}",
-                    "caption_ext": ".txt",
-                    "cache_latents_to_disk": True,
+        selection = {"datasets": [{
+            "id": dataset_id,
+            "samples": [{
+                "id": "sample",
+                "files": [{
+                    "input_id": f"{dataset_id}:sample:target:0",
+                    "role": "target",
+                    "path": "sample.png",
+                    "sha256": "1" * 64,
+                }],
+                "caption": {
+                    "input_id": f"{dataset_id}:sample:caption",
+                    "text": "caption",
                 },
-                "views": [{"consumers": [{
-                    "kind": "recursive-directory",
-                    "native_pointer": "/folder_path",
-                    "path": view,
-                }]}],
             }],
-        }
+        }]}
+        lock = project_ai_toolkit_dataset(run, selection)
         destination.parent.mkdir(parents=True, exist_ok=True)
         (destination.parent / "dataset-projection.lock.json").write_text(
             json.dumps(lock), encoding="utf-8",
@@ -268,6 +268,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             "backend": {
                 "name": "ai-toolkit",
                 "config": {
+                    "model_arch": "sdxl",
                     "gradient_accumulation_steps": 2,
                     "native_config": {"ema_config": {"use_ema": True}},
                 },
@@ -288,7 +289,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             "id": "source",
             "backend": {
                 "name": "ai-toolkit",
-                "config": {"native_config": {"ema_config": {"use_ema": True}}},
+                "config": {"model_arch": "sdxl", "native_config": {"ema_config": {"use_ema": True}}},
             },
             "model": {"base": "example/model"},
             "datasets": [{"id": "tiny"}],
