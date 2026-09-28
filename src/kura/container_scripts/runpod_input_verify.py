@@ -314,7 +314,7 @@ def postflight():
             "source_changes": source_changes,
             "view_changes": link_changes,
         })
-    except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
+    except (TransferError, OSError, KeyError, TypeError, AttributeError, ValueError) as error:
         record.update({
             "status": "uncheckable",
             "source_stat_verification": "uncheckable",
@@ -381,7 +381,7 @@ def main():
             })
             # Commit point: once this record exists the inputs are published.
             write_record(record_path, record)
-        except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
+        except (TransferError, OSError, KeyError, TypeError, AttributeError, ValueError) as error:
             # Remove only the view roots this attempt created, then unpublish,
             # so the workspace holds none of this attempt and it can retry.
             try:
@@ -391,7 +391,7 @@ def main():
             except OSError as rollback_error:
                 raise TransferError(f"{error}; rollback also failed: {rollback_error}") from error
             raise
-    except (TransferError, OSError, KeyError, TypeError, ValueError) as error:
+    except (TransferError, OSError, KeyError, TypeError, AttributeError, ValueError) as error:
         record.update({
             "status": "failed",
             "error": f"{type(error).__name__}: {error}",

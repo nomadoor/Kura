@@ -533,7 +533,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch(
-                    "kura.run_commands.runpod_ssh.finalize_runpod_dataset_handoff",
+                    "kura.executors.runpod.finalize_runpod_dataset_handoff",
                     side_effect=OSError("disk full while promoting records"),
                 ):
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
@@ -542,8 +542,15 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertEqual(code, 0)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "completed")
-            self.assertEqual(status["dataset_input_postflight"]["status"], "uncheckable")
-            self.assertIn("reproducibility is not confirmed", status["dataset_input_postflight"]["warning"])
+            projected = status["dataset_input_postflight"]
+            self.assertEqual(projected["status"], "uncheckable")
+            self.assertIn("reproducibility is not confirmed", projected["warning"])
+            # The fact lives in an append-only record that status only projects.
+            record = json.loads((run_dir / projected["record"]).read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "uncheckable")
+            self.assertIn("disk full", record["error"])
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertIn(projected["record"], [item.get("record") for item in events if item.get("event") == "dataset_input_postflight"])
 
     def test_download_does_not_complete_when_adapter_is_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -498,7 +498,11 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             stage = json.loads((run_dir / json.loads((run_dir / "status.json").read_text())["last_stage"]).read_text())
             (run_dir / stage["archive"]).unlink()
 
+        def list_realization(run_dir: Path) -> None:
+            (run_dir / "realizations" / "real-1.json").write_text("[]", encoding="utf-8")
+
         cases = {
+            "realization is a JSON list": list_realization,
             "missing archive": remove_archive,
             "missing pin": lambda run_dir: (run_dir / "realizations" / "real-1.transfer-manifest.json").unlink(),
             "missing resolved manifest": lambda run_dir: (run_dir / "resolved" / "manifest.lock.yaml").unlink(),
@@ -606,7 +610,13 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             manifest_path = remote_dir / Path(record["manifest"]).name
             manifest_path.write_text(manifest_path.read_text(encoding="utf-8") + " ", encoding="utf-8")
 
+        def list_manifest(remote_dir: Path, record: dict) -> None:
+            manifest_path = remote_dir / Path(record["manifest"]).name
+            manifest_path.write_text("[]", encoding="utf-8")
+            self.manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
         cases = {
+            "manifest is a JSON list": list_manifest,
             "swapped manifest": swapped_manifest,
             "corrupt byte": corrupt_byte,
             "extra manifest entry": extra_entry,
@@ -818,6 +828,59 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             self.assertEqual(record["remote_source_stat_verification"], "changed")
             self.assertEqual(record["record_conflicts"], ["real-1.runpod-input.json"])
             self.assertEqual((run_dir / "realizations" / "real-1.runpod-input.json").read_text(encoding="utf-8"), "local")
+
+
+    def test_malformed_records_become_an_uncheckable_record_never_an_exception(self) -> None:
+        from kura.executors.runpod import project_runpod_dataset_handoff
+
+        malformed = {
+            "empty object": "{}",
+            "json list": "[]",
+            "missing required fields": json.dumps({"schema_version": 1, "status": "matched"}),
+            "not json": "{",
+        }
+        for name, content in malformed.items():
+            with self.subTest(existing_local_record=name), tempfile.TemporaryDirectory() as directory:
+                run_dir, downloaded = self._downloaded(Path(directory), "matched")
+                (run_dir / "realizations").mkdir(exist_ok=True)
+                (run_dir / "realizations" / "real-1.dataset-input-postflight.json").write_text(content, encoding="utf-8")
+
+                projected = project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+                self.assertEqual(projected["status"], "uncheckable")
+                record = json.loads((run_dir / projected["record"]).read_text(encoding="utf-8"))
+                self.assertEqual(record["status"], "uncheckable")
+                self.assertIn(projected["record"], [
+                    item.get("record") for item in run_events_of(run_dir)
+                ])
+
+        for name, content in malformed.items():
+            with self.subTest(remote_record=name), tempfile.TemporaryDirectory() as directory:
+                run_dir, downloaded = self._downloaded(Path(directory), "matched")
+                (downloaded / "realizations" / "real-1.runpod-input-postflight.json").write_text(content, encoding="utf-8")
+
+                projected = project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+                self.assertEqual(projected["status"], "uncheckable")
+                self.assertEqual(projected["record"], "realizations/real-1.dataset-input-postflight.json")
+
+    def test_status_carries_the_fact_only_when_no_record_can_be_written(self) -> None:
+        from kura.executors.runpod import project_runpod_dataset_handoff
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "matched")
+            with patch("kura.executors.runpod._write_json", side_effect=OSError("read-only filesystem")):
+                projected = project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+            self.assertEqual(projected["status"], "uncheckable")
+            self.assertNotIn("record", projected)
+            self.assertIn("could not be written", projected["error"])
+
+
+def run_events_of(run_dir: Path) -> list[dict]:
+    from kura.executors.common import run_events
+
+    return run_events(run_dir)
 
 
 class RunEventReaderTests(unittest.TestCase):

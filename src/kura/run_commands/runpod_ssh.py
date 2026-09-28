@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 
 from kura.container_scripts import script_source
-from kura.executors.runpod import finalize_runpod_dataset_handoff
+from kura.executors.runpod import project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
@@ -36,7 +36,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, dataset_input_drift_warning, run_events
+from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, run_events
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
@@ -615,20 +615,10 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     steps = configured_steps
 
             realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
-            try:
-                input_postflight = (
-                    finalize_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
-                    if isinstance(realization_ref, str) else None
-                )
-            except (OSError, ValueError) as exc:
-                # Input drift is a warning; failing to record it must never
-                # block the download that lets the Pod be stopped.
-                input_postflight = {
-                    "status": "uncheckable",
-                    "view_cleanup": "not-required",
-                    "warning": dataset_input_drift_warning("uncheckable"),
-                    "error": _safe_error(exc),
-                }
+            input_postflight = (
+                project_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
+                if isinstance(realization_ref, str) else None
+            )
 
             def mutate(status: dict[str, Any]) -> None:
                 if input_postflight is not None:
@@ -1831,7 +1821,7 @@ def _prepare_remote_upload(run_dir: Path) -> dict[str, Any]:
         return _prepare_remote_upload_unchecked(run_dir)
     except TransferRefused:
         raise
-    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as error:
         raise TransferRefused(f"remote job preparation failed before upload: {_safe_error(error)}") from error
 
 

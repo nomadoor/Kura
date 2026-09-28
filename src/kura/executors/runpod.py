@@ -623,13 +623,76 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     return record
 
 
+_POSTFLIGHT_STATUSES = frozenset({"matched", "changed", "uncheckable"})
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    """Read a record written outside this process; anything but a JSON object is a ValueError."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"record {path.name} is unreadable: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"record {path.name} is not a JSON object")
+    return value
+
+
+def _remote_postflight(path: Path) -> tuple[str, str, str]:
+    """The Pod's postflight verdicts, or ``uncheckable`` for anything missing or malformed."""
+    try:
+        record = _read_json_object(path)
+    except ValueError:
+        return "uncheckable", "uncheckable", "uncheckable"
+
+    def verdict(key: str, allowed: frozenset[str]) -> str:
+        value = record.get(key)
+        return value if isinstance(value, str) and value in allowed else "uncheckable"
+
+    sources = verdict("source_stat_verification", frozenset({"matched", "changed"}))
+    links = verdict("view_link_verification", frozenset({"matched", "changed"}))
+    derived = (
+        "uncheckable" if "uncheckable" in {sources, links}
+        else "changed" if "changed" in {sources, links}
+        else "matched"
+    )
+    # The overall verdict must agree with its parts; anything else is untrusted.
+    status = derived if verdict("status", frozenset({"matched", "changed"})) == derived else "uncheckable"
+    return status, sources, links
+
+
+def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: dict[str, Any]) -> dict[str, Any]:
+    """Append the event once and return the status projection that refers to ``ref``."""
+    # status.json is projected after the event, so a matching projection proves
+    # it exists; otherwise scan once, which covers a crash between the two.
+    announced = _load_status(run_dir).get("dataset_input_postflight")
+    if not (isinstance(announced, dict) and announced.get("record") == ref) and not _event_exists(
+        run_dir, event="dataset_input_postflight", realization_id=realization_id, record=ref,
+    ):
+        append_run_event(run_dir, {
+            "event": "dataset_input_postflight",
+            "timestamp": record["observed_at"],
+            "realization_id": realization_id,
+            "record": ref,
+            "status": record["status"],
+        })
+    warning = dataset_input_drift_warning(record["status"])
+    return {
+        "status": record["status"],
+        "record": ref,
+        # A Pod is discarded with its disposable view; nothing is left to clean.
+        "view_cleanup": "not-required",
+        **({"warning": warning} if warning else {}),
+    }
+
+
 def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
     """Bring the Pod's input records home and project post-training input drift once.
 
     Remote records are copied into ``realizations/`` without overwriting a
     record that already exists. The local source stat check is combined with
-    the Pod's own postflight; drift is recorded as a warning and never fails
-    the run or its published output.
+    the Pod's own postflight. Records read from outside are validated here;
+    any problem is raised as ``ValueError`` or ``OSError`` for
+    ``project_runpod_dataset_handoff`` to record as uncheckable.
     """
     if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
         return None
@@ -646,7 +709,14 @@ def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realiza
     postflight_ref = f"realizations/{realization_id}.dataset-input-postflight.json"
     postflight_path = run_dir / postflight_ref
     if postflight_path.is_file():
-        postflight = json.loads(postflight_path.read_text(encoding="utf-8"))
+        postflight = _read_json_object(postflight_path)
+        if (
+            postflight.get("schema_version") != 1
+            or postflight.get("realization_id") != realization_id
+            or not isinstance(postflight.get("observed_at"), str)
+            or postflight.get("status") not in _POSTFLIGHT_STATUSES
+        ):
+            raise ValueError("existing dataset input postflight record is malformed")
     else:
         workspace = run_dir.parent.parent
         try:
@@ -656,13 +726,7 @@ def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realiza
         except (OSError, ValueError) as exc:
             source_changes, local_status = [_redact_secret_text(str(exc))], "uncheckable"
         remote_path = local / f"{realization_id}.runpod-input-postflight.json"
-        try:
-            remote_postflight = json.loads(remote_path.read_text(encoding="utf-8"))
-            remote_status = remote_postflight.get("status")
-        except (OSError, json.JSONDecodeError):
-            remote_postflight, remote_status = {}, "uncheckable"
-        if remote_status not in {"matched", "changed"}:
-            remote_status = "uncheckable"
+        remote_status, remote_sources, remote_links = _remote_postflight(remote_path)
         statuses = {local_status, remote_status}
         status = "uncheckable" if "uncheckable" in statuses else "changed" if "changed" in statuses else "matched"
         postflight = {
@@ -673,33 +737,44 @@ def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realiza
             "source_stat_verification": local_status,
             "source_changes": source_changes,
             "remote_record": f"realizations/{remote_path.name}",
-            "remote_source_stat_verification": remote_postflight.get("source_stat_verification", "uncheckable"),
-            "remote_view_link_verification": remote_postflight.get("view_link_verification", "uncheckable"),
+            "remote_source_stat_verification": remote_sources,
+            "remote_view_link_verification": remote_links,
             **({"record_conflicts": conflicts} if conflicts else {}),
         }
         _write_json(postflight_path, postflight)
-    # status.json is projected after the event, so a matching projection proves
-    # it exists; otherwise scan once, which covers a crash between the two.
-    current = _load_status(run_dir)
-    announced = current.get("dataset_input_postflight")
-    if not (isinstance(announced, dict) and announced.get("record") == postflight_ref) and not _event_exists(
-        run_dir, event="dataset_input_postflight", realization_id=realization_id, record=postflight_ref,
-    ):
-        append_run_event(run_dir, {
-            "event": "dataset_input_postflight",
-            "timestamp": postflight["observed_at"],
-            "realization_id": realization_id,
-            "record": postflight_ref,
-            "status": postflight["status"],
-        })
-    warning = dataset_input_drift_warning(postflight["status"])
-    return {
-        "status": postflight["status"],
-        "record": postflight_ref,
-        # A Pod is discarded with its disposable view; nothing is left to clean.
-        "view_cleanup": "not-required",
-        **({"warning": warning} if warning else {}),
+    return _announce_postflight(run_dir, realization_id, postflight_ref, postflight)
+
+
+def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
+    """Project post-training input drift for a download; never raises.
+
+    Drift is a warning, so recording it must never block the download that
+    lets the Pod be stopped. A failure becomes its own append-only
+    ``uncheckable`` record and event; status alone carries it only when even
+    that record cannot be written.
+    """
+    try:
+        return finalize_runpod_dataset_handoff(run_dir, downloaded_run, realization_id)
+    except (OSError, ValueError) as exc:
+        detail = _redact_secret_text(str(exc))
+    ref = f"realizations/{realization_id}.dataset-input-postflight-uncheckable-{_realization_id()}.json"
+    record = {
+        "schema_version": 1,
+        "realization_id": realization_id,
+        "observed_at": _now(),
+        "status": "uncheckable",
+        "error": detail,
     }
+    try:
+        _write_json(run_dir / ref, record)
+        return {**_announce_postflight(run_dir, realization_id, ref, record), "error": detail}
+    except (OSError, ValueError) as write_error:
+        return {
+            "status": "uncheckable",
+            "view_cleanup": "not-required",
+            "warning": dataset_input_drift_warning("uncheckable"),
+            "error": f"{detail}; the uncheckable record could not be written: {_redact_secret_text(str(write_error))}",
+        }
 
 
 def _runpod_state(pod: dict[str, Any]) -> tuple[str, int | None]:
