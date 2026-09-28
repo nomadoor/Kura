@@ -23,7 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
-from kura.fsio import atomic_write_json
+from kura.fsio import atomic_write_bytes
 from kura.training_artifacts import load_training_state, verify_training_state
 
 TRANSFER_SCHEMA_VERSION = 1
@@ -459,6 +459,51 @@ def _entry_stat(item: dict[str, Any]) -> os.stat_result:
         os.close(descriptor)
 
 
+def transfer_manifest_bytes(record: dict[str, Any]) -> bytes:
+    """The exact manifest bytes for a transfer record; the Pod trusts only their digest."""
+    return (json.dumps({key: record[key] for key in _MANIFEST_KEYS}, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def write_transfer_manifest(path: Path, record: dict[str, Any]) -> None:
     """Write the inventory the Pod verifies, bound to the archive by its digest."""
-    atomic_write_json(path, {key: record[key] for key in _MANIFEST_KEYS})
+    atomic_write_bytes(path, transfer_manifest_bytes(record))
+
+
+def pin_transfer_manifest(workspace: Path, run_dir: Path, run: dict[str, Any], record: dict[str, Any], pinned: Path) -> str:
+    """Prove the stage, then freeze the manifest the Pod will trust; return its digest.
+
+    The pinned copy is generated from the record just proven, never read back
+    from the mutable ``transfer/`` directory, so a later restage or edit
+    cannot change what the Pod accepts.
+    """
+    verify_stage_matches_compile(workspace, run_dir, run, record)
+    manifest = transfer_manifest_bytes(record)
+    atomic_write_bytes(pinned, manifest)
+    return hashlib.sha256(manifest).hexdigest()
+
+
+class TransferRefused(ValueError):
+    """The controller refused to upload; nothing has run on the Pod, so it is safe to stop."""
+
+
+class StagedTransferChanged(TransferRefused):
+    """The stage no longer matches what launch pinned."""
+
+
+def verify_pinned_transfer(workspace: Path, run_dir: Path, run: dict[str, Any], record: dict[str, Any], pinned: Path, pinned_sha256: str) -> bytes:
+    """Re-prove the stage just before upload and require it to equal the launch pin.
+
+    Returns the pinned manifest bytes to upload. Any change after this point
+    (including to the archive during upload) is rejected by the Pod, which
+    trusts only ``pinned_sha256``.
+    """
+    try:
+        manifest = pinned.read_bytes()
+        if hashlib.sha256(manifest).hexdigest() != pinned_sha256:
+            raise ValueError("the manifest pinned at launch was modified")
+        verify_stage_matches_compile(workspace, run_dir, run, record)
+        if transfer_manifest_bytes(record) != manifest:
+            raise ValueError("the stage was replaced after launch pinned it")
+    except ValueError as error:
+        raise StagedTransferChanged(f"staged transfer changed after launch: {error}") from error
+    return manifest

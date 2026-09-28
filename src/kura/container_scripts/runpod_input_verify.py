@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import tarfile
 from datetime import datetime
@@ -126,7 +127,12 @@ def check_envelope(staging, manifest, run_id):
 
 
 def publish(staging, workspace, run_id):
-    """Rename each verified top-level tree into place; never merge into existing paths."""
+    """Rename the verified trees into place as one unit; return an undo function.
+
+    Every target is checked before the first rename, and a failure midway
+    moves already-published trees back, so the workspace either has all
+    verified inputs or none of them and the same Pod can retry.
+    """
     moves = [
         (staging / "runs" / run_id / "run.yaml", workspace / "runs" / run_id / "run.yaml"),
         (staging / "runs" / run_id / "resolved", workspace / "runs" / run_id / "resolved"),
@@ -137,16 +143,29 @@ def publish(staging, workspace, run_id):
     if staged_runs - {run_id} or {path.name for path in staging.iterdir()} - {"runs", "datasets", "artifacts"}:
         raise TransferError("staging contains a tree outside the declared namespaces")
     moves = [(source, target) for source, target in moves if source.exists()]
-    # Check every target first so a refusal publishes nothing.
     for _, target in moves:
         if target.exists() or target.is_symlink():
             raise TransferError(f"transfer target already exists: {target.relative_to(workspace)}")
-    for source, target in moves:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(source, target)
+    moved = []
+
+    def undo():
+        for source, target in reversed(moved):
+            os.rename(target, source)
+        moved.clear()
+
+    try:
+        for source, target in moves:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(source, target)
+            moved.append((source, target))
+    except OSError:
+        undo()
+        raise
+    return undo
 
 
-def materialize_views(workspace, lock, run_id):
+def materialize_views(workspace, lock, run_id, created):
+    """Create each frozen view; append every root it creates to ``created``."""
     datasets = workspace / "datasets"
     view_prefix = f"runs/{run_id}/cache/dataset-view/"
     links = 0
@@ -159,6 +178,7 @@ def materialize_views(workspace, lock, run_id):
         if root.exists() or root.is_symlink():
             raise TransferError(f"view root already exists: {root_relative}")
         root.mkdir(parents=True)
+        created.append(root)
         expected_links = {}
         for link in view["links"]:
             path = safe_relative(link["path"])
@@ -244,13 +264,20 @@ def view_changes(workspace, lock):
     return changes
 
 
+def source_state(path):
+    """A transferred source's identity for drift checks; a non-regular file never matches."""
+    observed = path.lstat()
+    if not stat.S_ISREG(observed.st_mode):
+        return {"type": "not-regular"}
+    return {"size": observed.st_size, "mtime_ns": observed.st_mtime_ns, "ctime_ns": observed.st_ctime_ns}
+
+
 def source_baseline(workspace, manifest):
-    baseline = {}
-    for entry in manifest["entries"]:
-        if entry["namespace"] == "source":
-            observed = (workspace / entry["destination"]).stat()
-            baseline[entry["destination"]] = {"size": observed.st_size, "mtime_ns": observed.st_mtime_ns}
-    return baseline
+    return {
+        entry["destination"]: source_state(workspace / entry["destination"])
+        for entry in manifest["entries"]
+        if entry["namespace"] == "source"
+    }
 
 
 def postflight():
@@ -268,11 +295,11 @@ def postflight():
         source_changes = []
         for destination, baseline in sorted(verified["source_baseline"].items()):
             try:
-                observed = (workspace / safe_relative(destination)).stat()
+                observed = source_state(workspace / safe_relative(destination))
             except OSError:
                 source_changes.append(f"missing transferred source: {destination}")
                 continue
-            if {"size": observed.st_size, "mtime_ns": observed.st_mtime_ns} != baseline:
+            if observed != baseline:
                 source_changes.append(f"transferred source changed: {destination}")
         link_changes = view_changes(workspace, lock)
         record.update({
@@ -323,13 +350,23 @@ def main():
             "input_sha256": manifest["input_sha256"],
             "projection_sha256": manifest["projection_sha256"],
         })
-        if staging.exists():
-            raise TransferError("transfer staging directory already exists")
+        if staging.is_symlink():
+            raise TransferError("transfer staging path is a symlink")
+        # A previous failed attempt on this Pod leaves only unpublished staging.
+        shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True)
         extract_verified(archive_path, manifest, staging)
         lock = check_envelope(staging, manifest, run_id)
-        publish(staging, workspace, run_id)
-        links, generated = materialize_views(workspace, lock, run_id)
+        undo = publish(staging, workspace, run_id)
+        created_views = []
+        try:
+            links, generated = materialize_views(workspace, lock, run_id, created_views)
+        except (TransferError, OSError, KeyError, TypeError, ValueError):
+            # Remove only the view roots this attempt created, then unpublish.
+            for root in reversed(created_views):
+                shutil.rmtree(root)
+            undo()
+            raise
         archive_path.unlink()
         shutil.rmtree(staging.parent)
         usage = shutil.disk_usage(workspace)

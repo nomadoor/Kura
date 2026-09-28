@@ -22,11 +22,11 @@ import yaml
 
 from kura import __version__
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
-from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, verify_stage_matches_compile, write_transfer_archive, write_transfer_manifest
+from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
-from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
 class RunPodAPIError(ValueError):
@@ -678,9 +678,13 @@ def finalize_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realiza
             **({"record_conflicts": conflicts} if conflicts else {}),
         }
         _write_json(postflight_path, postflight)
+    # status.json is projected after the event, so a matching projection proves
+    # it exists; otherwise scan once, which covers a crash between the two.
     current = _load_status(run_dir)
     announced = current.get("dataset_input_postflight")
-    if not (isinstance(announced, dict) and announced.get("record") == postflight_ref):
+    if not (isinstance(announced, dict) and announced.get("record") == postflight_ref) and not _event_exists(
+        run_dir, event="dataset_input_postflight", realization_id=realization_id, record=postflight_ref,
+    ):
         append_run_event(run_dir, {
             "event": "dataset_input_postflight",
             "timestamp": postflight["observed_at"],
@@ -771,7 +775,10 @@ def launch_runpod(
             if stage.get("transfer") != "selected-files":
                 raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
             run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
-            verify_stage_matches_compile(run_dir.parent.parent, run_dir, run, stage)
+            pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
+            manifest_sha256 = pin_transfer_manifest(
+                run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
+            )
         upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
         download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
         transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
@@ -781,6 +788,10 @@ def launch_runpod(
                 "stage": stage_ref,
                 "archive_sha256": stage["archive_sha256"],
                 "input_sha256": stage["input_sha256"],
+                # The Pod accepts only this manifest; upload re-proves the stage
+                # against it before sending anything.
+                "pinned_manifest": pinned_manifest,
+                "manifest_sha256": manifest_sha256,
                 "verification": "stage-matches-compile-before-pod-creation",
             })
         runtime_env.update({

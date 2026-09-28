@@ -26,6 +26,7 @@ from kura.dataset_transfer import (
     write_transfer_archive,
     write_transfer_manifest,
 )
+from kura.container_scripts import script_source
 from kura.executors.runpod import stage_runpod
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -416,6 +417,62 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                     graphql.assert_not_called()
 
 
+    def test_upload_sends_only_the_launch_pin_and_refuses_a_replaced_stage(self) -> None:
+        from kura.dataset_transfer import StagedTransferChanged, pin_transfer_manifest, verify_pinned_transfer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir, run = self._compiled(root)
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            pinned = run_dir / "realizations" / "real-1.transfer-manifest.json"
+            digest = pin_transfer_manifest(root, run_dir, run, record, pinned)
+            self.assertEqual(hashlib.sha256(pinned.read_bytes()).hexdigest(), digest)
+
+            # A deterministic restage of the same compile still equals the pin.
+            again = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            self.assertEqual(verify_pinned_transfer(root, run_dir, run, again, pinned, digest), pinned.read_bytes())
+
+            # A consistent forgery that adds an unselected file is refused.
+            forged = json.loads(json.dumps(record))
+            forged["entries"].append(dict(forged["entries"][-1], archive_name="source/datasets/tiny/extra.bin", destination="datasets/tiny/extra.bin"))
+            write_transfer_manifest(run_dir / record["manifest"], forged)
+            with self.assertRaises(StagedTransferChanged):
+                verify_pinned_transfer(root, run_dir, run, forged, pinned, digest)
+
+            # Editing the pinned copy itself is refused.
+            pinned.write_bytes(pinned.read_bytes() + b" ")
+            with self.assertRaisesRegex(StagedTransferChanged, "pinned at launch was modified"):
+                verify_pinned_transfer(root, run_dir, run, record, pinned, digest)
+
+    def test_a_pre_upload_refusal_stops_the_unused_pod_without_a_review_hold(self) -> None:
+        from kura.dataset_transfer import StagedTransferChanged
+        from kura.run_commands.launch import run_remote
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "runs" / "example").mkdir(parents=True)
+            with (
+                patch("kura.run_commands.launch._run_path", return_value=root / "runs" / "example"),
+                patch("kura.run_commands.launch.stage_run", return_value=0),
+                patch("kura.run_commands.launch.launch_run", return_value=0),
+                patch("kura.run_commands.launch._runpod_run_over_ssh", side_effect=StagedTransferChanged("replaced")),
+                patch("kura.run_commands.launch.download_with_retries") as download,
+                patch("kura.run_commands.launch.stop_run", return_value=0) as stop,
+                patch("kura.run_commands.launch.time.sleep") as sleep,
+                patch("kura.run_commands.launch._notify"),
+                patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                code = run_remote(
+                    "example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0,
+                    hold_for="30m",
+                )
+
+            self.assertEqual(code, 1)
+            stop.assert_called_once_with("example")
+            download.assert_not_called()
+            sleep.assert_not_called()
+
+
 class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
     """The Pod-side receive path, exercised through the generated job script."""
 
@@ -568,6 +625,66 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             self.assertIn("stray.png", postflight["view_changes"][0])
 
 
+    def test_postflight_catches_same_size_rewrites_with_restored_mtime_and_symlinks(self) -> None:
+        cases = {
+            "same size, mtime restored": (
+                "python -c \"import os; p='{pod}/datasets/tiny/a.png'; s=os.stat(p); "
+                "open(p,'r+b').write(b'X'); os.utime(p, ns=(s.st_atime_ns, s.st_mtime_ns))\""
+            ),
+            "replaced by a symlink": (
+                "python -c \"import os; p='{pod}/datasets/tiny/a.png'; os.rename(p, p + '.orig'); "
+                "os.symlink(p + '.orig', p)\""
+            ),
+        }
+        for name, command in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                pod, remote_dir, record = self._pod(Path(directory))
+
+                result = self._run_job(pod, remote_dir, record, command=command.format(pod=pod))
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                postflight = self._postflight(pod)
+                self.assertEqual(postflight["status"], "changed")
+                self.assertEqual(postflight["source_changes"], ["transferred source changed: datasets/tiny/a.png"])
+
+    def test_publication_is_all_or_nothing_and_retryable_on_the_same_pod(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("runpod_input_verify.py"), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            pod, remote_dir, record = self._pod(Path(directory))
+            real_rename = os.rename
+            calls = {"count": 0}
+
+            def failing_second_rename(source, target):
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    raise OSError("simulated rename failure")
+                return real_rename(source, target)
+
+            env = {
+                "KURA_WORKSPACE": str(pod), "KURA_RUN_ID": "example", "KURA_REALIZATION_ID": "real-1",
+                "KURA_KNOWN_MEDIA_SUFFIXES": json.dumps([".png"]),
+            }
+            argv = ["verify", str(remote_dir / record["archive_name"]),
+                    str(remote_dir / Path(record["manifest"]).name), self.manifest_sha256]
+            with (
+                patch.dict(os.environ, env),
+                patch.object(sys, "argv", argv),
+                patch.object(namespace["os"], "rename", side_effect=failing_second_rename),
+                self.assertRaises(SystemExit),
+            ):
+                namespace["main"]()
+            self.assertEqual(self._verify_record(pod)["status"], "failed")
+            self.assertFalse((pod / "runs" / "example" / "run.yaml").exists())
+            self.assertFalse((pod / "runs" / "example" / "resolved").exists())
+            self.assertFalse((pod / "datasets").exists())
+
+            with patch.dict(os.environ, env), patch.object(sys, "argv", argv):
+                namespace["main"]()
+            self.assertEqual(self._verify_record(pod)["status"], "verified")
+            self.assertTrue((pod / "datasets" / "tiny" / "a.png").is_file())
+
+
 class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
     def _downloaded(self, root: Path, remote_status: str) -> tuple[Path, Path]:
         run_dir, _ = self._compiled(root)
@@ -600,6 +717,12 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
 
             self.assertEqual(first, second)
             self.assertEqual(first["status"], "matched")
+            # A crash between the event and the status projection: finalize
+            # runs again without the projection and must not duplicate it.
+            status.pop("dataset_input_postflight")
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            finalize_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+            finalize_runpod_dataset_handoff(run_dir, downloaded, "real-1")
             self.assertNotIn("warning", first)
             self.assertTrue((run_dir / "realizations" / "real-1.runpod-input.json").is_file())
             events = [
@@ -626,6 +749,24 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             self.assertEqual(record["remote_source_stat_verification"], "changed")
             self.assertEqual(record["record_conflicts"], ["real-1.runpod-input.json"])
             self.assertEqual((run_dir / "realizations" / "real-1.runpod-input.json").read_text(encoding="utf-8"), "local")
+
+
+class RunEventReaderTests(unittest.TestCase):
+    def test_events_with_unicode_line_separators_are_still_found(self) -> None:
+        from kura.executors.common import _event_exists, append_run_event
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            append_run_event(run_dir, {"event": "note", "detail": "caption\u2028second"})
+            append_run_event(run_dir, {
+                "event": "dataset_input_postflight", "realization_id": "r", "record": "realizations/r.json",
+                "detail": "path\u2029with separator",
+            })
+            (run_dir / "logs" / "events.jsonl").open("a", encoding="utf-8").write("not json\n")
+
+            self.assertTrue(_event_exists(
+                run_dir, event="dataset_input_postflight", realization_id="r", record="realizations/r.json",
+            ))
 
 
 if __name__ == "__main__":

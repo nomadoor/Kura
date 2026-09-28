@@ -46,9 +46,12 @@ stop Pod
   runs require it: their inputs arrive only through the verified
   selected-file transfer. A Pod-side verification failure writes
   `realizations/<id>.runpod-input.json` with `status: failed`, never starts the
-  trainer, and the normal download-then-stop path still runs. If stage or
-  launch says "stage it again", the compile or staged files changed; rerun the
-  stage rather than editing any staged file.
+  trainer, and the normal download-then-stop path still runs. Launch pins the
+  proven manifest in `realizations/<id>.transfer-manifest.json`; the Pod
+  trusts only that pin. If the stage changes after launch, the controller
+  refuses before uploading and stops the unused Pod at once (no review hold).
+  If stage or launch says "stage it again", the compile or staged files
+  changed; rerun the stage rather than editing any staged file.
 - Treat configured GPU candidates as workspace policy, not durable skill
   knowledge. Inspect current availability and price before selecting one.
   After that choice, compile the run and inspect the compiled resource plan

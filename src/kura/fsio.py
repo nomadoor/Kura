@@ -83,20 +83,19 @@ def append_line_durably(path: Path, line: str) -> None:
         _fsync_directory(path.parent)
 
 
-def atomic_write_text(path: Path, text: str) -> None:
+def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
+            mode="wb",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
             temporary_name = handle.name
-            handle.write(text)
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
@@ -108,6 +107,10 @@ def atomic_write_text(path: Path, text: str) -> None:
                 os.unlink(temporary_name)
             except FileNotFoundError:
                 pass
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def atomic_write_json(path: Path, value: Any) -> None:

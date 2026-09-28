@@ -31,6 +31,7 @@ from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
+from kura.dataset_transfer import TransferRefused
 from kura.run_envelope import run_executor
 
 
@@ -108,6 +109,14 @@ def run_remote(
         notify_body = f"Run {run_id} {state_word} with exit code {exit_code}.{stop_note}"
         _notify(notify_channels, subject=notify_subject, body=notify_body)
         return exit_code
+    except TransferRefused as exc:
+        # Refused before any upload: nothing ran remotely, so stop at once;
+        # there is nothing to review.
+        safe_to_stop = True
+        hold_for_sec = 0
+        print(f"cannot run remote job: {_safe_error(exc)}; stopping the unused Pod", file=sys.stderr)
+        _notify(notify_channels, subject=f"Kura run refused: {run_id}", body=f"Run {run_id} was refused before upload:\n{_safe_error(exc)}\nThe unused Pod is being stopped.")
+        return 1
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         message = _safe_error(exc)
         print(f"cannot run remote job: {message}", file=sys.stderr)

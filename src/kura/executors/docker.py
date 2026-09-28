@@ -23,6 +23,7 @@ from kura.dataset_handoff import (
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
+    _event_exists,
     dataset_input_drift_warning,
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
@@ -53,25 +54,6 @@ def _docker_image_id(image: str) -> str | None:
     except FileNotFoundError:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
-
-
-def _event_exists(run_dir: Path, *, event: str, realization_id: str, record: str) -> bool:
-    path = run_dir / "logs" / "events.jsonl"
-    if not path.is_file():
-        return False
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            item = json.loads(line)
-            if (
-                isinstance(item, dict)
-                and item.get("event") == event
-                and item.get("realization_id") == realization_id
-                and item.get("record") == record
-            ):
-                return True
-    except (OSError, json.JSONDecodeError):
-        return False
-    return False
 
 
 def _finalize_dataset_handoff(

@@ -26,6 +26,7 @@ import yaml
 
 from kura.container_scripts import script_source
 from kura.executors.runpod import finalize_runpod_dataset_handoff
+from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
@@ -35,7 +36,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event
+from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, run_events
 from kura.run_commands.common import _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
@@ -523,15 +524,11 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         def record_recovery_download(recovery_artifacts: list[str]) -> None:
             if not recovery_artifacts:
                 return
-            events_path = run_dir / "logs" / "events.jsonl"
-            if events_path.is_file():
-                for line in events_path.read_text(encoding="utf-8").splitlines():
-                    try:
-                        prior = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if prior.get("event") == "run_recovery_artifacts_downloaded" and prior.get("artifacts") == recovery_artifacts:
-                        return
+            if any(
+                prior.get("event") == "run_recovery_artifacts_downloaded" and prior.get("artifacts") == recovery_artifacts
+                for prior in run_events(run_dir)
+            ):
+                return
             append_run_event(run_dir, {"event": "run_recovery_artifacts_downloaded", "timestamp": datetime.now().astimezone().isoformat(), "kind": "non-final-intermediate", "artifacts": recovery_artifacts})
 
         def materialize_downloaded_status() -> tuple[bool, list[str]]:
@@ -1835,23 +1832,32 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     if not isinstance(workspace, str) or not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
         raise ValueError("latest realization has no runnable RunPod command")
     selected_files = stage.get("transfer") == "selected-files"
-    if selected_files and workspace != "/workspace":
-        # Frozen view links target /workspace/datasets/...; another root would
-        # leave every link dangling.
-        raise ValueError("selected-file RunPod transfer requires KURA_WORKSPACE=/workspace")
+    remote_manifest_sha256: str | None = None
+    pinned_manifest: Path | None = None
+    if selected_files:
+        # Refusals here happen before any upload, so the Pod is safe to stop.
+        if workspace != "/workspace":
+            # Frozen view links target /workspace/datasets/...
+            raise TransferRefused("selected-file RunPod transfer requires KURA_WORKSPACE=/workspace")
+        # Send only what launch pinned before the Pod existed, after proving the
+        # stage still equals it; the Pod trusts nothing but the pinned digest.
+        pin = realization.get("transfer") if isinstance(realization.get("transfer"), dict) else {}
+        pinned, remote_manifest_sha256 = pin.get("pinned_manifest"), pin.get("manifest_sha256")
+        if not isinstance(pinned, str) or not isinstance(remote_manifest_sha256, str) or pin.get("stage") != status.get("last_stage"):
+            raise StagedTransferChanged("the realization has no pin for the current stage")
+        locked_run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        pinned_manifest = run_dir / pinned
+        verify_pinned_transfer(
+            run_dir.parent.parent, run_dir, locked_run, stage, pinned_manifest, remote_manifest_sha256,
+        )
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
     remote_archive = f"{remote_dir}/{archive_name}"
     remote_manifest: str | None = None
-    remote_manifest_sha256: str | None = None
     uploads = [(archive_path, remote_archive)]
-    if selected_files:
-        manifest = stage.get("manifest")
-        if not isinstance(manifest, str) or not (run_dir / manifest).is_file():
-            raise ValueError("latest RunPod stage has no transfer manifest")
-        remote_manifest = f"{remote_dir}/{Path(manifest).name}"
-        remote_manifest_sha256 = hashlib.sha256((run_dir / manifest).read_bytes()).hexdigest()
-        uploads.append((run_dir / manifest, remote_manifest))
+    if pinned_manifest is not None:
+        remote_manifest = f"{remote_dir}/transfer-manifest.json"
+        uploads.append((pinned_manifest, remote_manifest))
     prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_dir)}"], context="ssh workspace preparation")
     if prepared.returncode:
         raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
