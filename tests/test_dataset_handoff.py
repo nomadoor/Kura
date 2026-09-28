@@ -45,6 +45,8 @@ from kura.backends.dataset_profiles import (
     resolve_projection_partitions,
     select_projection_profile,
 )
+from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architecture, musubi_native_dataset_architecture
+from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, materialize_dataset_view, remove_dataset_views
 from kura.dataset_handoff import local_training_mounts
@@ -62,6 +64,31 @@ def _musubi_semantic_block(projected: dict, index: int = 0) -> dict:
 
 
 class DatasetHandoffTests(unittest.TestCase):
+    def test_musubi_architecture_aliases_are_canonicalized_at_one_boundary(self) -> None:
+        for alias, canonical in MUSUBI_ARCHITECTURE_ALIASES.items():
+            run = {"backend": {"name": "musubi-tuner", "config": {"architecture": alias}}}
+            self.assertEqual(_musubi_architecture(run), canonical)
+
+        self.assertEqual(musubi_native_task("minimaxh3", None), "t2va")
+        self.assertEqual(musubi_native_task("hidream", None), "t2i")
+        self.assertEqual(musubi_native_task("kandinsky_5", None), "k5-pro-t2v-5s-sd")
+        for condition in MUSUBI_SURFACE.conditions:
+            for clause in condition.when_any:
+                selectors = dict(clause)
+                architectures = selectors.get("architecture")
+                if architectures is None:
+                    continue
+                for alias, canonical in MUSUBI_ARCHITECTURE_ALIASES.items():
+                    self.assertNotIn(alias, architectures)
+                    if canonical in architectures:
+                        self.assertIn(canonical, architectures)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "no pinned native dataset architecture",
+        ):
+            musubi_native_dataset_architecture("future_video_architecture")
+
     def test_shared_projection_profile_selects_by_shape_mode_and_role_limits(self) -> None:
         dataset = {
             "samples": [{
@@ -3927,7 +3954,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "no verified Musubi projection profile matches.*flux1_kontext.*image-control.*control.*2",
+                "no verified Musubi projection profile matches.*flux_kontext.*image-control.*control.*2",
             ):
                 freeze_dataset_handoff(
                     run,
@@ -4458,6 +4485,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(report["datasets"][0]["policy"]["target_fps"], 16.0)
             self.assertEqual(_musubi_video_preflight_env(run, resolved / "musubi"), {
                 "KURA_MUSUBI_ARCHITECTURE": "wan",
+                "KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE": "wan",
                 "KURA_MUSUBI_TARGET_FPS": "16.0",
                 "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
                 "KURA_MUSUBI_PROFILES": "wan-video",
@@ -4781,6 +4809,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["policy"]["target_fps"], 24.0)
             self.assertEqual(_musubi_video_preflight_env(run, resolved / "musubi"), {
                 "KURA_MUSUBI_ARCHITECTURE": "hunyuan_video",
+                "KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE": "hv",
                 "KURA_MUSUBI_TARGET_FPS": "24.0",
                 "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
                 "KURA_MUSUBI_PROFILES": "hunyuan-video",

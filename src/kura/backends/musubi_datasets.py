@@ -56,7 +56,6 @@ _MINIMAX_H3_DATASET_REQUIREMENTS = {
 }
 MUSUBI_ARCHITECTURE_REQUIREMENTS = {
     "minimax_h3": _MINIMAX_H3_DATASET_REQUIREMENTS,
-    "minimaxh3": _MINIMAX_H3_DATASET_REQUIREMENTS,
 }
 
 
@@ -324,12 +323,11 @@ MUSUBI_JSONL_CODECS = {
     },
 }
 _ORDINARY_IMAGE_ARCHITECTURES = (
-    "flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen",
-    "zimage", "z_image", "ideogram4", "ideogram_4", "hidream_o1", "hidream",
-    "hunyuan_video", "hunyuanvideo", "hunyuan_video_1_5",
+    "flux2", "krea2", "qwen_image", "zimage", "ideogram4", "hidream_o1",
+    "hunyuan_video", "hunyuan_video_1_5",
 )
 _H3_VIDEO_PROFILE_COMMON = {
-    "architectures": ("minimax_h3", "minimaxh3"),
+    "architectures": ("minimax_h3",),
     "shape": ("video", "video-audio"),
     "allowed_options": ("target_frames", "frame_extraction"),
     "required_options": ("target_frames",),
@@ -353,7 +351,7 @@ _PLAIN_VIDEO_PROFILE_COMMON = {
 }
 _FRAMEPACK_VIDEO_PROFILE_COMMON = {
     **_PLAIN_VIDEO_PROFILE_COMMON,
-    "architectures": ("framepack", "frame_pack"),
+    "architectures": ("framepack",),
     "allowed_options": ("target_frames", "frame_extraction", "max_frames", "source_fps"),
     "native_options": {
         **_PLAIN_VIDEO_PROFILE_COMMON["native_options"],
@@ -372,10 +370,8 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
         "mode": {"one_frame": False},
         "mode_by_architecture": {
             "hidream_o1": {"task_dataset_kind": "image"},
-            "hidream": {"task_dataset_kind": "image"},
             "hunyuan_video_1_5": {"task_conditioning": "text"},
             "qwen_image": {"model_version": "original"},
-            "qwen": {"model_version": "original"},
         },
         "allowed_options": (),
         "required_options": (),
@@ -385,7 +381,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "flux-kontext-control": {
         "codec": "image-control-jsonl",
-        "architectures": ("flux_kontext", "flux1_kontext"),
+        "architectures": ("flux_kontext",),
         "shape": "image-control",
         "mode": {"one_frame": False},
         "allowed_options": ("control_resolution", "no_resize_control"),
@@ -396,7 +392,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "hidream-i2i": {
         "codec": "image-control-jsonl",
-        "architectures": ("hidream_o1", "hidream"),
+        "architectures": ("hidream_o1",),
         "shape": "image-control",
         "mode": {"one_frame": False, "task_dataset_kind": "image-control"},
         "allowed_options": ("control_resolution", "no_resize_control"),
@@ -407,7 +403,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "qwen-image-edit": {
         "codec": "image-control-jsonl",
-        "architectures": ("qwen_image", "qwen"),
+        "architectures": ("qwen_image",),
         "shape": "image-control",
         "mode": {"one_frame": False, "model_version": "edit"},
         "allowed_options": ("control_resolution", "no_resize_control"),
@@ -418,7 +414,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "qwen-image-edit-multi-control": {
         "codec": "image-control-jsonl",
-        "architectures": ("qwen_image", "qwen"),
+        "architectures": ("qwen_image",),
         "shape": "image-control",
         "mode": {"one_frame": False, "model_version": ("edit-2509", "edit-2511")},
         "allowed_options": ("control_resolution", "no_resize_control"),
@@ -429,7 +425,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "qwen-image-layered": {
         "codec": "layered-image-jsonl",
-        "architectures": ("qwen_image", "qwen"),
+        "architectures": ("qwen_image",),
         "shape": "image",
         "mode": {"one_frame": False, "model_version": "layered"},
         "allowed_options": (),
@@ -440,7 +436,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "flux2-image-references": {
         "codec": "image-control-jsonl",
-        "architectures": ("flux2", "flux_2"),
+        "architectures": ("flux2",),
         "shape": "image-control",
         "mode": {"one_frame": False},
         "allowed_options": ("control_resolution", "no_resize_control"),
@@ -503,7 +499,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "hunyuan-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
-        "architectures": ("hunyuan_video", "hunyuanvideo"),
+        "architectures": ("hunyuan_video",),
         "target_fps": 24.0,
     },
     "hunyuan-video-1.5-video": {
@@ -513,7 +509,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "kandinsky5-video": {
         **_PLAIN_VIDEO_PROFILE_COMMON,
-        "architectures": ("kandinsky5", "kandinsky_5"),
+        "architectures": ("kandinsky5",),
         "mode": {"one_frame": False, "task_dataset_kind": "video"},
         "target_fps": 24.0,
     },
@@ -527,7 +523,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "framepack-single-frame": {
         "codec": "image-control-jsonl",
-        "architectures": ("framepack", "frame_pack"),
+        "architectures": ("framepack",),
         "shape": "image-control",
         "mode": {"one_frame": True, "f1": False},
         "allowed_options": (
@@ -546,7 +542,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "framepack-single-frame-multi-control": {
         "codec": "image-control-jsonl",
-        "architectures": ("framepack", "frame_pack"),
+        "architectures": ("framepack",),
         "shape": "image-control",
         "mode": {"one_frame": True, "f1": False},
         "allowed_options": (
@@ -565,7 +561,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "h3-one-frame-fl2va": {
         "codec": "h3-one-frame-control-jsonl",
-        "architectures": ("minimax_h3", "minimaxh3"),
+        "architectures": ("minimax_h3",),
         "shape": "image-control",
         "mode": {"one_frame": True, "task_conditioning": "first-last-frame"},
         "allowed_options": ("fp_1f_clean_indices", "fp_1f_target_index"),
@@ -577,7 +573,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "h3-one-frame-plain": {
         "codec": "plain-image-jsonl",
-        "architectures": ("minimax_h3", "minimaxh3"),
+        "architectures": ("minimax_h3",),
         "shape": "image",
         "mode": {"one_frame": True, "task_conditioning": "text", "teacher_conditions": None},
         "allowed_options": (), "required_options": (), "native_options": {},
@@ -607,7 +603,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
     },
     "h3-one-frame-ref2va": {
         "codec": "h3-one-frame-reference-jsonl",
-        "architectures": ("minimax_h3", "minimaxh3"),
+        "architectures": ("minimax_h3",),
         "shape": "image-references",
         "mode": {"one_frame": True, "task_conditioning": "references", "teacher_conditions": None},
         "allowed_options": (), "required_options": (), "native_options": {},
@@ -630,7 +626,7 @@ _MUSUBI_PROJECTION_PROFILE_DEFINITIONS = {
         "role_limits": {"target": (1, 1), "audio": (0, 1)},
     },
     "h3-one-frame-teacher-subject-ref": {
-        "codec": "h3-one-frame-reference-jsonl", "architectures": ("minimax_h3", "minimaxh3"),
+        "codec": "h3-one-frame-reference-jsonl", "architectures": ("minimax_h3",),
         "shape": "image-references",
         "mode": {"one_frame": True, "task_conditioning": "references", "teacher_conditions": "subject_ref"},
         "allowed_options": (), "required_options": (), "native_options": {},
@@ -683,7 +679,7 @@ def _musubi_h3_effective_task(override: dict[str, Any]) -> str:
 
 def _musubi_projection_task(architecture: str, override: dict[str, Any]) -> str:
     """Resolve the same architecture-specific task default used by the command."""
-    if architecture in {"minimax_h3", "minimaxh3"}:
+    if architecture == "minimax_h3":
         return _musubi_h3_effective_task(override)
     return musubi_native_task(architecture, override.get("task"))
 

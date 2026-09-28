@@ -394,6 +394,13 @@ is marked `migration: pending`; merge readiness must run
 
 ## Final integration cleanup ledger
 
+- Complete the structural cleanup bundle before RunPod selected-file transfer,
+  in separately reviewed commits ordered as follows: canonicalize Musubi
+  architecture aliases; close the AI-Toolkit non-strict projection path; add
+  one shared frozen-projection reader; choose one owner for view
+  materialization; remove unused compiler/writer parameters; and move
+  backend-specific plan facts behind an adapter-owned interface. The small
+  follow-ups listed below may be paired only when they touch the same seam.
 - The final pinned-image sd-scripts smoke records that
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
@@ -405,8 +412,38 @@ is marked `migration: pending`; merge readiness must run
 - Remove AI-Toolkit's non-strict directory-derived dataset projection. Direct
   compiler tests must supply the same frozen manifest projection used by the
   public compile path; they must not preserve a second inferred transport.
+- Replace the separate `dataset-projection.lock.json` readers in AI-Toolkit,
+  Musubi command/dataset compilation, and sd-scripts with one core/shared
+  reader. It owns projection-path resolution, including the current
+  `destination.parent` versus `destination.parent.parent` cases, and becomes
+  the only reader used by later RunPod selected-file transfer.
+- Materialize a compiled dataset view exactly once during launch. Remove the
+  duplicate ownership between `launch.py` and the Docker executor and keep the
+  operation at the layer that can enforce every executor's pre-acquisition
+  contract.
+- Remove unused `workspace` and `strict` parameters from backend compiler and
+  dataset-config writer interfaces where they are accepted and immediately
+  discarded. Preserve a parameter only when its contract has a real consumer.
+- Keep backend-specific planning facts out of `plan.py`. Define an
+  adapter-owned planning-facts interface for values such as sd-scripts disk
+  cache estimates, Musubi video-frame checks, and Musubi dataset defaults;
+  plan renders those facts without importing backend implementation tables.
+  Approve the interface proposal separately if the migration is too broad for
+  one cleanup commit.
+- Resolve three smaller adapter cleanup questions: avoid rescanning an audio
+  sidecar parent directory once per video in `musubi_dataset_assert`; decide
+  and document whether all three frozen forms (`semantic`, `native_runtime`,
+  and `native`) remain necessary; and replace AI-Toolkit's incidental codec
+  label with one that names the actual trainer handoff contract.
 - Update `kura dataset inspect` to render manifest-v2 typed video targets and
   typed caption references without reporting a present caption as missing.
   Strict validation, projection, and execution already use the typed manifest;
   this is a legacy inspection-display mismatch and must be removed before the
   final merge.
+- Include a terminal run's remaining `cache/dataset-view` in `kura cleanup
+  runs` even when automatic removal was deferred for publication recovery and
+  the container later disappeared, leaving reconciliation at `unknown`.
+  Cleanup remains dry-run first and must identify the view as disposable rather
+  than deleting it automatically.
+- Avoid rescanning a run's complete `logs/events.jsonl` on every reconciliation
+  merely to decide whether one dataset postflight/cleanup event already exists.

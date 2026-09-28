@@ -210,6 +210,15 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
                     for item in surface.conditions
                 ],
                 "selector_defaults": dict(surface.selector_defaults),
+                "selector_normalizations": [
+                    {
+                        "field": item.field,
+                        "aliases": list(item.aliases),
+                        "rule": item.rule,
+                        "value_aliases": dict(item.value_aliases),
+                    }
+                    for item in surface.selector_normalizations
+                ],
                 "nested_config_fields": surface.nested_config_fields or {},
                 **({"config_value_choices": {field: list(values) for field, values in surface.config_value_choices}}
                    if surface.config_value_choices else {}),

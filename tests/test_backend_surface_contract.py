@@ -277,6 +277,18 @@ class BackendSurfaceContractTests(unittest.TestCase):
             musubi["conditional_fields"]["timestep_boundary"]["when_any"],
             [{"architecture": ["wan"]}],
         )
+        self.assertEqual(
+            musubi["selector_aliases"]["architecture"]["fields"],
+            ["model_arch"],
+        )
+        self.assertEqual(
+            musubi["selector_aliases"]["architecture"]["values"]["flux_2"],
+            "flux2",
+        )
+        self.assertIn(
+            "case-insensitive",
+            musubi["selector_aliases"]["architecture"]["normalization"],
+        )
         sd_scripts = backend_capabilities("sd-scripts")
         self.assertEqual(
             sd_scripts["conditional_fields"]["cond_emb_dim"]["when_any"],
@@ -308,6 +320,40 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertIn("sd1", model_arch_choices)
         self.assertIn("qwen_image_2", model_arch_choices)
         self.assertNotIn("sd15", model_arch_choices)
+
+    def test_musubi_surface_normalizes_architecture_before_conditions(self) -> None:
+        for selector, architecture in (
+            ("architecture", "flux-2"),
+            ("architecture", "Flux2"),
+            ("model_arch", "flux_2"),
+        ):
+            with self.subTest(selector=selector, architecture=architecture, accepted=True):
+                validate_backend_config({
+                    "backend": {
+                        "name": "musubi-tuner",
+                        "config": {selector: architecture, "fp8_base": True},
+                    },
+                })
+            with self.subTest(selector=selector, architecture=architecture, accepted=False):
+                with self.assertRaisesRegex(ValueError, "f1.*not applicable"):
+                    validate_backend_config({
+                        "backend": {
+                            "name": "musubi-tuner",
+                            "config": {selector: architecture, "f1": True},
+                        },
+                    })
+
+    def test_musubi_surface_rejects_non_string_architecture_cleanly(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            r"musubi-tuner backend\.config\.architecture must be a string",
+        ):
+            validate_backend_config({
+                "backend": {
+                    "name": "musubi-tuner",
+                    "config": {"architecture": 5, "fp8_base": True},
+                },
+            })
 
     def test_ai_toolkit_legacy_dataset_selectors_name_manifest_migrations(self) -> None:
         base = {
@@ -457,15 +503,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
         self.assertEqual(
             capabilities["conditional_fields"]["convrot_int8"]["when_any"],
-            [{"architecture": ["krea2", "krea_2"]}],
+            [{"architecture": ["krea2"]}],
         )
         self.assertEqual(
             capabilities["conditional_fields"]["convrot_int8_bwd"]["when_any"],
-            [{"architecture": ["krea2", "krea_2"], "convrot_int8": [True]}],
+            [{"architecture": ["krea2"], "convrot_int8": [True]}],
         )
         self.assertEqual(
             capabilities["conditional_fields"]["gradient_checkpointing_cpu_offload"]["when_any"],
-            [{"architecture": ["krea2", "krea_2"], "gradient_checkpointing": [True]}],
+            [{"architecture": ["krea2"], "gradient_checkpointing": [True]}],
         )
 
     def test_compile_rejects_known_but_inapplicable_fields_before_artifact_generation(self) -> None:
@@ -516,6 +562,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "musubi-tuner", "json": True})()), 0)
         self.assertIn('"optimizer_type"', output.getvalue())
         self.assertIn('"validation": "unverified"', output.getvalue())
+
+    def test_capabilities_cli_prints_musubi_selector_aliases(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "musubi-tuner", "json": False})()), 0)
+        rendered = output.getvalue()
+        self.assertIn("selector aliases:", rendered)
+        self.assertIn("architecture: fields=model_arch", rendered)
+        self.assertIn("flux_2->flux2", rendered)
 
     def test_capabilities_cli_prints_sd_scripts_nested_dataset_fields(self) -> None:
         output = io.StringIO()

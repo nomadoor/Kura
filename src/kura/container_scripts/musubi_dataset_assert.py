@@ -121,6 +121,7 @@ def video_frame_preflight(entries, config_path, audio_suffixes):
     except (ImportError, ModuleNotFoundError) as exc:
         die(f"pinned Musubi video loader is unavailable: {exc}")
     architecture = os.environ.get("KURA_MUSUBI_ARCHITECTURE")
+    native_dataset_architecture = os.environ.get("KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE")
     profiles = os.environ.get("KURA_MUSUBI_PROFILES")
     fps_resample_mode = os.environ.get("KURA_MUSUBI_FPS_RESAMPLE_MODE")
     strict_timestamp_fps = fps_resample_mode == "timestamps"
@@ -140,7 +141,7 @@ def video_frame_preflight(entries, config_path, audio_suffixes):
         frame_extraction = entry.get("frame_extraction") or "head"
         latent_window_size = entry.get("fp_latent_window_size")
         full_framepack = (
-            architecture in {"framepack", "frame_pack"}
+            architecture == "framepack"
             and frame_extraction == "full"
             and isinstance(latent_window_size, int)
         )
@@ -212,7 +213,9 @@ def video_frame_preflight(entries, config_path, audio_suffixes):
                 if full_framepack:
                     from musubi_tuner.dataset.architectures import round_down_frame_count
 
-                    effective_frames = round_down_frame_count(loaded_frames, architecture, 4)
+                    if not native_dataset_architecture:
+                        raise ValueError("Musubi native dataset architecture is unavailable")
+                    effective_frames = round_down_frame_count(loaded_frames, native_dataset_architecture, 4)
                 else:
                     effective_frames = loaded_frames
                 minimum_frames = latent_window_size * 4 + 1 if full_framepack else required

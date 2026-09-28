@@ -107,7 +107,7 @@ def validate_lora(pattern, architecture, compatibility):
         has_lora = any(key.startswith("lora_") for key in keys)
         if not (has_lora and has_down and has_up):
             die(f"output is not a recognized LoRA safetensors file: {path}")
-        if architecture in ("flux2", "flux_2"):
+        if architecture == "flux2":
             module = str(metadata.get("ss_network_module") or "")
             model_spec = str(metadata.get("modelspec.architecture") or "")
             if module and module != "networks.lora_flux_2":

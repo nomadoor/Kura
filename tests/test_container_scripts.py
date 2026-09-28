@@ -639,7 +639,13 @@ class ContainerScriptTests(unittest.TestCase):
             media_utils = ModuleType("musubi_tuner.dataset.media_utils")
             media_utils.load_video = lambda *_args, **_kwargs: [object()] * 36  # type: ignore[attr-defined]
             architectures = ModuleType("musubi_tuner.dataset.architectures")
-            architectures.round_down_frame_count = lambda count, _architecture, stride: 1 + ((count - 1) // stride) * stride  # type: ignore[attr-defined]
+            observed_architectures = []
+
+            def round_down_frame_count(count, architecture, stride):
+                observed_architectures.append(architecture)
+                return 1 + ((count - 1) // stride) * stride
+
+            architectures.round_down_frame_count = round_down_frame_count  # type: ignore[attr-defined]
             modules = {
                 "musubi_tuner": ModuleType("musubi_tuner"),
                 "musubi_tuner.dataset": ModuleType("musubi_tuner.dataset"),
@@ -652,6 +658,7 @@ class ContainerScriptTests(unittest.TestCase):
                 "KURA_RUN_ID": "video-run",
                 "KURA_REALIZATION_ID": "framepack-full",
                 "KURA_MUSUBI_ARCHITECTURE": "framepack",
+                "KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE": "fp",
                 "KURA_MUSUBI_TARGET_FPS": "30.0",
                 "KURA_MUSUBI_FPS_RESAMPLE_MODE": "source-fps-when-declared",
                 "KURA_MUSUBI_PROFILES": "framepack-video",
@@ -663,6 +670,7 @@ class ContainerScriptTests(unittest.TestCase):
                 self.assertRaisesRegex(SystemExit, r"(?s)shorter than FramePack's full-window minimum.*33 converted frames"),
             ):
                 namespace["main"]()
+            self.assertEqual(observed_architectures, ["fp"])
 
     def test_musubi_h3_video_preflight_uses_the_pinned_timestamp_resampling_path(self) -> None:
         namespace = {"__name__": "__test__"}

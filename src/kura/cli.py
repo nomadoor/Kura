@@ -400,6 +400,18 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
         print("backend.config recognized upstream values (not Kura support claims):")
         for field, choices in payload["config_value_choices"].items():
             print(f"  {field}: " + ", ".join(choices))
+    if payload["selector_aliases"]:
+        print("backend.config selector aliases:")
+        for field, aliases in payload["selector_aliases"].items():
+            authored = ", ".join(aliases["fields"]) or "(none)"
+            values = ", ".join(
+                f"{alias}->{canonical}"
+                for alias, canonical in aliases["values"].items()
+            ) or "(none)"
+            print(
+                f"  {field}: fields={authored}; values={values}; "
+                f"normalization={aliases['normalization']}"
+            )
     if payload["unsupported_fields"]:
         print("unsupported fields:")
         for field, reason in payload["unsupported_fields"].items():

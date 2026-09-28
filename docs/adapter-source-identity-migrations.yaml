@@ -7,6 +7,75 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: shared-surface-musubi-alias-expansion-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Add adapter-declared selector normalization to the shared surface
+      validator so Musubi aliases are resolved before applicability checks.
+      AI-Toolkit fields, projection, commands, runtime behavior, and artifacts
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 889ae4cf3219db78e69cd48e08625299f8edc22026f89a9a7c55007f2e9ad907
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 61267fcf0364bf290da9dadc80c091a3bb2576ae06241f52976c1cb4b8cd7dac
+  - id: shared-surface-musubi-alias-expansion-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Add adapter-declared selector normalization to the shared surface
+      validator so Musubi aliases are resolved before applicability checks.
+      sd-scripts fields, projection, commands, runtime behavior, and artifacts
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6b10b104c008912ce110f25154b44217d581e8e2477a3a6a2d4b3713df743441
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d3698b6d75cd0accef4d7ac071af4ab6dbb01570a6594368597b1246ca7611fa
+  - id: musubi-canonical-architecture-aliases-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Normalize every accepted Musubi architecture alias once at the adapter
+      and authored-surface boundaries and keep only canonical keys in dataset,
+      command, model, task, and condition tables. Pass the pinned dataset helper
+      its documented short architecture name. Existing evidence uses canonical
+      authored spellings, and FramePack follows the same non-H3 rounding branch,
+      so generated trainer inputs, frame results, runtime behavior, and
+      artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 73835bbdacd307886443379fafdb13c5819c7846ee8521cae1f12dc7e0fefe41
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 455227b110304e5bb25c0dfa8f4ee96d876068ccae554012d871cb4ac52c3795
   - id: sd-scripts-pinned-image-avif-capability-2026-09-28
     backend: sd-scripts
     reason: >-

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from kura.backends.common import canonical_musubi_architecture
+
 
 @dataclass(frozen=True)
 class MusubiNativeTask:
@@ -90,20 +92,9 @@ MUSUBI_NATIVE_TASKS: dict[str, dict[str, MusubiNativeTask]] = {
     },
 }
 
-_MUSUBI_TASK_ARCHITECTURE_ALIASES = {
-    "minimaxh3": "minimax_h3",
-    "hidream": "hidream_o1",
-    "kandinsky_5": "kandinsky5",
-}
-
-
-def _task_architecture(architecture: str) -> str:
-    return _MUSUBI_TASK_ARCHITECTURE_ALIASES.get(architecture, architecture)
-
-
 def musubi_native_task(architecture: str, value: object) -> str:
     """Resolve and validate the native task selector shared by projection and command."""
-    canonical = _task_architecture(architecture)
+    canonical = canonical_musubi_architecture(architecture)
     tasks = MUSUBI_NATIVE_TASKS.get(canonical)
     if tasks is None:
         return str(value or "")
@@ -124,7 +115,7 @@ def musubi_native_task(architecture: str, value: object) -> str:
 
 def musubi_native_task_profile(architecture: str, value: object) -> MusubiNativeTask | None:
     """Return declared task properties, or ``None`` for a taskless architecture."""
-    canonical = _task_architecture(architecture)
+    canonical = canonical_musubi_architecture(architecture)
     if canonical not in MUSUBI_NATIVE_TASKS:
         return None
     task = musubi_native_task(canonical, value)

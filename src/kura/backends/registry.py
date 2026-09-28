@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura.backends.ai_toolkit import AI_TOOLKIT_DATASET_FIELD_SPECS, AI_TOOLKIT_DATASET_OPTION_CAPABILITIES, AI_TOOLKIT_PINNED_MODEL_ARCHS, command_ai_toolkit, compile_ai_toolkit, display_ai_toolkit, project_ai_toolkit_dataset, requirements_ai_toolkit, training_state_contract_ai_toolkit, validate_ai_toolkit_config
+from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, canonical_musubi_architecture
 from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tuner, display_musubi_tuner, training_state_contract_musubi
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
@@ -39,6 +40,17 @@ def _when_any(field: str, *clauses: dict[str, tuple[Any, ...]]) -> FieldConditio
 
 
 @dataclass(frozen=True)
+class SelectorNormalization:
+    """Resolve authored selector names and values before surface conditions."""
+
+    field: str
+    aliases: tuple[str, ...]
+    normalize: Callable[[Any], Any]
+    rule: str
+    value_aliases: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
 class BackendSurface:
     """The adapter-owned authoring vocabulary accepted by Kura."""
 
@@ -49,6 +61,7 @@ class BackendSurface:
     unavailable: tuple[tuple[str, str], ...] = ()
     nested_config_fields: dict[str, dict[str, dict[str, Any]]] | None = None
     config_value_choices: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    selector_normalizations: tuple[SelectorNormalization, ...] = ()
 
     def __post_init__(self) -> None:
         overlap = self.fields & self.escape_hatches
@@ -63,6 +76,14 @@ class BackendSurface:
         choice_fields = [field for field, _ in self.config_value_choices]
         if len(choice_fields) != len(set(choice_fields)) or set(choice_fields) - self.fields:
             raise ValueError("backend config value choices must name distinct declared fields")
+        normalized_fields = [item.field for item in self.selector_normalizations]
+        if len(normalized_fields) != len(set(normalized_fields)):
+            raise ValueError("backend selector normalizations must name distinct fields")
+        for item in self.selector_normalizations:
+            if item.field not in self.fields:
+                raise ValueError(f"backend selector normalization names undeclared field: {item.field}")
+            if item.field in item.aliases or len(item.aliases) != len(set(item.aliases)):
+                raise ValueError(f"backend selector normalization aliases are invalid for {item.field}")
 
 
 @dataclass(frozen=True)
@@ -145,57 +166,64 @@ MUSUBI_SURFACE = BackendSurface(
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only", "weighting_scheme",
     }),
     escape_hatches=frozenset({"command", "extra_args"}),
+    selector_normalizations=(SelectorNormalization(
+        field="architecture",
+        aliases=("model_arch",),
+        normalize=canonical_musubi_architecture,
+        rule="case-insensitive; hyphens become underscores; named aliases become canonical values",
+        value_aliases=tuple(sorted(MUSUBI_ARCHITECTURE_ALIASES.items())),
+    ),),
     selector_defaults=(("precache", True), ("one_frame", False), ("h3_loss_method", "guidance")),
     unavailable=(("mixed_precision", "Musubi training precision is fixed to bf16; save_precision controls only the saved checkpoint dtype"),),
     conditions=(
-        _when("allow_a40_large_micro_batch", architecture=("flux2", "flux_2")),
-        _when("allow_a40_uncheckpointed_9b", architecture=("flux2", "flux_2")),
-        _when("convrot_int8_bwd", architecture=("krea2", "krea_2"), convrot_int8=(True,)),
-        _when("convrot_int8", architecture=("krea2", "krea_2")),
+        _when("allow_a40_large_micro_batch", architecture=("flux2",)),
+        _when("allow_a40_uncheckpointed_9b", architecture=("flux2",)),
+        _when("convrot_int8_bwd", architecture=("krea2",), convrot_int8=(True,)),
+        _when("convrot_int8", architecture=("krea2",)),
         _when("discrete_flow_shift", architecture=("wan",)),
-        _when("dit_dtype", architecture=("ideogram4", "ideogram_4")),
-        _when("f1", architecture=("framepack", "frame_pack")),
-        _when("fp8", architecture=("flux_kontext", "flux1_kontext", "framepack", "frame_pack")),
-        _when("fp8_base", architecture=("flux2", "flux_2", "wan", "krea2", "krea_2", "qwen_image", "qwen", "zimage", "z_image", "flux_kontext", "flux1_kontext", "hidream_o1", "hidream", "hunyuan_video", "hunyuanvideo", "hunyuan_video_1_5", "framepack", "frame_pack", "kandinsky5", "kandinsky_5")),
-        _when("fp8_scaled", architecture=("flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen", "zimage", "z_image", "flux_kontext", "flux1_kontext", "hidream_o1", "hidream", "hunyuan_video_1_5", "framepack", "frame_pack", "kandinsky5", "kandinsky_5")),
-        _when_any("fp8_llm", {"architecture": ("zimage", "z_image", "framepack", "frame_pack")}, {"architecture": ("hunyuan_video", "hunyuanvideo"), "precache": (True,)}),
-        _when_any("fp8_t5", {"architecture": ("flux_kontext", "flux1_kontext")}, {"architecture": ("wan",), "precache": (True,)}),
-        _when("fp8_te", architecture=("hidream_o1", "hidream"), precache=(True,)),
-        _when("fp8_text_encoder", architecture=("flux2", "flux_2"), precache=(True,)),
-        _when("fp8_vl", architecture=("qwen_image", "qwen", "hunyuan_video_1_5")),
-        _when("gradient_checkpointing_cpu_offload", architecture=("krea2", "krea_2"), gradient_checkpointing=(True,)),
-        _when("include_turbo_dit", architecture=("krea2", "krea_2")),
-        _when("model_bundle", architecture=("flux2", "flux_2", "krea2", "krea_2", "minimax_h3", "minimaxh3")),
-        _when("model_type", architecture=("hidream_o1", "hidream")),
-        _when("model_version", architecture=("flux2", "flux_2", "qwen_image", "qwen")),
-        _when("noise_clip_std", architecture=("hidream_o1", "hidream")),
-        _when("noise_scale_end", architecture=("hidream_o1", "hidream")),
-        _when("noise_scale_start", architecture=("hidream_o1", "hidream")),
+        _when("dit_dtype", architecture=("ideogram4",)),
+        _when("f1", architecture=("framepack",)),
+        _when("fp8", architecture=("flux_kontext", "framepack")),
+        _when("fp8_base", architecture=("flux2", "wan", "krea2", "qwen_image", "zimage", "flux_kontext", "hidream_o1", "hunyuan_video", "hunyuan_video_1_5", "framepack", "kandinsky5")),
+        _when("fp8_scaled", architecture=("flux2", "krea2", "qwen_image", "zimage", "flux_kontext", "hidream_o1", "hunyuan_video_1_5", "framepack", "kandinsky5")),
+        _when_any("fp8_llm", {"architecture": ("zimage", "framepack")}, {"architecture": ("hunyuan_video",), "precache": (True,)}),
+        _when_any("fp8_t5", {"architecture": ("flux_kontext",)}, {"architecture": ("wan",), "precache": (True,)}),
+        _when("fp8_te", architecture=("hidream_o1",), precache=(True,)),
+        _when("fp8_text_encoder", architecture=("flux2",), precache=(True,)),
+        _when("fp8_vl", architecture=("qwen_image", "hunyuan_video_1_5")),
+        _when("gradient_checkpointing_cpu_offload", architecture=("krea2",), gradient_checkpointing=(True,)),
+        _when("include_turbo_dit", architecture=("krea2",)),
+        _when("model_bundle", architecture=("flux2", "krea2", "minimax_h3")),
+        _when("model_type", architecture=("hidream_o1",)),
+        _when("model_version", architecture=("flux2", "qwen_image")),
+        _when("noise_clip_std", architecture=("hidream_o1",)),
+        _when("noise_scale_end", architecture=("hidream_o1",)),
+        _when("noise_scale_start", architecture=("hidream_o1",)),
         _when_any(
             "one_frame",
             {"architecture": ("wan",)},
-            {"architecture": ("framepack", "frame_pack")},
-            {"architecture": ("minimax_h3", "minimaxh3")},
+            {"architecture": ("framepack",)},
+            {"architecture": ("minimax_h3",)},
         ),
-        _when("one_frame_no_2x", architecture=("framepack", "frame_pack"), one_frame=(True,), precache=(True,)),
-        _when("one_frame_no_4x", architecture=("framepack", "frame_pack"), one_frame=(True,), precache=(True,)),
-        _when("pixel_cache_batch_size", architecture=("hidream_o1", "hidream"), precache=(True,)),
-        _when("quantized_qwen", architecture=("kandinsky5", "kandinsky_5"), precache=(True,)),
-        _when("remove_first_image_from_target", architecture=("qwen_image", "qwen")),
+        _when("one_frame_no_2x", architecture=("framepack",), one_frame=(True,), precache=(True,)),
+        _when("one_frame_no_4x", architecture=("framepack",), one_frame=(True,), precache=(True,)),
+        _when("pixel_cache_batch_size", architecture=("hidream_o1",), precache=(True,)),
+        _when("quantized_qwen", architecture=("kandinsky5",), precache=(True,)),
+        _when("remove_first_image_from_target", architecture=("qwen_image",)),
         _when(
             "h3_guidance_loss_scale",
-            architecture=("minimax_h3", "minimaxh3"),
+            architecture=("minimax_h3",),
             h3_loss_method=("guidance",),
         ),
         _when(
             "h3_guidance_loss_sigma_min",
-            architecture=("minimax_h3", "minimaxh3"),
+            architecture=("minimax_h3",),
             h3_loss_method=("guidance",),
         ),
         *(
             _when(
                 field,
-                architecture=("minimax_h3", "minimaxh3"),
+                architecture=("minimax_h3",),
                 h3_loss_method=("teacher_matching",),
             )
             for field in (
@@ -210,17 +238,17 @@ MUSUBI_SURFACE = BackendSurface(
                 "h3_timestep_focus_prob",
             )
         ),
-        _when("h3_loss_method", architecture=("minimax_h3", "minimaxh3")),
-        _when("task", architecture=("wan", "hidream_o1", "hidream", "hunyuan_video_1_5", "kandinsky5", "kandinsky_5", "minimax_h3", "minimaxh3")),
+        _when("h3_loss_method", architecture=("minimax_h3",)),
+        _when("task", architecture=("wan", "hidream_o1", "hunyuan_video_1_5", "kandinsky5", "minimax_h3")),
         _when("text_encoder_batch_size", precache=(True,)),
-        _when("text_encoder_blocks_to_swap", architecture=("minimax_h3", "minimaxh3"), precache=(True,)),
+        _when("text_encoder_blocks_to_swap", architecture=("minimax_h3",), precache=(True,)),
         _when("timestep_boundary", architecture=("wan",)),
-        _when("timestep_sampling", architecture=("flux2", "flux_2", "wan", "krea2", "krea_2", "hidream_o1", "hidream")),
-        _when("vae_chunk_size", architecture=("hunyuan_video", "hunyuanvideo", "framepack", "frame_pack"), precache=(True,)),
-        _when_any("vae_dtype", {"architecture": ("flux2", "flux_2")}, {"architecture": ("ideogram4", "ideogram_4"), "precache": (True,)}),
-        _when("vae_tiling", architecture=("hunyuan_video", "hunyuanvideo"), precache=(True,)),
-        _when("video_only", architecture=("minimax_h3", "minimaxh3")),
-        _when("weighting_scheme", architecture=("flux2", "flux_2", "krea2", "krea_2", "qwen_image", "qwen", "hidream_o1", "hidream")),
+        _when("timestep_sampling", architecture=("flux2", "wan", "krea2", "hidream_o1")),
+        _when("vae_chunk_size", architecture=("hunyuan_video", "framepack"), precache=(True,)),
+        _when_any("vae_dtype", {"architecture": ("flux2",)}, {"architecture": ("ideogram4",), "precache": (True,)}),
+        _when("vae_tiling", architecture=("hunyuan_video",), precache=(True,)),
+        _when("video_only", architecture=("minimax_h3",)),
+        _when("weighting_scheme", architecture=("flux2", "krea2", "qwen_image", "hidream_o1")),
     ),
     nested_config_fields=MUSUBI_DATASET_OPTION_CAPABILITIES,
 )
@@ -326,7 +354,12 @@ def validate_backend_config(run: dict[str, Any]) -> None:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
     native = backend_config(run, adapter.name)
-    accepted = adapter.surface.fields | adapter.surface.escape_hatches
+    selector_aliases = {
+        alias
+        for normalization in adapter.surface.selector_normalizations
+        for alias in normalization.aliases
+    }
+    accepted = adapter.surface.fields | adapter.surface.escape_hatches | selector_aliases
     unknown = sorted(set(native) - accepted)
     details: list[str] = []
     unavailable = {**_GENERAL_UNAVAILABLE, **dict(adapter.surface.unavailable)}
@@ -343,6 +376,26 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             f"{adapter.name} backend.config contains unsupported key(s): " + ", ".join(details)
             + f". Run `kura run capabilities {adapter.name}` for accepted fields."
         )
+    resolved = dict(native)
+    for normalization in adapter.surface.selector_normalizations:
+        authored = [
+            (field, native[field])
+            for field in (normalization.field, *normalization.aliases)
+            if field in native
+        ]
+        if len(authored) > 1:
+            raise ValueError(
+                f"{adapter.name} backend.config selector {normalization.field!r} "
+                "must use exactly one authored field; found "
+                + ", ".join(repr(field) for field, _ in authored)
+            )
+        if authored:
+            authored_field, authored_value = authored[0]
+            if not isinstance(authored_value, str):
+                raise ValueError(
+                    f"{adapter.name} backend.config.{authored_field} must be a string"
+                )
+            resolved[normalization.field] = normalization.normalize(authored_value)
     defaults = dict(adapter.surface.selector_defaults)
     for condition in adapter.surface.conditions:
         if condition.field not in native:
@@ -354,7 +407,7 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             clause_matches = True
             labels: list[str] = []
             for selector, allowed in clause:
-                value = native.get(selector, defaults.get(selector))
+                value = resolved.get(selector, defaults.get(selector))
                 if value is None:
                     selector_missing = True
                     clause_matches = False
@@ -365,7 +418,7 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             resolved_clauses.append(" and ".join(labels))
         if not matched and not selector_missing:
             selected = ", ".join(
-                f"{selector}={native.get(selector, defaults.get(selector))!r}"
+                f"{selector}={resolved.get(selector, defaults.get(selector))!r}"
                 for selector in sorted({name for clause in condition.when_any for name, _ in clause})
             )
             raise ValueError(
@@ -400,4 +453,12 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
         },
         "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
         "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
+        "selector_aliases": {
+            item.field: {
+                "fields": list(item.aliases),
+                "values": dict(item.value_aliases),
+                "normalization": item.rule,
+            }
+            for item in adapter.surface.selector_normalizations
+        },
     }
