@@ -176,13 +176,17 @@ its own adapter projection, tests, and runtime evidence. An explicit custom
 native command remains an unverified escape hatch under the existing backend
 boundary; it does not gain a verified dataset-handoff claim from this ADR.
 
-## Open decisions and recommendations
+## Resolved decisions
 
-| Question | Recommendation for owner review |
+Each question left open when this ADR was accepted is now settled by the
+implementation; the detail lives in
+[dataset-handoff-implementation-spec.md](../dataset-handoff-implementation-spec.md).
+
+| Question | Resolution |
 | --- | --- |
-| Typed-reference row details | Define the closed JSONL field spelling, ordering, inline versus referenced caption precedence, and relationship syntax in a specification. Preserve the ADR-level typed-input versus metadata distinction. |
-| Dataset-prep skill example | The current `.agents/skills/dataset-prep/SKILL.md` minimal `items.jsonl` example uses `id` and an untyped `path`. Update its explanation and example in the follow-on schema specification and skill synchronization work, once typed-reference syntax is fixed; do not imply that the legacy row is a formal version-2 input. |
-| Existing dataset migration interface | Make draft/validate dry-run-first; report ambiguous pairs, duplicate stems, unlisted candidate media, and unclassified files. Never rewrite media or silently turn a draft into approved run intent. Permit manual authoring for complex datasets. |
-| Resume from a run without the new lock | Preserve an explicit legacy path only where the existing digest and training-state contract allow it; display and record “media identity unverified.” Both new-lock runs compare semantic input identity, not host stat or sampler order. Never silently equate old digest with the new lock. |
-| RunPod selected-file transfer | Transfer only the frozen selected sources and generated native inputs, with a checked remote inventory and per-file content proof against the lock. Do not create a Pod when a required source cannot be transferred. Decide the archive/stream format before replacing the current whole-dataset upload. |
-| Candidate-media inventory scope | Inspect only declared dataset roots and explicit media conventions, report possible omissions, and require owner resolution when the candidate could affect this run. Do not treat every unrelated dataset file as a training sample. |
+| Typed-reference row details | `items_schema_version: 2` rows carry ordered typed `files[]` entries (`type`, `role`, `path`, optional `sha256`), a caption of `{text}`, `{file}`, or `null`, and an optional opaque `group`; metadata never selects inputs. |
+| Dataset-prep skill example | `.agents/skills/dataset-prep/SKILL.md` teaches the v2 row and how to replace the old selectors (`dataset_folder`, `control_subdir`). |
+| Existing dataset migration interface | `kura dataset draft` previews reviewable v2 candidate files, and `kura dataset validate` checks them; neither rewrites media nor turns a draft into run intent. |
+| Resume from a run without the new lock | Resume compares semantic input identity when both runs have v2 locks and records `legacy-unverified` / `source-unverified` when the source run cannot prove media identity. |
+| RunPod selected-file transfer | Stage archives only the frozen selected files with per-file SHA-256 proof; launch re-proves the stage and pins its manifest before Pod creation; the Pod verifies the archive and every file before model acquisition. |
+| Candidate-media inventory scope | Manifest measurement reports unlisted media only under declared dataset roots and requires them to be listed or explicitly excluded. |

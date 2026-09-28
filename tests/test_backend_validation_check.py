@@ -8,6 +8,7 @@ import unittest
 from scripts.check_backend_validation import (
     migration_pending_contract_ids,
     render_backend_validation_markdown,
+    support_matrix_migration_pending,
     validate_backend_validation_plan,
 )
 
@@ -312,3 +313,23 @@ class BackendValidationCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SupportMatrixMigrationPendingTests(unittest.TestCase):
+    def test_pending_rows_outside_every_inventory_still_block_merge(self) -> None:
+        text = "\n".join([
+            "| Backend | Model family | Adapter | Status | Verified scope |",
+            "| trainer-a | Family | Built-in | 🔧 | Compiles through the manifest path |",
+            "| trainer-b | Family | Built-in | 🟡 | Manifest projection Migration Pending |",
+            "Prose that mentions migration pending outside a table row is not a claim.",
+        ])
+
+        failures = support_matrix_migration_pending(text)
+
+        self.assertEqual(failures, ["docs/backend-support.md:3: merge blocked by a migration-pending support row"])
+
+    def test_the_published_matrix_has_no_pending_rows(self) -> None:
+        from pathlib import Path
+
+        text = (Path(__file__).resolve().parents[1] / "docs" / "backend-support.md").read_text(encoding="utf-8")
+        self.assertEqual(support_matrix_migration_pending(text), [])

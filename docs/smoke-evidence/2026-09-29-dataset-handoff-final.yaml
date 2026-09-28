@@ -115,11 +115,72 @@ sd_scripts_avif:
   pillow: 11.0.0 without an AVIF plugin
   upstream_gate: library/dataset.py adds .avif only after importing pillow_avif
   conclusion: excluding .avif from SD_SCRIPTS_IMAGE_SUFFIXES matches the pinned image
+sd_scripts_manifest_v2:
+  adapter_source: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+  image: nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+  architecture: sd15
+  model: Comfy-Org/stable-diffusion-v1-5-archive v1-5-pruned-emaonly-fp16 (cached, 0 B downloaded)
+  dataset: kura-smoke-multiconcept (person/nested/ 3 samples, tiny/ 1 sample; two manifest groups)
+  first_attempt:
+    run_id: 20260929-0202_sd15-multiconcept-handoff_aa85
+    outcome: failed by recipe, not handoff; sd-scripts read the correct subset view but rejected large images at 256 with bucketing disabled
+  multi_concept:
+    run_id: 20260929-0204_sd15-multiconcept-bucketed_3b3d
+    subsets:
+      - {group: person, image_dir: cache/dataset-view/sd-scripts/kura-smoke-multiconcept/subset-000, num_repeats: 2}
+      - {group: tiny, image_dir: cache/dataset-view/sd-scripts/kura-smoke-multiconcept/subset-001, num_repeats: 1}
+    view: {verification: matched, link_count: 4}
+    postflight: matched
+    view_cleanup: removed
+    publication: completed
+  local_path_model:
+    run_id: 20260929-0206_sd15-local-path-model_b1d3
+    model_mount: ro
+    postflight: matched
+    publication: completed
+  resume:
+    run_id: 20260929-0210_sd15-resume-final_0a6e
+    source_run: 20260929-0204_sd15-multiconcept-bucketed_3b3d
+    state_mount: ro
+    kura_checks: [training state verified]
+    logical_steps: 1 to 2
+    postflight: matched
+    publication: completed
+musubi_manifest_v2:
+  adapter_source: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+  image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+  architecture: wan (T2V 1.3B)
+  models: cached Wan 2.1 dit, vae, and t5 (0 B downloaded)
+  dataset: musubi-video-smoke (1 video)
+  video_jsonl:
+    run_id: 20260929-0202_wan13-jsonl-handoff_2207
+    video_jsonl_file: cache/dataset-view/musubi/musubi-video-smoke/native/items.jsonl
+    frame_preflight: {status: passed, effective_frames: 5}
+    view: {verification: matched, link_count: 1}
+    postflight: matched
+    view_cleanup: removed
+    publication: completed
+  local_path_model:
+    run_id: 20260929-0206_wan13-local-path-model_1b3b
+    model_mounts: [ro, ro, ro]
+    postflight: matched
+    publication: completed
+  resume:
+    run_id: 20260929-0210_wan13-resume-final_1d4b
+    source_run: 20260929-0202_wan13-jsonl-handoff_2207
+    state_mount: ro
+    kura_checks: [training state verified]
+    logical_steps: 1 to 2
+    postflight: matched
+    publication: completed
 scope: >-
   Proves the final manifest-v2 handoff end to end on real trainers: the
   AI-Toolkit trainer reads Kura's run-owned view for root-level and images/
   layouts; the RunPod path transfers only selected files, verifies them on the
   Pod before model acquisition, and returns its records; local-path models and
   Resume state are mounted read-only; the embedded-audio preflight rejects a
-  silent video and accepts one with audio. It does not establish LoRA quality,
-  LTX-2.5 training, or other backends' runtime behavior.
+  silent video and accepts one with audio. sd-scripts proves a nested
+  multi-concept handoff with per-group subsets and repeats, and Musubi proves
+  the generated video JSONL handoff; both also prove read-only local-path
+  models and Resume state. It does not establish LoRA quality, LTX-2.5
+  training, or other architectures' runtime behavior.

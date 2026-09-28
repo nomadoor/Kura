@@ -21,6 +21,11 @@ from kura.backends.sd_scripts_datasets import (
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.container_scripts import script_source
 from kura.run_commands.plan import _disk_cache_estimate as _sd_scripts_disk_cache_estimate, _disk_cache_preflight_report as _sd_scripts_cache_preflight_report
+from kura.backends.sd_scripts import compile_sd_scripts
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
@@ -66,6 +71,55 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
         offset += 4
     encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
     path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + body)
+
+
+class SdScriptsManifestCompileTests(unittest.TestCase):
+    """Every built-in LoRA architecture compiles through the manifest profile/codec path."""
+
+    CASES = {
+        "sd15": ({"base": "/workspace/models/sd15.safetensors"}, "train_network.py"),
+        "sdxl": ({"base": "/workspace/models/sdxl.safetensors"}, "sdxl_train_network.py"),
+        "flux1": ({
+            "dit": "/workspace/models/flux1-dev.safetensors", "clip_l": "/workspace/models/clip_l.safetensors",
+            "t5xxl": "/workspace/models/t5xxl.safetensors", "ae": "/workspace/models/ae.safetensors",
+        }, "flux_train_network.py"),
+        "anima": ({
+            "dit": "/workspace/models/anima.safetensors", "qwen3": "/workspace/models/qwen3.safetensors",
+            "vae": "/workspace/models/anima-vae.safetensors",
+        }, "anima_train_network.py"),
+    }
+
+    def test_every_lora_architecture_compiles_through_the_frozen_manifest_view(self) -> None:
+        for architecture, (model_paths, script) in self.CASES.items():
+            with self.subTest(architecture=architecture), tempfile.TemporaryDirectory() as directory:
+                run = {
+                    "id": "example",
+                    "type": "train",
+                    "backend": {"name": "sd-scripts", "config": {
+                        "architecture": architecture, "mode": "lora", "model_paths": model_paths,
+                        "dataset_config": {
+                            "general": {"caption_extension": ".txt", "resolution": [256, 256]},
+                            "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "tiny", "num_repeats": 2}]}],
+                        },
+                    }},
+                    "model": {"base": architecture},
+                    "datasets": [{"id": "tiny"}],
+                    "recipe": {"steps": 1, "seed": 1},
+                }
+                resolved = Path(directory) / "runs" / "example" / "resolved"
+                resolved.mkdir(parents=True)
+                report = freeze_fixture(run, resolved)
+
+                command = compile_sd_scripts(run, resolved / "sd-scripts")
+
+                projected = report["datasets"][0]
+                self.assertEqual(projected["policy"]["profile"], "ordinary-image-lora")
+                self.assertEqual(projected["policy"]["codec"], "dreambooth-image-subset")
+                toml = tomllib.loads((resolved / "sd-scripts" / "dataset.toml").read_text(encoding="utf-8"))
+                subset = toml["datasets"][0]["subsets"][0]
+                self.assertEqual(subset["num_repeats"], 2)
+                self.assertTrue(subset["image_dir"].startswith("/workspace/runs/example/cache/dataset-view/sd-scripts/"))
+                self.assertIn(script, json.dumps(command))
 
 
 class SdScriptsBackendTests(unittest.TestCase):

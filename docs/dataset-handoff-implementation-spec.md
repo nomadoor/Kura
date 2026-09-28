@@ -1,7 +1,8 @@
 # Dataset handoff implementation specification
 
-Status: draft for owner review. This is an implementation contract, not a claim
-that the current worktree or any backend already satisfies it.
+Status: implemented. The merge criteria below are met; the real-container and
+RunPod smokes are recorded in
+[smoke-evidence/2026-09-29-dataset-handoff-final.yaml](smoke-evidence/2026-09-29-dataset-handoff-final.yaml).
 
 Decision source: [dataset-projection-contract ADR](adr/dataset-projection-contract.md).
 This document specifies one atomic change for all three built-in training

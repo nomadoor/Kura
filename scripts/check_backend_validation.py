@@ -13,6 +13,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_DIR = ROOT / "docs" / "backend-validation"
 SMOKE_PATH = ROOT / "docs" / "backend-smoke-evidence.yaml"
+SUPPORT_PATH = ROOT / "docs" / "backend-support.md"
 IDENTITY_KEYS = {"kind", "value"}
 UPGRADE_STATUSES = {"in_progress", "complete"}
 CHANGE_KINDS = {"execution-contract", "enhancement", "outside-contract"}
@@ -20,6 +21,19 @@ DISPOSITIONS = {"support", "unsupported", "not_applicable"}
 ADAPTER_KINDS = {"built-in", "generic", "escape-hatch"}
 EXECUTION_LIST_KEYS = ("entrypoints", "model_roles", "cache_stages")
 MIGRATION_STATUSES = {"pending"}
+
+
+def support_matrix_migration_pending(text: str) -> list[str]:
+    """Rows of the published support matrix that still await migration.
+
+    Inventories cover only audited upgrades, so the matrix itself is checked
+    too; otherwise a backend outside every inventory passes as a false green.
+    """
+    failures = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.startswith("|") and ("🟡" in line or "migration pending" in line.lower()):
+            failures.append(f"docs/backend-support.md:{number}: merge blocked by a migration-pending support row")
+    return failures
 
 
 def _markdown_cell(value: object) -> str:
@@ -457,6 +471,8 @@ def main(argv: list[str] | None = None) -> int:
     smoke_payload = yaml.safe_load(SMOKE_PATH.read_text(encoding="utf-8"))
     smoke_records = smoke_payload.get("records", []) if isinstance(smoke_payload, dict) else []
     failures: list[str] = []
+    if args.require_no_migration_pending:
+        failures.extend(support_matrix_migration_pending(SUPPORT_PATH.read_text(encoding="utf-8")))
     paths = sorted(PLAN_DIR.glob("*.yaml")) if PLAN_DIR.is_dir() else []
     if not paths:
         failures.append("docs/backend-validation must contain at least one YAML plan")
