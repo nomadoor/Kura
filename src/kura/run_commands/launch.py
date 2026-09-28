@@ -323,40 +323,27 @@ def launch_run(
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
         spec = _load_frozen_command(run_dir, locked)
-        if isinstance(input_lock, dict):
-            from kura.dataset_handoff import (
-                inspect_dataset_sources,
-                materialize_dataset_view,
-            )
+        if isinstance(input_lock, dict) and input_lock.get("schema_version") == 2:
+            from kura.dataset_handoff import inspect_dataset_sources
 
-            if input_lock.get("schema_version") == 2:
-                changes = inspect_dataset_sources(_workspace(), input_lock)
-                if changes:
-                    raise ValueError(
-                        "compiled dataset input changed; recompile the run: " + "; ".join(changes[:5])
-                    )
-                view_link_count = None
-                view_link_verification = None
-                if executor == "docker" and not dry_run:
-                    materialize_dataset_view(_workspace(), input_lock)
-                    view_link_count = sum(
-                        len(view.get("links", []))
-                        for view in input_lock.get("views", [])
-                        if isinstance(view, dict) and isinstance(view.get("links"), list)
-                    )
-                    view_link_verification = "matched"
-                input_preflight = {
-                    "event": "dataset_input_preflight",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "executor": executor,
-                    "compile_verification": input_lock.get("verification"),
-                    "launch_verification": "stat-match",
-                    "source_stat_verification": "matched",
-                    "view_link_verification": view_link_verification,
-                    "view_link_count": view_link_count,
-                    "input_sha256": input_lock.get("input_sha256"),
-                    "runpod_transfer_preflight": None,
-                }
+            # Executor-neutral check. The executor that consumes the lock owns
+            # its transport (a local view for Docker) and records that fact in
+            # its realization.
+            changes = inspect_dataset_sources(_workspace(), input_lock)
+            if changes:
+                raise ValueError(
+                    "compiled dataset input changed; recompile the run: " + "; ".join(changes[:5])
+                )
+            input_preflight = {
+                "event": "dataset_input_preflight",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "executor": executor,
+                "compile_verification": input_lock.get("verification"),
+                "launch_verification": "stat-match",
+                "source_stat_verification": "matched",
+                "input_sha256": input_lock.get("input_sha256"),
+                "runpod_transfer_preflight": None,
+            }
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1

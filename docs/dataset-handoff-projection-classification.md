@@ -405,10 +405,6 @@ is marked `migration: pending`; merge readiness must run
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Materialize a compiled dataset view exactly once during launch. Remove the
-  duplicate ownership between `launch.py` and the Docker executor and keep the
-  operation at the layer that can enforce every executor's pre-acquisition
-  contract.
 - Remove unused `workspace` and `strict` parameters from backend compiler and
   dataset-config writer interfaces where they are accepted and immediately
   discarded. Preserve a parameter only when its contract has a real consumer.

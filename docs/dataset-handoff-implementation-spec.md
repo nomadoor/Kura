@@ -244,6 +244,9 @@ Pinned evidence to check in tests/review:
 The authored dataset stays in place. The materializer builds the exact
 backend-native view in a run-owned folder using symlinks to selected source
 files and real files for generated captions, JSONL, and configuration. The
+Docker executor is the view's only owner: it builds the view immediately
+before the mounts that expose it and records the verified link count in its
+realization. Launch performs only the executor-neutral source-stat check. The
 folder is writable so pinned trainers can create adjacent `_latent_cache`,
 `.aitk_size.json`, `cache_info`, and similar files there. Kura does not copy
 or snapshot local media, use hardlinks, or patch upstream images for adjacent

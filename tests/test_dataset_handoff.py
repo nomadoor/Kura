@@ -6,6 +6,7 @@ import argparse
 from copy import deepcopy
 import json
 import os
+import subprocess
 import tempfile
 import tomllib
 import unittest
@@ -6483,6 +6484,53 @@ class DatasetHandoffTests(unittest.TestCase):
             volumes = [command[index + 1] for index, value in enumerate(command) if value == "--volume"]
             self.assertNotIn(f"{workspace.resolve()}:/workspace", volumes)
             self.assertIn(f"{resolved.resolve()}:/workspace/runs/example/resolved:ro", volumes)
+
+    def test_v2_docker_launch_is_the_only_view_owner_and_records_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            (resolved.parent / "status.json").write_text(
+                json.dumps({"run_id": "example", "state": "compiled"}), encoding="utf-8",
+            )
+            started = subprocess.CompletedProcess([], 0, "container-id\n", "")
+            with (
+                patch("kura.executors.docker._docker_image_id", return_value=None),
+                patch("kura.executors.docker.docker_preflight", return_value={}),
+                patch("kura.executors.docker.subprocess.run", return_value=started),
+                patch(
+                    "kura.executors.docker.materialize_dataset_view",
+                    wraps=materialize_dataset_view,
+                ) as materialize,
+            ):
+                _, realization_id = launch_docker(
+                    workspace=workspace,
+                    run_dir=resolved.parent,
+                    spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
+                    image="example:image",
+                    dockerfile="docker/ai-toolkit/Dockerfile",
+                    mounts=[],
+                    gpu=False,
+                    dry_run=False,
+                )
+
+            materialize.assert_called_once()
+            self.assertTrue((workspace / lock["views"][0]["root"]).is_dir())
+            realization = json.loads(
+                (resolved.parent / "realizations" / f"{realization_id}.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                realization["dataset_view"],
+                {"verification": "matched", "link_count": len(lock["views"][0]["links"])},
+            )
+            import kura.run_commands.launch as launch_module
+            self.assertFalse(hasattr(launch_module, "materialize_dataset_view"))
 
     def test_v2_docker_dry_run_mounts_resume_state_and_local_models_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

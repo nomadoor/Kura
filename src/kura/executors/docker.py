@@ -387,13 +387,20 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
     mount_workspace = True
     input_lock_path = run_dir / "resolved" / "dataset-input.lock.json"
     input_lock = None
+    dataset_view = None
     if input_lock_path.is_file():
         input_lock = json.loads(input_lock_path.read_text(encoding="utf-8"))
     if isinstance(input_lock, dict) and input_lock.get("schema_version") == 2:
         effective_mounts = local_training_mounts(workspace, run_dir, input_lock, configured=mounts)
         mount_workspace = False
         if not dry_run:
+            # The Docker executor is the only owner of the local view: it is
+            # created here, immediately before the mounts that expose it.
             materialize_dataset_view(workspace, input_lock)
+            dataset_view = {
+                "verification": "matched",
+                "link_count": sum(len(view.get("links", [])) for view in input_lock.get("views", [])),
+            }
     else:
         effective_mounts = _effective_mounts(mounts, workspace_target)
     preflight = {} if dry_run else docker_preflight(workspace, effective_mounts, min_free_gb=min_free_gb)
@@ -439,6 +446,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in effective_mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
         "output_baseline": output_baseline,
+        **({"dataset_view": dataset_view} if dataset_view is not None else {}),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
         "platform": platform.platform(), "host": platform.node(), "kura_version": __version__, "preflight": preflight,
