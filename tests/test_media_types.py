@@ -42,6 +42,11 @@ class MediaTypeRegistryTests(unittest.TestCase):
             ".webm", ".wmv",
         }))
 
+    def test_sd_scripts_image_loader_capability_matches_the_pinned_image(self) -> None:
+        self.assertEqual(SD_SCRIPTS_IMAGE_SUFFIXES, frozenset({
+            ".bmp", ".jpeg", ".jpg", ".png", ".webp",
+        }))
+
     def test_frozen_suffixes_is_stable_and_compact(self) -> None:
         self.assertEqual(frozen_suffixes({".webm", ".mp4"}), '[".mp4",".webm"]')
 

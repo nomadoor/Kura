@@ -7,6 +7,27 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: sd-scripts-pinned-image-avif-capability-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Match first-class image suffixes to the pinned sd-scripts image: the
+      loader adds AVIF only when pillow_avif imports successfully, while the
+      image installs the pinned requirements and editable package, neither of
+      which declares that optional plugin. Existing evidence uses PNG or JPEG
+      inputs, so selected inputs, generated views, native configuration,
+      commands, and artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f483e359a4a21d293bd0f561f3e1ee0e9278cd4ad9b3883dcd665ed2c79ac2cf
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6b10b104c008912ce110f25154b44217d581e8e2477a3a6a2d4b3713df743441
   - id: frozen-ai-toolkit-loader-suffix-capability-2026-09-28
     backend: ai-toolkit
     reason: >-

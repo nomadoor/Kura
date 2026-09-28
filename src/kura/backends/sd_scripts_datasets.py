@@ -21,10 +21,12 @@ from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
 
 
-# Pinned sd-scripts 6721028, library/dataset.py:70-93. AVIF is a
-# conditional entry gated by importing pillow_avif; P2-7 verifies whether that
-# dependency exists in Kura's pinned image before this capability is finalized.
-SD_SCRIPTS_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"})
+# Pinned sd-scripts 6721028, library/dataset.py:70-93. AVIF and JXL are
+# conditional on pillow_avif / jxlpy / pillow_jxl imports. Kura's pinned image
+# installs that revision's requirements.txt and editable setup.py; neither
+# declares those optional plugins, so only the unconditional loader entries are
+# first-class capabilities.
+SD_SCRIPTS_IMAGE_SUFFIXES = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".webp"})
 
 
 def _sd_scripts_caption_projection(

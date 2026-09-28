@@ -394,6 +394,10 @@ is marked `migration: pending`; merge readiness must run
 
 ## Final integration cleanup ledger
 
+- The final pinned-image sd-scripts smoke records that
+  `python -c "import pillow_avif"` fails inside the fixed image. This confirms
+  the build-definition inference behind excluding conditional AVIF support;
+  image pull/build is not required before that approved smoke.
 - Canonicalize Musubi architecture aliases through `_musubi_architecture` so
   `musubi_datasets.py`, `musubi_command.py`, and `musubi_models.py` no longer
   repeat the `minimax_h3` / `minimaxh3` spelling pair. Keep one canonical key

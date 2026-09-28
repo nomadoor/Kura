@@ -4388,6 +4388,28 @@ class DatasetHandoffTests(unittest.TestCase):
                     project=lambda selection: project_sd_scripts_dataset(run, selection),
                 )
 
+    def test_sd_scripts_rejects_avif_missing_from_the_pinned_image_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            run["backend"] = {"name": "sd-scripts", "config": {
+                "architecture": "sd15", "mode": "lora",
+                "dataset_config": {"datasets": [{"subsets": [
+                    {"dataset_id": "tiny", "num_repeats": 1},
+                ]}]},
+            }}
+            dataset = workspace / "datasets" / "tiny"
+            (dataset / "a.png").rename(dataset / "a.avif")
+            row = json.loads((dataset / "items.jsonl").read_text(encoding="utf-8"))
+            row["files"][0]["path"] = "a.avif"
+            (dataset / "items.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "no verified sd-scripts projection profile matches"):
+                freeze_dataset_handoff(
+                    run, workspace, resolved, backend="sd-scripts",
+                    project=lambda selection: project_sd_scripts_dataset(run, selection),
+                )
+
     def test_musubi_projects_wan_video_caption_with_explicit_frame_options(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
