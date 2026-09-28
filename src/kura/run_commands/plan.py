@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 from kura.backends import get_backend, validate_backend_config
+from kura.backends.musubi_datasets import MUSUBI_DATASET_GENERAL_DEFAULTS
 from kura.dataset_handoff import inspect_dataset_sources, inspect_dataset_view
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
@@ -1424,7 +1425,12 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                     else:
                         backend = payload.get("backend")
                         config = backend.get("config") if isinstance(backend, dict) else None
-                        general = config.get("resolution", [960, 544]) if isinstance(config, dict) else [960, 544]
+                        default_resolution = MUSUBI_DATASET_GENERAL_DEFAULTS["resolution"]
+                        general = (
+                            config.get("resolution", default_resolution)
+                            if isinstance(config, dict)
+                            else default_resolution
+                        )
                         resolution_text = f"{general} (general)"
                     lines.append(
                         f"    - group {_format_plan_value(group)}: repeats "

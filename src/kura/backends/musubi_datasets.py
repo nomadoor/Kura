@@ -29,6 +29,32 @@ VIDEO_SUFFIXES = {".avi", ".mkv", ".mov", ".mp4", ".webm"}
 AUDIO_SUFFIXES = {".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav"}
 MUSUBI_CAPTION_TRANSFORM = "strip"
 FRAMEPACK_LATENT_WINDOW_SIZE = 9
+MUSUBI_DATASET_GENERAL_DEFAULTS = {
+    "resolution": [960, 544],
+    "caption_extension": ".txt",
+    "batch_size": 1,
+    "enable_bucket": True,
+    "bucket_no_upscale": False,
+}
+
+
+_MINIMAX_H3_DATASET_REQUIREMENTS = {
+    "batch_size": {
+        "kind": "literal",
+        "value": MUSUBI_DATASET_GENERAL_DEFAULTS["batch_size"],
+        "default": MUSUBI_DATASET_GENERAL_DEFAULTS["batch_size"],
+    },
+    "resolution": {
+        "kind": "positive-integer-pair-multiple",
+        "multiple": 32,
+        "default": MUSUBI_DATASET_GENERAL_DEFAULTS["resolution"],
+        "block_field": "resolution",
+    },
+}
+MUSUBI_ARCHITECTURE_REQUIREMENTS = {
+    "minimax_h3": _MINIMAX_H3_DATASET_REQUIREMENTS,
+    "minimaxh3": _MINIMAX_H3_DATASET_REQUIREMENTS,
+}
 
 
 @dataclass(frozen=True)
@@ -1191,7 +1217,65 @@ def _project_musubi_jsonl_block(
 def validate_musubi_authored_config(run: dict[str, Any]) -> None:
     """Validate typed Musubi configuration before writing compile artifacts."""
 
-    _musubi_dataset_options(run)
+    dataset_options = _musubi_dataset_options(run)
+    _validate_musubi_architecture_requirements(run, dataset_options)
+
+
+def _validate_musubi_architecture_requirements(
+    run: dict[str, Any], dataset_options: dict[str, dict[str, Any]],
+) -> None:
+    """Apply model-local dataset requirements declared by architecture."""
+
+    override = _musubi_backend_override(run)
+    if override.get("architecture") is None and override.get("model_arch") is None:
+        return
+    architecture = _musubi_architecture(run)
+    for field, requirement in MUSUBI_ARCHITECTURE_REQUIREMENTS.get(
+        architecture, {},
+    ).items():
+        values = [(f"backend.config.{field}", override.get(field, requirement["default"]))]
+        block_field = requirement.get("block_field")
+        if isinstance(block_field, str):
+            values.extend(
+                (
+                    f"backend.config.dataset_options.{dataset_id}.blocks[{index}].{block_field}",
+                    block[block_field],
+                )
+                for dataset_id, options in dataset_options.items()
+                for index, block in enumerate(options.get("blocks") or [])
+                if block_field in block
+            )
+        kind = requirement["kind"]
+        for source, value in values:
+            if kind == "literal":
+                expected = requirement["value"]
+                if type(value) is not type(expected) or value != expected:
+                    raise ValueError(
+                        f"Musubi architecture {architecture!r} requires "
+                        f"{source}={expected!r}"
+                    )
+                continue
+            if kind == "positive-integer-pair-multiple":
+                multiple = requirement["multiple"]
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or any(
+                        isinstance(item, bool)
+                        or not isinstance(item, int)
+                        or item <= 0
+                        or item % multiple
+                        for item in value
+                    )
+                ):
+                    raise ValueError(
+                        f"Musubi architecture {architecture!r} requires {source} "
+                        f"to contain two positive multiples of {multiple}"
+                    )
+                continue
+            raise ValueError(
+                f"Musubi architecture requirement {field!r} has unsupported kind {kind!r}"
+            )
 
 
 def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
@@ -1202,13 +1286,7 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, work
         raise ValueError("Musubi Tuner requires datasets[]")
     if override.get("dataset_config") is not None:
         raise ValueError("Musubi first-class manifest compile cannot use an authored dataset config")
-    general = {
-        "resolution": [960, 544],
-        "caption_extension": ".txt",
-        "batch_size": 1,
-        "enable_bucket": True,
-        "bucket_no_upscale": False,
-    }
+    general = deepcopy(MUSUBI_DATASET_GENERAL_DEFAULTS)
     for key in ("batch_size", "resolution"):
         if key in override:
             general[key] = override[key]

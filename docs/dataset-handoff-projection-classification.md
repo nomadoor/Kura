@@ -394,6 +394,10 @@ is marked `migration: pending`; merge readiness must run
 
 ## Final integration cleanup ledger
 
+- Canonicalize Musubi architecture aliases through `_musubi_architecture` so
+  `musubi_datasets.py`, `musubi_command.py`, and `musubi_models.py` no longer
+  repeat the `minimax_h3` / `minimaxh3` spelling pair. Keep one canonical key
+  in each downstream table and one alias map at the native-selector boundary.
 - Remove AI-Toolkit's non-strict directory-derived dataset projection. Direct
   compiler tests must supply the same frozen manifest projection used by the
   public compile path; they must not preserve a second inferred transport.

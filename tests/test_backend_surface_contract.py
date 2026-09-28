@@ -378,6 +378,46 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, rf"{expected}.*not applicable"):
                     validate_backend_config(run)
 
+    def test_musubi_minimax_h3_architecture_requirements_guard_batch_and_resolution(self) -> None:
+        base = {
+            "backend": {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+            }},
+            "datasets": [{"id": "tiny"}],
+        }
+        invalid = (
+            ({"batch_size": 2}, r"minimax_h3.*batch_size=1"),
+            ({"batch_size": True}, r"minimax_h3.*batch_size=1"),
+            ({"resolution": [960, 550]}, r"minimax_h3.*resolution.*multiples of 32"),
+            ({"resolution": [960]}, r"minimax_h3.*resolution.*multiples of 32"),
+            (
+                {"dataset_options": {"tiny": {"blocks": [{"resolution": [960, 550]}]}}},
+                r"minimax_h3.*dataset_options\.tiny\.blocks\[0\]\.resolution.*multiples of 32",
+            ),
+        )
+        for fields, expected in invalid:
+            with self.subTest(fields=fields):
+                run = deepcopy(base)
+                run["backend"]["config"].update(fields)
+                with self.assertRaisesRegex(ValueError, expected):
+                    validate_backend_config(run)
+
+        validate_backend_config(base)
+        explicit = deepcopy(base)
+        explicit["backend"]["config"].update({
+            "batch_size": 1,
+            "resolution": [1024, 768],
+        })
+        validate_backend_config(explicit)
+
+        unrelated = deepcopy(base)
+        unrelated["backend"]["config"].update({
+            "architecture": "wan",
+            "batch_size": 2,
+            "resolution": [960, 550],
+        })
+        validate_backend_config(unrelated)
+
     def test_musubi_capabilities_expose_manifest_projection_options_only(self) -> None:
         capabilities = backend_capabilities("musubi-tuner")
 

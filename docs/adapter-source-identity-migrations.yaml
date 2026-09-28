@@ -7,6 +7,31 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: musubi-minimax-h3-dataset-requirements-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Restore the pinned MiniMax-H3 dataset guards as architecture requirements:
+      batch_size must be 1 and every effective resolution must contain positive
+      multiples of 32. Existing evidence-scoped runs use batch size 1 and valid
+      default or authored resolutions, so their generated JSONL, native TOML,
+      commands, optimizer behavior, and artifacts remain unchanged. This
+      migration does not claim evidence for a configuration rejected by the new
+      guard.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: cb39421edf298215f7198c85dacb04f12baa4a9ee77222c9cccfc01d402749b4
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f0f6483186381094bb0de139f34062c3c56f6da7acb1c1fc79a417a9c5246040
   - id: ai-toolkit-explicit-group-blocks-existing-evidence-2026-09-28
     backend: ai-toolkit
     reason: >-
