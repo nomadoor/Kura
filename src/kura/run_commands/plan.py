@@ -19,7 +19,6 @@ from typing import Any
 import yaml
 
 from kura.backends import get_backend, validate_backend_config
-from kura.backends.musubi_datasets import MUSUBI_DATASET_GENERAL_DEFAULTS
 from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
@@ -601,35 +600,31 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
     return records
 
 
-def _sd_scripts_disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+def _run_adapter(run: dict[str, Any]) -> Any:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    if backend.get("name") != "sd-scripts":
-        return {"enabled": False, "bytes": 0, "status": "not-applicable"}
-    native = backend_config(run, "sd-scripts")
-    enabled = any(native.get(key) is True for key in ("cache_latents_to_disk", "cache_text_encoder_outputs_to_disk"))
-    if not enabled:
-        return {"enabled": False, "bytes": 0, "status": "disabled"}
-    value = native.get("disk_cache_estimate_gb")
-    if isinstance(value, bool):
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
     try:
-        gib = float(value)
-    except (TypeError, ValueError):
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "set backend.config.disk_cache_estimate_gb after measuring the smoke recipe"}
-    if not math.isfinite(gib) or gib <= 0:
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
-    return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate"}
+        return get_backend(backend.get("name"))
+    except ValueError:
+        return None
 
 
-def _sd_scripts_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
-    estimate = _sd_scripts_disk_cache_estimate(run)
+def _disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+    adapter = _run_adapter(run)
+    if adapter is None or adapter.disk_cache_estimate is None:
+        return {"enabled": False, "bytes": 0, "status": "not-applicable"}
+    return adapter.disk_cache_estimate(run)
+
+
+def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
+    estimate = _disk_cache_estimate(run)
     if not estimate["enabled"]:
         return []
+    check = f"{_run_adapter(run).name}-disk-cache"
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if estimate["status"] == "unknown":
         severity = "info" if safety.get("allow_unknown_disk_cache") is True else "error"
-        return [_preflight_record("sd-scripts-disk-cache", severity, f"disk cache size is unknown; {estimate.get('detail')}", "run.yaml")]
-    return [_preflight_record("sd-scripts-disk-cache", "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
+        return [_preflight_record(check, severity, f"disk cache size is unknown; {estimate.get('detail')}", "run.yaml")]
+    return [_preflight_record(check, "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
 
 
 def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -727,7 +722,7 @@ def collect_run_preflight(
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
-    records.extend(_sd_scripts_cache_preflight_report(run))
+    records.extend(_disk_cache_preflight_report(run))
     important = (_adapter_display(run).get("checkpoint") or {})
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
@@ -770,7 +765,7 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
     container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=50)
     container_disk_bytes = container_disk_gib * 1024**3
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    disk_cache_estimate = _sd_scripts_disk_cache_estimate(run)
+    disk_cache_estimate = _disk_cache_estimate(run)
     estimated_write_bytes = int(download_estimate.get("bytes") or 0) + int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0)
     if estimated_write_bytes > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
         required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
@@ -812,7 +807,7 @@ def _local_launch_disk_preflight(
     if enforce_model_download_safety:
         _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    disk_cache_estimate = _sd_scripts_disk_cache_estimate(run)
+    disk_cache_estimate = _disk_cache_estimate(run)
     write_estimates = {
         "hf_cache": int(download_estimate.get("bytes") or 0),
         "workspace": int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0),
@@ -902,66 +897,21 @@ def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
     return _configured_gib(value, default=50) * 1024**3
 
 
+def _general_resolution(run: dict[str, Any]) -> Any:
+    adapter = _run_adapter(run)
+    if adapter is None or adapter.general_resolution is None:
+        return None
+    return adapter.general_resolution(run)
+
+
 def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
     projection = load_frozen_dataset_projection(
         run_dir / "resolved", required=False,
     )
     if projection is None:
         return []
-    checks = []
-    datasets = projection.get("datasets")
-    if not isinstance(datasets, list):
-        return checks
-    if projection.get("backend") == "ai-toolkit":
-        for dataset in datasets:
-            policy = dataset.get("policy") if isinstance(dataset, dict) else None
-            if isinstance(policy, dict) and policy.get("audio_selection") == "embedded-target-video":
-                checks.append({
-                    "kind": "ai-toolkit-embedded-audio",
-                    "dataset": dataset.get("id"),
-                    "timing": "immediately after container launch, before model acquisition",
-                    "host_verification": (
-                        "unavailable; invokes the pinned AI-Toolkit video/audio loader "
-                        "inside the container"
-                    ),
-                })
-        return checks
-    if projection.get("backend") != "musubi-tuner":
-        return checks
-    for dataset in datasets:
-        if not isinstance(dataset, dict):
-            continue
-        native = dataset.get("native")
-        if not isinstance(native, dict):
-            continue
-        blocks = native.get("datasets")
-        if not isinstance(blocks, list):
-            continue
-        policy = dataset.get("policy")
-        profile = policy.get("profile") if isinstance(policy, dict) else None
-        for index, block in enumerate(blocks):
-            if not isinstance(block, dict) or not any(
-                isinstance(block.get(key), str) for key in ("video_directory", "video_jsonl_file")
-            ):
-                continue
-            target_frames = block.get("target_frames")
-            if not isinstance(target_frames, list) or not target_frames:
-                continue
-            check = {
-                "kind": "musubi-video-effective-frame-count",
-                "dataset": dataset.get("id"),
-                "required_frames": max(target_frames),
-                "timing": "immediately after container launch, before model acquisition",
-                "host_verification": "unavailable; measured by the pinned Musubi loader inside the container",
-            }
-            if len(blocks) > 1:
-                check["block"] = index
-            if isinstance(profile, str) and profile.startswith("h3-video-"):
-                outside = sorted({frame for frame in target_frames if frame < 124 or frame > 345})
-                check["released_frame_range"] = [124, 345]
-                check["released_range_warning"] = outside
-            checks.append(check)
-    return checks
+    adapter = get_backend(projection["backend"])
+    return adapter.runtime_checks(projection) if adapter.runtime_checks is not None else []
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
@@ -1074,6 +1024,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
                 ],
                 "postflight": postflight,
                 "runtime_checks": _dataset_runtime_checks(run_dir),
+                "general_resolution": _general_resolution(run),
             }
         else:
             dataset_input_payload = {
@@ -1207,7 +1158,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "resources": resources,
         "runpod_capacity": _runpod_capacity_payload(run, workspace_config),
         "model_downloads": download_estimate,
-        "disk_cache": _sd_scripts_disk_cache_estimate(run),
+        "disk_cache": _disk_cache_estimate(run),
         "preflight": preflight,
         "experiment": experiment_context(workspace, run_id, run=run),
     }
@@ -1428,22 +1379,16 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                     if not isinstance(setting, dict):
                         continue
                     resolution = setting.get("resolution")
+                    general = dataset_input.get("general_resolution")
                     if isinstance(resolution, list):
-                        resolution_text = str(resolution)
+                        resolution_text = f", resolution {resolution}"
+                    elif general is not None:
+                        resolution_text = f", resolution {general} (general)"
                     else:
-                        backend = payload.get("backend")
-                        config = backend.get("config") if isinstance(backend, dict) else None
-                        default_resolution = MUSUBI_DATASET_GENERAL_DEFAULTS["resolution"]
-                        general = (
-                            config.get("resolution", default_resolution)
-                            if isinstance(config, dict)
-                            else default_resolution
-                        )
-                        resolution_text = f"{general} (general)"
+                        resolution_text = ""
                     lines.append(
                         f"    - group {_format_plan_value(group)}: repeats "
-                        f"{_format_plan_value(setting.get('num_repeats'))}, resolution "
-                        f"{resolution_text}"
+                        f"{_format_plan_value(setting.get('num_repeats'))}{resolution_text}"
                     )
         for check in dataset_input.get("runtime_checks", []):
             if not isinstance(check, dict):

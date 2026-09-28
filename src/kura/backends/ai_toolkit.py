@@ -950,6 +950,23 @@ def project_ai_toolkit_dataset(run: dict[str, Any], selection: dict[str, Any]) -
     return {"schema_version": 1, "backend": "ai-toolkit", "datasets": projected_datasets}
 
 
+def runtime_checks_ai_toolkit(projection: dict[str, Any]) -> list[dict[str, Any]]:
+    """Name the container-side checks a frozen AI-Toolkit handoff will run."""
+    return [
+        {
+            "kind": "ai-toolkit-embedded-audio",
+            "dataset": dataset["id"],
+            "timing": "immediately after container launch, before model acquisition",
+            "host_verification": (
+                "unavailable; invokes the pinned AI-Toolkit video/audio loader "
+                "inside the container"
+            ),
+        }
+        for dataset in projection["datasets"]
+        if (dataset.get("policy") or {}).get("audio_selection") == "embedded-target-video"
+    ]
+
+
 def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
     native = backend_config(run, "ai-toolkit")
     authored_arch = native.get("model_arch")

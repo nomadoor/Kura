@@ -478,6 +478,24 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def sd_scripts_disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+    """Estimate the run-scoped latent/text-encoder disk cache the author declared."""
+    native = backend_config(run, "sd-scripts")
+    enabled = any(native.get(key) is True for key in ("cache_latents_to_disk", "cache_text_encoder_outputs_to_disk"))
+    if not enabled:
+        return {"enabled": False, "bytes": 0, "status": "disabled"}
+    value = native.get("disk_cache_estimate_gb")
+    if isinstance(value, bool):
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
+    try:
+        gib = float(value)
+    except (TypeError, ValueError):
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "set backend.config.disk_cache_estimate_gb after measuring the smoke recipe"}
+    if not math.isfinite(gib) or gib <= 0:
+        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
+    return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate"}
+
+
 def compile_sd_scripts(run: dict[str, Any], destination: Path) -> dict[str, Any]:
     native = sd_scripts_native(run)
     destination.mkdir(parents=True, exist_ok=True)

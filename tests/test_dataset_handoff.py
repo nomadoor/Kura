@@ -54,7 +54,7 @@ from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff
 from kura.dataset_handoff import _digest, local_training_mounts
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
-from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, format_run_plan, plan_run
+from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, _disk_cache_estimate, _general_resolution, format_run_plan, plan_run
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
@@ -3463,6 +3463,23 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual([check["block"] for check in checks], [0, 1])
             self.assertEqual([check["required_frames"] for check in checks], [25, 25])
 
+    def test_plan_facts_come_from_the_adapter_not_plan_tables(self) -> None:
+        musubi = {"backend": {"name": "musubi-tuner", "config": {"architecture": "wan"}}}
+        self.assertEqual(_general_resolution(musubi), [960, 544])
+        musubi["backend"]["config"]["resolution"] = [640, 480]
+        self.assertEqual(_general_resolution(musubi), [640, 480])
+        for name in ("ai-toolkit", "sd-scripts"):
+            self.assertIsNone(_general_resolution({"backend": {"name": name, "config": {}}}))
+        self.assertEqual(
+            _disk_cache_estimate({"backend": {"name": "musubi-tuner", "config": {}}})["status"],
+            "not-applicable",
+        )
+        import kura.run_commands.plan as plan_module
+        source = Path(plan_module.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("kura.backends.musubi", source)
+        self.assertNotIn("kura.backends.sd_scripts", source)
+        self.assertNotIn("kura.backends.ai_toolkit", source)
+
     def test_musubi_group_block_plan_shows_mapping_repeat_and_resolution(self) -> None:
         output = format_run_plan({
             "id": "example", "type": "train",
@@ -3471,6 +3488,7 @@ class DatasetHandoffTests(unittest.TestCase):
             "dataset_input": {
                 "status": "current", "verification": "content-hash-at-compile",
                 "selection": [], "changes": [], "runtime_checks": [],
+                "general_resolution": [960, 544],
                 "views": [
                     {"dataset": "tiny", "id": "musubi-tiny-block-000", "root": "first", "repeat": 3,
                      "links": 1, "generated_files": 0},

@@ -405,12 +405,6 @@ is marked `migration: pending`; merge readiness must run
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Keep backend-specific planning facts out of `plan.py`. Define an
-  adapter-owned planning-facts interface for values such as sd-scripts disk
-  cache estimates, Musubi video-frame checks, and Musubi dataset defaults;
-  plan renders those facts without importing backend implementation tables.
-  Approve the interface proposal separately if the migration is too broad for
-  one cleanup commit.
 - Resolve three smaller adapter cleanup questions: avoid rescanning an audio
   sidecar parent directory once per video in `musubi_dataset_assert`; decide
   and document whether all three frozen forms (`semantic`, `native_runtime`,

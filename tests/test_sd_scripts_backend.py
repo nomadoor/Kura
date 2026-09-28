@@ -20,7 +20,7 @@ from kura.backends.sd_scripts_datasets import (
 )
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.container_scripts import script_source
-from kura.run_commands.plan import _sd_scripts_cache_preflight_report, _sd_scripts_disk_cache_estimate
+from kura.run_commands.plan import _disk_cache_estimate as _sd_scripts_disk_cache_estimate, _disk_cache_preflight_report as _sd_scripts_cache_preflight_report
 
 
 def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:

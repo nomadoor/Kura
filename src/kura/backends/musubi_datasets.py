@@ -1213,6 +1213,43 @@ def _project_musubi_jsonl_block(
     }
 
 
+def runtime_checks_musubi(projection: dict[str, Any]) -> list[dict[str, Any]]:
+    """Name the container-side video checks a frozen Musubi handoff will run."""
+    checks: list[dict[str, Any]] = []
+    for dataset in projection["datasets"]:
+        blocks = dataset["native"].get("datasets", [])
+        profile = (dataset.get("policy") or {}).get("profile")
+        for index, block in enumerate(blocks):
+            target_frames = block.get("target_frames")
+            if (
+                not any(isinstance(block.get(key), str) for key in ("video_directory", "video_jsonl_file"))
+                or not isinstance(target_frames, list)
+                or not target_frames
+            ):
+                continue
+            check: dict[str, Any] = {
+                "kind": "musubi-video-effective-frame-count",
+                "dataset": dataset["id"],
+                "required_frames": max(target_frames),
+                "timing": "immediately after container launch, before model acquisition",
+                "host_verification": "unavailable; measured by the pinned Musubi loader inside the container",
+            }
+            if len(blocks) > 1:
+                check["block"] = index
+            if isinstance(profile, str) and profile.startswith("h3-video-"):
+                check["released_frame_range"] = [124, 345]
+                check["released_range_warning"] = sorted(
+                    {frame for frame in target_frames if frame < 124 or frame > 345}
+                )
+            checks.append(check)
+    return checks
+
+
+def musubi_general_resolution(run: dict[str, Any]) -> Any:
+    """Return the [general] resolution that blocks without their own inherit."""
+    return _musubi_backend_override(run).get("resolution", MUSUBI_DATASET_GENERAL_DEFAULTS["resolution"])
+
+
 def validate_musubi_authored_config(run: dict[str, Any]) -> None:
     """Validate typed Musubi configuration before writing compile artifacts."""
 
