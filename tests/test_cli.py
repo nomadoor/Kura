@@ -7549,6 +7549,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
             (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"SEED": "1"},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
             (run_dir / "transfer").mkdir()
             (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
             stage_path = run_dir / "realizations" / "stage.json"
@@ -7622,6 +7628,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
             (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"SEED": "1"},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
             (run_dir / "transfer").mkdir()
             (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
             (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
