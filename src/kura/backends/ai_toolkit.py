@@ -16,6 +16,7 @@ from kura.backends.dataset_profiles import (
 )
 from kura.backends.shared import _datasets, _script_command
 from kura.container_scripts import script_source
+from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.provenance import artifact_pinning
@@ -1212,38 +1213,6 @@ def _ai_toolkit_frozen_native_blocks(
     return native_datasets, views, wrapped
 
 
-def _validate_ai_toolkit_manifest_projection(projection: object) -> list[dict[str, Any]]:
-    """Reject pre-manifest test locks and accept only the frozen public report shape."""
-    if (
-        not isinstance(projection, dict)
-        or projection.get("schema_version") != 1
-        or projection.get("backend") != "ai-toolkit"
-        or not isinstance(projection.get("datasets"), list)
-    ):
-        raise ValueError("AI-Toolkit frozen manifest projection schema is invalid")
-    required = {
-        "id", "consumed", "unrepresentable", "native_string_fields", "policy",
-        "views", "semantic", "native_runtime", "native",
-    }
-    projected_datasets = projection["datasets"]
-    for item in projected_datasets:
-        if not isinstance(item, dict) or not required.issubset(item):
-            raise ValueError("AI-Toolkit frozen manifest projection schema is invalid")
-        if (
-            not isinstance(item["id"], str)
-            or not isinstance(item["consumed"], list)
-            or not isinstance(item["unrepresentable"], list)
-            or not isinstance(item["native_string_fields"], list)
-            or not isinstance(item["policy"], dict)
-            or not isinstance(item["views"], list)
-            or not isinstance(item["semantic"], dict)
-            or not isinstance(item["native_runtime"], dict)
-            or not isinstance(item["native"], dict)
-        ):
-            raise ValueError("AI-Toolkit frozen manifest projection schema is invalid")
-    return projected_datasets
-
-
 def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
     """Write AI-Toolkit native YAML for configured training runs."""
     del strict
@@ -1254,11 +1223,13 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path, *, workspace: Pat
     if override.get("command") is not None:
         projected_datasets = []
     else:
-        projection_path = destination.parent / "dataset-projection.lock.json"
-        if not projection_path.is_file():
-            raise ValueError("AI-Toolkit first-class compile requires a frozen manifest projection")
-        projection = json.loads(projection_path.read_text(encoding="utf-8"))
-        frozen_datasets = _validate_ai_toolkit_manifest_projection(projection)
+        projection = load_frozen_dataset_projection(
+            destination.parent,
+            backend="ai-toolkit",
+            dataset_ids=[str(item.get("id")) for item in datasets],
+        )
+        assert projection is not None
+        frozen_datasets = projection["datasets"]
         projected_by_id = {
             item["id"]: item for item in frozen_datasets
         }

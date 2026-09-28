@@ -23,7 +23,7 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
         latest = next(
             item for item in migrations["records"]
             if item["id"]
-            == "ai-toolkit-manifest-projection-lock-shape-2026-09-28"
+            == "core-frozen-projection-reader-ai-toolkit-2026-09-28"
         )
 
         self.assertEqual(migration["backend"], record["backend"])

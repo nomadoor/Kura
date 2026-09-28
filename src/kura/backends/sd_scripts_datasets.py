@@ -717,21 +717,12 @@ def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -
 
 
 def write_sd_scripts_dataset_config(
-    run: dict[str, Any], destination: Path, *, workspace: Path | None, strict: bool,
+    run: dict[str, Any], destination: Path, *, projection: dict[str, Any],
+    workspace: Path | None, strict: bool,
 ) -> dict[str, Any]:
     """Write only the native TOML already frozen and verified by core."""
     del workspace, strict
-    projection_path = destination.parent.parent / "dataset-projection.lock.json"
-    if not projection_path.is_file():
-        raise ValueError("sd-scripts first-class compile requires a frozen manifest projection")
-    projection = json.loads(projection_path.read_text(encoding="utf-8"))
-    projected = projection.get("datasets") if isinstance(projection, dict) else None
-    if (
-        not isinstance(projection, dict)
-        or projection.get("backend") != "sd-scripts"
-        or not isinstance(projected, list)
-    ):
-        raise ValueError("sd-scripts frozen projection is missing or belongs to another backend")
+    projected = projection["datasets"]
     selected_ids = [str(item.get("id")) for item in _datasets(run)]
     by_id = {
         item.get("id"): item for item in projected

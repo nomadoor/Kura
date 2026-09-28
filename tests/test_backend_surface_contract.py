@@ -16,6 +16,7 @@ import tempfile
 import yaml
 import unittest
 
+from kura.dataset_handoff import write_frozen_dataset_handoff
 from kura.backends import BACKENDS, BackendAdapter, backend_capabilities, validate_backend_config
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
 from kura.backends.musubi_command import _script_command as musubi_script_command
@@ -65,63 +66,46 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }]}
         projection = BACKENDS["ai-toolkit"].project_dataset(run, selection)
         resolved.mkdir(parents=True, exist_ok=True)
-        (resolved / "dataset-projection.lock.json").write_text(
-            json.dumps(projection), encoding="utf-8",
-        )
+        write_frozen_dataset_handoff(resolved, projection, {"schema_version": 2})
         return projection
 
     def _write_musubi_projection(self, run: dict[str, object], resolved: Path) -> None:
         dataset_id = str(run["datasets"][0]["id"])
-        source = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/source/items.jsonl"
-        cache = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/cache"
-        lock = {
-            "backend": "musubi-tuner",
-            "datasets": [{
-                "id": dataset_id,
-                "native": {"datasets": [{
-                    "image_jsonl_file": f"/workspace/{source}",
-                    "cache_directory": f"/workspace/{cache}",
-                    "num_repeats": 1,
-                }]},
-                "native_runtime": {"datasets": [{
-                    "image_jsonl_file": f"/workspace/{source}",
-                    "cache_directory": f"/workspace/{cache}",
-                    "num_repeats": 1,
-                }]},
-                "policy": {"block_settings": [{"num_repeats": 1}]},
-                "views": [{
-                    "consumers": [{
-                        "kind": "jsonl",
-                        "native_pointer": "/datasets/0/image_jsonl_file",
-                        "native_file": source,
-                    }],
-                    "write_roots": [{
-                        "native_pointer": "/datasets/0/cache_directory",
-                        "path": cache,
-                    }],
+        selection = {"datasets": [{
+            "id": dataset_id,
+            "samples": [{
+                "id": "sample",
+                "files": [{
+                    "input_id": f"{dataset_id}:sample:target:0",
+                    "role": "target",
+                    "path": "sample.png",
+                    "sha256": "1" * 64,
                 }],
+                "caption": {"input_id": f"{dataset_id}:sample:caption", "text": "caption"},
             }],
-        }
+        }]}
+        lock = BACKENDS["musubi-tuner"].project_dataset(run, selection)
         resolved.mkdir(parents=True, exist_ok=True)
-        (resolved / "dataset-projection.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        write_frozen_dataset_handoff(resolved, lock, {"schema_version": 2})
 
     def _write_sd_scripts_projection(self, run: dict[str, object], resolved: Path) -> None:
         dataset_id = str(run["datasets"][0]["id"])
-        view = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
-        block = {"subsets": [{
-            "image_dir": f"/workspace/{view}",
-            "num_repeats": 1,
-            "caption_extension": ".txt",
-        }]}
-        lock = {
-            "backend": "sd-scripts",
-            "datasets": [{
-                "id": dataset_id,
-                "native": {"datasets": [block]},
+        selection = {"datasets": [{
+            "id": dataset_id,
+            "samples": [{
+                "id": "sample",
+                "files": [{
+                    "input_id": f"{dataset_id}:sample:target:0",
+                    "role": "target",
+                    "path": "sample.png",
+                    "sha256": "1" * 64,
+                }],
+                "caption": {"input_id": f"{dataset_id}:sample:caption", "text": "caption"},
             }],
-        }
+        }]}
+        lock = BACKENDS["sd-scripts"].project_dataset(run, selection)
         resolved.mkdir(parents=True, exist_ok=True)
-        (resolved / "dataset-projection.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        write_frozen_dataset_handoff(resolved, lock, {"schema_version": 2})
 
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -130,6 +114,48 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     run = {"backend": {"name": name, "config": {"kura_unknown_sentinel": True}}}
                     with self.assertRaisesRegex(ValueError, "kura_unknown_sentinel"):
                         adapter.compile(run, Path(directory) / name, Path(directory), False)
+
+    def test_musubi_and_sd_scripts_reject_legacy_minimal_projection_locks(self) -> None:
+        runs = {
+            "musubi-tuner": {
+                "id": "legacy-musubi",
+                "backend": {"name": "musubi-tuner", "config": {
+                    "architecture": "flux2", "model_version": "klein-base-4b",
+                    "model_paths": {
+                        "dit": "/models/dit", "vae": "/models/vae",
+                        "text_encoder": "/models/text",
+                    },
+                }},
+                "model": {"base": "example/model"},
+                "datasets": [{"id": "tiny"}],
+                "recipe": {"steps": 1, "seed": 1},
+            },
+            "sd-scripts": {
+                "id": "legacy-sd",
+                "backend": {"name": "sd-scripts", "config": {
+                    "architecture": "sd15", "model_paths": {"base": "/models/base"},
+                    "dataset_config": {"datasets": [{"subsets": [{
+                        "dataset_id": "tiny", "num_repeats": 1,
+                    }]}]},
+                }},
+                "model": {"base": "/models/base"},
+                "datasets": [{"id": "tiny"}],
+                "recipe": {"steps": 1, "seed": 1},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for backend, run in runs.items():
+                with self.subTest(backend=backend):
+                    resolved = root / backend
+                    resolved.mkdir()
+                    (resolved / "dataset-projection.lock.json").write_text(json.dumps({
+                        "schema_version": 1,
+                        "backend": backend,
+                        "datasets": [{"id": "tiny", "native": {}, "views": [{}]}],
+                    }), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
+                        BACKENDS[backend].compile(run, resolved, root, False)
 
     def test_plausible_general_ml_substitutions_name_the_fix(self) -> None:
         for name in BACKENDS:

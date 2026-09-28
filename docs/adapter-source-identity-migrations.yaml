@@ -7,6 +7,73 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: core-frozen-projection-reader-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Load frozen dataset-projection locks through one core reader shared by
+      all built-in adapters. The report schema is checked only when
+      freeze_dataset_handoff writes it; the input lock records its digest and
+      the reader accepts only a report matching that digest. Valid public
+      compile output is unchanged; unbound or altered locks are rejected.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 878281fbf87850c77b35d6249266572e59ef5d3d97e9d9d80d81560b95a7ded3
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: dc13c116488bf74f5062878f0d79e2521a3021fa74226b54ef986b5c4b5e990f
+  - id: core-frozen-projection-reader-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Route frozen dataset-projection loading through the core reader, which
+      accepts only the report bound by digest to the input lock, and pass that
+      report to Musubi configuration and video-preflight consumers. Valid
+      public compile output is unchanged; unbound or altered locks are rejected.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 455227b1c88bf7984c5532763664e9dffb17df8fb52edb013949c9e83fce36a1
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c36e64bb5a2fd59a58332cd04dd85212155dfec44be8c0ade5cfb8f29a0e14a2
+  - id: core-frozen-projection-reader-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Route frozen dataset-projection loading through the core reader, which
+      accepts only the report bound by digest to the input lock, and pass that
+      report to the sd-scripts TOML writer. Valid public compile output is
+      unchanged; unbound or altered locks are rejected.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d3698b6d75cd0accef4d7ac071af4ab6dbb01570a6594368597b1246ca7611fa
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 30ff71d0ab94d978a61afaf93692477b87d4b9a677f9ce0c575860235fb2cef5
   - id: ai-toolkit-manifest-projection-lock-shape-2026-09-28
     backend: ai-toolkit
     reason: >-

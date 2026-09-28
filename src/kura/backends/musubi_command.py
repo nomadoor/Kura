@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from kura.container_scripts import script_source
+from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths, musubi_native_dataset_architecture
 from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _reject_owned_extra_args, _script_command as _shared_script_command, _truthy
 from kura.backends.musubi_datasets import (
@@ -196,19 +196,24 @@ def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: P
     explicit_command = _musubi_backend_override(run).get("command") is not None
     command = command_musubi_tuner(run)
     if not explicit_command:
-        command["env"].update(_musubi_video_preflight_env(run, destination))
-        _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
+        projection = load_frozen_dataset_projection(
+            destination.parent,
+            backend="musubi-tuner",
+            dataset_ids=[str(item.get("id")) for item in run.get("datasets", [])],
+        )
+        assert projection is not None
+        command["env"].update(_musubi_video_preflight_env(run, projection))
+        _write_musubi_dataset_config(
+            run, destination / "dataset.toml",
+            projection=projection, workspace=workspace, strict=strict,
+        )
     if not explicit_command:
         atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
     return command
 
 
-def _musubi_video_preflight_env(run: dict[str, Any], destination: Path) -> dict[str, str]:
+def _musubi_video_preflight_env(run: dict[str, Any], projection: dict[str, Any]) -> dict[str, str]:
     """Resolve video preflight semantics from the frozen projection profiles."""
-    projection_path = destination.parent / "dataset-projection.lock.json"
-    if not projection_path.is_file():
-        return {}
-    projection = json.loads(projection_path.read_text(encoding="utf-8"))
     datasets = projection.get("datasets") if isinstance(projection, dict) else None
     if not isinstance(datasets, list):
         raise ValueError("Musubi frozen projection has no dataset list for video preflight")

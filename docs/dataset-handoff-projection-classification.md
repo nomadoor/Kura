@@ -405,18 +405,6 @@ is marked `migration: pending`; merge readiness must run
   `python -c "import pillow_avif"` fails inside the fixed image. This confirms
   the build-definition inference behind excluding conditional AVIF support;
   image pull/build is not required before that approved smoke.
-- Canonicalize Musubi architecture aliases through `_musubi_architecture` so
-  `musubi_datasets.py`, `musubi_command.py`, and `musubi_models.py` no longer
-  repeat the `minimax_h3` / `minimaxh3` spelling pair. Keep one canonical key
-  in each downstream table and one alias map at the native-selector boundary.
-- Remove AI-Toolkit's non-strict directory-derived dataset projection. Direct
-  compiler tests must supply the same frozen manifest projection used by the
-  public compile path; they must not preserve a second inferred transport.
-- Replace the separate `dataset-projection.lock.json` readers in AI-Toolkit,
-  Musubi command/dataset compilation, and sd-scripts with one core/shared
-  reader. It owns projection-path resolution, including the current
-  `destination.parent` versus `destination.parent.parent` cases, and becomes
-  the only reader used by later RunPod selected-file transfer.
 - Materialize a compiled dataset view exactly once during launch. Remove the
   duplicate ownership between `launch.py` and the Docker executor and keep the
   operation at the layer that can enforce every executor's pre-acquisition

@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import yaml
 
+from kura.dataset_handoff import write_frozen_dataset_handoff
 from kura.cli import cmd_run_resume
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, compile_ai_toolkit, command_ai_toolkit, project_ai_toolkit_dataset, training_state_contract_ai_toolkit
 from kura.backends.sd_scripts import training_state_contract_sd_scripts
@@ -109,9 +110,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
         }]}
         lock = project_ai_toolkit_dataset(run, selection)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        (destination.parent / "dataset-projection.lock.json").write_text(
-            json.dumps(lock), encoding="utf-8",
-        )
+        write_frozen_dataset_handoff(destination.parent, lock, {"schema_version": 2})
 
     def test_ai_toolkit_h3_command_requires_a_nonzero_lora_update(self) -> None:
         run = {

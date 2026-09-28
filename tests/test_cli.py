@@ -25,9 +25,10 @@ from unittest.mock import Mock, patch
 
 import yaml
 
+from kura.dataset_handoff import write_frozen_dataset_handoff
 from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolkit_dataset
-from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES
+from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
@@ -3897,9 +3898,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         }]}
         lock = project_ai_toolkit_dataset(run, selection)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        (destination.parent / "dataset-projection.lock.json").write_text(
-            json.dumps(lock), encoding="utf-8",
-        )
+        write_frozen_dataset_handoff(destination.parent, lock, {"schema_version": 2})
         return lock["datasets"][0]["native"]["folder_path"]
 
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
@@ -3968,7 +3967,7 @@ class AiToolkitBackendTests(unittest.TestCase):
             (destination.parent / "dataset-projection.lock.json").write_text(
                 json.dumps(legacy_lock), encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "manifest projection schema"):
+            with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
                 compile_ai_toolkit(run, destination, strict=False)
 
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
@@ -4025,36 +4024,27 @@ class AiToolkitBackendTests(unittest.TestCase):
 class MusubiBackendTests(unittest.TestCase):
     def _write_frozen_projection(self, run: dict[str, Any], destination: Path) -> None:
         dataset_id = str(run["datasets"][0]["id"])
-        source = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/source/items.jsonl"
-        cache = f"runs/{run['id']}/cache/dataset-view/{dataset_id}/cache"
-        native_block = {
-            "image_jsonl_file": f"/workspace/{source}",
-            "cache_directory": f"/workspace/{cache}",
-            "num_repeats": 1,
-        }
-        lock = {
-            "backend": "musubi-tuner",
-            "datasets": [{
-                "id": dataset_id,
-                "native": {"datasets": [native_block]},
-                "native_runtime": {"datasets": [native_block]},
-                "policy": {"block_settings": [{"num_repeats": 1}]},
-                "views": [{
-                    "consumers": [{
-                        "kind": "jsonl",
-                        "native_pointer": "/datasets/0/image_jsonl_file",
-                        "native_file": source,
-                    }],
-                    "write_roots": [{
-                        "native_pointer": "/datasets/0/cache_directory",
-                        "path": cache,
-                    }],
+        architecture = str(run.get("backend", {}).get("config", {}).get("architecture") or "")
+        target_path = "sample.mp4" if architecture in {"minimax_h3", "minimaxh3"} else "sample.png"
+        selection = {"datasets": [{
+            "id": dataset_id,
+            "samples": [{
+                "id": "sample",
+                "files": [{
+                    "input_id": f"{dataset_id}:sample:target:0",
+                    "role": "target",
+                    "path": target_path,
+                    "sha256": "1" * 64,
                 }],
+                "caption": {
+                    "input_id": f"{dataset_id}:sample:caption",
+                    "text": "caption",
+                },
             }],
-        }
-        projection_path = destination.parent / "dataset-projection.lock.json"
-        projection_path.parent.mkdir(parents=True, exist_ok=True)
-        projection_path.write_text(json.dumps(lock), encoding="utf-8")
+        }]}
+        write_frozen_dataset_handoff(
+            destination.parent, project_musubi_dataset(run, selection), {"schema_version": 2},
+        )
 
     def _run(self) -> dict[str, object]:
         return {
@@ -4183,11 +4173,11 @@ class MusubiBackendTests(unittest.TestCase):
             dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         self.assertIn(
-            'image_jsonl_file = "/workspace/runs/musubi-example/cache/dataset-view/tiny/source/items.jsonl"',
+            'image_jsonl_file = "/workspace/runs/musubi-example/cache/dataset-view/musubi/tiny/native/items.jsonl"',
             dataset_toml,
         )
         self.assertIn(
-            'cache_directory = "/workspace/runs/musubi-example/cache/dataset-view/tiny/cache"',
+            'cache_directory = "/workspace/runs/musubi-example/cache/dataset-view/musubi/tiny/cache"',
             dataset_toml,
         )
         self.assertEqual(command["cwd"], "/opt/musubi-tuner")
@@ -5278,6 +5268,7 @@ class MusubiBackendTests(unittest.TestCase):
             "architecture": "minimax_h3",
             "model_bundle": "minimax-h3-pruned-int8",
             "video_only": True,
+            "dataset_options": {"tiny": {"target_frames": [5]}},
         }}
 
         command = command_musubi_tuner(run)

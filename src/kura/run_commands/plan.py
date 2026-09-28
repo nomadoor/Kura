@@ -23,6 +23,7 @@ from kura.backends.musubi_datasets import MUSUBI_DATASET_GENERAL_DEFAULTS
 from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
+    load_frozen_dataset_projection,
     require_dataset_transfer_supported,
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
@@ -902,11 +903,10 @@ def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
 
 
 def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
-    projection_path = run_dir / "resolved" / "dataset-projection.lock.json"
-    if not projection_path.is_file():
-        return []
-    projection = json.loads(projection_path.read_text(encoding="utf-8"))
-    if not isinstance(projection, dict):
+    projection = load_frozen_dataset_projection(
+        run_dir / "resolved", required=False,
+    )
+    if projection is None:
         return []
     checks = []
     datasets = projection.get("datasets")

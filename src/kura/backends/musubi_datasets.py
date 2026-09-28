@@ -1277,7 +1277,10 @@ def _validate_musubi_architecture_requirements(
             )
 
 
-def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> None:
+def _write_musubi_dataset_config(
+    run: dict[str, Any], destination: Path, *, projection: dict[str, Any],
+    workspace: Path | None = None, strict: bool = False,
+) -> None:
     del workspace, strict
     override = _musubi_backend_override(run)
     datasets = _datasets(run)
@@ -1293,7 +1296,7 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, work
     for key, value in general.items():
         if value is not None:
             lines.append(f"{key} = {_toml_scalar(value)}")
-    items = _frozen_musubi_dataset_items(run, destination, datasets)
+    items = _frozen_musubi_dataset_items(run, datasets, projection)
     for item in items:
         lines.extend(["", "[[datasets]]"])
         for key, value in item.items():
@@ -1306,15 +1309,9 @@ def _write_musubi_dataset_config(run: dict[str, Any], destination: Path, *, work
 
 
 def _frozen_musubi_dataset_items(
-    run: dict[str, Any], destination: Path, datasets: list[dict[str, Any]],
+    run: dict[str, Any], datasets: list[dict[str, Any]], projection: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    projection_path = destination.parent.parent / "dataset-projection.lock.json"
-    if not projection_path.is_file():
-        raise ValueError("Musubi first-class compile requires a frozen manifest projection")
-    projection = json.loads(projection_path.read_text(encoding="utf-8"))
-    projected = projection.get("datasets") if isinstance(projection, dict) else None
-    if not isinstance(projection, dict) or projection.get("backend") != "musubi-tuner" or not isinstance(projected, list):
-        raise ValueError("Musubi frozen projection is missing or belongs to another backend")
+    projected = projection["datasets"]
     by_id = {
         item.get("id"): item for item in projected
         if isinstance(item, dict) and isinstance(item.get("id"), str)

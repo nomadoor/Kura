@@ -22,11 +22,11 @@ from kura.backends.ai_toolkit import (
     compile_ai_toolkit,
     project_ai_toolkit_dataset,
 )
-from kura.backends.musubi_command import _musubi_max_resolution, _musubi_video_preflight_env
+from kura.backends.musubi_command import _musubi_max_resolution, _musubi_video_preflight_env as _musubi_video_preflight_env_impl
 from kura.backends.musubi_datasets import (
     MUSUBI_PROJECTION_PROFILES,
     _musubi_h3_effective_task,
-    _write_musubi_dataset_config,
+    _write_musubi_dataset_config as _write_musubi_dataset_config_impl,
     project_musubi_dataset,
 )
 from kura.backends.musubi_native_selectors import (
@@ -38,7 +38,7 @@ from kura.backends.sd_scripts_datasets import (
     SD_SCRIPTS_FOLDER_CODECS,
     SD_SCRIPTS_PROJECTION_PROFILES,
     project_sd_scripts_dataset,
-    write_sd_scripts_dataset_config,
+    write_sd_scripts_dataset_config as write_sd_scripts_dataset_config_impl,
 )
 from kura.backends.dataset_profiles import (
     classify_dataset_shape,
@@ -48,7 +48,7 @@ from kura.backends.dataset_profiles import (
 from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architecture, musubi_native_dataset_architecture
 from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
-from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, materialize_dataset_view, remove_dataset_views
+from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views, write_frozen_dataset_handoff
 from kura.dataset_handoff import local_training_mounts
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
@@ -57,6 +57,99 @@ from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_ru
 
 def _musubi_native_block(projected: dict, index: int = 0) -> dict:
     return projected["native"]["datasets"][index]
+
+
+def _write_musubi_dataset_config(run: dict, destination: Path, **kwargs: object) -> None:
+    projection = load_frozen_dataset_projection(
+        destination.parent.parent,
+        backend="musubi-tuner",
+        dataset_ids=[str(item.get("id")) for item in run.get("datasets", [])],
+    )
+    assert projection is not None
+    _write_musubi_dataset_config_impl(
+        run, destination, projection=projection, **kwargs,
+    )
+
+
+def write_sd_scripts_dataset_config(run: dict, destination: Path, **kwargs: object) -> dict:
+    projection = load_frozen_dataset_projection(
+        destination.parent.parent,
+        backend="sd-scripts",
+        dataset_ids=[str(item.get("id")) for item in run.get("datasets", [])],
+    )
+    assert projection is not None
+    return write_sd_scripts_dataset_config_impl(
+        run, destination, projection=projection, **kwargs,
+    )
+
+
+def _musubi_video_preflight_env(run: dict, destination: Path) -> dict[str, str]:
+    projection = load_frozen_dataset_projection(
+        destination.parent,
+        backend="musubi-tuner",
+        dataset_ids=[str(item.get("id")) for item in run.get("datasets", [])],
+    )
+    assert projection is not None
+    return _musubi_video_preflight_env_impl(run, projection)
+
+
+class FrozenDatasetProjectionReaderTests(unittest.TestCase):
+    @staticmethod
+    def _report(backend: str = "ai-toolkit") -> dict:
+        semantic = {"caption_ext": ".txt"}
+        runtime = {"folder_path": "/workspace/runs/example/cache/dataset-view/tiny"}
+        return {
+            "schema_version": 1,
+            "backend": backend,
+            "datasets": [{
+                "id": "tiny",
+                "consumed": ["tiny:sample:target:0"],
+                "unrepresentable": [],
+                "semantic": semantic,
+                "native_runtime": runtime,
+                "native": {**semantic, **runtime},
+                "native_string_fields": ["/caption_ext"],
+                "policy": {"profile": "ordinary-image"},
+                "views": [{"id": "primary"}],
+            }],
+        }
+
+    def test_reader_owns_location_schema_backend_and_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            write_frozen_dataset_handoff(resolved, self._report(), {"schema_version": 2})
+
+            report = load_frozen_dataset_projection(
+                resolved, backend="ai-toolkit", dataset_ids=["tiny"],
+            )
+
+            self.assertEqual(report["datasets"][0]["id"], "tiny")
+            with self.assertRaisesRegex(ValueError, "belongs to backend"):
+                load_frozen_dataset_projection(
+                    resolved, backend="musubi-tuner", dataset_ids=["tiny"],
+                )
+            with self.assertRaisesRegex(ValueError, "selected datasets"):
+                load_frozen_dataset_projection(
+                    resolved, backend="ai-toolkit", dataset_ids=["other"],
+                )
+
+    def test_reader_rejects_pre_manifest_minimal_reports_for_every_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            resolved = run_dir / "resolved"
+            resolved.mkdir(parents=True)
+            for backend in ("ai-toolkit", "musubi-tuner", "sd-scripts"):
+                with self.subTest(backend=backend):
+                    (resolved / "dataset-projection.lock.json").write_text(
+                        json.dumps({"backend": backend, "datasets": [{"id": "tiny"}]}),
+                        encoding="utf-8",
+                    )
+                    with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
+                        load_frozen_dataset_projection(
+                            resolved, backend=backend, dataset_ids=["tiny"],
+                        )
 
 
 def _musubi_semantic_block(projected: dict, index: int = 0) -> dict:
@@ -3785,7 +3878,9 @@ class DatasetHandoffTests(unittest.TestCase):
             runtime["image_directory"] = "/workspace/datasets/tiny"
             consumer = dataset["views"][0]["consumers"][0]
             consumer.update({"kind": "directory", "native_pointer": "/datasets/0/image_directory"})
-            projection_path.write_text(json.dumps(projection), encoding="utf-8")
+            # Rebind the altered report so the writer's own guard is exercised.
+            input_lock = json.loads((resolved / "dataset-input.lock.json").read_text(encoding="utf-8"))
+            write_frozen_dataset_handoff(resolved, projection, input_lock)
 
             with self.assertRaisesRegex(ValueError, "bypasses its verified source"):
                 _write_musubi_dataset_config(
@@ -5740,16 +5835,29 @@ class DatasetHandoffTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             resolved = run_dir / "resolved"
             resolved.mkdir(parents=True)
-            (resolved / "dataset-projection.lock.json").write_text(json.dumps({
-                "backend": "musubi-tuner",
-                "datasets": [{
-                    "id": "clips",
-                    "native": {"datasets": [{
-                        "video_jsonl_file": "/workspace/runs/example/cache/dataset-view/musubi/clips/native/items.jsonl",
+            run = {
+                "id": "example",
+                "backend": {"name": "musubi-tuner", "config": {
+                    "architecture": "wan",
+                    "dataset_options": {"clips": {
                         "target_frames": [1, 25, 49],
-                    }]},
+                        "frame_extraction": "head",
+                    }},
+                }},
+                "datasets": [{"id": "clips"}],
+            }
+            selection = {"datasets": [{
+                "id": "clips",
+                "samples": [{
+                    "id": "clip",
+                    "files": [{
+                        "input_id": "clips:clip:target:0", "role": "target",
+                        "path": "clip.mp4", "sha256": "1" * 64,
+                    }],
+                    "caption": {"input_id": "clips:clip:caption", "text": "caption"},
                 }],
-            }), encoding="utf-8")
+            }]}
+            write_frozen_dataset_handoff(resolved, project_musubi_dataset(run, selection), {"schema_version": 2})
 
             checks = _dataset_runtime_checks(run_dir)
             output = format_run_plan({
@@ -5800,17 +5908,26 @@ class DatasetHandoffTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             resolved = run_dir / "resolved"
             resolved.mkdir(parents=True)
-            (resolved / "dataset-projection.lock.json").write_text(json.dumps({
-                "backend": "musubi-tuner",
-                "datasets": [{
-                    "id": "clips",
-                    "policy": {"profile": "h3-video-t2va"},
-                    "native": {"datasets": [{
-                        "video_jsonl_file": "/workspace/runs/example/cache/dataset-view/musubi/clips/native/items.jsonl",
-                        "target_frames": [22, 362],
-                    }]},
+            run = {
+                "id": "example",
+                "backend": {"name": "musubi-tuner", "config": {
+                    "architecture": "minimax_h3", "task": "t2va",
+                    "dataset_options": {"clips": {"target_frames": [22, 362]}},
+                }},
+                "datasets": [{"id": "clips"}],
+            }
+            selection = {"datasets": [{
+                "id": "clips",
+                "samples": [{
+                    "id": "clip",
+                    "files": [{
+                        "input_id": "clips:clip:target:0", "role": "target",
+                        "path": "clip.mp4", "sha256": "1" * 64,
+                    }],
+                    "caption": {"input_id": "clips:clip:caption", "text": "caption"},
                 }],
-            }), encoding="utf-8")
+            }]}
+            write_frozen_dataset_handoff(resolved, project_musubi_dataset(run, selection), {"schema_version": 2})
 
             checks = _dataset_runtime_checks(run_dir)
 
@@ -6046,8 +6163,32 @@ class DatasetHandoffTests(unittest.TestCase):
             projection["datasets"][0]["native"]["folder_path"] = "/workspace/datasets/tiny"
             projection_path.write_text(json.dumps(projection), encoding="utf-8")
 
-            with self.assertRaisesRegex(ValueError, "bypasses its run-owned view"):
+            with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
                 compile_ai_toolkit(run, resolved / "ai-toolkit", workspace=workspace, strict=True)
+
+    def test_frozen_projection_reader_requires_the_bound_input_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            freeze_dataset_handoff(
+                run,
+                workspace,
+                resolved,
+                backend="ai-toolkit",
+                project=lambda selection: project_ai_toolkit_dataset(run, selection),
+            )
+            self.assertIsNotNone(load_frozen_dataset_projection(resolved, backend="ai-toolkit"))
+
+            projection_path = resolved / "dataset-projection.lock.json"
+            original = projection_path.read_bytes()
+            projection_path.write_bytes(original.replace(b'"caption_ext"', b'"caption_exT"', 1))
+            with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
+                load_frozen_dataset_projection(resolved, backend="ai-toolkit")
+
+            projection_path.write_bytes(original)
+            (resolved / "dataset-input.lock.json").unlink()
+            with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
+                load_frozen_dataset_projection(resolved, backend="ai-toolkit")
 
     def test_cli_compile_freezes_projection_before_native_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

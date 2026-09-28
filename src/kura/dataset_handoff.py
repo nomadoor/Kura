@@ -988,6 +988,51 @@ def _merge_projection_native(semantic: Any, runtime: Any) -> Any:
     raise ValueError("semantic and runtime native leaves overlap")
 
 
+def load_frozen_dataset_projection(
+    resolved_dir: Path,
+    *,
+    backend: str | None = None,
+    dataset_ids: list[str] | tuple[str, ...] | None = None,
+    required: bool = True,
+) -> dict[str, Any] | None:
+    """Load the projection report that freeze_dataset_handoff verified and wrote.
+
+    The report schema is checked once, when it is frozen.  Readers prove that
+    the file is that verified report by matching the digest recorded in the
+    input lock written alongside it; they do not re-derive the schema.
+    """
+    projection_path = resolved_dir / "dataset-projection.lock.json"
+    if not projection_path.is_file():
+        if not required:
+            return None
+        owner = backend or "dataset"
+        raise ValueError(f"{owner} first-class compile requires a frozen manifest projection")
+    input_path = resolved_dir / "dataset-input.lock.json"
+    try:
+        report = json.loads(projection_path.read_text(encoding="utf-8"))
+        input_lock = json.loads(input_path.read_text(encoding="utf-8")) if input_path.is_file() else None
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("frozen manifest projection or its input lock is unreadable") from error
+    if (
+        not isinstance(input_lock, dict)
+        or input_lock.get("schema_version") != 2
+        or input_lock.get("projection_sha256") != _digest(report)
+    ):
+        raise ValueError(
+            "frozen manifest projection was not written by the verified dataset handoff; recompile the run"
+        )
+    if backend is not None and report.get("backend") != backend:
+        raise ValueError(
+            f"frozen manifest projection belongs to backend {report.get('backend')!r}, not {backend!r}"
+        )
+    if dataset_ids is not None:
+        selected = list(dataset_ids)
+        frozen = [item["id"] for item in report["datasets"]]
+        if len(selected) != len(set(selected)) or set(frozen) != set(selected):
+            raise ValueError("frozen manifest projection does not match the selected datasets")
+    return report
+
+
 def freeze_dataset_handoff(
     run: dict[str, Any], workspace: Path, resolved: Path, *, backend: str, project: Project,
 ) -> dict[str, Any]:
@@ -1133,10 +1178,18 @@ def freeze_dataset_handoff(
         "input_sha256": _digest(semantic),
         "semantic": semantic,
     }
+    return write_frozen_dataset_handoff(resolved, report, lock)
+
+
+def write_frozen_dataset_handoff(
+    resolved: Path, report: dict[str, Any], lock: dict[str, Any],
+) -> dict[str, Any]:
+    """Write a verified projection report and bind it to its input lock by digest."""
+    bound = {**lock, "projection_sha256": _digest(report)}
     resolved.mkdir(parents=True, exist_ok=True)
     atomic_write_json(resolved / "dataset-projection.lock.json", report)
-    atomic_write_json(resolved / "dataset-input.lock.json", lock)
-    return lock
+    atomic_write_json(resolved / "dataset-input.lock.json", bound)
+    return bound
 
 
 def _current_stat(path: Path) -> dict[str, int]:
