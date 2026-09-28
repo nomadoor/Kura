@@ -18,6 +18,10 @@ records:
       Training commands are otherwise unchanged.
     behavior_changed: false
     evidence_ids:
+      - ai-toolkit-manifest-v2-handoff-docker-2026-09-29
+      - ai-toolkit-selected-file-transfer-runpod-2026-09-29
+      - ai-toolkit-local-path-model-docker-2026-09-29
+      - ai-toolkit-resume-manifest-v2-docker-2026-09-29
       - ai-toolkit-sd1-publication-docker-2026-09-23
       - ai-toolkit-minimax-h3-image-runpod-2026-09-22
       - ai-toolkit-0.13.18-class-import-2026-09-21

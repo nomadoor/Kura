@@ -394,11 +394,7 @@ is marked `migration: pending`; merge readiness must run
 
 ## Final integration cleanup ledger
 
-- An approved RunPod smoke proves the selected-file transfer end to end
-  (stage, Pod-side verification record, trainer, postflight, record promotion,
-  Pod stop), including one deliberately corrupted transfer that stops before
-  model acquisition.
-- The final pinned-image sd-scripts smoke records that
-  `python -c "import pillow_avif"` fails inside the fixed image. This confirms
-  the build-definition inference behind excluding conditional AVIF support;
-  image pull/build is not required before that approved smoke.
+All cleanup items are closed. The final real smokes are recorded in
+`docs/smoke-evidence/2026-09-29-dataset-handoff-final.yaml`. A transfer
+corrupted in flight is exercised by tests that run the generated RunPod job
+script; the CLI offers no way to corrupt an in-flight upload for a real smoke.

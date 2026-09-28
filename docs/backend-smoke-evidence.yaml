@@ -12,6 +12,110 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-manifest-v2-handoff-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      dataset_layouts: root-level and images/
+      optimizer_steps: 1
+      view_cleanup: removed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-selected-file-transfer-runpod-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      pod_input_verification: verified
+      optimizer_steps: 1
+      pod_stopped: true
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-local-path-model-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      model_acquisition: local-path read-only
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-resume-manifest-v2-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      restoration: partial_resume
+      logical_steps: 1-to-2
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-embedded-audio-preflight-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: ltx2.5
+      executor: docker
+      preflight: rejects silent video, accepts AAC video
+      optimizer_steps: 0
+    evidence_kind: real-runtime
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: sd-scripts-avif-absent-image-probe-2026-09-29
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+    native_path:
+      probe: import pillow_avif fails
+      image_suffixes: avif excluded
+    evidence_kind: real-runtime
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
   - id: ai-toolkit-sd1-publication-docker-2026-09-23
     backend: ai-toolkit
     adapter_source:
