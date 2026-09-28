@@ -68,6 +68,21 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def append_line_durably(path: Path, line: str) -> None:
+    """Append one line and fsync it (and a newly created file's directory).
+
+    Callers that project status after appending rely on the line being
+    durable first; a later status write must never outlive its event.
+    """
+    created = not path.exists()
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if created:
+        _fsync_directory(path.parent)
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None

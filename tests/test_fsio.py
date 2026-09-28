@@ -8,10 +8,21 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.fsio import append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml
 
 
 class FsioTests(unittest.TestCase):
+    def test_append_line_durably_fsyncs_before_returning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.jsonl"
+            with patch("kura.fsio.os.fsync") as fsync, patch("kura.fsio._fsync_directory") as fsync_directory:
+                append_line_durably(path, "one\n")
+                append_line_durably(path, "two\n")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "one\ntwo\n")
+            self.assertEqual(fsync.call_count, 2)
+            fsync_directory.assert_called_once_with(path.parent)
+
     def test_atomic_write_text_replaces_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "status.json"

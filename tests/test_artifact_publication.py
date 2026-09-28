@@ -17,6 +17,7 @@ import yaml
 from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import reconcile_docker
 from kura.executors import docker as docker_executor
+from kura.cli import _run_cleanup_candidates
 from kura.run_commands.runpod_ssh import cmd_run_download
 from kura.run_commands.experiment import format_run_completion
 
@@ -122,6 +123,41 @@ class LocalOutputPublicationTests(unittest.TestCase):
             self.assertFalse(recovered["recovery_required"])
             self.assertEqual(recovered["dataset_input_postflight"]["view_cleanup"], "removed")
             self.assertFalse(view.parent.parent.exists())
+
+    def test_recovery_view_becomes_a_cleanup_remnant_only_after_the_container_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = self._run(workspace)
+            _, view = self._manifest_view(run_dir)
+            blocked = self._reconcile(run_dir)
+            self.assertTrue(blocked["recovery_required"])
+            self.assertEqual(blocked["dataset_input_postflight"]["view_cleanup"], "deferred")
+
+            def remnants() -> list[str]:
+                return [
+                    item["id"]
+                    for item in _run_cleanup_candidates(workspace, keep_last=30, delete_final_artifacts=False)
+                    if item["classification"] == "safe-run-dataset-view-remnant"
+                ]
+
+            self.assertEqual(remnants(), [])
+
+            # A container that still exists but cannot report an exit code is
+            # also "unknown"; it is not evidence that the container is gone.
+            unclear = subprocess.CompletedProcess([], 0, '{"Running": false}', "")
+            with patch("kura.executors.docker.subprocess.run", return_value=unclear):
+                reconcile_docker(run_dir)
+            self.assertEqual(remnants(), [])
+
+            missing = subprocess.CompletedProcess([], 1, "", "Error: No such container: container-1")
+            with patch("kura.executors.docker.subprocess.run", return_value=missing):
+                status = reconcile_docker(run_dir)
+
+            observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
+            self.assertIs(observation["container_missing"], True)
+            self.assertTrue(status["recovery_required"])
+            self.assertEqual(remnants(), ["example"])
+            self.assertTrue(view.exists())
 
     def test_missing_frozen_command_is_not_treated_as_legacy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

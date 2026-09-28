@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.fsio import FileLockBusy, atomic_write_json, file_lock
+from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.training_artifacts import is_training_state_output
 
 
@@ -76,8 +76,7 @@ def append_run_event(run_dir: Path, event: dict[str, Any], *, best_effort: bool 
     path = run_dir / "logs" / "events.jsonl"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
+        append_line_durably(path, json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
     except OSError as exc:
         if not best_effort:
             raise

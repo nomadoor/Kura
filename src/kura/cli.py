@@ -800,6 +800,23 @@ def _cleanup_path_item(workspace: Path, relative: str, *, classification: str) -
     }
 
 
+def _last_observation_container_missing(run_dir: Path, status: dict[str, Any]) -> bool:
+    """True only when the latest realization's own observation records a missing container."""
+    reference = status.get("last_observation")
+    realization = status.get("last_realization")
+    if not isinstance(reference, str) or not isinstance(realization, str):
+        return False
+    try:
+        observation = json.loads((run_dir / reference).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(observation, dict)
+        and observation.get("container_missing") is True
+        and f"realizations/{observation.get('realization_id')}.json" == realization
+    )
+
+
 def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_artifacts: bool) -> list[dict[str, Any]]:
     states = {"completed", "failed", "interrupted", "launch_failed"}
     runs: list[dict[str, Any]] = []
@@ -827,10 +844,10 @@ def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_art
             view_cleanup = postflight.get("view_cleanup") if isinstance(postflight, dict) else None
             if item["state"] in states and view_cleanup == "failed":
                 note = "Removes only a disposable dataset view left by failed automatic cleanup."
-            elif item["state"] == "unknown":
+            elif _last_observation_container_missing(run_dir, item["status"]):
                 note = (
-                    "Removes only a disposable dataset view whose automatic cleanup never ran "
-                    "because the container disappeared; launch rebuilds it from the frozen lock."
+                    "Removes only a disposable dataset view kept for recovery after Docker "
+                    "reported the container missing; launch rebuilds it from the frozen lock."
                 )
             else:
                 note = None

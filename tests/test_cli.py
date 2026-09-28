@@ -631,8 +631,21 @@ class DoctorDockerTests(unittest.TestCase):
             dataset_file = root / "datasets" / "tiny" / "a.png"
             dataset_file.parent.mkdir(parents=True)
             dataset_file.write_bytes(b"image")
+            missing = {"realization_id": "launch", "state": "unknown", "container_missing": True}
+            unclear = {"realization_id": "launch", "state": "unknown", "container_missing": False}
+            observed = {
+                "state": "unknown", "started": "2026-01-04T00:00:00+00:00",
+                "last_realization": "realizations/launch.json",
+                "last_observation": "realizations/launch.observed.json",
+            }
+            observations = {"gone": missing, "deferred-then-gone": missing, "unclear": unclear}
             runs = {
-                "gone": ({"state": "unknown", "started": "2026-01-04T00:00:00+00:00"}, True),
+                "gone": (observed, True),
+                "deferred-then-gone": ({
+                    **observed, "state": "recovery_required", "recovery_required": True,
+                    "dataset_input_postflight": {"view_cleanup": "deferred"},
+                }, True),
+                "unclear": (observed, False),
                 "failed-cleanup": ({
                     "state": "completed", "ended": "2026-01-03T00:00:00+00:00",
                     "dataset_input_postflight": {"view_cleanup": "failed"},
@@ -649,6 +662,10 @@ class DoctorDockerTests(unittest.TestCase):
                 view.mkdir(parents=True)
                 (view / "a.png").symlink_to(dataset_file)
                 (root / "runs" / run_id / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                if run_id in observations:
+                    record = root / "runs" / run_id / "realizations" / "launch.observed.json"
+                    record.parent.mkdir()
+                    record.write_text(json.dumps(observations[run_id]), encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:

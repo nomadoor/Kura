@@ -502,11 +502,13 @@ def reconcile_docker(
         observed_at = _now()
         ended: str | None = None
         ended_source: str | None = None
+        container_missing = False
         if result.returncode:
             missing = "no such object" in (result.stderr + result.stdout).lower() or "no such container" in (result.stderr + result.stdout).lower()
             if not missing:
                 raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container state unavailable"))
             state, exit_code = "unknown", None
+            container_missing = True
             detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container no longer exists")
         else:
             try:
@@ -541,6 +543,9 @@ def reconcile_docker(
             "ended": ended,
             "ended_source": ended_source,
             "detail": detail,
+            # Docker reported the container absent; the only evidence that no
+            # later reconcile can finish this realization's handoff cleanup.
+            "container_missing": container_missing,
         }
         recorded = False
 
