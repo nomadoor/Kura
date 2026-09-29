@@ -568,6 +568,10 @@ def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]
 
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
     """Explicitly upload the compiled inputs needed by a RunPod Pod."""
+    # Artifact lookups return resolved paths; staged names are relative to the
+    # same resolved workspace even when it is reached through a symlink.
+    workspace = workspace.resolve()
+    run_dir = run_dir.resolve()
     settings = _runpod_settings(config)
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")

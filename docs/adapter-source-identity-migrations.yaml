@@ -8,6 +8,26 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-stage-resolves-workspace-2026-09-29
+    executor: runpod
+    reason: >-
+      stage_runpod resolves its workspace and run directory before relating
+      artifact paths, so a workspace reached through a symlink (for example
+      macOS /var) no longer mixes resolved and unresolved paths. The recorded
+      smokes used a workspace that was not behind a symlink, so their staged
+      archive, transfer, Pod-side verification, and Pod stop are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 42f789bf70df5fb8494a7d6c71f1e7b9af0a6dca7de84daba560da1309842911
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
   - id: musubi-architecture-scoped-extra-args-ownership-2026-09-29
     backend: musubi-tuner
     reason: >-

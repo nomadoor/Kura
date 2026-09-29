@@ -10,6 +10,7 @@ import hashlib
 import io
 import importlib.util
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -449,7 +450,7 @@ class ImageCommandTests(unittest.TestCase):
 
     def test_image_build_resolves_paths_from_workspace_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             nested = root / "datasets" / "tiny"
             nested.mkdir(parents=True)
             (root / "workspace.yaml").write_text(
@@ -559,7 +560,7 @@ class ImageCommandTests(unittest.TestCase):
 class DoctorDockerTests(unittest.TestCase):
     def test_cleanup_all_is_dry_run_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             (root / "cache" / "huggingface").mkdir(parents=True)
             (root / "cache" / "models").mkdir(parents=True, exist_ok=True)
@@ -797,7 +798,7 @@ class DoctorDockerTests(unittest.TestCase):
 
     def test_doctor_disk_reports_workspace_storage_and_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
                     {
@@ -840,7 +841,7 @@ class DoctorDockerTests(unittest.TestCase):
 
     def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": []}}), encoding="utf-8")
             (root / "cache").mkdir()
             (root / "runs").mkdir()
@@ -1241,7 +1242,7 @@ class DoctorDockerTests(unittest.TestCase):
 class MonitorCommandTests(unittest.TestCase):
     def test_monitor_passes_limit_to_textual_app(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
@@ -1431,7 +1432,7 @@ class EnvLocalTests(unittest.TestCase):
 
     def test_env_local_loads_from_workspace_root_when_called_in_subdirectory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             nested = root / "datasets" / "tiny"
             nested.mkdir(parents=True)
             (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
@@ -3092,7 +3093,7 @@ class RenderNotificationTests(unittest.TestCase):
                 pass
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -5674,7 +5675,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
     def test_docker_mount_sources_are_resolved_from_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
@@ -5967,7 +5968,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
     def test_launch_wait_blocks_for_local_docker_and_reconciles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             run_dir = root / "runs" / "example"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "logs").mkdir()
@@ -6504,7 +6505,7 @@ class RunPruneTests(unittest.TestCase):
     def test_run_prune_falls_back_to_docker_for_root_owned_artifacts(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:test"}}}}),
                 encoding="utf-8",
@@ -6536,7 +6537,7 @@ class RunPruneTests(unittest.TestCase):
     def test_run_prune_reports_artifact_delete_failure(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:test"}}}}),
                 encoding="utf-8",
