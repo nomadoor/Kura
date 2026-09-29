@@ -52,47 +52,32 @@ def _support_evidence_claims(text: str) -> list[tuple[int, str, str, list[str]]]
     return claims
 
 
-def _executor_identity_reaches_current(record_id: str, executor: str, value: str, migrations: list[object]) -> bool:
-    """Like _identity_reaches_current, over migrations declared for an executor."""
-    current = executor_source_identity(executor)["value"]
-    seen: set[str] = set()
-    while value != current and value not in seen:
-        seen.add(value)
-        candidates = [
-            item for item in migrations
-            if isinstance(item, dict)
-            and item.get("executor") == executor
-            and item.get("behavior_changed") is False
-            and isinstance(item.get("evidence_ids"), list)
-            and record_id in item["evidence_ids"]
-            and isinstance(item.get("previous"), dict)
-            and item["previous"].get("value") == value
-            and isinstance(item.get("replacement"), dict)
-            and isinstance(item["replacement"].get("value"), str)
-        ]
-        if len(candidates) != 1:
-            return False
-        value = candidates[0]["replacement"]["value"]
-    return value == current
+RUNPOD_TRANSFERS = {"selected-files", "legacy-upload"}
 
 
 def _requires_executor_identity(record: dict[str, object]) -> str | None:
-    """Selected-file RunPod evidence proves executor code, so it binds that executor's identity."""
+    """Selected-file RunPod evidence proves executor code, so it binds that executor's identity.
+
+    Every RunPod record must name its transfer, so a record cannot leave the
+    identity requirement by omitting or misspelling the key.
+    """
     native = record.get("native_path")
-    if isinstance(native, dict) and native.get("executor") == "runpod" and native.get("transfer") == "selected-files":
-        return "runpod"
-    return None
+    if not isinstance(native, dict) or native.get("executor") != "runpod":
+        return None
+    if native.get("transfer") not in RUNPOD_TRANSFERS:
+        raise ValueError(f"RunPod evidence must declare native_path.transfer as one of {sorted(RUNPOD_TRANSFERS)}")
+    return "runpod" if native["transfer"] == "selected-files" else None
 
 
-def _identity_reaches_current(record_id: str, backend: str, value: str, migrations: list[object]) -> bool:
-    current = adapter_source_identity(backend)["value"]
+def _chain_reaches_current(record_id: str, key: str, owner: str, value: str, current: str, migrations: list[object]) -> bool:
+    """Follow behavior-preserving migrations scoped to one owner and one evidence record."""
     seen: set[str] = set()
     while value != current and value not in seen:
         seen.add(value)
         candidates = [
             item for item in migrations
             if isinstance(item, dict)
-            and item.get("backend") == backend
+            and item.get(key) == owner
             and item.get("behavior_changed") is False
             and isinstance(item.get("evidence_ids"), list)
             and record_id in item["evidence_ids"]
@@ -105,6 +90,14 @@ def _identity_reaches_current(record_id: str, backend: str, value: str, migratio
             return False
         value = candidates[0]["replacement"]["value"]
     return value == current
+
+
+def _identity_reaches_current(record_id: str, backend: str, value: str, migrations: list[object]) -> bool:
+    return _chain_reaches_current(record_id, "backend", backend, value, adapter_source_identity(backend)["value"], migrations)
+
+
+def _executor_identity_reaches_current(record_id: str, executor: str, value: str, migrations: list[object]) -> bool:
+    return _chain_reaches_current(record_id, "executor", executor, value, executor_source_identity(executor)["value"], migrations)
 
 
 def main() -> int:
@@ -160,7 +153,11 @@ def main() -> int:
                 failures.append(f"{label}.{key} requires kind and value")
         if not isinstance(record.get("native_path"), dict) or not record["native_path"]:
             failures.append(f"{label}.native_path must be a non-empty opaque mapping")
-        executor = _requires_executor_identity(record)
+        try:
+            executor = _requires_executor_identity(record)
+        except ValueError as exc:
+            failures.append(f"{label}: {exc}")
+            executor = None
         if executor is not None and not _historical_record_is_retired(record, invalidation_ids):
             identity = record.get("executor_source")
             value = identity.get("value") if isinstance(identity, dict) else None

@@ -1863,6 +1863,47 @@ class ResumeRunTests(unittest.TestCase):
             self.assertEqual(status["state"], "failed")
             self.assertNotIn("training_state_sync_error", status)
 
+    def test_runpod_final_download_with_required_state_clears_a_stale_state_sync_error(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            run_dir = root / "runs" / "source"
+            downloaded = run_dir / "downloads" / "source"
+            (downloaded / "outputs").mkdir(parents=True)
+            (downloaded / "realizations").mkdir()
+            (downloaded / "realizations" / "remote-exit-20260101.json").write_text(
+                json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 1}), encoding="utf-8"
+            )
+            (run_dir / "resolved").mkdir(parents=True)
+            manifest = {
+                "id": "source",
+                "type": "train",
+                "backend": {"name": "musubi-tuner", "config": {}},
+                "recipe": {"steps": 100, "seed": 1},
+                "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+            }
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({
+                "state": "running", "pod_id": "pod-1",
+                "training_state_sync_error": "mid-run checkpoint mirror failed",
+            }), encoding="utf-8")
+            # An earlier mid-run sync published a state, so the final download has one.
+            state = {
+                "id": "state-step-00000050-abc", "observed_step": 50, "manifest_sha256": "0" * 64,
+                "restoration_contract": {"level": "best_effort_resume"},
+            }
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.select_training_state", return_value=state):
+                    self.assertEqual(_download_run_unlocked("source"), 0)
+            finally:
+                os.chdir(previous)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "failed")
+            self.assertNotIn("training_state_sync_error", status)
+            self.assertEqual(status["recoverable_training_states"][0]["artifact_id"], state["id"])
+
     def test_runpod_download_materializes_logical_resume_target(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:

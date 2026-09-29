@@ -51,8 +51,12 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
             _requires_executor_identity({"native_path": {"executor": "runpod", "transfer": "selected-files"}}),
             "runpod",
         )
-        self.assertIsNone(_requires_executor_identity({"native_path": {"executor": "runpod"}}))
+        self.assertIsNone(_requires_executor_identity({"native_path": {"executor": "runpod", "transfer": "legacy-upload"}}))
         self.assertIsNone(_requires_executor_identity({"native_path": {"executor": "local-docker", "transfer": "selected-files"}}))
+        # A RunPod record cannot leave the requirement by omitting or misnaming its transfer.
+        for native in ({"executor": "runpod"}, {"executor": "runpod", "transport": "selected-files"}, {"executor": "runpod", "transfer": "selected-file"}):
+            with self.subTest(native=native), self.assertRaises(ValueError):
+                _requires_executor_identity({"native_path": native})
 
     def test_executor_migration_chain_is_scoped_to_the_executor_and_the_evidence(self) -> None:
         current = executor_source_identity("runpod")["value"]
