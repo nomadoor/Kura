@@ -331,6 +331,185 @@ runs:
     cost_per_h: 0.49
     launched_at: '2026-09-29T19:18:32.553292+09:00'
     pod_stopped_at: '2026-09-29T19:23:41.324973+09:00'
+  ai-toolkit-sd1-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-sd1_dc89
+    model: hf-internal-testing/tiny-stable-diffusion-pipe
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit:dev
+    losses:
+    - 1.081
+    - 1.081
+    - 1.081
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-sd1_dc89/20260929-2323_ai-toolkit-sd1_dc89.safetensors
+    input_postflight: matched
+    publication: completed
+  ai-toolkit-sdxl-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-sdxl_f314
+    model: stabilityai/stable-diffusion-xl-base-1.0
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit:dev
+    losses:
+    - 0.03656
+    - 0.03656
+    - 0.03656
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-sdxl_f314/20260929-2323_ai-toolkit-sdxl_f314.safetensors
+    input_postflight: matched
+    publication: completed
+  ai-toolkit-anima-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-anima_40fb
+    model: circlestone-labs/Anima-Base-v1.0-Diffusers
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.02172
+    - 0.02172
+    - 0.02172
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-anima_40fb.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:25:39.004034+09:00'
+    pod_stopped_at: '2026-09-29T23:31:39.324599+09:00'
+  ai-toolkit-flux2-klein-4b-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-flux2-klein-4b_6e57
+    model: black-forest-labs/FLUX.2-klein-base-4B
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.05633
+    - 0.05633
+    - 0.05633
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-flux2-klein-4b_6e57.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:31:40.971950+09:00'
+    pod_stopped_at: '2026-09-29T23:34:58.809496+09:00'
+  ai-toolkit-zimage-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-zimage_cac5
+    model: Tongyi-MAI/Z-Image
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.0911
+    - 0.0911
+    - 0.0911
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-zimage_cac5.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:35:00.486392+09:00'
+    pod_stopped_at: '2026-09-29T23:38:00.760722+09:00'
+  ai-toolkit-chroma-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-chroma_2c92
+    model: lodestones/Chroma1-Base
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.1186
+    - 0.1186
+    - 0.1186
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-chroma_2c92.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:38:02.527842+09:00'
+    pod_stopped_at: '2026-09-29T23:43:38.026379+09:00'
+  ai-toolkit-flux-kontext-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-flux-kontext_19ab
+    model: black-forest-labs/FLUX.1-Kontext-dev
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.0833
+    - 0.0833
+    - 0.0833
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-flux-kontext_19ab.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:43:39.726472+09:00'
+    pod_stopped_at: '2026-09-29T23:46:26.480245+09:00'
+  ai-toolkit-qwen-image-2-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-qwen-image-2_7a05
+    model: Comfy-Org/Qwen-Image-2.1
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.04037
+    - 0.04037
+    - 0.04037
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-qwen-image-2_7a05.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:46:28.122887+09:00'
+    pod_stopped_at: '2026-09-29T23:50:03.805462+09:00'
+  ai-toolkit-krea2-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-krea2_c664
+    model: krea/Krea-2-Raw
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.01731
+    - 0.01731
+    - 0.01731
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-krea2_c664.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:50:05.604536+09:00'
+    pod_stopped_at: '2026-09-29T23:53:40.334866+09:00'
+  ai-toolkit-flux-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-flux_075f
+    model: black-forest-labs/FLUX.1-dev
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.09749
+    - 0.09749
+    - 0.09749
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-flux_075f.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:53:41.929117+09:00'
+    pod_stopped_at: '2026-09-29T23:55:55.347228+09:00'
+  ai-toolkit-flex2-2026-09-29-2323:
+    run_id: 20260929-2323_ai-toolkit-flex2_129b
+    model: ostris/Flex.2-preview
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.09475
+    - 0.09475
+    - 0.09475
+    outputs:
+    - outputs/20260929-2323_ai-toolkit-flex2_129b.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T23:55:57.528205+09:00'
+    pod_stopped_at: '2026-09-30T00:01:22.240999+09:00'
 scope: Each listed selector completed one optimizer step with a finite loss, published
   its adapter, and matched its input postflight; RunPod runs also stopped their Pod.
 ai_toolkit_failures:
@@ -379,3 +558,15 @@ musubi_video_preflight_stop:
       and input postflight matched and the Pod stopped
     cause: the generated 37-frame smoke video is too short after the pinned loader's
       frame conversion; a longer smoke video is needed, not a Kura change
+ai_toolkit_baseline_rerun:
+  adapter_change: docs/adr/upstream-training-baseline.md (pinned UI training baseline)
+  resolved_failures:
+    krea2: ai-toolkit-krea2-2026-09-29-2323 passed with the baseline noise_scheduler
+    flux: ai-toolkit-flux-2026-09-29-2323 passed with the baseline bf16 precision
+      and quantization
+    flex2: ai-toolkit-flex2-2026-09-29-2323 passed with the baseline cache_latents_to_disk
+      false
+  still_open:
+  - 'hidream, qwen_image, qwen_image_edit: need a Pod with more host RAM than the
+    about 50 GB A40'
+  - 'mageflow: pinned default repository does not exist'
