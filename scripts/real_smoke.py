@@ -95,19 +95,24 @@ def _musubi(architecture: str, model_base: str, dataset: str, script: str, **con
     return Smoke("musubi-tuner", architecture, model_base, dataset, {"architecture": architecture, **_MUSUBI_COMMON, **config}, expected_script=script, dataset_options=options)
 
 
+_UI_BASE_TRAIN = {"noise_scheduler": "flowmatch", "timestep_type": "sigmoid"}
+
+
 def _aitk(name: str, model_arch: str, model_base: str, dataset: str = IMAGE_DATASET, *, train: dict[str, Any] | None = None, model: dict[str, Any] | None = None, **config: Any) -> Smoke:
     # Model sources, memory defaults, and the model-specific training settings
     # (noise scheduler, timestep type, quantization type) follow the pinned
     # AI-Toolkit UI entry for each architecture
     # (extensions_built_in/diffusion_models/ui.tsx). Kura does not own that
     # catalog, so they travel through native_config as a user would set them.
-    native = {key: value for key, value in (("train", train), ("model", model)) if value}
-    if native:
-        config["native_config"] = native
+    # The UI starts every job from jobConfig.ts (flowmatch, sigmoid) and then
+    # applies the architecture entry; the CLI default would be DDPM instead.
+    native: dict[str, Any] = {"train": {**_UI_BASE_TRAIN, **(train or {})}}
+    if model:
+        native["model"] = model
+    config["native_config"] = native
     return Smoke("ai-toolkit", name, model_base, dataset, {"model_arch": model_arch, **_AITK_COMMON, **config}, expected_script="run.py")
 
 
-_FLOWMATCH = {"noise_scheduler": "flowmatch"}
 
 
 SMOKES: dict[str, Smoke] = {
@@ -273,18 +278,18 @@ SMOKES: dict[str, Smoke] = {
         },
     ),
     # AI-Toolkit image families (first-class manifest projections).
-    "ai-toolkit-flux": _aitk("flux", "flux", "black-forest-labs/FLUX.1-dev", quantize=True, quantize_te=True, train=_FLOWMATCH),
-    "ai-toolkit-flux-kontext": _aitk("flux_kontext", "flux_kontext", "black-forest-labs/FLUX.1-Kontext-dev", CONTROL_DATASET, quantize=True, quantize_te=True, train={**_FLOWMATCH, "timestep_type": "weighted"}),
-    "ai-toolkit-flex2": _aitk("flex2", "flex2", "ostris/Flex.2-preview", CONTROL_DATASET, quantize=True, quantize_te=True, bypass_guidance_embedding=True, train={**_FLOWMATCH, "timestep_type": "shift"}),
-    "ai-toolkit-chroma": _aitk("chroma", "chroma", "lodestones/Chroma1-Base", quantize=True, quantize_te=True, train=_FLOWMATCH),
-    "ai-toolkit-qwen-image": _aitk("qwen_image", "qwen_image", "Qwen/Qwen-Image", quantize=True, quantize_te=True, low_vram=True, train={**_FLOWMATCH, "timestep_type": "weighted"}, model={"qtype": "qfloat8"}),
-    "ai-toolkit-qwen-image-edit": _aitk("qwen_image_edit", "qwen_image_edit", "Qwen/Qwen-Image-Edit", CONTROL_DATASET, quantize=True, quantize_te=True, low_vram=True, train={**_FLOWMATCH, "timestep_type": "weighted"}, model={"qtype": "qfloat8"}),
-    "ai-toolkit-qwen-image-2": _aitk("qwen_image_2", "qwen_image_2", "Comfy-Org/Qwen-Image-2.1", quantize=True, quantize_te=True, low_vram=True, train={**_FLOWMATCH, "timestep_type": "shift", "unload_text_encoder": False}, model={"qtype": "convrot8", "qtype_te": "convrot8"}),
-    "ai-toolkit-anima": _aitk("anima", "anima", "circlestone-labs/Anima-Base-v1.0-Diffusers", train={**_FLOWMATCH, "timestep_type": "weighted"}),
-    "ai-toolkit-hidream": _aitk("hidream", "hidream", "HiDream-ai/HiDream-I1-Full", quantize=True, quantize_te=True, train={**_FLOWMATCH, "timestep_type": "shift"}),
-    "ai-toolkit-flux2-klein-4b": _aitk("flux2_klein_4b", "flux2_klein_4b", "black-forest-labs/FLUX.2-klein-base-4B", quantize=True, quantize_te=True, low_vram=True, train={**_FLOWMATCH, "timestep_type": "weighted", "unload_text_encoder": False}, model={"qtype": "qfloat8", "model_kwargs": {"match_target_res": False}}),
+    "ai-toolkit-flux": _aitk("flux", "flux", "black-forest-labs/FLUX.1-dev", quantize=True, quantize_te=True),
+    "ai-toolkit-flux-kontext": _aitk("flux_kontext", "flux_kontext", "black-forest-labs/FLUX.1-Kontext-dev", CONTROL_DATASET, quantize=True, quantize_te=True, train={"timestep_type": "weighted"}),
+    "ai-toolkit-flex2": _aitk("flex2", "flex2", "ostris/Flex.2-preview", CONTROL_DATASET, quantize=True, quantize_te=True, bypass_guidance_embedding=True, train={"timestep_type": "shift"}),
+    "ai-toolkit-chroma": _aitk("chroma", "chroma", "lodestones/Chroma1-Base", quantize=True, quantize_te=True),
+    "ai-toolkit-qwen-image": _aitk("qwen_image", "qwen_image", "Qwen/Qwen-Image", quantize=True, quantize_te=True, low_vram=True, train={"timestep_type": "weighted"}, model={"qtype": "qfloat8"}),
+    "ai-toolkit-qwen-image-edit": _aitk("qwen_image_edit", "qwen_image_edit", "Qwen/Qwen-Image-Edit", CONTROL_DATASET, quantize=True, quantize_te=True, low_vram=True, train={"timestep_type": "weighted"}, model={"qtype": "qfloat8"}),
+    "ai-toolkit-qwen-image-2": _aitk("qwen_image_2", "qwen_image_2", "Comfy-Org/Qwen-Image-2.1", quantize=True, quantize_te=True, low_vram=True, train={"timestep_type": "shift", "unload_text_encoder": False}, model={"qtype": "convrot8", "qtype_te": "convrot8"}),
+    "ai-toolkit-anima": _aitk("anima", "anima", "circlestone-labs/Anima-Base-v1.0-Diffusers", train={"timestep_type": "weighted"}),
+    "ai-toolkit-hidream": _aitk("hidream", "hidream", "HiDream-ai/HiDream-I1-Full", quantize=True, quantize_te=True, train={"timestep_type": "shift"}),
+    "ai-toolkit-flux2-klein-4b": _aitk("flux2_klein_4b", "flux2_klein_4b", "black-forest-labs/FLUX.2-klein-base-4B", quantize=True, quantize_te=True, low_vram=True, train={"timestep_type": "weighted", "unload_text_encoder": False}, model={"qtype": "qfloat8", "model_kwargs": {"match_target_res": False}}),
     "ai-toolkit-krea2": _aitk("krea2", "krea2", "krea/Krea-2-Raw", quantize=True, quantize_te=True, low_vram=True, train={"timestep_type": "linear"}),
-    "ai-toolkit-zimage": _aitk("zimage", "zimage", "Tongyi-MAI/Z-Image", quantize=True, quantize_te=True, low_vram=True, train={**_FLOWMATCH, "timestep_type": "weighted", "unload_text_encoder": False}, model={"qtype": "qfloat8"}),
+    "ai-toolkit-zimage": _aitk("zimage", "zimage", "Tongyi-MAI/Z-Image", quantize=True, quantize_te=True, low_vram=True, train={"timestep_type": "weighted", "unload_text_encoder": False}, model={"qtype": "qfloat8"}),
 }
 
 
