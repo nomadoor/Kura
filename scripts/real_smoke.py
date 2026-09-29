@@ -33,9 +33,10 @@ import yaml
 IMAGE_DATASET = "real-smoke-image"
 CONTROL_DATASET = "real-smoke-image-control"
 VIDEO_DATASET = "real-smoke-video"
-# FramePack needs at least one full latent window after the pinned loader's
-# frame conversion; the 37-frame video converts to 30 frames.
-LONG_VIDEO_DATASET = "real-smoke-video-long"
+# FramePack trains at 30 fps. The pinned loader can only drop frames, so a
+# 24 fps source never yields a full 37-frame latent window after conversion;
+# this video is encoded at 30 fps.
+FPS30_VIDEO_DATASET = "real-smoke-video-30fps"
 MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 A40 = "NVIDIA A40"
 
@@ -247,9 +248,9 @@ SMOKES: dict[str, Smoke] = {
         },
     ),
     "musubi-framepack": _musubi(
-        "framepack", "Kijai/HunyuanVideo_comfy", LONG_VIDEO_DATASET, "fpack_train_network.py",
+        "framepack", "Kijai/HunyuanVideo_comfy", FPS30_VIDEO_DATASET, "fpack_train_network.py",
         fp8_base=True, fp8_scaled=True, fp8_llm=True, blocks_to_swap=36,
-        dataset_options={LONG_VIDEO_DATASET: {"target_frames": [37], "frame_extraction": "head", "source_fps": 24.0}},
+        dataset_options={FPS30_VIDEO_DATASET: {"target_frames": [37], "frame_extraction": "head", "source_fps": 30.0}},
         model_downloads={
             "dit": _download("Kijai/HunyuanVideo_comfy", "FramePackI2V_HY_bf16.safetensors"),
             "vae": _download("tencent/HunyuanVideo", "hunyuan-video-t2v-720p/vae/pytorch_model.pt"),
@@ -340,7 +341,7 @@ def _create_control_dataset(root: Path) -> None:
 
 _VIDEO_GENERATOR = r'''
 import cv2, numpy as np, sys
-writer = cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (256, 256))
+writer = cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*"mp4v"), float(sys.argv[3]), (256, 256))
 if not writer.isOpened():
     raise SystemExit("cannot open VideoWriter")
 for i in range(int(sys.argv[2])):
@@ -353,13 +354,13 @@ writer.release()
 '''
 
 
-def _create_video_dataset(root: Path, frames: int = 37) -> None:
+def _create_video_dataset(root: Path, frames: int = 37, fps: float = 24.0) -> None:
     docker = shutil.which("docker")
     if docker is None:
         raise SystemExit(f"creating {VIDEO_DATASET} needs Docker to encode the MP4 inside {MUSUBI_IMAGE}")
     user = ["--user", f"{os.getuid()}:{os.getgid()}"] if hasattr(os, "getuid") else []
     result = subprocess.run(
-        [docker, "run", "--rm", *user, "-v", f"{root}:/out", "--entrypoint", "python", MUSUBI_IMAGE, "-c", _VIDEO_GENERATOR, "/out/0001.mp4", str(frames)],
+        [docker, "run", "--rm", *user, "-v", f"{root}:/out", "--entrypoint", "python", MUSUBI_IMAGE, "-c", _VIDEO_GENERATOR, "/out/0001.mp4", str(frames), str(fps)],
         text=True, capture_output=True, check=False, timeout=300,
     )
     if result.returncode:
@@ -372,7 +373,7 @@ _CREATORS = {
     IMAGE_DATASET: _create_image_dataset,
     CONTROL_DATASET: _create_control_dataset,
     VIDEO_DATASET: _create_video_dataset,
-    LONG_VIDEO_DATASET: lambda root: _create_video_dataset(root, frames=73),
+    FPS30_VIDEO_DATASET: lambda root: _create_video_dataset(root, frames=45, fps=30.0),
 }
 
 

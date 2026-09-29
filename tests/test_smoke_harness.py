@@ -93,7 +93,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self.assertEqual(_in_process_kura(workspace, "init").returncode, 0)
-            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset, MODULE.LONG_VIDEO_DATASET: _fake_video_dataset}
+            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset, MODULE.FPS30_VIDEO_DATASET: _fake_video_dataset}
             with patch.object(MODULE, "_kura", side_effect=_in_process_kura), patch.dict(MODULE._CREATORS, creators):
                 for smoke_id in sorted(MODULE.SMOKES):
                     with self.subTest(smoke=smoke_id):
