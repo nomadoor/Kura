@@ -33,6 +33,10 @@ import yaml
 IMAGE_DATASET = "real-smoke-image"
 CONTROL_DATASET = "real-smoke-image-control"
 VIDEO_DATASET = "real-smoke-video"
+# FramePack trains at 30 fps. The pinned loader can only drop frames, so a
+# 24 fps source never yields a full 37-frame latent window after conversion;
+# this video is encoded at 30 fps.
+FPS30_VIDEO_DATASET = "real-smoke-video-30fps"
 MUSUBI_IMAGE = "nomadoor/kura-musubi-tuner:dev"
 A40 = "NVIDIA A40"
 
@@ -244,9 +248,9 @@ SMOKES: dict[str, Smoke] = {
         },
     ),
     "musubi-framepack": _musubi(
-        "framepack", "Kijai/HunyuanVideo_comfy", VIDEO_DATASET, "fpack_train_network.py",
+        "framepack", "Kijai/HunyuanVideo_comfy", FPS30_VIDEO_DATASET, "fpack_train_network.py",
         fp8_base=True, fp8_scaled=True, fp8_llm=True, blocks_to_swap=36,
-        dataset_options={VIDEO_DATASET: {"target_frames": [37], "frame_extraction": "head", "source_fps": 24.0}},
+        dataset_options={FPS30_VIDEO_DATASET: {"target_frames": [37], "frame_extraction": "head", "source_fps": 30.0}},
         model_downloads={
             "dit": _download("Kijai/HunyuanVideo_comfy", "FramePackI2V_HY_bf16.safetensors"),
             "vae": _download("tencent/HunyuanVideo", "hunyuan-video-t2v-720p/vae/pytorch_model.pt"),
@@ -313,19 +317,19 @@ def _caption(path: str) -> dict[str, Any]:
     return {"file": {"type": "file", "path": path}}
 
 
-def _create_image_dataset(root: Path) -> None:
+def _create_image_dataset(root: Path, dataset_id: str) -> None:
     (root / "0001.png").write_bytes(_png())
     (root / "0001.txt").write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
-    _write_manifest(root, root.name, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.png"}], "caption": _caption("0001.txt")}])
+    _write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.png"}], "caption": _caption("0001.txt")}])
 
 
-def _create_control_dataset(root: Path) -> None:
+def _create_control_dataset(root: Path, dataset_id: str) -> None:
     (root / "target").mkdir()
     (root / "control").mkdir()
     (root / "target" / "0001.png").write_bytes(_png())
     (root / "control" / "0001.png").write_bytes(_png(variant=1))
     (root / "target" / "0001.txt").write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
-    _write_manifest(root, root.name, [{
+    _write_manifest(root, dataset_id, [{
         "id": "0001",
         "files": [
             {"type": "file", "role": "target", "path": "target/0001.png"},
@@ -337,10 +341,10 @@ def _create_control_dataset(root: Path) -> None:
 
 _VIDEO_GENERATOR = r'''
 import cv2, numpy as np, sys
-writer = cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (256, 256))
+writer = cv2.VideoWriter(sys.argv[1], cv2.VideoWriter_fourcc(*"mp4v"), float(sys.argv[3]), (256, 256))
 if not writer.isOpened():
     raise SystemExit("cannot open VideoWriter")
-for i in range(37):
+for i in range(int(sys.argv[2])):
     frame = np.zeros((256, 256, 3), dtype=np.uint8)
     frame[:, :, 0] = np.arange(256, dtype=np.uint8)[None, :]
     frame[:, :, 1] = np.arange(256, dtype=np.uint8)[:, None]
@@ -350,22 +354,27 @@ writer.release()
 '''
 
 
-def _create_video_dataset(root: Path) -> None:
+def _create_video_dataset(root: Path, dataset_id: str, frames: int = 37, fps: float = 24.0) -> None:
     docker = shutil.which("docker")
     if docker is None:
         raise SystemExit(f"creating {VIDEO_DATASET} needs Docker to encode the MP4 inside {MUSUBI_IMAGE}")
     user = ["--user", f"{os.getuid()}:{os.getgid()}"] if hasattr(os, "getuid") else []
     result = subprocess.run(
-        [docker, "run", "--rm", *user, "-v", f"{root}:/out", "--entrypoint", "python", MUSUBI_IMAGE, "-c", _VIDEO_GENERATOR, "/out/0001.mp4"],
+        [docker, "run", "--rm", *user, "-v", f"{root}:/out", "--entrypoint", "python", MUSUBI_IMAGE, "-c", _VIDEO_GENERATOR, "/out/0001.mp4", str(frames), str(fps)],
         text=True, capture_output=True, check=False, timeout=300,
     )
     if result.returncode:
         raise SystemExit(result.stderr or result.stdout or "video generation failed")
     (root / "0001.txt").write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
-    _write_manifest(root, root.name, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": _caption("0001.txt")}])
+    _write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": _caption("0001.txt")}])
 
 
-_CREATORS = {IMAGE_DATASET: _create_image_dataset, CONTROL_DATASET: _create_control_dataset, VIDEO_DATASET: _create_video_dataset}
+_CREATORS = {
+    IMAGE_DATASET: _create_image_dataset,
+    CONTROL_DATASET: _create_control_dataset,
+    VIDEO_DATASET: _create_video_dataset,
+    FPS30_VIDEO_DATASET: lambda root, dataset_id: _create_video_dataset(root, dataset_id, frames=45, fps=30.0),
+}
 
 
 def ensure_dataset(workspace: Path, dataset_id: str) -> str:
@@ -380,7 +389,7 @@ def ensure_dataset(workspace: Path, dataset_id: str) -> str:
     if staging.exists():
         raise SystemExit(f"{staging} is left from an interrupted creation; remove it and retry")
     staging.mkdir(parents=True)
-    _CREATORS[dataset_id](staging)
+    _CREATORS[dataset_id](staging, dataset_id)
     staging.rename(root)
     result = _kura(workspace, "dataset", "validate", dataset_id)
     if result.returncode:
@@ -393,7 +402,7 @@ def _kura(workspace: Path, *args: str, timeout: float = 600) -> subprocess.Compl
     return subprocess.run(["uv", "run", "kura", *args], cwd=workspace, text=True, capture_output=True, check=False, env=env, timeout=timeout)
 
 
-def build_run_fields(smoke_id: str, smoke: Smoke) -> dict[str, Any]:
+def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None) -> dict[str, Any]:
     """The run.yaml fields a smoke owns; everything else comes from `kura run new`."""
     config = json.loads(json.dumps(smoke.config))
     if smoke.dataset_options:
@@ -406,7 +415,7 @@ def build_run_fields(smoke_id: str, smoke: Smoke) -> dict[str, Any]:
         "recipe": {"steps": 1, "seed": 1},
         "compute": {
             "executor": smoke.executor,
-            "gpu": smoke.gpu,
+            "gpu": gpu or smoke.gpu,
             # Wait for the recorded GPU instead of failing or silently switching it.
             **({"capacity": {"mode": "wait", "timeout": "30m", "poll_interval": "30s"}} if smoke.executor == "runpod" else {}),
         },
@@ -414,17 +423,19 @@ def build_run_fields(smoke_id: str, smoke: Smoke) -> dict[str, Any]:
     }
 
 
-def prepare(workspace: Path, smoke_id: str) -> str:
+def prepare(workspace: Path, smoke_id: str, *, gpu: str | None = None) -> str:
     smoke = SMOKES[smoke_id]
+    if gpu and smoke.executor != "runpod":
+        raise SystemExit(f"{smoke_id} runs on {smoke.executor}; --gpu selects a RunPod GPU type")
     ensure_dataset(workspace, smoke.dataset)
-    created = _kura(workspace, "run", "new", "--experiment", "real-smoke", "--slug", smoke_id, "--backend", smoke.backend, "--executor", smoke.executor, "--gpu", smoke.gpu)
+    created = _kura(workspace, "run", "new", "--experiment", "real-smoke", "--slug", smoke_id, "--backend", smoke.backend, "--executor", smoke.executor, "--gpu", gpu or smoke.gpu)
     match = re.search(r"([0-9]{8}-[0-9]{4}_[a-z0-9-]+_[0-9a-f]{4})", created.stdout + created.stderr)
     if created.returncode or match is None:
         raise SystemExit(f"kura run new failed for {smoke_id}:\n{created.stdout}{created.stderr}")
     run_id = match.group(1)
     run_path = workspace / "runs" / run_id / "run.yaml"
     run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
-    run.update(build_run_fields(smoke_id, smoke))
+    run.update(build_run_fields(smoke_id, smoke, gpu=gpu))
     run_path.write_text(yaml.safe_dump(run, allow_unicode=True, sort_keys=False), encoding="utf-8")
     compiled = _kura(workspace, "run", "compile", run_id)
     if compiled.returncode:
@@ -528,6 +539,7 @@ def main() -> int:
     commands.add_parser("list", help="List the smokes this harness knows")
     prepare_parser = commands.add_parser("prepare", help="Create and compile runs; never launches")
     prepare_parser.add_argument("smoke", nargs="+", choices=sorted(SMOKES))
+    prepare_parser.add_argument("--gpu", help="RunPod GPU type overriding the smoke default, for example when host RAM is the limit")
     verify_parser = commands.add_parser("verify", help="Check a finished run")
     verify_parser.add_argument("run_id", nargs="+")
     evidence_parser = commands.add_parser("evidence", help="Print evidence records for verified runs")
@@ -543,7 +555,7 @@ def main() -> int:
         return 0
     if args.command == "prepare":
         for smoke_id in args.smoke:
-            print(json.dumps({"smoke": smoke_id, "run_id": prepare(workspace, smoke_id)}))
+            print(json.dumps({"smoke": smoke_id, "run_id": prepare(workspace, smoke_id, gpu=args.gpu)}))
         return 0
     if args.command == "evidence":
         pairs = [evidence(workspace, run_id, artifact=args.artifact) for run_id in args.run_id]

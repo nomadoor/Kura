@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import yaml
+
 from kura import cli
 from kura.dataset_manifest import validate_manifest
 
@@ -44,11 +46,11 @@ def _in_process_kura(workspace: Path, *args: str, timeout: float = 0) -> subproc
     return subprocess.CompletedProcess(list(args), code, out.getvalue(), err.getvalue())
 
 
-def _fake_video_dataset(root: Path) -> None:
+def _fake_video_dataset(root: Path, dataset_id: str) -> None:
     # The container encodes the real MP4; compile needs only a selected file.
     (root / "0001.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
     (root / "0001.txt").write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
-    MODULE._write_manifest(root, root.name, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": MODULE._caption("0001.txt")}])
+    MODULE._write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": MODULE._caption("0001.txt")}])
 
 
 class RealSmokeHarnessTests(unittest.TestCase):
@@ -57,12 +59,22 @@ class RealSmokeHarnessTests(unittest.TestCase):
             with self.subTest(dataset=dataset_id), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory) / dataset_id
                 root.mkdir()
-                MODULE._CREATORS[dataset_id](root)
+                MODULE._CREATORS[dataset_id](root, dataset_id)
                 count, errors = validate_manifest(root)
+                self.assertEqual(yaml.safe_load((root / "dataset.yaml").read_text(encoding="utf-8"))["id"], dataset_id)
                 self.assertEqual((count, errors), (1, []))
                 row = json.loads((root / "items.jsonl").read_text(encoding="utf-8"))
                 roles = [item["role"] for item in row["files"]]
                 self.assertEqual(roles, ["target", "control"] if dataset_id == MODULE.CONTROL_DATASET else ["target"])
+
+    def test_a_created_dataset_records_its_final_id_not_the_staging_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            ok = subprocess.CompletedProcess([], 0, "dataset valid", "")
+            with patch.object(MODULE, "_kura", return_value=ok):
+                self.assertEqual(MODULE.ensure_dataset(workspace, MODULE.IMAGE_DATASET), "created")
+            manifest = yaml.safe_load((workspace / "datasets" / MODULE.IMAGE_DATASET / "dataset.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["id"], MODULE.IMAGE_DATASET)
 
     def test_an_existing_dataset_is_validated_and_never_rewritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -93,7 +105,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self.assertEqual(_in_process_kura(workspace, "init").returncode, 0)
-            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset}
+            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset, MODULE.FPS30_VIDEO_DATASET: _fake_video_dataset}
             with patch.object(MODULE, "_kura", side_effect=_in_process_kura), patch.dict(MODULE._CREATORS, creators):
                 for smoke_id in sorted(MODULE.SMOKES):
                     with self.subTest(smoke=smoke_id):
@@ -102,6 +114,13 @@ class RealSmokeHarnessTests(unittest.TestCase):
                         self.assertTrue((run_dir / "resolved" / "dataset-projection.lock.json").is_file())
                         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
                         self.assertEqual(status["state"], "compiled")
+
+    def test_gpu_override_reaches_runpod_compute_and_refuses_local_smokes(self) -> None:
+        fields = MODULE.build_run_fields("ai-toolkit-hidream", MODULE.SMOKES["ai-toolkit-hidream"], gpu="NVIDIA A100 80GB PCIe")
+        self.assertEqual(fields["compute"]["gpu"], "NVIDIA A100 80GB PCIe")
+        self.assertEqual(fields["compute"]["capacity"]["mode"], "wait")
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(SystemExit, "selects a RunPod GPU"):
+            MODULE.prepare(Path(directory), "ai-toolkit-sd1", gpu="NVIDIA A100 80GB PCIe")
 
     def test_verify_requires_a_finished_published_step_and_a_stopped_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
