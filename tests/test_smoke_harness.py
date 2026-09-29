@@ -93,7 +93,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self.assertEqual(_in_process_kura(workspace, "init").returncode, 0)
-            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset}
+            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset, MODULE.LONG_VIDEO_DATASET: _fake_video_dataset}
             with patch.object(MODULE, "_kura", side_effect=_in_process_kura), patch.dict(MODULE._CREATORS, creators):
                 for smoke_id in sorted(MODULE.SMOKES):
                     with self.subTest(smoke=smoke_id):
@@ -102,6 +102,13 @@ class RealSmokeHarnessTests(unittest.TestCase):
                         self.assertTrue((run_dir / "resolved" / "dataset-projection.lock.json").is_file())
                         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
                         self.assertEqual(status["state"], "compiled")
+
+    def test_gpu_override_reaches_runpod_compute_and_refuses_local_smokes(self) -> None:
+        fields = MODULE.build_run_fields("ai-toolkit-hidream", MODULE.SMOKES["ai-toolkit-hidream"], gpu="NVIDIA A100 80GB PCIe")
+        self.assertEqual(fields["compute"]["gpu"], "NVIDIA A100 80GB PCIe")
+        self.assertEqual(fields["compute"]["capacity"]["mode"], "wait")
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(SystemExit, "selects a RunPod GPU"):
+            MODULE.prepare(Path(directory), "ai-toolkit-sd1", gpu="NVIDIA A100 80GB PCIe")
 
     def test_verify_requires_a_finished_published_step_and_a_stopped_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
