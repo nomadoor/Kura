@@ -90,10 +90,15 @@ the pinned source and records it. Kura does not author these values.
 - For an unknown or ambiguous arch, compile requires
   `native_config.train.noise_scheduler` and `mixed_precision`, the two values
   observed to decide whether a run trains at all.
-- With the forced `cache_latents_to_disk: true` removed, no Kura input can turn
-  latent caching on for AI-Toolkit. The Flex.2 refusal described above therefore
-  has no reachable input today. It becomes necessary if caching becomes an
-  authored option.
+- With the forced `cache_latents_to_disk: true` removed, latent caching follows
+  the baseline. It is on only where the pinned UI enables it (MiniMax-H3 and its
+  Ref2VA variant, LTX-2.3, LTX-2.5, YuE2). The `flex2` entry records `false`, so
+  the Flex.2 refusal described above has no reachable input today. It becomes
+  necessary if caching becomes an authored option.
+- Several UI entries can share one model path (`krea2` and `krea2:o_edit`). A
+  path match therefore narrows the candidates rather than deciding alone.
+  `model_kwargs.edit` is never taken from the baseline, because the typed
+  `model_edit` field owns edit mode.
 - Existing AI-Toolkit optimizer evidence predates the baseline. The generated
   configuration changed, so it is not migrated and needs a re-smoke.
 

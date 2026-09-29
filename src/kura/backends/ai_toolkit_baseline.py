@@ -46,16 +46,22 @@ def select_baseline_entry(model_arch: str, normalized_arch: str, model_base: obj
     ``model_arch`` is the authored selector (it may carry a UI tag such as
     ``zimage:turbo`` or the ``flex1`` alias); ``normalized_arch`` is the arch
     AI-Toolkit trains. Several UI entries can share one arch. The entry whose
-    model path equals ``model.base`` wins, then the entry named exactly like
-    the selector, then the entry named after the arch, then the only entry for
-    that arch. Anything else is ambiguous and returns None.
+    model path equals ``model.base`` wins when it is the only one; among several
+    such entries (or with no path match) the entry named like the selector,
+    then the entry named after the arch, then a sole candidate. Anything else is
+    ambiguous and returns None.
     """
     entries = {name: entry for name, entry in load_baseline()["entries"].items() if entry.get("arch") == normalized_arch}
     if not entries:
         return None
-    for name, entry in sorted(entries.items()):
-        if isinstance(model_base, str) and model_base and entry.get("name_or_path") == model_base:
-            return name, entry
+    # Several entries can share one model path (krea2 and krea2:o_edit), so a
+    # path match narrows the candidates instead of deciding alone.
+    if isinstance(model_base, str) and model_base:
+        by_path = {name: entry for name, entry in entries.items() if entry.get("name_or_path") == model_base}
+        if len(by_path) == 1:
+            return next(iter(by_path.items()))
+        if by_path:
+            entries = by_path
     for name in (model_arch, normalized_arch):
         if name in entries:
             return name, entries[name]

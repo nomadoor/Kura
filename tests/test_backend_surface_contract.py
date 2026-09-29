@@ -898,6 +898,27 @@ class BackendSurfaceContractTests(unittest.TestCase):
         tagged["model"]["base"] = "not/a-listed-path"
         self.assertEqual(ai_toolkit_baseline(tagged)["entry"], "zimage:turbo")
 
+        # krea2:turbo and krea2:o_edit_turbo share one model path; the selector
+        # decides, and edit mode never comes from the baseline.
+        for selector, expected in (("krea2:turbo", "krea2:turbo"), ("krea2", None)):
+            with self.subTest(selector=selector):
+                turbo = deepcopy(run)
+                turbo["backend"]["config"] = {"model_arch": selector}
+                turbo["model"]["base"] = "krea/Krea-2-Turbo"
+                if expected is None:
+                    with self.assertRaisesRegex(ValueError, "no unambiguous entry"):
+                        ai_toolkit_baseline(turbo)
+                    continue
+                selected = ai_toolkit_baseline(turbo)
+                self.assertEqual(selected["entry"], expected)
+                self.assertNotIn("edit", selected["model"].get("model_kwargs", {}))
+        edit = deepcopy(run)
+        edit["backend"]["config"] = {"model_arch": "krea2:o_edit", "model_edit": True}
+        edit["model"]["base"] = "krea/Krea-2-Raw"
+        selected = ai_toolkit_baseline(edit)
+        self.assertEqual(selected["entry"], "krea2:o_edit")
+        self.assertNotIn("edit", selected["model"].get("model_kwargs", {}))
+
     def test_ai_toolkit_architecture_without_a_baseline_requires_authored_scheduler_and_precision(self) -> None:
         from kura.backends.ai_toolkit import ai_toolkit_baseline
 

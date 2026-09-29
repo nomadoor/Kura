@@ -1292,9 +1292,10 @@ def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
             value = entry[section][key]
             if isinstance(value, dict):
                 current = authored.get(key) if isinstance(authored.get(key), dict) else {}
-                if section == "model" and key == "model_kwargs" and "model_edit" in override:
-                    current = {**current, "edit": override["model_edit"]}
                 missing_subkeys = {sub: deepcopy(item) for sub, item in value.items() if sub not in current}
+                if section == "model" and key == "model_kwargs":
+                    # Edit mode is owned by the typed model_edit field only.
+                    missing_subkeys.pop("edit", None)
                 if missing_subkeys:
                     filled[key] = missing_subkeys
             elif key not in authored:
