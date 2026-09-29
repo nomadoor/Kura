@@ -1,187 +1,132 @@
-"""Regression tests for developer real-smoke harnesses."""
+"""Regression tests for the developer real-smoke harness."""
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from kura import cli
+from kura.dataset_manifest import validate_manifest
+
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("musubi_real_smoke", ROOT / "scripts" / "musubi_real_smoke.py")
+SPEC = importlib.util.spec_from_file_location("real_smoke", ROOT / "scripts" / "real_smoke.py")
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-SD_SPEC = importlib.util.spec_from_file_location("sd_scripts_real_smoke", ROOT / "scripts" / "sd_scripts_real_smoke.py")
-assert SD_SPEC is not None and SD_SPEC.loader is not None
-SD_MODULE = importlib.util.module_from_spec(SD_SPEC)
-sys.modules[SD_SPEC.name] = SD_MODULE
-SD_SPEC.loader.exec_module(SD_MODULE)
+
+def _in_process_kura(workspace: Path, *args: str, timeout: float = 0) -> subprocess.CompletedProcess[str]:
+    """Run the Kura CLI in this process, the way the harness runs it as a subprocess."""
+    del timeout
+    out, err = io.StringIO(), io.StringIO()
+    previous = Path.cwd()
+    os.chdir(workspace)
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), patch.object(sys, "argv", ["kura", *args]):
+            try:
+                cli.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    finally:
+        os.chdir(previous)
+    return subprocess.CompletedProcess(list(args), code, out.getvalue(), err.getvalue())
 
 
-class MusubiRealSmokeHarnessTests(unittest.TestCase):
-    def test_flux_kontext_smoke_avoids_broken_upstream_fp8_t5_path(self) -> None:
-        self.assertNotIn("fp8_t5", MODULE.SPECS["flux_kontext"].extra_override)
+def _fake_video_dataset(root: Path) -> None:
+    # The container encodes the real MP4; compile needs only a selected file.
+    (root / "0001.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    (root / "0001.txt").write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
+    MODULE._write_manifest(root, root.name, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": MODULE._caption("0001.txt")}])
 
-    def test_dataset_generation_starts_from_an_empty_workspace(self) -> None:
+
+class RealSmokeHarnessTests(unittest.TestCase):
+    def test_generated_datasets_are_valid_manifest_v2(self) -> None:
+        for dataset_id in (MODULE.IMAGE_DATASET, MODULE.CONTROL_DATASET):
+            with self.subTest(dataset=dataset_id), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / dataset_id
+                root.mkdir()
+                MODULE._CREATORS[dataset_id](root)
+                count, errors = validate_manifest(root)
+                self.assertEqual((count, errors), (1, []))
+                row = json.loads((root / "items.jsonl").read_text(encoding="utf-8"))
+                roles = [item["role"] for item in row["files"]]
+                self.assertEqual(roles, ["target", "control"] if dataset_id == MODULE.CONTROL_DATASET else ["target"])
+
+    def test_an_existing_dataset_is_validated_and_never_rewritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            MODULE.ensure_generated_dataset(root, "flux-kontext-smoke")
-            self.assertTrue((root / "datasets" / "flux2-klein-tiny" / "images" / "00001.png").is_file())
-            self.assertTrue((root / "datasets" / "flux-kontext-smoke" / "pose" / "target" / "0001.png").is_file())
+            workspace = Path(directory)
+            dataset = workspace / "datasets" / MODULE.IMAGE_DATASET
+            dataset.mkdir(parents=True)
+            (dataset / "items.jsonl").write_text("authored\n", encoding="utf-8")
+            ok = subprocess.CompletedProcess([], 0, "dataset valid", "")
+            with patch.object(MODULE, "_kura", return_value=ok):
+                self.assertEqual(MODULE.ensure_dataset(workspace, MODULE.IMAGE_DATASET), "existing")
+            invalid = subprocess.CompletedProcess([], 1, "", "bad manifest")
+            with patch.object(MODULE, "_kura", return_value=invalid), self.assertRaises(SystemExit):
+                MODULE.ensure_dataset(workspace, MODULE.IMAGE_DATASET)
+            self.assertEqual(sorted(path.name for path in dataset.iterdir()), ["items.jsonl"])
+            self.assertEqual((dataset / "items.jsonl").read_text(encoding="utf-8"), "authored\n")
 
-    def test_video_generation_keeps_the_container_image_reference(self) -> None:
+    def test_an_interrupted_creation_is_not_reused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            completed = __import__("subprocess").CompletedProcess([], 0, "", "")
-            with patch.object(MODULE.shutil, "which", return_value="/usr/bin/docker"), patch.object(
-                MODULE, "run", return_value=completed
-            ) as run:
-                MODULE.ensure_generated_dataset(root, "musubi-video-smoke", image="example/musubi:test")
-            self.assertIn("example/musubi:test", run.call_args.args[0])
+            workspace = Path(directory)
+            (workspace / "datasets" / f".{MODULE.IMAGE_DATASET}.creating").mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, "interrupted creation"):
+                MODULE.ensure_dataset(workspace, MODULE.IMAGE_DATASET)
+            self.assertFalse((workspace / "datasets" / MODULE.IMAGE_DATASET).exists())
 
-    def test_validate_result_reads_the_common_frozen_command(self) -> None:
-        spec = MODULE.SPECS["wan"]
+    def test_every_smoke_compiles_through_the_normal_kura_cli(self) -> None:
+        # A backend surface change that invalidates a smoke must fail here,
+        # not after a paid Pod has started.
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "smoke"
-            (run_dir / "resolved").mkdir(parents=True)
+            workspace = Path(directory)
+            self.assertEqual(_in_process_kura(workspace, "init").returncode, 0)
+            creators = {**MODULE._CREATORS, MODULE.VIDEO_DATASET: _fake_video_dataset}
+            with patch.object(MODULE, "_kura", side_effect=_in_process_kura), patch.dict(MODULE._CREATORS, creators):
+                for smoke_id in sorted(MODULE.SMOKES):
+                    with self.subTest(smoke=smoke_id):
+                        run_id = MODULE.prepare(workspace, smoke_id)
+                        run_dir = workspace / "runs" / run_id
+                        self.assertTrue((run_dir / "resolved" / "dataset-projection.lock.json").is_file())
+                        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                        self.assertEqual(status["state"], "compiled")
+
+    def test_verify_requires_a_finished_published_step_and_a_stopped_pod(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "20260101-0000_musubi-zimage_abcd"
+            (run_dir / "outputs").mkdir(parents=True)
             (run_dir / "logs").mkdir()
-            (run_dir / "outputs").mkdir()
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1}),
-                encoding="utf-8",
-            )
-            (run_dir / "logs" / "stdout.log").write_text("avr_loss=0.1\n", encoding="utf-8")
-            (run_dir / "resolved" / "backend-command.lock.json").write_text(
-                json.dumps({"backend": "musubi-tuner", "cwd": "/opt/musubi-tuner", "argv": ["python", spec.expected_script], "env": {}}),
-                encoding="utf-8",
-            )
-            for index in range(spec.expected_outputs):
-                (run_dir / "outputs" / f"result-{index}.safetensors").write_bytes(b"result")
-
-            report = MODULE.validate_result(root, "smoke", spec)
-
-        self.assertTrue(report["checks"]["script_seen"])
-        self.assertTrue(report["ok"])
-
-    def test_runpod_result_requires_recovery_and_pod_stop(self) -> None:
-        spec = MODULE.SPECS["wan"]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "smoke"
-            (run_dir / "resolved").mkdir(parents=True)
-            (run_dir / "logs").mkdir()
-            (run_dir / "outputs").mkdir()
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "runpod", "recovery_required": False}),
-                encoding="utf-8",
-            )
-            (run_dir / "logs" / "stdout.log").write_text("avr_loss=0.1\n", encoding="utf-8")
-            (run_dir / "resolved" / "backend-command.lock.json").write_text(
-                json.dumps({"backend": "musubi-tuner", "cwd": "/opt/musubi-tuner", "argv": ["python", spec.expected_script], "env": {}}),
-                encoding="utf-8",
-            )
-            for index in range(spec.expected_outputs):
-                (run_dir / "outputs" / f"result-{index}.safetensors").write_bytes(b"result")
-
-            report = MODULE.validate_result(root, "smoke", spec)
-            self.assertFalse(report["checks"]["pod_stopped"])
-            self.assertFalse(report["ok"])
-
-            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            status["pod_stopped_at"] = "2026-01-01T00:00:00+00:00"
-            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
-            self.assertTrue(MODULE.validate_result(root, "smoke", spec)["ok"])
-
-
-class SdScriptsRealSmokeHarnessTests(unittest.TestCase):
-    def test_generated_lllite_dataset_is_paired_and_identity_stable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset_id = SD_MODULE.ensure_dataset(root, paired=True)
-            before = SD_MODULE.dataset_identity(root, dataset_id)
-            self.assertTrue((root / "datasets" / dataset_id / "images" / "0001.png").is_file())
-            self.assertTrue((root / "datasets" / dataset_id / "conditioning" / "0001.png").is_file())
-            self.assertEqual(before, SD_MODULE.dataset_identity(root, dataset_id))
-
-    def test_model_roles_require_every_selector_input(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            models = Path(directory) / "models.yaml"
-            models.write_text("dit: /models/dit.safetensors\n", encoding="utf-8")
-            with self.assertRaisesRegex(SystemExit, "qwen3, vae"):
-                SD_MODULE.load_models(models, SD_MODULE.SPECS["anima-lora"])
-
-    def test_tier1_run_uses_bounded_architecture_specific_settings(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "datasets").mkdir()
-            cases = {
-                "sd15": ("base: /models/sd15.safetensors\n", [256, 256]),
-                "sdxl": ("base: /models/sdxl.safetensors\n", [512, 512]),
-                "flux1": ("dit: /models/flux.safetensors\nclip_l: /models/clip.safetensors\nt5xxl: /models/t5.safetensors\nae: /models/ae.safetensors\n", [512, 512]),
-                "anima-lora": ("dit: /models/anima.safetensors\nqwen3: /models/qwen.safetensors\nvae: /models/vae.safetensors\n", [512, 512]),
-                "anima-lllite": ("dit: /models/anima.safetensors\nqwen3: /models/qwen.safetensors\nvae: /models/vae.safetensors\n", [512, 512]),
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"argv": ["zimage_train_network.py"]}), encoding="utf-8")
+            (run_dir / "outputs" / "adapter.safetensors").write_bytes(b"x")
+            (run_dir / "logs" / "stdout.log").write_text("steps: 1/1 avr_loss=0.123\n", encoding="utf-8")
+            status = {
+                "state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "runpod",
+                "publication_state": "completed", "dataset_input_postflight": {"status": "matched"},
+                "pod_stopped_at": "2026-01-01T00:00:00+00:00",
             }
-            for selector, (models_text, resolution) in cases.items():
-                models = root / f"{selector}.yaml"
-                models.write_text(models_text, encoding="utf-8")
-                run_id, _ = SD_MODULE.write_run(root, selector, SD_MODULE.SPECS[selector], models_file=models, executor="docker", gpu="gpu")
-                run_yaml = __import__("yaml").safe_load((root / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
-                config = run_yaml["backend"]["config"]
-                self.assertEqual(config["dataset_config"]["general"]["resolution"], resolution)
-                if selector == "flux1":
-                    self.assertTrue(config["fp8_base"])
-                    self.assertEqual(config["blocks_to_swap"], 16)
-                    self.assertEqual(config["timestep_sampling"], "flux_shift")
-                    self.assertEqual(config["network_dim"], 16)
-                if selector == "sdxl":
-                    self.assertEqual(config["network_dim"], 8)
-                    self.assertEqual(config["network_alpha"], 4)
-                    self.assertTrue(config["network_train_unet_only"])
-                if selector == "anima-lora":
-                    self.assertEqual(config["learning_rate"], 0.0001)
-                    self.assertEqual(config["network_dim"], 8)
-                    self.assertTrue(config["network_train_unet_only"])
-                    self.assertEqual(config["timestep_sampling"], "sigmoid")
-                if selector == "anima-lllite":
-                    self.assertNotIn("network_dim", config)
-                    self.assertEqual(config["learning_rate"], 0.00005)
-                    self.assertEqual(config["lllite_mlp_dim"], 64)
-                    self.assertEqual(config["timestep_sampling"], "shift")
-                    self.assertEqual(config["discrete_flow_shift"], 3.0)
-
-    def test_lllite_validation_checks_real_metadata_and_dataset_identity(self) -> None:
-        spec = SD_MODULE.SPECS["anima-lllite"]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset_id = SD_MODULE.ensure_dataset(root, paired=True)
-            run_dir = root / "runs" / "smoke"
-            (run_dir / "resolved").mkdir(parents=True)
-            (run_dir / "outputs").mkdir()
-            (run_dir / "realizations").mkdir()
-            (run_dir / "logs").mkdir()
-            (run_dir / "logs" / "stdout.log").write_text("steps: 100% 1/1 [avr_loss=0.125]\n", encoding="utf-8")
-            observation = "realizations/local.observed.json"
-            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "docker", "last_observation": observation}), encoding="utf-8")
-            (run_dir / observation).write_text(json.dumps({"state": "completed", "exit_code": 0, "container_id": "container"}), encoding="utf-8")
-            (run_dir / "resolved" / "backend-command.lock.json").write_text(spec.expected_script, encoding="utf-8")
-            (run_dir / "realizations" / "dataset-before.json").write_text(json.dumps(SD_MODULE.dataset_identity(root, dataset_id)), encoding="utf-8")
-            header = {"__metadata__": {"lllite.version": "2"}, "lllite_conditioning1.conv1.weight": {"dtype": "F32", "shape": [1], "data_offsets": [0, 4]}}
-            encoded = json.dumps(header).encode("utf-8")
-            import struct
-            (run_dir / "outputs" / "result.safetensors").write_bytes(struct.pack("<Q", len(encoded)) + encoded + struct.pack("<f", 0.0))
-            self.assertTrue(SD_MODULE.validate_result(root, "smoke", dataset_id, spec)["ok"])
-            (run_dir / observation).unlink()
-            report = SD_MODULE.validate_result(root, "smoke", dataset_id, spec)
-            self.assertFalse(report["checks"]["docker_terminal_observed"])
-            self.assertFalse(report["ok"])
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            self.assertTrue(MODULE.verify(workspace, run_dir.name)["ok"])
+            for key, value in (("pod_stopped_at", None), ("publication_state", "blocked"), ("dataset_input_postflight", {"status": "changed"})):
+                with self.subTest(key=key):
+                    (run_dir / "status.json").write_text(json.dumps({**status, key: value}), encoding="utf-8")
+                    self.assertFalse(MODULE.verify(workspace, run_dir.name)["ok"])
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+            (run_dir / "logs" / "stdout.log").write_text("avr_loss=nan\n", encoding="utf-8")
+            self.assertFalse(MODULE.verify(workspace, run_dir.name)["checks"]["finite_loss"])
 
 
 if __name__ == "__main__":

@@ -27,7 +27,7 @@ one-step training proof.
 
 Real one-step smoke is tracked separately. It must use actual model files and
 finish one optimizer step through Kura's normal Docker or RunPod executor. The
-developer runner is `uv run python scripts/musubi_real_smoke.py <architecture>`.
+developer runner is `uv run python scripts/real_smoke.py prepare <smoke-id>` (list them with `uv run python scripts/real_smoke.py list`); it only creates and compiles the run, and the approved launch is `uv run kura run execute <run-id>`. Rows below that cite `scripts/musubi_real_smoke.py` record the retired pre-manifest runner.
 Choose the first executor/GPU from the concrete model, dataset, precision,
 memory, and disk facts before running an expensive smoke; do not probe GPU
 classes blindly.
