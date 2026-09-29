@@ -97,6 +97,22 @@ environment. These are measurement moments, not additional approval gates. A
 fact has one owner; Kura duplicates a trainer check only when its native failure
 would be expensive-late or cryptic.
 
+For first-class training, compile requires an authored, versioned dataset
+manifest and freezes the run's selected inputs and backend projection before
+acquisition. After approval, launch checks every selected source's stat and
+the run-owned view's exact source-link inventory and targets against the
+lock, before any Kura-managed or backend-managed model download. Local Docker
+exposes the original dataset read-only as a separate contamination safeguard.
+A stat-and-link match is not a new content hash or live immutability claim.
+After training, Kura repeats the check. A mismatch is recorded without
+changing the trainer result or invalidating publication; realization records
+it, while status and plan warn that inputs may have changed during training.
+Once terminal state and publication are settled, Kura records automatic
+removal of the disposable view and its caches; unresolved recovery prevents
+removal. RunPod transfer completeness and per-file content integrity are
+recorded separately from semantic input identity and local source change
+detection. Output publication remains a separate condition of completion.
+
 RunPod capacity is measured before approval. The plan shows stock and price for
 ordered GPU/cloud candidates and may freeze a bounded foreground wait policy.
 Waiting probes stock with bounded backoff, then treats Pod creation as
@@ -107,9 +123,11 @@ billing Pod after the controller exits.
 
 ## File roles
 
+- `dataset.yaml` and `items.jsonl`: the author's versioned dataset inventory,
+  independent of a particular trainer or run.
 - `run.yaml`: human and agent intent, recipe, and approved contingency envelope.
-- `resolved/`: immutable backend input, requirements, workflow input, and
-  environment intent.
+- `resolved/`: immutable run-selected manifest content, effective input lock
+  and backend projection, requirements, workflow input, and environment intent.
 - `realizations/`: append-only launch, provider/container/image identity,
   runtime measurements, model observations, exit, and recovery facts.
 - `status.json`: latest materialized state only.

@@ -2,17 +2,220 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
+import json
 import math
-from pathlib import Path, PurePosixPath
+from pathlib import Path
+import tomllib
 from typing import Any
 
+from kura.backends.dataset_profiles import (
+    classify_dataset_shape,
+    resolve_projection_partitions,
+    select_projection_profile,
+)
 from kura.backends.shared import _datasets, _toml_scalar
-from kura.fsio import atomic_write_json, atomic_write_text
+from kura.dataset_handoff import project_caption_text
+from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
 
 
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
+# Pinned sd-scripts 6721028, library/dataset.py:70-93. AVIF and JXL are
+# conditional on pillow_avif / jxlpy / pillow_jxl imports. Kura's pinned image
+# installs that revision's requirements.txt and editable setup.py; neither
+# declares those optional plugins, so only the unconditional loader entries are
+# first-class capabilities.
+SD_SCRIPTS_IMAGE_SUFFIXES = frozenset({".bmp", ".jpeg", ".jpg", ".png", ".webp"})
+
+
+def _sd_scripts_caption_projection(
+    caption: dict[str, Any], transform: str, *, sample_id: str,
+) -> str:
+    """Match the pinned DreamBooth caption-file loader before materialization."""
+    text = caption.get("text")
+    if not isinstance(text, str):
+        raise ValueError(f"sd-scripts sample {sample_id!r} has no caption text")
+    projected = project_caption_text(text, transform)
+    if not projected:
+        raise ValueError(
+            f"sd-scripts sample {sample_id!r} caption is empty after {transform}"
+        )
+    return projected
+
+
+def _dreambooth_image_subset(
+    run: dict[str, Any], dataset: dict[str, Any], samples: list[dict[str, Any]],
+    subset: dict[str, Any], *, view_name: str, caption_transform: str,
+) -> dict[str, Any]:
+    """Build one sd-scripts DreamBooth subset from explicit manifest rows."""
+    dataset_id = str(dataset.get("id"))
+    base_root = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
+    view_root = base_root if view_name == "default" else f"{base_root}/{view_name}"
+    caption_extension = str(subset["caption_extension"])
+    consumed: list[str] = []
+    links: list[dict[str, str]] = []
+    files: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
+    for index, sample in enumerate(samples):
+        references = sample.get("files", [])
+        target = next(item for item in references if item.get("role") == "target")
+        caption = sample.get("caption")
+        suffix = Path(str(target.get("path"))).suffix.lower()
+        assert isinstance(caption, dict) and isinstance(caption.get("text"), str)
+        caption_text = _sd_scripts_caption_projection(
+            caption, caption_transform, sample_id=str(sample.get("id")),
+        )
+        content_tag = hashlib.sha256(json.dumps(
+            {"target": target.get("sha256"), "caption": caption_text},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()[:12]
+        stem = f"{index:06d}-{content_tag}"
+        links.append({
+            "path": f"{view_root}/{stem}{suffix}",
+            "target": f"/workspace/datasets/{dataset_id}/{target['path']}",
+            "input_id": target["input_id"],
+        })
+        files.append({
+            "path": f"{view_root}/{stem}{caption_extension}",
+            "text": caption_text,
+            "input_id": caption["input_id"],
+            "caption_transform": caption_transform,
+        })
+        consumed.extend([target["input_id"], caption["input_id"]])
+        bindings.append({
+            "rule": "same-relative-stem",
+            "key": stem,
+            "members": [
+                {"input_id": target["input_id"], "root": view_root},
+                {"input_id": caption["input_id"], "root": view_root},
+            ],
+        })
+    return {
+        "consumed": consumed,
+        "view_root": view_root,
+        "links": links,
+        "files": files,
+        "bindings": bindings,
+    }
+
+
+def _lllite_control_subset(
+    run: dict[str, Any], dataset: dict[str, Any], samples: list[dict[str, Any]],
+    subset: dict[str, Any], *, view_name: str, caption_transform: str,
+) -> dict[str, Any]:
+    """Build one paired Anima LLLite subset with sibling role roots."""
+    dataset_id = str(dataset.get("id"))
+    base_root = f"runs/{run['id']}/cache/dataset-view/sd-scripts/{dataset_id}"
+    view_root = base_root if view_name == "default" else f"{base_root}/{view_name}"
+    image_root = f"{view_root}/images"
+    control_root = f"{view_root}/conditioning"
+    caption_extension = str(subset["caption_extension"])
+    consumed: list[str] = []
+    links: list[dict[str, str]] = []
+    files: list[dict[str, str]] = []
+    bindings: list[dict[str, Any]] = []
+    image_inputs: list[str] = []
+    control_inputs: list[str] = []
+    for index, sample in enumerate(samples):
+        references = sample.get("files", [])
+        target = next(item for item in references if item.get("role") == "target")
+        control = next(item for item in references if item.get("role") == "control")
+        caption = sample.get("caption")
+        assert isinstance(caption, dict) and isinstance(caption.get("text"), str)
+        caption_text = _sd_scripts_caption_projection(
+            caption, caption_transform, sample_id=str(sample.get("id")),
+        )
+        content_tag = hashlib.sha256(json.dumps(
+            {
+                "target": target.get("sha256"),
+                "control": control.get("sha256"),
+                "caption": caption_text,
+            },
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()[:12]
+        stem = f"{index:06d}-{content_tag}"
+        target_path = f"{image_root}/{stem}{Path(str(target['path'])).suffix.lower()}"
+        caption_path = f"{image_root}/{stem}{caption_extension}"
+        control_path = f"{control_root}/{stem}{Path(str(control['path'])).suffix.lower()}"
+        links.extend([
+            {"path": target_path, "target": f"/workspace/datasets/{dataset_id}/{target['path']}", "input_id": target["input_id"]},
+            {"path": control_path, "target": f"/workspace/datasets/{dataset_id}/{control['path']}", "input_id": control["input_id"]},
+        ])
+        files.append({
+            "path": caption_path,
+            "text": caption_text,
+            "input_id": caption["input_id"],
+            "caption_transform": caption_transform,
+        })
+        image_inputs.extend([target["input_id"], caption["input_id"]])
+        control_inputs.append(control["input_id"])
+        consumed.extend([target["input_id"], control["input_id"], caption["input_id"]])
+        bindings.append({
+            "rule": "same-relative-stem",
+            "key": stem,
+            "members": [
+                {"input_id": target["input_id"], "root": image_root},
+                {"input_id": caption["input_id"], "root": image_root},
+                {"input_id": control["input_id"], "root": control_root},
+            ],
+        })
+    return {
+        "consumed": consumed,
+        "view_root": view_root,
+        "links": links,
+        "files": files,
+        "bindings": bindings,
+        "role_roots": {"image": image_root, "conditioning": control_root},
+        "consumer_inputs": {"image": image_inputs, "conditioning": control_inputs},
+    }
+
+
+SD_SCRIPTS_FOLDER_CODECS = {
+    "dreambooth-image-subset": {"build": _dreambooth_image_subset},
+    "lllite-control-subset": {"build": _lllite_control_subset},
+}
+
+SD_SCRIPTS_PROJECTION_PROFILES = {
+    "ordinary-image-lora": {
+        "architectures": ("sd15", "sdxl", "flux1", "anima"),
+        "shape": "image",
+        "caption": "required",
+        "mode": {
+            "training_mode": "lora",
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "native_string_fields": (),
+        "caption_transforms": {
+            "default": "first-line-strip",
+            "wildcard": "nonempty-lines-strip",
+        },
+        "codec": "dreambooth-image-subset",
+    },
+    "anima-lllite-image-control": {
+        "architectures": ("anima",),
+        "shape": "image-control",
+        "caption": "required",
+        "mode": {
+            "training_mode": "controlnet_lllite",
+        },
+        "mode_by_architecture": {},
+        "role_limits": {"target": (1, 1), "control": (1, 1)},
+        "allowed_options": (),
+        "required_options": (),
+        "native_options": {},
+        "native_string_fields": (),
+        "caption_transforms": {
+            "default": "first-line-strip",
+            "wildcard": "nonempty-lines-strip",
+        },
+        "codec": "lllite-control-subset",
+    },
+}
 
 # This is Kura's reviewed subset of the dataset schema in the pinned sd-scripts
 # commit.  The same descriptors drive validation and public capabilities.
@@ -68,9 +271,7 @@ _DATASET_NATIVE_FIELDS: dict[str, dict[str, Any]] = {
 }
 _SUBSET_STAGING_FIELDS: dict[str, dict[str, Any]] = {
     "dataset_id": _STRING,
-    "image_subdir": _STRING,
-    "caption_subdir": _STRING,
-    "conditioning_subdir": _STRING,
+    "group": _STRING,
 }
 
 GENERAL_FIELD_SPECS = dict(_DATASET_NATIVE_FIELDS)
@@ -90,14 +291,6 @@ SD_SCRIPTS_DATASET_CAPABILITIES = {
     "dataset_config.datasets[]": _capability_fields(DATASET_FIELD_SPECS),
     "dataset_config.datasets[].subsets[]": _capability_fields(SUBSET_FIELD_SPECS),
 }
-
-_RUNTIME_LOG_FIELDS = tuple(dict.fromkeys(
-    key
-    for specs in (DATASET_FIELD_SPECS, SUBSET_FIELD_SPECS)
-    for key, spec in specs.items()
-    if spec.get("runtime_log") is True
-))
-
 
 def _validate_field(value: Any, spec: dict[str, Any], *, field: str) -> None:
     kind = spec["type"]
@@ -148,32 +341,6 @@ def _validate_field(value: Any, spec: dict[str, Any], *, field: str) -> None:
     raise AssertionError(f"unknown sd-scripts dataset field type: {kind}")
 
 
-def _safe_relative(value: Any, *, field: str, default: str | None = None) -> PurePosixPath:
-    raw = value if isinstance(value, str) and value else default
-    if not isinstance(raw, str) or not raw:
-        raise ValueError(f"sd-scripts {field} is required")
-    path = PurePosixPath(raw)
-    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
-        raise ValueError(f"sd-scripts {field} must be a safe relative path")
-    return path
-
-
-def _selected_files(directory: Path, suffixes: set[str] | None = None) -> list[Path]:
-    if not directory.is_dir():
-        raise ValueError(f"sd-scripts dataset directory is missing: {directory}")
-    return [path for path in sorted(directory.rglob("*")) if path.is_file() and (suffixes is None or path.suffix.lower() in suffixes)]
-
-
-def _identity(path: Path) -> dict[str, Any]:
-    stat = path.stat()
-    hasher = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    digest = hasher.hexdigest()
-    return {"sha256": digest, "size_bytes": stat.st_size}
-
-
 def _clean_keys(values: Any, specs: dict[str, dict[str, Any]], *, field: str) -> dict[str, Any]:
     if values is None:
         return {}
@@ -181,6 +348,16 @@ def _clean_keys(values: Any, specs: dict[str, dict[str, Any]], *, field: str) ->
         raise ValueError(f"sd-scripts {field} must be a mapping")
     unknown = sorted(set(values) - set(specs))
     if unknown:
+        legacy_selectors = sorted(
+            set(unknown) & {"image_subdir", "caption_subdir", "conditioning_subdir"}
+        )
+        if legacy_selectors:
+            raise ValueError(
+                "sd-scripts manifest projection replaces folder selector(s) "
+                + ", ".join(legacy_selectors)
+                + "; put target, caption, and control references in items.jsonl and use "
+                "an optional manifest group on the authored subset"
+            )
         raise ValueError(f"sd-scripts {field} contains unsupported key(s): " + ", ".join(unknown))
     clean = {key: value for key, value in values.items() if value is not None}
     for key, value in clean.items():
@@ -292,116 +469,301 @@ def _validated_dataset_config(
     return general, cleaned_datasets
 
 
+def _sd_scripts_flatten_groups(native: dict[str, Any]) -> bool:
+    if native.get("flatten_groups") not in (None, True, False):
+        raise ValueError("sd-scripts backend.config.flatten_groups must be true or false")
+    return native.get("flatten_groups") is True
+
+
 def validate_sd_scripts_dataset_config(run: dict[str, Any]) -> None:
     native = backend_config(run, "sd-scripts")
+    _sd_scripts_flatten_groups(native)
     if native.get("command") is None:
         _validated_dataset_config(native)
 
 
-def write_sd_scripts_dataset_config(run: dict[str, Any], destination: Path, *, workspace: Path | None, strict: bool) -> dict[str, Any]:
-    if strict and workspace is None:
-        raise ValueError("sd-scripts strict dataset compilation requires the workspace path")
+def _sd_scripts_profile(
+    native: dict[str, Any], dataset: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    architecture = str(native.get("architecture") or "")
+    training_mode = str(native.get("mode") or "lora")
+    shape, examples, cardinalities = classify_dataset_shape(
+        dataset, image_suffixes=SD_SCRIPTS_IMAGE_SUFFIXES, video_suffixes=set(),
+    )
+    return select_projection_profile(
+        backend="sd-scripts",
+        profiles=SD_SCRIPTS_PROJECTION_PROFILES,
+        architecture=architecture,
+        shape=shape,
+        mode={
+            "training_mode": training_mode,
+        },
+        shape_examples=examples,
+        role_cardinalities=cardinalities,
+        caption_presence={
+            str(sample.get("id")): isinstance(sample.get("caption"), dict)
+            for sample in dataset.get("samples", [])
+        },
+    )
+
+
+def _sd_scripts_authored_subsets(
+    dataset_id: str,
+    declared_ids: list[str],
+    cleaned_datasets: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    candidates: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for native_dataset, subsets in cleaned_datasets:
+        matching = [
+            subset for subset in subsets
+            if subset.get("dataset_id") == dataset_id
+            or subset.get("dataset_id") is None and len(declared_ids) == 1
+        ]
+        if matching:
+            if len(matching) != len(subsets):
+                raise ValueError("sd-scripts one native dataset block cannot mix manifest datasets")
+            candidates.append((native_dataset, matching))
+    if len(candidates) != 1:
+        raise ValueError(
+            f"sd-scripts dataset {dataset_id!r} must map to exactly one explicit authored dataset block"
+        )
+    native_dataset, authored_subsets = candidates[0]
+    for authored_subset in authored_subsets:
+        if "num_repeats" not in authored_subset:
+            raise ValueError("sd-scripts manifest subset requires an explicit positive num_repeats")
+    return deepcopy(native_dataset), deepcopy(authored_subsets)
+
+
+def _resolve_sd_scripts_projection_subsets(
+    dataset: dict[str, Any], authored_subsets: list[dict[str, Any]], *,
+    flatten_groups: bool,
+) -> list[tuple[str | None, dict[str, Any], list[dict[str, Any]]]]:
+    """Resolve one manifest dataset to N subsets; the ordinary case is N=1."""
+    configured_groups = [subset.get("group") for subset in authored_subsets]
+    partitions = resolve_projection_partitions(
+        dataset,
+        backend="sd-scripts",
+        authored_groups=configured_groups,
+        flatten_groups=flatten_groups,
+        authored_unit="subsets",
+        allow_single_ungrouped_authored_with_flatten=True,
+    )
+    return [
+        (
+            partition.group,
+            deepcopy(authored_subsets[partition.index]),
+            list(partition.dataset.get("samples", [])),
+        )
+        for partition in partitions
+    ]
+
+
+def _effective_sd_scripts_subset_semantics(
+    general: dict[str, Any], dataset: dict[str, Any], subset: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Freeze effective caption and cache meaning after native inheritance."""
+    effective = {**general, **dataset, **subset}
+    caption_keys = {
+        key for key, spec in _SUBSET_NATIVE_FIELDS.items()
+        if spec.get("plan_group") == "caption"
+    } | {"caption_extension"}
+    cache_keys = {
+        key for key, spec in _SUBSET_NATIVE_FIELDS.items()
+        if spec.get("plan_group") == "cache"
+    }
+    return (
+        {key: deepcopy(effective[key]) for key in sorted(caption_keys) if key in effective},
+        {key: deepcopy(effective[key]) for key in sorted(cache_keys) if key in effective},
+    )
+
+
+def project_sd_scripts_dataset(run: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
+    """Project the first sd-scripts manifest path through a named folder codec."""
     native = backend_config(run, "sd-scripts")
-    declared = _datasets(run)
-    declared_ids = {item.get("id") for item in declared if isinstance(item.get("id"), str)}
+    if native.get("command") is not None:
+        raise ValueError("sd-scripts explicit command is outside first-class manifest projection")
+    flatten_groups = _sd_scripts_flatten_groups(native)
     general, cleaned_datasets = _validated_dataset_config(native)
+    declared_ids = [str(item.get("id")) for item in selection.get("datasets", [])]
+    projected: list[dict[str, Any]] = []
+    for dataset in selection.get("datasets", []):
+        dataset_id = str(dataset.get("id"))
+        profile_name, profile = _sd_scripts_profile(native, dataset)
+        codec_name = profile["codec"]
+        codec = SD_SCRIPTS_FOLDER_CODECS[codec_name]
+        native_dataset, authored_subsets = _sd_scripts_authored_subsets(
+            dataset_id, declared_ids, cleaned_datasets,
+        )
+        resolved_subsets = _resolve_sd_scripts_projection_subsets(
+            dataset, authored_subsets, flatten_groups=flatten_groups,
+        )
+
+        subset_natives: list[dict[str, Any]] = []
+        views: list[dict[str, Any]] = []
+        all_consumed: list[str] = []
+        policy_subsets: list[dict[str, Any]] = []
+        for subset_index, (group, authored, samples) in enumerate(resolved_subsets):
+            authored.pop("group", None)
+            authored.pop("dataset_id", None)
+            caption_extension = str(
+                authored.get("caption_extension")
+                or native_dataset.get("caption_extension")
+                or general.get("caption_extension")
+                or ".txt"
+            )
+            authored["caption_extension"] = caption_extension
+            caption_processing, cache_settings = _effective_sd_scripts_subset_semantics(
+                general, native_dataset, authored,
+            )
+            caption_transform = profile["caption_transforms"][
+                "wildcard" if caption_processing.get("enable_wildcard") is True else "default"
+            ]
+            caption_processing["caption_transform"] = caption_transform
+            # Manifest group IDs are opaque author vocabulary, not path segments.
+            view_name = "default" if len(resolved_subsets) == 1 else f"subset-{subset_index:03d}"
+            report = codec["build"](
+                run, dataset, samples, authored,
+                view_name=view_name,
+                caption_transform=caption_transform,
+            )
+            subset_native = deepcopy(authored)
+            image_root = report.get("role_roots", {}).get("image", report["view_root"])
+            native_subset = {
+                "image_dir": f"/workspace/{image_root}",
+                **({
+                    "conditioning_data_dir": f"/workspace/{report['role_roots']['conditioning']}",
+                } if "conditioning" in report.get("role_roots", {}) else {}),
+                **subset_native,
+            }
+            subset_natives.append(native_subset)
+            subset_pointer = f"/datasets/0/subsets/{subset_index}"
+            image_inputs = report.get("consumer_inputs", {}).get("image", report["consumed"])
+            consumers = [{
+                "id": "dreambooth-subset",
+                "kind": "recursive-directory",
+                "native_pointer": f"{subset_pointer}/image_dir",
+                "path": image_root,
+                "input_ids": list(image_inputs),
+            }]
+            if "conditioning" in report.get("role_roots", {}):
+                consumers.append({
+                    "id": "conditioning-subset",
+                    "kind": "recursive-directory",
+                    "native_pointer": f"{subset_pointer}/conditioning_data_dir",
+                    "path": report["role_roots"]["conditioning"],
+                    "input_ids": list(report["consumer_inputs"]["conditioning"]),
+                })
+            views.append({
+                "id": f"sd-scripts-{dataset_id}-{view_name}",
+                "root": report["view_root"],
+                "links": report["links"],
+                "files": report["files"],
+                "native_files": [],
+                "write_roots": [{
+                    "path": image_root,
+                    "native_pointer": f"{subset_pointer}/image_dir",
+                }],
+                "consumers": consumers,
+                "repeat": authored["num_repeats"],
+                "repeat_pointer": f"{subset_pointer}/num_repeats",
+                "bindings": report["bindings"],
+            })
+            all_consumed.extend(report["consumed"])
+            policy_subsets.append({
+                "group": group,
+                "settings": deepcopy(subset_native),
+                "caption_processing": caption_processing,
+                "cache_settings": cache_settings,
+            })
+        dataset_native = {**native_dataset, "subsets": subset_natives}
+        complete_native: dict[str, Any] = {
+            **({"general": deepcopy(general)} if general else {}),
+            "datasets": [dataset_native],
+        }
+        projected.append({
+            "id": dataset_id,
+            "consumed": all_consumed,
+            "unrepresentable": [],
+            "semantic": {},
+            "native_runtime": complete_native,
+            "native": complete_native,
+            "native_string_fields": [
+                *[
+                    f"/general/{key}" for key, value in general.items()
+                    if isinstance(value, str)
+                ],
+                *[
+                    f"/datasets/0/{key}" for key, value in native_dataset.items()
+                    if isinstance(value, str)
+                ],
+                *[
+                    f"/datasets/0/subsets/{subset_index}/{key}"
+                    for subset_index, subset_native in enumerate(subset_natives)
+                    for key, value in subset_native.items()
+                    if isinstance(value, str) and key not in {"image_dir", "conditioning_data_dir"}
+                ],
+            ],
+            "policy": {
+                "profile": profile_name,
+                "codec": codec_name,
+                "general": deepcopy(general),
+                "dataset_settings": deepcopy(native_dataset),
+                "subsets": policy_subsets,
+                **({"flatten_groups": True} if flatten_groups else {}),
+            },
+            "views": views,
+        })
+    return {"schema_version": 1, "backend": "sd-scripts", "datasets": projected}
+
+
+def write_sd_scripts_dataset_config(
+    run: dict[str, Any], destination: Path, *, projection: dict[str, Any],
+) -> dict[str, Any]:
+    """Write only the native TOML already frozen and verified by core."""
+    projected = projection["datasets"]
+    selected_ids = [str(item.get("id")) for item in _datasets(run)]
+    by_id = {
+        item.get("id"): item for item in projected
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    if len(by_id) != len(selected_ids) or set(by_id) != set(selected_ids):
+        raise ValueError("sd-scripts frozen projection does not match the selected datasets")
+    general: dict[str, Any] | None = None
+    datasets: list[dict[str, Any]] = []
+    for dataset_id in selected_ids:
+        native = by_id[dataset_id].get("native")
+        if not isinstance(native, dict) or set(native) - {"general", "datasets"}:
+            raise ValueError(f"sd-scripts frozen projection for dataset {dataset_id!r} is invalid")
+        candidate_general = native.get("general", {})
+        blocks = native.get("datasets")
+        if not isinstance(candidate_general, dict) or not isinstance(blocks, list) or len(blocks) != 1:
+            raise ValueError(f"sd-scripts frozen projection for dataset {dataset_id!r} has invalid subsets")
+        if general is None:
+            general = deepcopy(candidate_general)
+        elif general != candidate_general:
+            raise ValueError("sd-scripts frozen projections disagree on general dataset settings")
+        datasets.extend(deepcopy(blocks))
+    complete = {**({"general": general} if general else {}), "datasets": datasets}
     lines = ["# Generated by Kura for sd-scripts."]
     if general:
         lines.append("[general]")
         lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in general.items())
-    stage_root = f"runs/{run['id']}/cache/sd-scripts/datasets"
-    frozen: list[dict[str, Any]] = []
-    subset_locks: list[dict[str, Any]] = []
-    effective_controls: list[dict[str, Any]] = []
-    seen_destinations: set[str] = set()
-    for dataset_index, (native_dataset, cleaned_subsets) in enumerate(cleaned_datasets):
+    for dataset in datasets:
         lines.extend(["", "[[datasets]]"])
-        lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in native_dataset.items())
-        for subset_index, source_clean in enumerate(cleaned_subsets):
-            effective = {**general, **native_dataset, **source_clean}
-            effective.setdefault("num_repeats", 1)
-            effective_controls.append({
-                "dataset_index": dataset_index,
-                "subset_index": subset_index,
-                **{key: effective[key] for key in _RUNTIME_LOG_FIELDS if key in effective},
-            })
-            clean = dict(source_clean)
-            dataset_id = clean.pop("dataset_id", None)
-            if not isinstance(dataset_id, str) or not dataset_id:
-                if not declared_ids:
-                    raise ValueError("sd-scripts dataset_config requires at least one declared dataset in datasets[]")
-                if len(declared_ids) == 1:
-                    dataset_id = next(iter(declared_ids))
-                else:
-                    raise ValueError("sd-scripts subset dataset_id is required when more than one dataset is declared")
-            if dataset_id not in declared_ids:
-                raise ValueError(f"sd-scripts subset references undeclared dataset_id: {dataset_id}")
-            image_subdir = _safe_relative(clean.pop("image_subdir", None), field="image_subdir", default="images")
-            caption_subdir_value = clean.pop("caption_subdir", None)
-            caption_subdir = _safe_relative(caption_subdir_value, field="caption_subdir") if caption_subdir_value else image_subdir
-            conditioning_value = clean.pop("conditioning_subdir", None)
-            conditioning_subdir = _safe_relative(conditioning_value, field="conditioning_subdir") if conditioning_value else None
-            if "num_repeats" not in general and "num_repeats" not in native_dataset:
-                clean.setdefault("num_repeats", 1)
-            stage_base = PurePosixPath(stage_root) / f"{dataset_index:03d}-{subset_index:03d}"
-            image_stage = stage_base / "images"
-            conditioning_stage = stage_base / "conditioning"
-            images: list[Path] = []
-            conditions: list[Path] = []
-            if workspace is not None:
-                dataset_root = workspace / "datasets" / dataset_id
-                images = _selected_files(dataset_root / image_subdir, IMAGE_SUFFIXES)
-                if strict and not images:
-                    raise ValueError(f"sd-scripts subset has no images: {dataset_id}/{image_subdir}")
-                captions = _selected_files(dataset_root / caption_subdir, None)
-                caption_extension = str(clean.get("caption_extension") or native_dataset.get("caption_extension") or general.get("caption_extension") or ".txt")
-                if not caption_extension.startswith("."):
-                    raise ValueError("sd-scripts caption_extension must start with a dot")
-                captions_by_stem = {path.relative_to(dataset_root / caption_subdir).with_suffix("").as_posix(): path for path in captions if path.suffix.lower() == caption_extension.lower()}
-                for image in images:
-                    relative = image.relative_to(dataset_root / image_subdir)
-                    targets = [(image, image_stage / relative)]
-                    caption = captions_by_stem.get(relative.with_suffix("").as_posix())
-                    if caption is not None:
-                        targets.append((caption, image_stage / relative.with_suffix(caption.suffix)))
-                    for source, target in targets:
-                        source_rel = source.relative_to(workspace).as_posix()
-                        target_rel = target.as_posix()
-                        if target_rel in seen_destinations:
-                            raise ValueError(f"sd-scripts staged dataset collision: {target_rel}")
-                        seen_destinations.add(target_rel)
-                        frozen.append({"source": source_rel, "destination": target_rel, "identity": _identity(source)})
-                if conditioning_subdir:
-                    conditions = _selected_files(dataset_root / conditioning_subdir, IMAGE_SUFFIXES)
-                    image_stems = {path.relative_to(dataset_root / image_subdir).with_suffix("").as_posix() for path in images}
-                    condition_stems = {path.relative_to(dataset_root / conditioning_subdir).with_suffix("").as_posix() for path in conditions}
-                    if image_stems != condition_stems:
-                        missing = sorted(image_stems - condition_stems)
-                        extra = sorted(condition_stems - image_stems)
-                        raise ValueError(f"sd-scripts paired conditioning stems do not match images; missing={missing[:5]}, extra={extra[:5]}")
-                    for source in conditions:
-                        relative = source.relative_to(dataset_root / conditioning_subdir)
-                        target_rel = (conditioning_stage / relative).as_posix()
-                        if target_rel in seen_destinations:
-                            raise ValueError(f"sd-scripts staged dataset collision: {target_rel}")
-                        seen_destinations.add(target_rel)
-                        frozen.append({"source": source.relative_to(workspace).as_posix(), "destination": target_rel, "identity": _identity(source)})
-            lines.extend(["", "  [[datasets.subsets]]", f'image_dir = "/workspace/{image_stage.as_posix()}"'])
-            if conditioning_subdir:
-                lines.append(f'conditioning_data_dir = "/workspace/{conditioning_stage.as_posix()}"')
-            for key, value in clean.items():
-                lines.append(f"{key} = {_toml_scalar(value)}")
-            subset_locks.append({"dataset_id": dataset_id, "image_subdir": image_subdir.as_posix(), "conditioning_subdir": conditioning_subdir.as_posix() if conditioning_subdir else None, "image_count": len(images), "conditioning_count": len(conditions), "stage": stage_base.as_posix()})
+        subsets = dataset.get("subsets")
+        if not isinstance(subsets, list) or not subsets:
+            raise ValueError("sd-scripts manifest projection requires one or more subsets per dataset block")
+        lines.extend(
+            f"{key} = {_toml_scalar(value)}"
+            for key, value in dataset.items() if key != "subsets"
+        )
+        for subset in subsets:
+            lines.append("")
+            lines.append("  [[datasets.subsets]]")
+            lines.extend(f"{key} = {_toml_scalar(value)}" for key, value in subset.items())
     destination.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(destination, "\n".join(lines) + "\n")
-    lock = {
-        "schema_version": 1,
-        "backend": "sd-scripts",
-        "run_id": run["id"],
-        "stage_root": stage_root,
-        "subsets": subset_locks,
-        "effective_controls": effective_controls,
-        "files": frozen,
-    }
-    atomic_write_json(destination.parent / "dataset-stage.lock.json", lock)
-    return lock
+    parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
+    if parsed != complete:
+        raise ValueError("sd-scripts generated dataset TOML differs from the verified native projection")
+    return complete

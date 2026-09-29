@@ -14,9 +14,10 @@ draft run plan: measure GPU stock/price
 record the selected GPU and immediate/wait capacity policy
 compile
 final run plan and one approval
-stage upload bundle
-launch disposable Pod
+stage upload bundle (manifest-v2: selected files only, hashed against the lock)
+launch disposable Pod (manifest-v2: staged archive re-proven against the compile first)
 upload over SSH
+verify inputs on the Pod before model acquisition (manifest-v2)
 run backend command detached from SSH control
 poll remote logs/exit record
 verify terminal manifest and download only the snapshot delta
@@ -41,7 +42,16 @@ stop Pod
 - `--hold-for 30m`: normal post-download review window.
 - `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
 - `--job-timeout 0`: wait until remote exit.
-- `runpod.storage_mode: upload`: no Network Volume by default.
+- `runpod.storage_mode: upload`: no Network Volume by default. Manifest-v2
+  runs require it: their inputs arrive only through the verified
+  selected-file transfer. A Pod-side verification failure writes
+  `realizations/<id>.runpod-input.json` with `status: failed`, never starts the
+  trainer, and the normal download-then-stop path still runs. Launch pins the
+  proven manifest in `realizations/<id>.transfer-manifest.json`; the Pod
+  trusts only that pin. If the stage changes after launch, the controller
+  refuses before uploading and stops the unused Pod at once (no review hold).
+  If stage or launch says "stage it again", the compile or staged files
+  changed; rerun the stage rather than editing any staged file.
 - Treat configured GPU candidates as workspace policy, not durable skill
   knowledge. Inspect current availability and price before selecting one.
   After that choice, compile the run and inspect the compiled resource plan
@@ -75,6 +85,12 @@ stop Pod
   maximum lease, obtain user approval, then record and compile the approved
   executor change.
 - Do not stop a disposable Pod until remote exit and local download are confirmed.
+  A completed trainer must also leave a durable training state, or the Pod is
+  kept for recovery. A failed trainer whose downloaded snapshot has no state
+  completes as failed with `training_state_sync_error`, because the snapshot
+  already holds everything the Pod had.
+- The SSH job exports the frozen command's `env` (Kura's own variables win);
+  an SSH session does not inherit the Pod's create-time environment.
 - Terminal finalization reuses only checkpoints recorded by the periodic mirror
   or protected training-state bytes whose size and SHA-256 match the post-exit
   remote manifest. It downloads missing or changed files, verifies a second

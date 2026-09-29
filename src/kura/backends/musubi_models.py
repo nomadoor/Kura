@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.container_scripts import script_source
-from kura.backends.common import _musubi_backend_override
+from kura.backends.common import _musubi_architecture, _musubi_backend_override
 from kura.backends.shared import _truthy
 from kura.provenance import artifact_pinning
 
@@ -80,6 +80,11 @@ MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _normalize_musubi_model_version(value: Any, *, default: str = "") -> str:
+    """Return the one normalized spelling used by Musubi projection and argv."""
+    return str(value or default).strip().lower().replace("_", "-")
+
+
 def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
     clean = _musubi_explicit_model_paths(override)
@@ -125,10 +130,10 @@ def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     base = str(model.get("base") or "").lower().replace("_", "-")
     override = _musubi_backend_override(run)
     architecture = _musubi_architecture(run)
-    if architecture not in ("flux2", "flux_2"):
+    if architecture != "flux2":
         return {}
-    model_version = str(override.get("model_version") or "").lower().replace("_", "-")
-    bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
+    model_version = _normalize_musubi_model_version(override.get("model_version"))
+    bundle = _normalize_musubi_model_version(override.get("model_bundle"), default="auto")
     if bundle in ("none", "off", "false"):
         return {}
     is_base_4b = (
@@ -174,7 +179,7 @@ def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _krea2_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     override = _musubi_backend_override(run)
     architecture = _musubi_architecture(run)
-    if architecture not in ("krea2", "krea_2"):
+    if architecture != "krea2":
         return {}
     bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
     if bundle in ("none", "off", "false"):
@@ -192,7 +197,7 @@ def _krea2_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _minimax_h3_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     override = _musubi_backend_override(run)
     architecture = _musubi_architecture(run)
-    if architecture not in ("minimax_h3", "minimaxh3"):
+    if architecture != "minimax_h3":
         return {}
     bundle = str(override.get("model_bundle") or "auto").lower().replace("_", "-")
     if bundle in ("none", "off", "false"):
@@ -266,7 +271,7 @@ def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, s
                 "filename": item_filename,
                 "link_path": _musubi_model_cache_path(repo_id, key, item_filename),
             }
-            if architecture in ("minimax_h3", "minimaxh3"):
+            if architecture == "minimax_h3":
                 item["link_mode"] = "hardlink"
             revision = value.get("revision")
             if isinstance(revision, str) and revision:
@@ -315,14 +320,6 @@ def requirements_musubi(run: dict[str, Any], download_estimate: dict[str, Any] |
     return requirements
 
 
-def _musubi_architecture(run: dict[str, Any]) -> str:
-    override = _musubi_backend_override(run)
-    value = override.get("architecture") or override.get("model_arch")
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("Musubi backend.config.architecture is required")
-    return value.lower().replace("-", "_")
-
-
 def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
     return ValueError(
         "unsupported Kura built-in Musubi adapter: "
@@ -335,7 +332,7 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
 
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
     override = _musubi_backend_override(run)
-    model_version = str(override.get("model_version") or "").lower().replace("_", "-")
+    model_version = _musubi_model_version(run, default="")
     if model_version:
         return model_version
 
@@ -354,10 +351,22 @@ def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
     raise ValueError("Musubi FLUX.2 requires backend.config.model_version or a recognized model.base/model_bundle; refusing to default to 4B")
 
 
+def _musubi_model_version(run: dict[str, Any], *, default: str = "original") -> str:
+    """Normalize the authored model version identically for every Musubi consumer."""
+    override = _musubi_backend_override(run)
+    return _normalize_musubi_model_version(
+        override.get("model_version"), default=default,
+    )
+
+
 def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     architecture = _musubi_architecture(run)
     override = _musubi_backend_override(run)
-    model_version = str(override.get("model_version") or "").lower().replace("_", "-")
+    model_version = (
+        _musubi_flux2_model_version(run)
+        if architecture == "flux2"
+        else _musubi_model_version(run)
+    )
     model_base = str(run.get("model", {}).get("base") or "").lower().replace("_", "-")
     if model_version == "dev" or "flux.2-dev" in model_base or "flux2-dev" in model_base:
         text_encoder_format = "safetensors"
@@ -365,11 +374,6 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version or "9b" in model_base else "qwen3_4b_text_encoder"
     defaults: dict[str, dict[str, str]] = {
         "flux2": {
-            "dit": "flux2_dit",
-            "vae": "flux2_ae_or_vae",
-            "text_encoder": text_encoder_format,
-        },
-        "flux_2": {
             "dit": "flux2_dit",
             "vae": "flux2_ae_or_vae",
             "text_encoder": text_encoder_format,
@@ -387,19 +391,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "text_encoder": "safetensors",
             "turbo_dit": "safetensors",
         },
-        "krea_2": {
-            "dit": "safetensors",
-            "vae": "safetensors",
-            "text_encoder": "safetensors",
-            "turbo_dit": "safetensors",
-        },
         "minimax_h3": {
-            "dit": "safetensors",
-            "video_vae": "safetensors",
-            "audio_vae": "safetensors",
-            "text_encoder": "safetensors",
-        },
-        "minimaxh3": {
             "dit": "safetensors",
             "video_vae": "safetensors",
             "audio_vae": "safetensors",
@@ -410,17 +402,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "vae": "safetensors",
             "text_encoder": "safetensors",
         },
-        "qwen": {
-            "dit": "safetensors",
-            "vae": "safetensors",
-            "text_encoder": "safetensors",
-        },
         "zimage": {
-            "dit": "safetensors",
-            "vae": "safetensors",
-            "text_encoder": "safetensors",
-        },
-        "z_image": {
             "dit": "safetensors",
             "vae": "safetensors",
             "text_encoder": "safetensors",
@@ -431,18 +413,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "text_encoder1": "safetensors",
             "text_encoder2": "safetensors",
         },
-        "flux1_kontext": {
-            "dit": "safetensors",
-            "vae": "safetensors",
-            "text_encoder1": "safetensors",
-            "text_encoder2": "safetensors",
-        },
         "ideogram4": {
-            "dit": "safetensors",
-            "vae": "safetensors",
-            "text_encoder": "safetensors",
-        },
-        "ideogram_4": {
             "dit": "safetensors",
             "vae": "safetensors",
             "text_encoder": "safetensors",
@@ -450,16 +421,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
         "hidream_o1": {
             "dit": "safetensors",
         },
-        "hidream": {
-            "dit": "safetensors",
-        },
         "hunyuan_video": {
-            "dit": "safetensors",
-            "vae": "file",
-            "text_encoder1": "hf_model_id_or_path",
-            "text_encoder2": "hf_model_id_or_path",
-        },
-        "hunyuanvideo": {
             "dit": "safetensors",
             "vae": "file",
             "text_encoder1": "hf_model_id_or_path",
@@ -479,20 +441,7 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
             "text_encoder2": "hf_model_id_or_path",
             "image_encoder": "hf_model_id_or_path",
         },
-        "frame_pack": {
-            "dit": "safetensors",
-            "vae": "file",
-            "text_encoder1": "hf_model_id_or_path",
-            "text_encoder2": "hf_model_id_or_path",
-            "image_encoder": "hf_model_id_or_path",
-        },
         "kandinsky5": {
-            "dit": "safetensors",
-            "vae": "safetensors",
-            "text_encoder_qwen": "hf_model_id_or_path",
-            "text_encoder_clip": "hf_model_id_or_path",
-        },
-        "kandinsky_5": {
             "dit": "safetensors",
             "vae": "safetensors",
             "text_encoder_qwen": "hf_model_id_or_path",

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from kura.fsio import FileLockBusy, atomic_write_json, file_lock
+from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.training_artifacts import is_training_state_output
 
 
@@ -72,12 +72,54 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
+def run_events(run_dir: Path) -> list[dict[str, Any]]:
+    """Read events.jsonl by physical LF lines, skipping only a malformed line.
+
+    Events are written with ensure_ascii=False, so a Unicode line separator can
+    appear inside a string; splitting on it would drop real events.
+    """
+    path = run_dir / "logs" / "events.jsonl"
+    if not path.is_file():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").split("\n"):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def _event_exists(run_dir: Path, *, event: str, realization_id: str, record: str) -> bool:
+    return any(
+        item.get("event") == event
+        and item.get("realization_id") == realization_id
+        and item.get("record") == record
+        for item in run_events(run_dir)
+    )
+
+
+def dataset_input_drift_warning(status: str) -> str | None:
+    """The reproducibility warning a post-training input observation projects."""
+    if status == "changed":
+        return (
+            "inputs changed between compile and post-training observation; "
+            "the exact change time is unknown"
+        )
+    if status == "uncheckable":
+        return "post-training input verification was unavailable; reproducibility is not confirmed"
+    return None
+
+
 def append_run_event(run_dir: Path, event: dict[str, Any], *, best_effort: bool = False) -> bool:
     path = run_dir / "logs" / "events.jsonl"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
+        append_line_durably(path, json.dumps(_redact_secrets(event), ensure_ascii=False) + "\n")
     except OSError as exc:
         if not best_effort:
             raise

@@ -93,7 +93,13 @@ Before applying, say what those commands mean:
 - `cleanup cache`: remove Kura-managed model/cache data; models may need to be
   downloaded again.
 - `cleanup runs`: remove only transient run cache/tmp by default; it keeps
-  outputs, downloads, and final artifacts.
+  outputs, downloads, and final artifacts. For kept runs it also offers a
+  leftover `cache/dataset-view` as `safe-run-dataset-view-remnant` when
+  automatic removal failed, or when the latest reconcile observation records
+  that Docker reported the container missing (a view kept for publication
+  recovery included). An `unknown` state alone is not that evidence.
+  The view holds only symlinks and generated files and is rebuilt from the
+  frozen lock on the next launch; the dataset itself is never touched.
 
 Require explicit, high-confidence approval:
 

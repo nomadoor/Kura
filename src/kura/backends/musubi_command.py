@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from kura.container_scripts import script_source
-from kura.backends.common import _musubi_backend_override, _require_paths
-from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _script_command as _shared_script_command, _truthy
-from kura.backends.musubi_datasets import _write_musubi_dataset_config
-from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_output_compatibility, _unsupported_musubi_adapter_error
-from kura.backends.musubi_native_selectors import wan_native_selector
+from kura.dataset_handoff import load_frozen_dataset_projection
+from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths, musubi_native_dataset_architecture
+from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _reject_owned_extra_args, _script_command as _shared_script_command, _truthy
+from kura.backends.musubi_datasets import (
+    MUSUBI_AUDIO_SUFFIXES,
+    FRAMEPACK_LATENT_WINDOW_SIZE,
+    MUSUBI_IMAGE_SUFFIXES,
+    MUSUBI_VIDEO_SUFFIXES,
+    _musubi_h3_effective_task,
+    _write_musubi_dataset_config,
+)
+from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
+from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
+from kura.media_types import frozen_suffixes
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
 
@@ -35,8 +43,43 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Flags Kura owns for every architecture. Flags Kura emits only for some
+# architectures (for example --timestep_sampling) are refused by
+# _reject_emitted_duplicates only where that architecture's command carries them.
+MUSUBI_OWNED_FLAGS = frozenset({
+    "--audio_vae", "--base_weights", "--batch_size", "--block_swap_h2d_only",
+    "--block_swap_ring_size", "--blocks_to_swap", "--byt5", "--cache_seed",
+    "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config", "--dit",
+    "--dit_dtype", "--dit_high_noise", "--f1", "--fp8", "--fp8_base", "--fp8_llm",
+    "--fp8_scaled", "--fp8_t5", "--fp8_te", "--fp8_text_encoder", "--fp8_vl",
+    "--gradient_accumulation_steps", "--gradient_checkpointing",
+    "--gradient_checkpointing_cpu_offload", "--h3_guidance_loss_scale",
+    "--h3_guidance_loss_sigma_min", "--h3_guidance_loss_uncond_cache",
+    "--h3_teacher_conditions", "--h3_teacher_matching", "--i2v", "--image_encoder",
+    "--latent_window_size", "--learning_rate", "--lr_scheduler",
+    "--max_data_loader_n_workers", "--max_train_steps", "--mixed_precision",
+    "--model_type", "--model_version", "--network_alpha", "--network_dim",
+    "--network_module", "--noise_clip_std", "--noise_scale_end",
+    "--noise_scale_start", "--one_frame", "--one_frame_no_2x", "--one_frame_no_4x",
+    "--optimizer_type", "--output_dir", "--output_name",
+    "--persistent_data_loader_workers", "--quantized_qwen", "--resume",
+    "--save_every_n_steps", "--save_last_n_steps", "--save_last_n_steps_state",
+    "--save_precision", "--save_state", "--save_state_on_train_end", "--sdpa",
+    "--seed", "--skip_existing", "--t5", "--task", "--teacher_conditions",
+    "--text_cache_dtype", "--text_encoder", "--text_encoder1", "--text_encoder2",
+    "--text_encoder_blocks_to_swap", "--text_encoder_clip", "--text_encoder_qwen",
+    "--turbo_dit", "--uncond_output", "--use_pinned_memory_for_block_swap", "--vae",
+    "--vae_chunk_size", "--vae_dtype", "--vae_tiling", "--video_only",
+    "--video_vae",
+})
+
+
 def _extra_args(override: dict[str, Any]) -> list[str]:
-    return _shared_extra_args(override, backend_label="Musubi Tuner")
+    values = _shared_extra_args(override, backend_label="Musubi Tuner")
+    _reject_owned_extra_args(
+        values, owned_flags=MUSUBI_OWNED_FLAGS, backend_label="Musubi Tuner",
+    )
+    return values
 
 
 def _extra_arg_value(arguments: list[str], flag: str) -> str | None:
@@ -54,6 +97,21 @@ def _extra_arg_value(arguments: list[str], flag: str) -> str | None:
     if len(values) > 1:
         raise ValueError(f"Musubi backend.config.extra_args duplicates {flag}")
     return values[0] if values else None
+
+
+def _reject_emitted_duplicates(train: list[str], extra_args: list[str]) -> None:
+    """Refuse an extra argument that repeats or abbreviates a flag Kura emitted for this architecture."""
+    extra_flags = [argument.split("=", 1)[0] for argument in extra_args if argument.startswith("--")]
+    emitted = [argument.split("=", 1)[0] for argument in train if argument.startswith("--")]
+    for flag in extra_flags:
+        if flag in emitted:
+            emitted.remove(flag)
+    duplicates = sorted({
+        candidate for candidate in extra_flags
+        if any(flag.startswith(candidate) for flag in emitted)
+    })
+    if duplicates:
+        raise ValueError("Musubi Tuner extra_args duplicates adapter-owned flag(s): " + ", ".join(duplicates))
 
 
 def _script_command(commands: list[list[str]], override: dict[str, Any], run: dict[str, Any] | None = None) -> list[str]:
@@ -147,16 +205,75 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         if any(arg == flag or arg.startswith(flag + "=") for arg in train):
             raise ValueError(f"Musubi backend.config.{key} duplicates backend.config.extra_args {flag}")
         train.append(flag)
+    _reject_emitted_duplicates(train, _extra_args(override))
     return _shared_script_command(commands, step_name="musubi")
 
 
-def compile_musubi_tuner(run: dict[str, Any], destination: Path, *, workspace: Path | None = None, strict: bool = False) -> dict[str, Any]:
+def compile_musubi_tuner(run: dict[str, Any], destination: Path) -> dict[str, Any]:
     """Write Musubi Tuner native dataset TOML and a readable command manifest."""
     destination.mkdir(parents=True, exist_ok=True)
-    _write_musubi_dataset_config(run, destination / "dataset.toml", workspace=workspace, strict=strict)
+    explicit_command = _musubi_backend_override(run).get("command") is not None
     command = command_musubi_tuner(run)
-    atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
+    if not explicit_command:
+        projection = load_frozen_dataset_projection(
+            destination.parent,
+            backend="musubi-tuner",
+            dataset_ids=[str(item.get("id")) for item in run.get("datasets", [])],
+        )
+        assert projection is not None
+        command["env"].update(_musubi_video_preflight_env(run, projection))
+        _write_musubi_dataset_config(
+            run, destination / "dataset.toml",
+            projection=projection,
+        )
+    if not explicit_command:
+        atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
     return command
+
+
+def _musubi_video_preflight_env(run: dict[str, Any], projection: dict[str, Any]) -> dict[str, str]:
+    """Resolve video preflight semantics from the frozen projection profiles."""
+    datasets = projection.get("datasets") if isinstance(projection, dict) else None
+    if not isinstance(datasets, list):
+        raise ValueError("Musubi frozen projection has no dataset list for video preflight")
+    policies: list[dict[str, Any]] = []
+    for dataset in datasets:
+        if not isinstance(dataset, dict):
+            continue
+        native = dataset.get("native")
+        if not isinstance(native, dict):
+            continue
+        native_blocks = native.get("datasets")
+        if not isinstance(native_blocks, list):
+            raise ValueError("Musubi video projection native handoff must contain datasets[]")
+        if not any(
+            isinstance(block, dict) and isinstance(block.get("video_jsonl_file"), str)
+            for block in native_blocks
+        ):
+            continue
+        policy = dataset.get("policy")
+        if not isinstance(policy, dict):
+            raise ValueError("Musubi video projection has no verified profile policy")
+        policies.append(policy)
+    if not policies:
+        return {}
+    target_fps_values = {policy.get("target_fps") for policy in policies}
+    resample_modes = {policy.get("fps_resample_mode") for policy in policies}
+    profiles = {policy.get("profile") for policy in policies}
+    if len(target_fps_values) != 1 or not all(isinstance(value, (int, float)) for value in target_fps_values):
+        raise ValueError(f"Musubi video projection profiles disagree on target_fps: {sorted(map(str, target_fps_values))}")
+    if len(resample_modes) != 1 or not all(isinstance(value, str) and value for value in resample_modes):
+        raise ValueError(f"Musubi video projection profiles disagree on fps_resample_mode: {sorted(map(str, resample_modes))}")
+    if not all(isinstance(value, str) and value for value in profiles):
+        raise ValueError("Musubi video projection has an invalid profile name")
+    architecture = _musubi_architecture(run)
+    return {
+        "KURA_MUSUBI_ARCHITECTURE": architecture,
+        "KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE": musubi_native_dataset_architecture(architecture),
+        "KURA_MUSUBI_TARGET_FPS": str(next(iter(target_fps_values))),
+        "KURA_MUSUBI_FPS_RESAMPLE_MODE": str(next(iter(resample_modes))),
+        "KURA_MUSUBI_PROFILES": ",".join(sorted(profiles)),
+    }
 
 
 def _musubi_prune_checkpoints_command(output_dir: str, output_name: str, before_step: Any) -> list[str] | None:
@@ -183,50 +300,36 @@ def _musubi_save_precision(override: dict[str, Any]) -> str:
 
 
 def _musubi_micro_batch(run: dict[str, Any], override: dict[str, Any]) -> int | None:
+    del run
     direct = _int_or_none(override.get("batch_size"))
-    if direct is not None:
-        return direct
-    dataset_config = override.get("dataset_config")
-    if isinstance(dataset_config, dict):
-        general = dataset_config.get("general")
-        if isinstance(general, dict):
-            batch_size = _int_or_none(general.get("batch_size"))
-            if batch_size is not None:
-                return batch_size
-        datasets = dataset_config.get("datasets")
-        if isinstance(datasets, list):
-            for item in datasets:
-                if not isinstance(item, dict):
-                    continue
-                batch_size = _int_or_none(item.get("batch_size"))
-                if batch_size is not None:
-                    return batch_size
-    return None
+    return direct
 
 
 def _musubi_max_resolution(run: dict[str, Any], override: dict[str, Any]) -> int | None:
+    del run
     values: list[int] = []
     direct = override.get("resolution")
     if isinstance(direct, list):
         values.extend(value for item in direct if (value := _int_or_none(item)) is not None)
     elif (value := _int_or_none(direct)) is not None:
         values.append(value)
-    dataset_config = override.get("dataset_config")
-    if isinstance(dataset_config, dict):
-        general = dataset_config.get("general")
-        if isinstance(general, dict):
-            resolution = general.get("resolution")
-            if isinstance(resolution, list):
-                values.extend(value for item in resolution if (value := _int_or_none(item)) is not None)
-        datasets = dataset_config.get("datasets")
-        if isinstance(datasets, list):
-            for item in datasets:
-                if not isinstance(item, dict):
+    dataset_options = override.get("dataset_options")
+    if isinstance(dataset_options, dict):
+        for options in dataset_options.values():
+            if not isinstance(options, dict):
+                continue
+            blocks = options.get("blocks")
+            sources = [options, *blocks] if isinstance(blocks, list) else [options]
+            for source in sources:
+                if not isinstance(source, dict):
                     continue
                 for key in ("resolution", "control_resolution"):
-                    resolution = item.get(key)
-                    if isinstance(resolution, list):
-                        values.extend(value for part in resolution if (value := _int_or_none(part)) is not None)
+                    configured = source.get(key)
+                    if isinstance(configured, list):
+                        values.extend(
+                            value for part in configured
+                            if (value := _int_or_none(part)) is not None
+                        )
     return max(values) if values else None
 
 
@@ -256,9 +359,9 @@ def _validate_musubi_resource_flags(run: dict[str, Any], override: dict[str, Any
     pinned = _truthy(override.get("use_pinned_memory_for_block_swap"))
     if pinned and (blocks is None or blocks <= 0):
         raise ValueError("Musubi use_pinned_memory_for_block_swap requires blocks_to_swap > 0")
-    if architecture not in ("flux2", "flux_2"):
+    if architecture != "flux2":
         return
-    model_version = str(override.get("model_version") or "").lower()
+    model_version = _musubi_flux2_model_version(run)
     if "9b" not in model_version:
         return
     gpu = str(run.get("compute", {}).get("gpu") or "")
@@ -297,8 +400,6 @@ def _musubi_uses_sample_prompts(override: dict[str, Any], extra_args: list[str])
 def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Project adapter-owned native values for generic display and safety."""
     native = _musubi_backend_override(run)
-    dataset_config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
-    general = dataset_config.get("general") if isinstance(dataset_config.get("general"), dict) else {}
     extra_args = _extra_args(native)
     gradient_accumulation = native.get("gradient_accumulation_steps") or _extra_arg_value(extra_args, "--gradient_accumulation_steps") or 1
     memory = {
@@ -323,16 +424,16 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         "alpha": native.get("network_alpha"),
         "learning_rate": native.get("learning_rate"),
         "scheduler": native.get("lr_scheduler"),
-        "batch_size": native.get("batch_size") or general.get("batch_size"),
+        "batch_size": native.get("batch_size"),
         "gradient_accumulation_steps": gradient_accumulation,
-        "resolution": native.get("resolution") or general.get("resolution"),
+        "resolution": native.get("resolution"),
         "optimizer": native.get("optimizer_type"),
         "precision": native.get("save_precision"),
         "memory": memory,
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
             "prune_before_step": native.get("prune_checkpoints_before_step"),
-            "keep_last": _extra_arg_value(extra_args, "--save_last_n_steps") or _extra_arg_value(extra_args, "--save_last_n_epochs"),
+            "keep_last": native.get("save_last_n_steps") or _extra_arg_value(extra_args, "--save_last_n_epochs"),
         },
     }
 
@@ -358,19 +459,6 @@ def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], out
         "--output_name", output_name,
     ])
     return args
-
-
-def _validate_krea2_dataset_shape(override: dict[str, Any]) -> None:
-    dataset_config = override.get("dataset_config")
-    if not isinstance(dataset_config, dict):
-        return
-    datasets = dataset_config.get("datasets")
-    if not isinstance(datasets, list):
-        return
-    forbidden = {"paired_jsonl", "control_directory", "control_resolution", "conditioning_data_dir"}
-    for item in datasets:
-        if isinstance(item, dict) and any(key in item for key in forbidden):
-            raise ValueError("Musubi Krea2 supports plain image/caption datasets only; remove paired/control dataset fields")
 
 
 def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
@@ -417,10 +505,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Tuner command env must not contain secrets; use the process environment instead")
         return {"cwd": cwd, "argv": argv, "env": env}
 
-    architecture_value = override.get("architecture") or override.get("model_arch")
-    if not isinstance(architecture_value, str) or not architecture_value.strip():
-        raise ValueError("Musubi backend.config.architecture is required")
-    architecture = architecture_value.lower().replace("-", "_")
+    architecture = _musubi_architecture(run)
     _validate_musubi_resource_flags(run, override, architecture)
     recipe = validated_recipe(run, required=True)
     explicit_paths = _musubi_explicit_model_paths(override)
@@ -432,8 +517,9 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     common = [
         "accelerate", "launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
     ]
+    backend_cache_path: str | None = None
     precache = bool(override.get("precache", True))
-    if architecture in ("flux2", "flux_2"):
+    if architecture == "flux2":
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         model_version = _musubi_flux2_model_version(run)
         if model_version == "dev" and _truthy(override.get("fp8_text_encoder")):
@@ -501,7 +587,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         argv = _script_command(commands, override, run)
     elif architecture == "wan":
         dit, vae, t5 = _require_paths(paths, ("dit", "vae", "t5"))
-        task = str(override.get("task") or "t2v-1.3B")
+        task = musubi_native_task(architecture, override.get("task"))
         native_selector = wan_native_selector(task)
         clip = paths.get("clip")
         one_frame = _truthy(override.get("one_frame"))
@@ -581,11 +667,11 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("minimax_h3", "minimaxh3"):
+    elif architecture == "minimax_h3":
         dit, video_vae, audio_vae, text_encoder = _require_paths(
             paths, ("dit", "video_vae", "audio_vae", "text_encoder")
         )
-        task = str(override.get("task") or "t2va")
+        task = musubi_native_task(architecture, override.get("task"))
         if task not in {"t2va", "fl2va", "ref2va"}:
             raise ValueError("Musubi MiniMax-H3 task must be t2va, fl2va, or ref2va")
         loss_method = str(override.get("h3_loss_method") or "guidance")
@@ -625,11 +711,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(
                     "Musubi MiniMax-H3 teacher_matching one_frame requires h3_teacher_conditions=subject_ref"
                 )
-            latent_task = {
-                "first,last": "fl2va",
-                "ref": "t2va",
-                "subject_ref": "ref2va",
-            }[teacher_conditions]
+            latent_task = _musubi_h3_effective_task(override)
             text_task = "t2va"
             train_task = "t2va"
         text_encoder_blocks_to_swap = _int_or_none(override.get("text_encoder_blocks_to_swap"))
@@ -638,7 +720,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         blocks_to_swap = _int_or_none(override.get("blocks_to_swap"))
         if blocks_to_swap is not None and not 0 <= blocks_to_swap <= 48:
             raise ValueError("Musubi MiniMax-H3 blocks_to_swap must be in [0, 48]")
-        uncond_cache = f"/workspace/runs/{run['id']}/resolved/musubi/minimax-h3-uncond.safetensors"
+        backend_cache_path = f"/workspace/runs/{run['id']}/cache/musubi"
+        uncond_cache = f"{backend_cache_path}/minimax-h3-uncond.safetensors"
         train_argv = [
             *common, "src/musubi_tuner/minimax_h3_train_network.py",
             "--dataset_config", dataset_config,
@@ -728,8 +811,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("krea2", "krea_2"):
-        _validate_krea2_dataset_shape(override)
+    elif architecture == "krea2":
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         extra_args = _extra_args(override)
         convrot_int8 = _truthy(override.get("convrot_int8"))
@@ -811,9 +893,13 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("qwen_image", "qwen"):
+    elif architecture == "qwen_image":
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
-        model_version = str(override.get("model_version") or "original")
+        model_version = _musubi_model_version(run)
+        if _truthy(override.get("remove_first_image_from_target")) and model_version != "layered":
+            raise ValueError(
+                "Musubi remove_first_image_from_target requires model_version=layered"
+            )
         train_argv = [
             *common, "src/musubi_tuner/qwen_image_train_network.py",
             "--dit", dit, "--vae", vae, "--text_encoder", text_encoder,
@@ -828,6 +914,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
         _append_flag(train_argv, override, "fp8_vl")
+        _append_flag(train_argv, override, "remove_first_image_from_target")
         train_argv.extend(_extra_args(override))
         commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):
@@ -858,7 +945,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("zimage", "z_image"):
+    elif architecture == "zimage":
         dit, vae, text_encoder = _require_paths(paths, ("dit", "vae", "text_encoder"))
         train_argv = [
             *common, "src/musubi_tuner/zimage_train_network.py",
@@ -900,7 +987,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("flux_kontext", "flux1_kontext"):
+    elif architecture == "flux_kontext":
         dit, vae, text_encoder1, text_encoder2 = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2"))
         train_argv = [
             *common, "src/musubi_tuner/flux_kontext_train_network.py",
@@ -945,7 +1032,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("ideogram4", "ideogram_4"):
+    elif architecture == "ideogram4":
         extra_args = _extra_args(override)
         uses_sampling = _musubi_uses_sample_prompts(override, extra_args)
         if precache or uses_sampling:
@@ -996,10 +1083,10 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("hidream_o1", "hidream"):
+    elif architecture == "hidream_o1":
         dit = _require_paths(paths, ("dit",))[0]
         model_type = str(override.get("model_type") or "full")
-        task = str(override.get("task") or "t2i")
+        task = musubi_native_task(architecture, override.get("task"))
         train_argv = [
             *common, "src/musubi_tuner/hidream_o1_train_network.py",
             "--dit", dit,
@@ -1050,7 +1137,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("hunyuan_video", "hunyuanvideo"):
+    elif architecture == "hunyuan_video":
         dit, vae, text_encoder1, text_encoder2 = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2"))
         train_argv = [
             *common, "src/musubi_tuner/hv_train_network.py",
@@ -1096,7 +1183,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
     elif architecture == "hunyuan_video_1_5":
-        task = str(override.get("task") or "t2v")
+        task = musubi_native_task(architecture, override.get("task"))
         required = ("dit", "vae", "text_encoder", "byt5", "image_encoder") if task == "i2v" else ("dit", "vae", "text_encoder", "byt5")
         required_paths = dict(zip(required, _require_paths(paths, required)))
         train_argv = [
@@ -1148,7 +1235,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("framepack", "frame_pack"):
+    elif architecture == "framepack":
         dit, vae, text_encoder1, text_encoder2, image_encoder = _require_paths(paths, ("dit", "vae", "text_encoder1", "text_encoder2", "image_encoder"))
         train_argv = [
             *common, "src/musubi_tuner/fpack_train_network.py",
@@ -1158,6 +1245,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--dataset_config", dataset_config,
             "--sdpa", "--mixed_precision", "bf16",
             "--network_module", "networks.lora_framepack",
+            "--latent_window_size", str(FRAMEPACK_LATENT_WINDOW_SIZE),
             *_musubi_common_train_args(run, override, output_dir, output_name),
         ]
         if _truthy(override.get("f1")):
@@ -1209,9 +1297,9 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         if str(_musubi_output_compatibility(run)["lora_format"]).lower() not in ("none", "off", "false"):
             commands.append(_musubi_lora_validation_command(run, output_dir, output_name))
         argv = _script_command(commands, override, run)
-    elif architecture in ("kandinsky5", "kandinsky_5"):
+    elif architecture == "kandinsky5":
         dit, vae, text_encoder_qwen, text_encoder_clip = _require_paths(paths, ("dit", "vae", "text_encoder_qwen", "text_encoder_clip"))
-        task = str(override.get("task") or "k5-pro-t2v-5s-sd")
+        task = musubi_native_task(architecture, override.get("task"))
         train_argv = [
             *common, "src/musubi_tuner/kandinsky5_train_network.py",
             "--mixed_precision", "bf16",
@@ -1262,7 +1350,21 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     else:
         raise _unsupported_musubi_adapter_error(architecture)
 
-    return {
-        "cwd": "/opt/musubi-tuner", "argv": argv, "env": _backend_env("Musubi Tuner", override),
+    env = _backend_env("Musubi Tuner", override)
+    env.update({
+        "KURA_MUSUBI_IMAGE_SUFFIXES": frozen_suffixes(MUSUBI_IMAGE_SUFFIXES),
+        "KURA_MUSUBI_VIDEO_SUFFIXES": frozen_suffixes(MUSUBI_VIDEO_SUFFIXES),
+        "KURA_MUSUBI_AUDIO_SUFFIXES": frozen_suffixes(MUSUBI_AUDIO_SUFFIXES),
+    })
+    result = {
+        "cwd": "/opt/musubi-tuner", "argv": argv, "env": env,
         "output_contract": {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]},
     }
+    if backend_cache_path is not None:
+        env["KURA_MUSUBI_CACHE"] = backend_cache_path
+        result["write_roots"] = [{
+            "role": "backend-cache",
+            "path": backend_cache_path,
+            "env": "KURA_MUSUBI_CACHE",
+        }]
+    return result

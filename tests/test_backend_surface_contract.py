@@ -11,25 +11,98 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
-
-import yaml
 import unittest
 
+import yaml
+
 from kura.backends import BACKENDS, BackendAdapter, backend_capabilities, validate_backend_config
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
 from kura.backends.musubi_command import _script_command as musubi_script_command
 from kura.cli import cmd_run_capabilities, cmd_run_compile, cmd_run_plan
 from kura.init_templates import cmd_init
+from kura.media_types import frozen_suffixes
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 class BackendSurfaceContractTests(unittest.TestCase):
+    def _write_ai_toolkit_projection(
+        self,
+        run: dict[str, object],
+        resolved: Path,
+    ) -> None:
+        self._write_ai_toolkit_manifest_projection(
+            run, resolved, target="sample.png",
+        )
+
+    def _write_ai_toolkit_manifest_projection(
+        self,
+        run: dict[str, object],
+        resolved: Path,
+        *,
+        target: str,
+        controls: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        return freeze_fixture(run, resolved, target=target, controls=controls)
+
+    def _write_musubi_projection(self, run: dict[str, object], resolved: Path) -> None:
+        freeze_fixture(run, resolved)
+
+    def _write_sd_scripts_projection(self, run: dict[str, object], resolved: Path) -> None:
+        freeze_fixture(run, resolved)
+
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for name, adapter in BACKENDS.items():
                 with self.subTest(backend=name):
                     run = {"backend": {"name": name, "config": {"kura_unknown_sentinel": True}}}
                     with self.assertRaisesRegex(ValueError, "kura_unknown_sentinel"):
-                        adapter.compile(run, Path(directory) / name, Path(directory), False)
+                        adapter.compile(run, Path(directory) / name)
+
+    def test_musubi_and_sd_scripts_reject_legacy_minimal_projection_locks(self) -> None:
+        runs = {
+            "musubi-tuner": {
+                "id": "legacy-musubi",
+                "backend": {"name": "musubi-tuner", "config": {
+                    "architecture": "flux2", "model_version": "klein-base-4b",
+                    "model_paths": {
+                        "dit": "/models/dit", "vae": "/models/vae",
+                        "text_encoder": "/models/text",
+                    },
+                }},
+                "model": {"base": "example/model"},
+                "datasets": [{"id": "tiny"}],
+                "recipe": {"steps": 1, "seed": 1},
+            },
+            "sd-scripts": {
+                "id": "legacy-sd",
+                "backend": {"name": "sd-scripts", "config": {
+                    "architecture": "sd15", "model_paths": {"base": "/models/base"},
+                    "dataset_config": {"datasets": [{"subsets": [{
+                        "dataset_id": "tiny", "num_repeats": 1,
+                    }]}]},
+                }},
+                "model": {"base": "/models/base"},
+                "datasets": [{"id": "tiny"}],
+                "recipe": {"steps": 1, "seed": 1},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for backend, run in runs.items():
+                with self.subTest(backend=backend):
+                    resolved = root / backend
+                    resolved.mkdir()
+                    (resolved / "dataset-projection.lock.json").write_text(json.dumps({
+                        "schema_version": 1,
+                        "backend": backend,
+                        "datasets": [{"id": "tiny", "native": {}, "views": [{}]}],
+                    }), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
+                        BACKENDS[backend].compile(run, resolved)
 
     def test_plausible_general_ml_substitutions_name_the_fix(self) -> None:
         for name in BACKENDS:
@@ -154,6 +227,18 @@ class BackendSurfaceContractTests(unittest.TestCase):
             musubi["conditional_fields"]["timestep_boundary"]["when_any"],
             [{"architecture": ["wan"]}],
         )
+        self.assertEqual(
+            musubi["selector_aliases"]["architecture"]["fields"],
+            ["model_arch"],
+        )
+        self.assertEqual(
+            musubi["selector_aliases"]["architecture"]["values"]["flux_2"],
+            "flux2",
+        )
+        self.assertIn(
+            "case-insensitive",
+            musubi["selector_aliases"]["architecture"]["normalization"],
+        )
         sd_scripts = backend_capabilities("sd-scripts")
         self.assertEqual(
             sd_scripts["conditional_fields"]["cond_emb_dim"]["when_any"],
@@ -164,16 +249,85 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertEqual(
             backend_capabilities("ai-toolkit")["nested_config_fields"]["dataset_config"],
             {
-                "control_subdir": {"type": "relative-path"},
+                "do_i2v": {"type": "boolean"},
                 "do_audio": {"type": "boolean"},
                 "fps": {"type": "integer", "minimum": 1},
+                "generated_controls": {
+                    "type": "string-list",
+                    "choices": ("depth", "pose", "line", "inpaint", "mask"),
+                },
                 "num_frames": {"type": "integer", "minimum": 1},
             },
+        )
+        ai_toolkit = backend_capabilities("ai-toolkit")
+        self.assertIn("flatten_groups", ai_toolkit["config_fields"])
+        self.assertIn("dataset_options", ai_toolkit["config_fields"])
+        self.assertEqual(
+            ai_toolkit["nested_config_fields"]["dataset_options.<dataset-id>"],
+            {"blocks": {"type": "list of group and num_repeats mappings"}},
         )
         model_arch_choices = backend_capabilities("ai-toolkit")["config_value_choices"]["model_arch"]
         self.assertIn("sd1", model_arch_choices)
         self.assertIn("qwen_image_2", model_arch_choices)
         self.assertNotIn("sd15", model_arch_choices)
+
+    def test_musubi_surface_normalizes_architecture_before_conditions(self) -> None:
+        for selector, architecture in (
+            ("architecture", "flux-2"),
+            ("architecture", "Flux2"),
+            ("model_arch", "flux_2"),
+        ):
+            with self.subTest(selector=selector, architecture=architecture, accepted=True):
+                validate_backend_config({
+                    "backend": {
+                        "name": "musubi-tuner",
+                        "config": {selector: architecture, "fp8_base": True},
+                    },
+                })
+            with self.subTest(selector=selector, architecture=architecture, accepted=False):
+                with self.assertRaisesRegex(ValueError, "f1.*not applicable"):
+                    validate_backend_config({
+                        "backend": {
+                            "name": "musubi-tuner",
+                            "config": {selector: architecture, "f1": True},
+                        },
+                    })
+
+    def test_musubi_surface_rejects_non_string_architecture_cleanly(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            r"musubi-tuner backend\.config\.architecture must be a string",
+        ):
+            validate_backend_config({
+                "backend": {
+                    "name": "musubi-tuner",
+                    "config": {"architecture": 5, "fp8_base": True},
+                },
+            })
+
+    def test_ai_toolkit_legacy_dataset_selectors_name_manifest_migrations(self) -> None:
+        base = {
+            "id": "legacy-ai-toolkit-dataset",
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "qwen_image_2"}},
+            "model": {"base": "Qwen/Qwen-Image-2.1"},
+            "datasets": [{"id": "paired"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        folder = deepcopy(base)
+        folder["backend"]["config"]["dataset_folder"] = "/workspace/datasets/paired/images"
+        with self.assertRaisesRegex(
+            ValueError,
+            r"dataset_folder.*items\.jsonl.*role.*target",
+        ):
+            validate_backend_config(folder)
+
+        control = deepcopy(base)
+        control["backend"]["config"]["dataset_config"] = {"control_subdir": "control"}
+        with self.assertRaisesRegex(
+            ValueError,
+            r"dataset_config\.control_subdir.*items\.jsonl.*role.*control",
+        ):
+            validate_backend_config(control)
 
     def test_musubi_rejects_declared_fields_on_the_wrong_architecture(self) -> None:
         for field, value in (("timestep_boundary", 900), ("noise_scale_start", 0.5)):
@@ -222,40 +376,92 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, rf"{expected}.*not applicable"):
                     validate_backend_config(run)
 
-    def test_musubi_capabilities_expose_typed_minimax_h3_dataset_contract(self) -> None:
+    def test_musubi_minimax_h3_architecture_requirements_guard_batch_and_resolution(self) -> None:
+        base = {
+            "backend": {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+            }},
+            "datasets": [{"id": "tiny"}],
+        }
+        invalid = (
+            ({"batch_size": 2}, r"minimax_h3.*batch_size=1"),
+            ({"batch_size": True}, r"minimax_h3.*batch_size=1"),
+            ({"resolution": [960, 550]}, r"minimax_h3.*resolution.*multiples of 32"),
+            ({"resolution": [960]}, r"minimax_h3.*resolution.*multiples of 32"),
+            (
+                {"dataset_options": {"tiny": {"blocks": [{"resolution": [960, 550]}]}}},
+                r"minimax_h3.*dataset_options\.tiny\.blocks\[0\]\.resolution.*multiples of 32",
+            ),
+        )
+        for fields, expected in invalid:
+            with self.subTest(fields=fields):
+                run = deepcopy(base)
+                run["backend"]["config"].update(fields)
+                with self.assertRaisesRegex(ValueError, expected):
+                    validate_backend_config(run)
+
+        validate_backend_config(base)
+        explicit = deepcopy(base)
+        explicit["backend"]["config"].update({
+            "batch_size": 1,
+            "resolution": [1024, 768],
+        })
+        validate_backend_config(explicit)
+
+        unrelated = deepcopy(base)
+        unrelated["backend"]["config"].update({
+            "architecture": "wan",
+            "batch_size": 2,
+            "resolution": [960, 550],
+        })
+        validate_backend_config(unrelated)
+
+    def test_musubi_capabilities_expose_manifest_projection_options_only(self) -> None:
         capabilities = backend_capabilities("musubi-tuner")
 
+        self.assertNotIn("dataset_config", capabilities["config_fields"])
+        self.assertNotIn("dataset_config", capabilities["escape_hatches"])
+        self.assertNotIn("h3_dataset_config", capabilities["config_fields"])
+        self.assertNotIn("h3_dataset_config", capabilities["conditional_fields"])
         self.assertEqual(
-            capabilities["conditional_fields"]["h3_dataset_config"]["when_any"],
-            [{"architecture": ["minimax_h3", "minimaxh3"]}],
-        )
-        self.assertEqual(
-            capabilities["nested_config_fields"]["h3_dataset_config.datasets[]"]["source"]["type"],
-            "enum:image_directory|image_jsonl|video_directory|video_jsonl",
-        )
-        self.assertEqual(
-            capabilities["nested_config_fields"]["h3_dataset_config.datasets[]"]["fp_1f_target_index"]["minimum"],
+            capabilities["nested_config_fields"]["dataset_options.<dataset-id>"]["fp_1f_target_index"]["minimum"],
             0,
         )
+
+    def test_musubi_video_dataset_options_are_discoverable(self) -> None:
+        capabilities = backend_capabilities("musubi-tuner")
+
+        self.assertIn("dataset_options", capabilities["config_fields"])
+        options = capabilities["nested_config_fields"]["dataset_options.<dataset-id>"]
         self.assertEqual(
-            capabilities["nested_config_fields"]["h3_dataset_config.general"]["batch_size"],
-            {"type": "integer", "minimum": 1, "maximum": 1},
+            options["target_frames"]["grid"],
+            "profile-specific: Wan 1+4n; MiniMax-H3 5+17n",
         )
+        self.assertEqual(
+            options["frame_extraction"],
+            {"type": "enum:head|full", "default": "profile-specific"},
+        )
+        self.assertEqual(options["max_frames"], {"type": "integer", "minimum": 1})
+        self.assertEqual(options["control_resolution"], {"type": "integer-pair", "minimum": 1})
+        self.assertEqual(options["fp_1f_clean_indices"], {"type": "integer-list", "minimum": 0})
+        self.assertEqual(options["fp_1f_target_index"], {"type": "integer", "minimum": 0})
+        self.assertEqual(options["fp_1f_no_post"], {"type": "boolean", "default": False})
+        self.assertEqual(options["no_resize_control"], {"type": "boolean"})
 
     def test_musubi_capabilities_expose_krea2_memory_accommodations(self) -> None:
         capabilities = backend_capabilities("musubi-tuner")
 
         self.assertEqual(
             capabilities["conditional_fields"]["convrot_int8"]["when_any"],
-            [{"architecture": ["krea2", "krea_2"]}],
+            [{"architecture": ["krea2"]}],
         )
         self.assertEqual(
             capabilities["conditional_fields"]["convrot_int8_bwd"]["when_any"],
-            [{"architecture": ["krea2", "krea_2"], "convrot_int8": [True]}],
+            [{"architecture": ["krea2"], "convrot_int8": [True]}],
         )
         self.assertEqual(
             capabilities["conditional_fields"]["gradient_checkpointing_cpu_offload"]["when_any"],
-            [{"architecture": ["krea2", "krea_2"], "gradient_checkpointing": [True]}],
+            [{"architecture": ["krea2"], "gradient_checkpointing": [True]}],
         )
 
     def test_compile_rejects_known_but_inapplicable_fields_before_artifact_generation(self) -> None:
@@ -270,7 +476,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.subTest(backend=name, field=next(reversed(config))):
                     run = {"backend": {"name": name, "config": config}}
                     with self.assertRaisesRegex(ValueError, "not applicable"):
-                        BACKENDS[name].compile(run, root / name, root, False)
+                        BACKENDS[name].compile(run, root / name)
 
     def test_sd_scripts_rejects_declared_fields_on_the_wrong_mode(self) -> None:
         cases = (
@@ -306,6 +512,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "musubi-tuner", "json": True})()), 0)
         self.assertIn('"optimizer_type"', output.getvalue())
         self.assertIn('"validation": "unverified"', output.getvalue())
+
+    def test_capabilities_cli_prints_musubi_selector_aliases(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(cmd_run_capabilities(type("Args", (), {"backend": "musubi-tuner", "json": False})()), 0)
+        rendered = output.getvalue()
+        self.assertIn("selector aliases:", rendered)
+        self.assertIn("architecture: fields=model_arch", rendered)
+        self.assertIn("flux_2->flux2", rendered)
 
     def test_capabilities_cli_prints_sd_scripts_nested_dataset_fields(self) -> None:
         output = io.StringIO()
@@ -379,8 +594,9 @@ class BackendSurfaceContractTests(unittest.TestCase):
             "recipe": {"steps": 1, "seed": 1},
         }
         with tempfile.TemporaryDirectory() as directory:
+            self._write_ai_toolkit_projection(run, Path(directory))
             with self.assertRaisesRegex(ValueError, "duplicates backend.config.model_arch"):
-                BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+                BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
     def test_ai_toolkit_rejects_sd15_before_compiling_native_config(self) -> None:
         run = {
@@ -391,7 +607,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
             with self.assertRaisesRegex(ValueError, "sd15.*sd1"):
-                BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+                BACKENDS["ai-toolkit"].compile(run, destination)
             self.assertFalse((destination / "ai-toolkit.yaml").exists())
 
     def test_ai_toolkit_selector_catalog_is_tied_to_the_declared_image_pin(self) -> None:
@@ -423,7 +639,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+            self._write_ai_toolkit_projection(run, destination)
+            BACKENDS["ai-toolkit"].compile(run, destination)
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
             self.assertEqual(process["model"]["arch"], "sd1")
 
@@ -436,7 +653,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}],
                     "recipe": {"steps": 1, "seed": 1},
                 }
-                BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
+                self._write_ai_toolkit_projection(run, destination)
+                BACKENDS["ai-toolkit"].compile(run, destination)
                 process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                 self.assertEqual(process["model"]["arch"], arch)
 
@@ -464,7 +682,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertRegex(error.getvalue(), "sd15.*sd1")
             self.assertFalse((run_dir / "resolved" / "backend-command.lock.json").exists())
 
-    def test_ai_toolkit_native_model_arch_remains_an_unvalidated_escape_hatch(self) -> None:
+    def test_ai_toolkit_native_model_arch_cannot_claim_first_class_manifest_projection(self) -> None:
         run = {
             "id": "custom-arch", "backend": {"name": "ai-toolkit", "config": {
                 "native_config": {"model": {"arch": "custom_extension_arch"}},
@@ -474,9 +692,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory)
-            BACKENDS["ai-toolkit"].compile(run, destination, destination, False)
-            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
-            self.assertEqual(process["model"]["arch"], "custom_extension_arch")
+            with self.assertRaisesRegex(ValueError, "no verified AI-Toolkit projection profile"):
+                self._write_ai_toolkit_projection(run, destination)
 
     def test_ai_toolkit_minimax_h3_rejects_gradient_checkpointing_for_pinned_runtime(self) -> None:
         run = {
@@ -489,14 +706,126 @@ class BackendSurfaceContractTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "gradient_checkpointing=false"):
-                BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+                BACKENDS["ai-toolkit"].compile(run, Path(directory))
+
+    def test_ai_toolkit_flex2_bypass_guidance_is_typed_and_compiled(self) -> None:
+        run = {
+            "id": "flex2-typed", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "flex2", "bypass_guidance_embedding": True,
+            }},
+            "model": {"base": "ostris/Flex.2-preview"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            self._write_ai_toolkit_projection(run, destination)
+            BACKENDS["ai-toolkit"].compile(run, destination)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
+                "config"
+            ]["process"][0]
+        self.assertIs(process["train"]["bypass_guidance_embedding"], True)
+        self.assertIn(
+            "bypass_guidance_embedding",
+            backend_capabilities("ai-toolkit")["conditional_fields"],
+        )
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["bypass_guidance_embedding"] = "true"
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            validate_backend_config(invalid)
+
+    def test_ai_toolkit_zimage_l2p_companion_source_is_typed_and_compiled(self) -> None:
+        run = {
+            "id": "zimage-l2p-typed", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "zimage_l2p",
+                "extras_name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+            }},
+            "model": {"base": "zhen-nan/L2P/model-1k-merge.safetensors"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            self._write_ai_toolkit_projection(run, destination)
+            BACKENDS["ai-toolkit"].compile(run, destination)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
+                "config"
+            ]["process"][0]
+        self.assertEqual(
+            process["model"]["extras_name_or_path"],
+            "Tongyi-MAI/Z-Image-Turbo",
+        )
+        self.assertIn(
+            "extras_name_or_path",
+            backend_capabilities("ai-toolkit")["conditional_fields"],
+        )
+        self.assertEqual(
+            BACKENDS["ai-toolkit"].requirements(run)[1]["role"],
+            "model_extras",
+        )
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["extras_name_or_path"] = "   "
+        with self.assertRaisesRegex(ValueError, "must be a nonempty model reference"):
+            validate_backend_config(invalid)
+
+    def test_ai_toolkit_krea2_edit_mode_is_typed_and_compiled(self) -> None:
+        run = {
+            "id": "krea2-edit-typed", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "krea2", "model_edit": True,
+            }},
+            "model": {"base": "black-forest-labs/FLUX.2-krea-dev"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            self._write_ai_toolkit_manifest_projection(
+                run, destination, target="sample.png", controls=("control.png",),
+            )
+            BACKENDS["ai-toolkit"].compile(run, destination)
+            process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))[
+                "config"
+            ]["process"][0]
+        self.assertIs(process["model"]["model_kwargs"]["edit"], True)
+        self.assertIn(
+            "model_edit",
+            backend_capabilities("ai-toolkit")["conditional_fields"],
+        )
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["model_edit"] = "true"
+        with self.assertRaisesRegex(ValueError, "model_edit must be true or false"):
+            validate_backend_config(invalid)
+
+    def test_ai_toolkit_generated_controls_are_closed_and_flex2_only(self) -> None:
+        run = {
+            "id": "generated-controls", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "flex2",
+                "dataset_config": {"generated_controls": ["depth", "pose"]},
+            }},
+            "model": {"base": "ostris/Flex.2-preview"},
+            "datasets": [{"id": "images"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        validate_backend_config(run)
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["dataset_config"]["generated_controls"] = ["depth", "depth"]
+        with self.assertRaisesRegex(ValueError, "unique list"):
+            validate_backend_config(invalid)
+
+        invalid = deepcopy(run)
+        invalid["backend"]["config"]["model_arch"] = "sdxl"
+        with self.assertRaisesRegex(ValueError, "verified only for flex2"):
+            validate_backend_config(invalid)
 
     def test_ai_toolkit_sdxl_evidence_settings_preserve_legacy_process_semantics(self) -> None:
         """The two migrated 2026-07-12 smokes differed only by executor."""
         ordinary = {
             "model_arch": "sdxl", "network_dim": 1, "network_alpha": 1,
             "save_every_n_steps": 1, "save_last_n_steps": 1,
-            "dataset_folder": "/workspace/datasets/flux2-klein-tiny/images",
             "resolution": [256, 256], "learning_rate": 1.0e-6, "batch_size": 1,
             "gradient_accumulation_steps": 1, "gradient_checkpointing": True,
             "mixed_precision": "bf16", "optimizer_type": "adamw8bit", "low_vram": True,
@@ -511,14 +840,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "recipe": {"steps": 1, "seed": 1}, "compute": {"executor": executor},
                 }
                 destination = Path(directory) / "ai-toolkit"
-                command = BACKENDS["ai-toolkit"].compile(run, destination, Path(directory), False)
+                self._write_ai_toolkit_projection(run, destination)
+                command = BACKENDS["ai-toolkit"].compile(run, destination)
                 process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
                 self.assertEqual(process, {
                     "type": "sd_trainer", "training_folder": f"/workspace/runs/{run_id}/outputs", "device": "cuda:0",
                     "network": {"type": "lora", "linear": 1, "linear_alpha": 1},
                     "save": {"save_every": 1, "max_step_saves_to_keep": 1},
                     "datasets": [{
-                        "folder_path": "/workspace/datasets/flux2-klein-tiny/images", "caption_ext": ".txt",
+                        "folder_path": f"/workspace/runs/{run_id}/cache/dataset-view/ai-toolkit/flux2-klein-tiny", "caption_ext": ".txt",
                         "cache_latents_to_disk": True, "resolution": [256, 256],
                     }],
                     "train": {
@@ -534,83 +864,70 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertEqual(command["cwd"], expected_cwd)
                 self.assertEqual(command["argv"][:2], ["python", "-c"])
                 self.assertIn(f"/workspace/runs/{run_id}/resolved/ai-toolkit.yaml", command["argv"][3])
-                self.assertEqual(command["env"], {"SEED": "1", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
+                self.assertEqual(command["env"], {
+                    "SEED": "1",
+                    "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
+                    "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+                })
 
     def test_ai_toolkit_projects_typed_video_dataset_settings(self) -> None:
         run = {
             "id": "minimax-video", "backend": {"name": "ai-toolkit", "config": {
                 "model_arch": "minimax_h3",
-                "dataset_folder": "/workspace/datasets/video/videos",
                 "dataset_config": {"num_frames": 5, "fps": 24, "do_audio": False},
             }},
             "model": {"base": "Comfy-Org/MiniMax-H3"},
-            "datasets": [{"id": "video"}],
+            "datasets": [{"id": "tiny"}],
             "recipe": {"steps": 1, "seed": 1},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self._write_ai_toolkit_manifest_projection(
+                run, root, target="sample.mp4",
+            )
+            BACKENDS["ai-toolkit"].compile(run, root)
+            process = yaml.safe_load(
+                (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+        self.assertEqual(process["datasets"][0]["num_frames"], 5)
+        self.assertEqual(process["datasets"][0]["fps"], 24)
+        self.assertIs(process["datasets"][0]["do_audio"], False)
+        self.assertIn("/cache/dataset-view/", process["datasets"][0]["folder_path"])
 
-            BACKENDS["ai-toolkit"].compile(run, root, root, False)
-
-            process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
-        self.assertEqual(process["datasets"], [{
-            "folder_path": "/workspace/datasets/video/videos",
-            "caption_ext": ".txt",
-            "cache_latents_to_disk": True,
-            "num_frames": 5,
-            "fps": 24,
-            "do_audio": False,
-        }])
-
-    def test_ai_toolkit_projects_control_subdir_inside_each_owned_dataset(self) -> None:
+    def test_ai_toolkit_projects_manifest_controls_inside_each_owned_view(self) -> None:
         run = {
             "id": "qwen-edit", "backend": {"name": "ai-toolkit", "config": {
                 "model_arch": "qwen_image_2",
-                "dataset_config": {"control_subdir": "control"},
             }},
             "model": {"base": "Qwen/Qwen-Image-2.1"},
-            "datasets": [{"id": "paired"}],
+            "datasets": [{"id": "tiny"}],
             "recipe": {"steps": 1, "seed": 1},
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-
-            BACKENDS["ai-toolkit"].compile(run, root, root, False)
-
-            process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
-        self.assertEqual(process["datasets"], [{
-            "folder_path": "/workspace/datasets/paired/images",
-            "caption_ext": ".txt",
-            "cache_latents_to_disk": True,
-            "control_path": "/workspace/datasets/paired/control",
-        }])
-
-    def test_ai_toolkit_rejects_control_subdir_that_escapes_the_dataset(self) -> None:
-        run = {
-            "id": "unsafe-edit", "backend": {"name": "ai-toolkit", "config": {
-                "model_arch": "mageflow_edit",
-                "dataset_config": {"control_subdir": "../outside"},
-            }},
-            "model": {"base": "microsoft/Mage-Flow-Edit-Base"},
-            "datasets": [{"id": "paired"}],
-            "recipe": {"steps": 1, "seed": 1},
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "relative path inside the dataset"):
-                BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+            self._write_ai_toolkit_manifest_projection(
+                run, root, target="sample.png", controls=("control.png",),
+            )
+            BACKENDS["ai-toolkit"].compile(run, root)
+            process = yaml.safe_load(
+                (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
+            )["config"]["process"][0]
+        self.assertIn("/cache/dataset-view/", process["datasets"][0]["folder_path"])
+        self.assertEqual(len(process["datasets"][0]["control_path"]), 1)
+        self.assertIn("/cache/dataset-view/", process["datasets"][0]["control_path"][0])
 
     def test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture(self) -> None:
         cases = (
-            ("qwen_image_2", "Qwen/Qwen-Image-2.1", {}),
-            ("anima", "circlestone-labs/Anima-Base-v1.0-Diffusers", {}),
-            ("mageflow", "microsoft/Mage-Flow-Base", {}),
-            ("mageflow_edit", "microsoft/Mage-Flow-Edit-Base", {"control_subdir": "control"}),
-            ("ltx2.5", "Lightricks/LTX-2.5", {"num_frames": 9, "fps": 24, "do_audio": False}),
-            ("minimax_h3", "MiniMaxAI/MiniMax-H3", {"num_frames": 5, "fps": 24, "do_audio": False}),
-            ("minimax_h3_ref2va", "MiniMaxAI/MiniMax-H3", {"num_frames": 5, "fps": 24, "do_audio": False, "control_subdir": "control"}),
-            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", {"num_frames": 5, "fps": 24, "do_audio": False}),
+            ("qwen_image_2", "Qwen/Qwen-Image-2.1", "sample.png", (), {}),
+            ("anima", "circlestone-labs/Anima-Base-v1.0-Diffusers", "sample.png", (), {}),
+            ("mageflow", "microsoft/Mage-Flow-Base", "sample.png", (), {}),
+            ("mageflow_edit", "microsoft/Mage-Flow-Edit-Base", "sample.png", ("control.png",), {}),
+            ("ltx2.5", "Lightricks/LTX-2.5", "sample.mp4", (), {"num_frames": 9, "fps": 24, "do_audio": False}),
+            ("minimax_h3", "MiniMaxAI/MiniMax-H3", "sample.mp4", (), {"num_frames": 5, "fps": 24, "do_audio": False}),
+            ("minimax_h3_ref2va", "MiniMaxAI/MiniMax-H3", "sample.mp4", ("portrait.png",), {"num_frames": 5, "fps": 24, "do_audio": False}),
+            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", "sample.png", (), {}),
         )
-        for arch, model, dataset_config in cases:
+        for arch, model, target, controls, dataset_config in cases:
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 run = {
@@ -621,25 +938,26 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "model": {"base": model}, "datasets": [{"id": "tiny"}],
                     "recipe": {"steps": 1, "seed": 1},
                 }
-
-                BACKENDS["ai-toolkit"].compile(run, root, root, False)
-
-                process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+                self._write_ai_toolkit_manifest_projection(
+                    run, root, target=target, controls=controls,
+                )
+                BACKENDS["ai-toolkit"].compile(run, root)
+                process = yaml.safe_load(
+                    (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
+                )["config"]["process"][0]
                 self.assertEqual(process["model"]["arch"], arch)
                 self.assertEqual(process["model"]["name_or_path"], model)
-                if "control_subdir" in dataset_config:
-                    self.assertEqual(process["datasets"][0]["control_path"], "/workspace/datasets/tiny/control")
 
     def test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode(self) -> None:
         cases = (
-            ("ltx2.5", "image-only", {}),
-            ("ltx2.5", "video-audio", {"num_frames": 9, "fps": 24, "do_audio": True}),
-            ("ltx2.5", "conditioned-video", {"num_frames": 9, "fps": 24, "control_subdir": "control"}),
-            ("minimax_h3", "image-only", {}),
-            ("minimax_h3", "video-audio", {"num_frames": 5, "fps": 24, "do_audio": True}),
-            ("minimax_h3", "first-frame-control", {"num_frames": 5, "fps": 24, "control_subdir": "control"}),
+            ("ltx2.5", "image-only", "sample.png", {}),
+            ("ltx2.5", "video-audio", "sample.mp4", {"num_frames": 9, "fps": 24, "do_audio": True}),
+            ("ltx2.5", "first-frame", "sample.mp4", {"num_frames": 9, "fps": 24, "do_i2v": True}),
+            ("minimax_h3", "image-only", "sample.png", {}),
+            ("minimax_h3", "video-audio", "sample.mp4", {"num_frames": 5, "fps": 24, "do_audio": True}),
+            ("minimax_h3", "first-frame", "sample.mp4", {"num_frames": 5, "fps": 24, "do_i2v": True}),
         )
-        for arch, mode, dataset_config in cases:
+        for arch, mode, target, dataset_config in cases:
             with self.subTest(arch=arch, mode=mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 run = {
@@ -653,17 +971,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "datasets": [{"id": "tiny"}],
                     "recipe": {"steps": 1, "seed": 1},
                 }
-
-                BACKENDS["ai-toolkit"].compile(run, root, root, False)
-
-                process = yaml.safe_load((root / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
+                self._write_ai_toolkit_manifest_projection(run, root, target=target)
+                BACKENDS["ai-toolkit"].compile(run, root)
+                process = yaml.safe_load(
+                    (root / "ai-toolkit.yaml").read_text(encoding="utf-8")
+                )["config"]["process"][0]
                 projected = process["datasets"][0]
                 self.assertEqual(process["model"]["arch"], arch)
-                self.assertEqual(projected.get("num_frames"), dataset_config.get("num_frames"))
-                self.assertEqual(projected.get("fps"), dataset_config.get("fps"))
-                self.assertEqual(projected.get("do_audio"), dataset_config.get("do_audio"))
-                expected_control = "/workspace/datasets/tiny/control" if "control_subdir" in dataset_config else None
-                self.assertEqual(projected.get("control_path"), expected_control)
+                for field, value in dataset_config.items():
+                    self.assertEqual(projected[field], value)
 
     def test_ai_toolkit_rejects_invalid_video_dataset_settings(self) -> None:
         base = {
@@ -682,7 +998,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 run = deepcopy(base)
                 run["backend"]["config"]["dataset_config"] = {field: value}
                 with self.assertRaisesRegex(ValueError, expected):
-                    BACKENDS["ai-toolkit"].compile(run, Path(directory), Path(directory), False)
+                    BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
     def test_musubi_escape_hatches_cannot_shadow_declared_fields(self) -> None:
         base = {
@@ -697,8 +1013,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
             root = Path(directory)
             run = json.loads(json.dumps(base))
             run["backend"]["config"].update({"blocks_to_swap": 1, "extra_args": ["--blocks_to_swap", "2"]})
-            with self.assertRaisesRegex(ValueError, "duplicates backend.config.extra_args"):
-                BACKENDS["musubi-tuner"].compile(run, root / "args", root, False)
+            with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                BACKENDS["musubi-tuner"].compile(run, root / "args")
 
             run = json.loads(json.dumps(base))
             run["backend"]["config"].update({
@@ -707,18 +1023,13 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 "gradient_checkpointing": True,
                 "extra_args": ["--block_swap_h2d_only"],
             })
-            with self.assertRaisesRegex(ValueError, "duplicates backend.config.extra_args"):
-                BACKENDS["musubi-tuner"].compile(run, root / "h2d", root, False)
-
-            run = json.loads(json.dumps(base))
-            run["backend"]["config"].update({"batch_size": 1, "dataset_config": {"general": {"batch_size": 2}}})
-            with self.assertRaisesRegex(ValueError, "duplicates backend.config.dataset_config.general.batch_size"):
-                BACKENDS["musubi-tuner"].compile(run, root / "dataset", root, False)
+            with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                BACKENDS["musubi-tuner"].compile(run, root / "h2d")
 
     def test_declared_ordinary_values_reach_each_adapter_artifact(self) -> None:
         runs = {
             "ai-toolkit": {
-                "id": "surface-ai", "backend": {"name": "ai-toolkit", "config": {"optimizer_type": "adamw8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2}},
+                "id": "surface-ai", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl", "optimizer_type": "adamw8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2}},
                 "model": {"base": "example/model"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
             "musubi-tuner": {
@@ -730,7 +1041,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             "sd-scripts": {
                 "id": "surface-sd", "backend": {"name": "sd-scripts", "config": {
                     "architecture": "sd15", "optimizer_type": "AdamW8bit", "lr_scheduler": "constant", "gradient_accumulation_steps": 2, "model_paths": {"base": "/models/base"},
-                    "dataset_config": {"datasets": [{"subsets": [{"dataset_id": "tiny"}]}]},
+                    "dataset_config": {"datasets": [{"subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}]},
                 }}, "model": {"base": "/models/base"}, "datasets": [{"id": "tiny"}], "recipe": {"steps": 1, "seed": 1},
             },
         }
@@ -742,7 +1053,13 @@ class BackendSurfaceContractTests(unittest.TestCase):
             (images / "1.txt").write_text("caption\n", encoding="utf-8")
             for name, run in runs.items():
                 with self.subTest(backend=name):
-                    spec = BACKENDS[name].compile(run, root / name, root, False)
+                    if name == "ai-toolkit":
+                        self._write_ai_toolkit_projection(run, root / name)
+                    elif name == "musubi-tuner":
+                        self._write_musubi_projection(run, root / name)
+                    elif name == "sd-scripts":
+                        self._write_sd_scripts_projection(run, root / name)
+                    spec = BACKENDS[name].compile(run, root / name)
                     if name == "ai-toolkit":
                         compiled = yaml.safe_load((root / "ai-toolkit" / "ai-toolkit.yaml").read_text(encoding="utf-8"))
                         self.assertEqual(compiled["config"]["process"][0]["train"]["optimizer"], "adamw8bit")

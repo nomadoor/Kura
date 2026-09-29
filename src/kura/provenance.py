@@ -34,13 +34,82 @@ def _source_symbol(path: Path, symbol: str) -> bytes:
     payload = path.read_bytes()
     text = payload.decode("utf-8")
     tree = ast.parse(text, filename=str(path))
-    matches = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == symbol]
-    if len(matches) != 1:
+    definitions: dict[str, list[ast.AST]] = {}
+    for node in tree.body:
+        names: list[str] = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.append(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names.extend(target.id for target in targets if isinstance(target, ast.Name))
+        for name in names:
+            definitions.setdefault(name, []).append(node)
+    if len(definitions.get(symbol, [])) != 1:
         raise ValueError(f"source identity symbol {symbol!r} was not found exactly once in {path.name}")
-    source = ast.get_source_segment(text, matches[0])
-    if source is None:
-        raise ValueError(f"source identity symbol {symbol!r} has no source segment in {path.name}")
-    return source.encode("utf-8")
+    pending = [symbol]
+    closure: dict[str, ast.AST] = {}
+    while pending:
+        name = pending.pop()
+        if name in closure:
+            continue
+        matches = definitions.get(name, [])
+        if len(matches) != 1:
+            raise ValueError(f"source identity dependency {name!r} was not found exactly once in {path.name}")
+        node = matches[0]
+        closure[name] = node
+        pending.extend(
+            child.id for child in ast.walk(node)
+            if isinstance(child, ast.Name)
+            and isinstance(child.ctx, ast.Load)
+            and child.id in definitions
+        )
+    parts: list[bytes] = []
+    for name, node in sorted(closure.items()):
+        source = ast.get_source_segment(text, node)
+        if source is None:
+            raise ValueError(f"source identity symbol {name!r} has no source segment in {path.name}")
+        parts.append(name.encode("utf-8") + b"\0" + source.encode("utf-8"))
+    return b"\0".join(parts)
+
+
+# Source files whose behavior an executor's transport and lifecycle evidence
+# depends on, including the shared modules they consume (handoff inventory,
+# media suffixes, event and file durability, executor selection). RunPod
+# evidence proves these, not the adapter, so it is bound to this identity
+# separately. A change to a shared module therefore needs a re-smoke or a
+# declared behavior-preserving executor migration.
+EXECUTOR_SOURCE_FILES: dict[str, tuple[str, ...]] = {
+    "runpod": (
+        "container_scripts/runpod_input_verify.py",
+        "dataset_handoff.py",
+        "dataset_transfer.py",
+        "executors/common.py",
+        "executors/runpod.py",
+        "fsio.py",
+        "media_types.py",
+        "run_commands/launch.py",
+        "run_commands/runpod_ssh.py",
+        "run_envelope.py",
+    ),
+}
+
+
+def executor_source_identity(executor: str, *, read: Any = None) -> dict[str, str]:
+    """Hash the executor transport and lifecycle sources.
+
+    ``read`` maps a package-relative path to its bytes; it defaults to the
+    installed package and lets tooling hash a historical tree.
+    """
+    files = EXECUTOR_SOURCE_FILES.get(executor)
+    if files is None:
+        raise ValueError(f"unsupported executor for source identity: {executor}")
+    package_root = Path(__file__).resolve().parent
+    reader = read or (lambda relative: (package_root / relative).read_bytes())
+    parts = [(relative, reader(relative)) for relative in files]
+    identity = _hash_source_parts(parts, executor, scope="executor-v1")
+    identity.pop("backend")
+    identity["executor"] = executor
+    return identity
 
 
 def legacy_adapter_source_identity(backend_name: str) -> dict[str, str]:
@@ -80,31 +149,63 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     container_root = package_root / "container_scripts"
     shared = backend_root / "shared.py"
     registry = backend_root / "registry.py"
+    run_envelope = package_root / "run_envelope.py"
     if backend_name == "ai-toolkit":
-        paths = [backend_root / "ai_toolkit.py"]
-        symbols = [(shared, name) for name in ("_datasets", "_script_command")]
-        runtime_paths = [container_root / "ai_toolkit_state.py", container_root / "training_state_verify.py"]
+        paths = [
+            backend_root / "ai_toolkit.py",
+            backend_root / "dataset_profiles.py",
+        ]
+        symbols = [
+            *((shared, name) for name in ("_datasets", "_script_command")),
+            *((run_envelope, name) for name in (
+                "backend_config", "resume_intent", "run_executor",
+                "training_state_policy", "validated_recipe",
+            )),
+        ]
+        runtime_paths = [
+            container_root / "ai_toolkit_state.py",
+            container_root / "ai_toolkit_video_assert.py",
+            container_root / "training_state_verify.py",
+        ]
     elif backend_name == "musubi-tuner":
-        paths = [backend_root / "common.py", *sorted(backend_root.glob("musubi_*.py"))]
+        paths = [
+            backend_root / "common.py",
+            backend_root / "dataset_profiles.py",
+            *sorted(backend_root.glob("musubi_*.py")),
+        ]
         symbols = [
             (shared, name)
-            for name in ("_datasets", "_toml_scalar", "_script_command", "_truthy", "_extra_args", "_append_flag")
+            for name in (
+                "_datasets", "_toml_scalar", "_script_command", "_truthy",
+                "_extra_args", "_reject_owned_extra_args", "_append_flag", "_int_or_none",
+            )
         ]
+        symbols.extend((run_envelope, name) for name in (
+            "backend_config", "resume_intent", "training_state_policy", "validated_recipe",
+        ))
         runtime_paths = [
             container_root / name
             for name in ("hf_download.py", "musubi_dataset_assert.py", "prune_checkpoints.py", "safetensors_validator.py", "training_state_verify.py")
         ]
     elif backend_name == "sd-scripts":
-        paths = sorted(backend_root.glob("sd_scripts*.py"))
+        paths = [
+            backend_root / "dataset_profiles.py",
+            *sorted(backend_root.glob("sd_scripts*.py")),
+        ]
         symbols = [
             (shared, name)
-            for name in ("_datasets", "_toml_scalar", "_script_command", "_truthy", "_extra_args", "_int_or_none", "_append_flag")
+            for name in (
+                "_datasets", "_toml_scalar", "_script_command", "_truthy",
+                "_extra_args", "_reject_owned_extra_args", "_int_or_none", "_append_flag",
+            )
         ]
+        symbols.extend((run_envelope, name) for name in (
+            "backend_config", "resume_intent", "training_state_policy", "validated_recipe",
+        ))
         runtime_paths = [
             container_root / name
             for name in (
                 "hf_download.py",
-                "sd_scripts_dataset_stage.py",
                 "sd_scripts_probe.py",
                 "sd_scripts_publish_anima.py",
                 "sd_scripts_state.py",
@@ -114,6 +215,12 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
         ]
     else:
         raise ValueError(f"unsupported backend for source identity: {backend_name}")
+    paths.extend([
+        package_root / "dataset_handoff.py",
+        package_root / "dataset_jsonl.py",
+        package_root / "media_types.py",
+        package_root / "dataset_manifest.py",
+    ])
     missing = [path for path in [*paths, *runtime_paths] if not path.is_file()]
     if missing:
         raise ValueError("source identity input is missing: " + ", ".join(path.name for path in missing))
@@ -143,6 +250,15 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
                     for item in surface.conditions
                 ],
                 "selector_defaults": dict(surface.selector_defaults),
+                "selector_normalizations": [
+                    {
+                        "field": item.field,
+                        "aliases": list(item.aliases),
+                        "rule": item.rule,
+                        "value_aliases": dict(item.value_aliases),
+                    }
+                    for item in surface.selector_normalizations
+                ],
                 "nested_config_fields": surface.nested_config_fields or {},
                 **({"config_value_choices": {field: list(values) for field, values in surface.config_value_choices}}
                    if surface.config_value_choices else {}),

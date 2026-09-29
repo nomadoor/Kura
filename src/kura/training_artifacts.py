@@ -462,6 +462,7 @@ def compile_resume_lock(
     resolved: Path,
     *,
     target_runtime_identity: dict[str, Any] | None = None,
+    target_input_lock: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     continuation = resume_intent(run)
     if continuation is None:
@@ -485,6 +486,25 @@ def compile_resume_lock(
     expected_recipe = compatibility.get("recipe_sha256")
     if isinstance(expected_recipe, str) and expected_recipe != current_fingerprint:
         raise ValueError("Resume artifact recipe changed from the published compatibility fingerprint")
+    dataset_input: dict[str, Any] | None = None
+    if target_input_lock is not None:
+        source_path = workspace / "runs" / str(run.get("parent_run")) / "resolved" / "dataset-input.lock.json"
+        if source_path.is_file():
+            source_input_lock = json.loads(source_path.read_text(encoding="utf-8"))
+            source_identity = source_input_lock.get("input_sha256")
+            target_identity = target_input_lock.get("input_sha256")
+            if isinstance(source_identity, str) and isinstance(target_identity, str):
+                if source_identity != target_identity:
+                    raise ValueError("Resume dataset input changed from the source run")
+                dataset_input = {"status": "content-matched", "input_sha256": target_identity}
+            elif source_input_lock.get("verification") == "unverified-native-source" and source_identity is None:
+                # The old recipe fingerprint still guards the declared dataset
+                # digest; do not misrepresent it as media-content verification.
+                dataset_input = {"status": "source-unverified", "detail": "media identity is unverified in the source input lock"}
+            else:
+                raise ValueError("Resume dataset input identity is unverified in a lock-bearing run")
+        else:
+            dataset_input = {"status": "legacy-unverified", "detail": "media identity is unverified (old dataset digest only)"}
     if manifest.get("restoration_contract") != continuation.get("restoration_contract"):
         raise ValueError("Resume restoration contract does not match the selected artifact")
     source_runtime = manifest.get("runtime_identity") if isinstance(manifest.get("runtime_identity"), dict) else {}
@@ -529,6 +549,7 @@ def compile_resume_lock(
         "restoration_contract": manifest["restoration_contract"],
         "runtime_identity": manifest.get("runtime_identity") or {},
         "compatibility": compatibility,
+        "dataset_input": dataset_input,
         "files": manifest["files"],
     }
     resolved.mkdir(parents=True, exist_ok=True)

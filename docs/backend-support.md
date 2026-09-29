@@ -66,11 +66,11 @@ contracts.
 | Upstream delta | Kura status | Required action | Current evidence |
 | --- | --- | --- | --- |
 | AI-Toolkit Qwen-Image 2.1 T2I | Generic image projection | Keep explicit `model_arch: qwen_image_2`; real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
-| AI-Toolkit Qwen-Image 2.1 Edit | Generic image projection plus typed control path | Author `dataset_config.control_subdir`; real smoke remains separate | Compile fixture and GPU image import passed |
+| AI-Toolkit Qwen-Image 2.1 Edit | Manifest image projection plus typed control roles | Author ordered per-sample `control` references in `items.jsonl`; real smoke remains separate | Compile fixture and GPU image import passed |
 | AI-Toolkit Anima | Generic image projection | Real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
 | AI-Toolkit Mage-Flow Base | Generic image projection | Real smoke remains separate | Exact registry diff, compile fixture, and GPU image import passed |
-| AI-Toolkit Mage-Flow Edit | Generic image projection plus typed control path | Author `dataset_config.control_subdir`; real smoke remains separate | Compile fixture and GPU image import passed |
-| AI-Toolkit LTX-2.5 | Generic typed video projection | Real smoke remains separate | Typed `num_frames`, `fps`, and `do_audio` compile fixture and GPU image import passed |
+| AI-Toolkit Mage-Flow Edit | Manifest image projection plus typed control roles | Author ordered per-sample `control` references in `items.jsonl`; real smoke remains separate | Compile fixture and GPU image import passed |
+| AI-Toolkit LTX-2.5 | Manifest-backed typed video projection | Real training smoke remains separate | Typed `num_frames`, `fps`, `do_i2v`, and `do_audio` compile fixture; in a real container the embedded-audio preflight rejected a silent video and accepted one with audio before model acquisition (`ai-toolkit-embedded-audio-preflight-docker-2026-09-29`); GPU image import passed |
 | AI-Toolkit MiniMax-H3 | Generic typed video projection | Keep gradient checkpointing disabled for the pinned runtime; validate quality separately from this bounded smoke | Patched image published by digest; base one-step A40 smoke passed with all 208 `lora_B` tensors finite and non-zero; Ref2VA and VSA/Fast remain compile/import-only |
 | AI-Toolkit MiniMax-H3 Ref2VA | Generic typed video projection plus typed control path | Real smoke remains separate from the base target | `minimax_h3_ref2va` compile fixture and GPU image import passed |
 | AI-Toolkit MiniMax-H3 VSA/Fast | Generic typed video projection | Keep evidence distinct from the base real smoke | `minimax_h3_vsa` compile fixture and GPU image import passed |
@@ -109,31 +109,40 @@ author's responsibility.
 | ⚠️ | Only the stated subset is covered |
 | ❌ | Outside the current Kura training contract |
 
+Manifest-v2 RunPod runs use a verified selected-file transfer: stage archives
+only the files the frozen handoff selected, proving each file's compile-time
+SHA-256 while writing; launch re-proves the staged archive against the compile
+before a Pod exists; the Pod verifies every file and the archive, publishes the
+verified tree, and builds the frozen views before model acquisition. A real
+A40 smoke proved this path end to end
+(`ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29`, on the current RunPod executor source); older RunPod evidence
+below records the execution contract verified at that time.
+
 ## Support matrix
 
 | Backend | Model family | Adapter | Status | Verified scope |
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |
-| AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Pinned-image local `sd1` path completed one optimizer step and Kura structural publication; non-root model-cache acquisition also passed. Evidence: `ai-toolkit-sd1-publication-docker-2026-09-23` |
-| AI-Toolkit | FLUX.1 / Kontext / Flex / Chroma | Generic native-config projection | 🧩 | Model-specific defaults not verified |
-| AI-Toolkit | Qwen Image | Generic native-config projection | ⚠️ | T2I expressible; edit/control needs explicit dataset config |
-| AI-Toolkit | Qwen-Image 2.1 | Generic projection plus typed control path | 🧪 | T2I and single-control Edit compile fixtures pass; pinned-image class import passes; no real smoke |
+| AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Pinned-image local `sd1` path completed one optimizer step and Kura structural publication; non-root model-cache acquisition also passed. The final manifest-v2 handoff completed one step for root-level and `images/` layouts, over the RunPod selected-file transfer, with a read-only local-path model, and as a Resume. Evidence: `ai-toolkit-sd1-publication-docker-2026-09-23`, `ai-toolkit-manifest-v2-handoff-docker-2026-09-29`, `ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29`, `ai-toolkit-local-path-model-docker-2026-09-29`, `ai-toolkit-resume-manifest-v2-docker-2026-09-29` |
+| AI-Toolkit | FLUX.1 / Kontext / Flex.2 / Chroma | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption covers FLUX.1, Chroma, Chroma Radiance, and control-free Kontext. The typed paired-folder codec covers one-control Kontext and Flex.2 authored control alternatives; typed `generated_controls` covers the pinned Flex.2 derivations. Flex.2 requires `bypass_guidance_embedding: true` and records that the trainer randomly selects one control per step. No optimizer claim for these selectors. |
+| AI-Toolkit | Qwen Image | Typed manifest projection | ⚠️ | Fixed-source ordinary image+caption T2I is first-class. Typed paired folders cover original Edit with one control and Edit Plus with one to three controls; no current optimizer smoke. |
+| AI-Toolkit | Qwen-Image 2.1 | Typed manifest projection | 🧪 | T2I and ordered multi-control Edit compile fixtures pass; the control slot count must be uniform across samples. Pinned-image class import passes; no real smoke. |
 | AI-Toolkit | Anima | Generic native-config projection | 🧪 | Compile fixture and pinned-image class import pass; no real smoke |
-| AI-Toolkit | Mage-Flow / Mage-Flow Edit | Generic projection plus typed control path | 🧪 | Base and single-control Edit compile fixtures pass; pinned-image class imports pass; no real smoke |
-| AI-Toolkit | HiDream | Generic native-config projection | 🧩 | No current real smoke |
-| AI-Toolkit | FLUX.2 / Krea 2 | Generic native-config projection | 🧩 | Musubi evidence does not apply to this backend |
-| AI-Toolkit | Z-Image | Generic native-config projection | ⚠️ | Companion artifacts vary by variant |
+| AI-Toolkit | Mage-Flow / Mage-Flow Edit | Typed manifest projection | 🧪 | Base image and ordered one-or-more-control Edit compile fixtures pass; pinned-image class imports pass; no real smoke. |
+| AI-Toolkit | HiDream | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption covers HiDream I1 and O1; typed paired folders cover E1 with exactly one control. No current real smoke. |
+| AI-Toolkit | FLUX.2 / Krea 2 | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption covers FLUX.2, Klein 4B/9B, and Krea 2 with edit mode false. Ordered image controls are typed for FLUX.2/Klein and Krea 2; Krea 2 requires typed `model_edit: true`. Musubi evidence does not apply. |
+| AI-Toolkit | Z-Image | Typed manifest projection | ⚠️ | Fixed-source ordinary image+caption path covers Z-Image. Z-Image L2P uses the same media path only when its required tokenizer/text-encoder companion is declared through typed `extras_name_or_path`; the first-class profile refuses an undeclared companion. Neither selector has optimizer smoke here. |
 | AI-Toolkit | Wan 2.1 / 2.2 | Native override only | ⚠️ | No first-class video dataset projection |
 | AI-Toolkit | LTX-2 / LTX-2.3 | — | 📋 | Not re-audited under the new typed video projection |
 | AI-Toolkit | LTX-2.5 | Generic config plus typed video-dataset projection | 🧪 | Compile fixture and pinned-image class import pass; no real smoke |
-| AI-Toolkit | MiniMax-H3 | Generic config plus typed video/control-dataset projection | 🔥 | Base video and plain image-only paths each passed one RunPod optimizer step on an NVIDIA A40 with finite, non-zero 208/208 saved `lora_B` tensors, durable step-1 state, output recovery, and Pod shutdown. First-frame video, joint audio, Ref2VA, and VSA/Fast remain compile/import-only. Evidence: `ai-toolkit-minimax-h3-runpod-2026-09-21`, `ai-toolkit-minimax-h3-image-runpod-2026-09-22` |
+| AI-Toolkit | MiniMax-H3 | Generic config plus typed video/control-dataset projection | 🔥 | Base video and plain image-only paths each passed one RunPod optimizer step on an NVIDIA A40 with finite, non-zero 208/208 saved `lora_B` tensors, durable step-1 state, output recovery, and Pod shutdown. Ref2VA now has typed same-stem image/video reference folders with uniform slot-kind/count checks and the pinned image-before-video effective order frozen in identity; it remains compile-only. First-frame video, joint audio, Ref2VA, and VSA/Fast do not inherit the base runtime claim. Evidence: `ai-toolkit-minimax-h3-runpod-2026-09-21`, `ai-toolkit-minimax-h3-image-runpod-2026-09-22` |
 | AI-Toolkit | ACE-Step | — | ❌ | Audio is outside the current training contract |
 | AI-Toolkit | YuE2 | — | ❌ | Audio is outside the current training contract |
 | AI-Toolkit | Qwen2.5-Omni | — | ❌ | LLM training is outside the current training contract |
 | AI-Toolkit | Other image families | Native override only | ⚠️ | Model-specific review required |
 | Musubi Tuner | FLUX.2 | Built-in | 🧪 | dev; Klein/base 4B and 9B; reference-image path compiles |
-| Musubi Tuner | MiniMax-H3 | Built-in | 🔥 | Typed T2VA, FL2VA, Ref2VA, one-frame, timed-control, ordered-reference, guidance, training-adapter, and asymmetric teacher-matching contracts compile; official bundles resolve; all three v0.3.5 entrypoints pass image smoke. T2VA guidance loss and plain one-frame image guidance loss are optimizer/lifecycle verified on A40; other supported modes are marked compile/image verified with no optimizer observation in the generated matrix. Evidence: `musubi-minimax-h3-runpod-2026-09-22`, `musubi-minimax-h3-image-runpod-2026-09-22` |
-| Musubi Tuner | Wan 2.1 / 2.2 | Built-in | ✅ | T2V/I2V, Fun Control, dual-DiT, and Single Frame covered. Evidence: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12` |
+| Musubi Tuner | MiniMax-H3 | Built-in | 🔥 | Typed T2VA, FL2VA, Ref2VA, one-frame, timed-control, ordered-reference, guidance, training-adapter, and asymmetric teacher-matching contracts compile; official bundles resolve; all three v0.3.5 entrypoints pass image smoke. T2VA guidance loss and plain one-frame image guidance loss are optimizer/lifecycle verified on A40; other supported modes are marked compile/image verified with no optimizer observation in the generated matrix. Evidence: `musubi-minimax-h3-runpod-2026-09-22`, `musubi-minimax-h3-image-runpod-2026-09-22`, `musubi-minimax-h3-guidance-cache-runpod-2026-09-29` |
+| Musubi Tuner | Wan 2.1 / 2.2 | Built-in | ✅ | T2V/I2V, Fun Control, dual-DiT, and Single Frame covered. Evidence: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12`, `musubi-wan-video-jsonl-docker-2026-09-29` |
 | Musubi Tuner | Krea 2 | Built-in | 🧪 | Broader Krea validation remains separate |
 | Musubi Tuner | Qwen-Image | Built-in | 🧪 | Original, Edit, 2509, 2511, and Layered compile paths covered |
 | Musubi Tuner | Z-Image | Built-in | 🧪 | — |
@@ -144,11 +153,11 @@ author's responsibility.
 | Musubi Tuner | HunyuanVideo 1.5 | Built-in | 🧪 | T2V and I2V compile paths covered |
 | Musubi Tuner | FramePack | Built-in | 🔥 | Normal, F1, and Single Frame compile paths covered. Evidence: `musubi-framepack-video-docker-2026-07-12` |
 | Musubi Tuner | Kandinsky 5 | Built-in | ⚠️ | Lite real-smoked; Pro remains capacity-dependent |
-| sd-scripts | Stable Diffusion 1.5 LoRA | Built-in | 🔥 | Two uninterrupted 100-step controls and a 50+50 Resume run completed with identical learned weights, optimizer, scheduler, and normalized train state in the recorded one-item case. The newer Kura post-exit publication gate still needs a real container smoke. Evidence: `sd-scripts-sd15-resume-equivalence-docker-2026-08-27` |
-| sd-scripts | SDXL LoRA | Built-in | 🔧 | Compile coverage remains; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
-| sd-scripts | FLUX.1 LoRA | Built-in | 🔧 | Compile coverage remains; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
-| sd-scripts | Anima LoRA | Built-in | 🔧 | Compile and publication tests remain; the earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence |
-| sd-scripts | Anima ControlNet-LLLite | Built-in | 🔧 | Compile, conversion, and cache tests remain; earlier optimizer smokes predate the default durable-state contract and are retained only as historical evidence |
+| sd-scripts | Stable Diffusion 1.5 LoRA | Built-in | 🔥 | Two uninterrupted 100-step controls and a 50+50 Resume run completed with identical learned weights, optimizer, scheduler, and normalized train state in the recorded one-item case. The newer Kura post-exit publication gate still needs a real container smoke. The final manifest-v2 handoff completed one step for a nested multi-concept dataset (per-group subsets and repeats), with a read-only local-path checkpoint, and as a Resume. Evidence: `sd-scripts-sd15-resume-equivalence-docker-2026-08-27`, `sd-scripts-manifest-v2-multiconcept-docker-2026-09-29` |
+| sd-scripts | SDXL LoRA | Built-in | 🔧 | Compiles through the manifest `ordinary-image-lora` profile and `dreambooth-image-subset` codec (frozen view, native TOML, trainer command). The earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence. |
+| sd-scripts | FLUX.1 LoRA | Built-in | 🔧 | Compiles through the manifest `ordinary-image-lora` profile and `dreambooth-image-subset` codec (frozen view, native TOML, trainer command). The earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence. |
+| sd-scripts | Anima LoRA | Built-in | 🔧 | Compiles through the manifest `ordinary-image-lora` profile and `dreambooth-image-subset` codec (frozen view, native TOML, trainer command); publication tests remain. The earlier optimizer smoke predates the default durable-state contract and is retained only as historical evidence. |
+| sd-scripts | Anima ControlNet-LLLite | Built-in | 🔧 | Typed manifest target/control projection and exact native TOML verification are implemented. Current-identity container/cache evidence is not yet recorded; earlier optimizer smokes predate the default durable-state contract and remain historical evidence only. |
 | sd-scripts | Other upstream families and modes | Explicit command only | ⚠️ | No built-in selector or support claim in the initial milestone |
 
 Musubi `v0.3.5` and Kura's FLUX.2 VAE compatibility patch passed the full image
@@ -164,12 +173,18 @@ projection is not SDXL-specific. Other families remain explicit configurations
 until representative tests promote them.
 
 AI-Toolkit video runs keep dataset source paths under Kura ownership and use
-the typed `backend.config.dataset_config` mapping for `num_frames`, `fps`, and
-`do_audio`. Paired/edit and single-reference runs use the relative
-`control_subdir`; Kura projects it to `control_path` inside each declared
-dataset. Model-specific settings that are not yet first-class remain visible in
-the recorded `native_config`; the protected native `datasets` list cannot be
-used to bypass Kura's dataset source contract.
+the typed `backend.config.dataset_config` mapping for `num_frames`, `fps`,
+`do_i2v`, and `do_audio`. `do_i2v` conditions on the selected target video's
+first frame. `do_audio` selects only embedded target-video audio and runs the
+pinned trainer's own video/audio loader before model acquisition; authored
+audio sidecars are rejected. In pinned `toolkit/dataloader_mixins.py:740-838`,
+a video with no audio stream leaves `audio_tensor` as `None`; no zero-filled
+audio is synthesized. A real-container smoke confirmed that preflight rejects
+such a video before acquisition
+(`ai-toolkit-embedded-audio-preflight-docker-2026-09-29`). Short videos are
+stretched by the pinned loader rather than silently skipped. Paired image/edit runs use manifest control roles
+projected into ordered run-owned folders. The protected native `datasets` list
+cannot bypass Kura's dataset source contract.
 
 MiniMax-H3 uses a checksum-pinned upstream finite-gradient patch on top of the
 official `0.13.18` image. For Kura-managed LoRA training-state runs, publication

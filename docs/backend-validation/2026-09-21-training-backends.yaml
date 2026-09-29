@@ -114,7 +114,7 @@ contracts:
     dataset: {kind: image, conditioning: single-control-image}
     execution: {adapter: generic, entrypoints: [run.py], model_roles: [trainer-managed-model], cache_stages: [], output: lora-safetensors, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_control_subdir_inside_each_owned_dataset], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
+    evidence: {source: [exact-registry-and-class-diff], compile: [tests/test_backend_surface_contract.py::BackendSurfaceContractTests.test_ai_toolkit_projects_manifest_controls_inside_each_owned_view], image: [ai-toolkit-0.13.18-class-import-2026-09-21], optimizer: [], lifecycle: []}
     runtime_note: No real optimizer-step smoke has been run for Qwen-Image 2.1 Edit.
   - id: ai-anima-image
     change_ids: [ai-anima]
@@ -307,8 +307,8 @@ contracts:
     dataset: {kind: video, conditioning: first-and-last-frame}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed first/last-frame dataset and native command path compile; a real optimizer step remains unverified.
+    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_video_codecs_restore_t2va_fl2va_and_explicit_target_audio], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The generated H3 video JSONL and verified TOML compile; a real optimizer step remains unverified.
   - id: musubi-h3-ref2va
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -318,8 +318,8 @@ contracts:
     dataset: {kind: video-jsonl, conditioning: ordered-image-video-audio-references}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [latents, text-encoder, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed ordered-reference JSONL, Ref2VA transformer selection, and native command path compile; a real optimizer step remains unverified.
+    evidence: {source: [v0.3.5-minimax-guide], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_ref2va_codec_preserves_ordered_references_and_audio_choices], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The generated Ref2VA JSONL preserves ordered image, video, and audio choices and matches the verified TOML; a real optimizer step remains unverified.
   - id: musubi-h3-image-plain
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -329,7 +329,8 @@ contracts:
     dataset: {kind: image, conditioning: none}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [musubi-minimax-h3-image-runpod-2026-09-22], lifecycle: [musubi-minimax-h3-image-runpod-2026-09-22]}
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_one_frame_codecs_restore_plain_timed_and_ordered_reference_inputs], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [musubi-minimax-h3-image-runpod-2026-09-22], lifecycle: [musubi-minimax-h3-image-runpod-2026-09-22]}
+    runtime_note: The optimizer and lifecycle evidence used the legacy dataset handoff; the manifest-projected one-frame plain codec currently has compile evidence only.
   - id: musubi-h3-image-edit
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -339,8 +340,8 @@ contracts:
     dataset: {kind: image, conditioning: timed-controls}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed timed-control dataset and FL2VA one-frame command path compile; a real optimizer step remains unverified.
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_one_frame_codecs_restore_plain_timed_and_ordered_reference_inputs], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The generated one-frame timed-control JSONL and verified TOML compile; a real optimizer step remains unverified.
   - id: musubi-h3-image-reference
     change_ids: [musubi-minimax-h3]
     backend: musubi-tuner
@@ -350,8 +351,8 @@ contracts:
     dataset: {kind: image, conditioning: ordered-untimed-references}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-latents, one-frame-text, unconditional-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed ordered-reference image dataset and Ref2VA one-frame command path compile; a real optimizer step remains unverified.
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_one_frame_codecs_restore_plain_timed_and_ordered_reference_inputs], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: The generated one-frame ordered-reference JSONL and verified TOML compile; a real optimizer step remains unverified.
   - id: musubi-h3-training-adapter
     change_ids: [musubi-minimax-h3-loss-recipes]
     backend: musubi-tuner
@@ -372,8 +373,8 @@ contracts:
     dataset: {kind: video, conditioning: endpoint-or-reference-teacher}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [condition-specific-latents, teacher-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_compile_musubi_minimax_h3_projects_typed_dataset_contracts], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed teacher datasets, teacher fields, and asymmetric task projection compile; a real optimizer step remains unverified.
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_teacher_matching_selects_the_profile_for_each_teacher_condition], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Endpoint and reference teacher conditions select verified generated video JSONL profiles; a real optimizer step remains unverified.
   - id: musubi-h3-teacher-image
     change_ids: [musubi-minimax-h3-loss-recipes]
     backend: musubi-tuner
@@ -383,8 +384,8 @@ contracts:
     dataset: {kind: image, conditioning: subject-reference-teacher}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [one-frame-subject-reference-latents, teacher-text], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: The typed subject-reference image dataset and one-frame teacher path compile; a real optimizer step remains unverified.
+    evidence: {source: [v0.3.5-minimax-guide-table-b], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_teacher_matching_selects_the_profile_for_each_teacher_condition], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Subject-reference teacher matching selects the verified one-frame reference JSONL profile; a real optimizer step remains unverified.
   - id: musubi-h3-mixed-image-video
     change_ids: [musubi-minimax-h3-mixed]
     backend: musubi-tuner
@@ -446,5 +447,5 @@ contracts:
     dataset: {kind: video-jsonl, conditioning: audio-sidecars-and-relative-references}
     execution: {adapter: built-in, entrypoints: [minimax_h3_cache_latents.py, minimax_h3_cache_text_encoder_outputs.py, minimax_h3_train_network.py], model_roles: [dit, video_vae, audio_vae, text_encoder], cache_stages: [audio-video-reference-latents, text-encoder], output: lora-safetensors-plus-state, lifecycle_changed: false}
     disposition: support
-    evidence: {source: [v0.3.5-dataset-source-audit], compile: [tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_validates_reference_jsonl_records, tests/test_cli.py::MusubiBackendTests.test_musubi_minimax_h3_reference_jsonl_rejects_one_frame_audio_and_reference_overflow], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
-    runtime_note: Target and reference audio paths and limits are typed and validated for MiniMax-H3; a real optimizer step with explicit sidecars remains unverified.
+    evidence: {source: [v0.3.5-dataset-source-audit], compile: [tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_video_codecs_restore_t2va_fl2va_and_explicit_target_audio, tests/test_dataset_handoff.py::DatasetHandoffTests.test_musubi_h3_ref2va_codec_preserves_ordered_references_and_audio_choices], image: [musubi-v0.3.5-entrypoints-2026-09-21], optimizer: [], lifecycle: []}
+    runtime_note: Generated JSONL fixes explicit target and reference audio paths, embedded-audio selection, and muted references; a real optimizer step with explicit audio remains unverified.

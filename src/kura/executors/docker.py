@@ -13,9 +13,18 @@ from typing import Any
 
 from kura import __version__
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure
+from kura.dataset_handoff import (
+    inspect_dataset_sources,
+    inspect_dataset_view,
+    local_training_mounts,
+    materialize_dataset_view,
+    remove_dataset_views,
+)
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
+    _event_exists,
+    dataset_input_drift_warning,
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
     MIN_FREE_SPACE_GIB,
@@ -45,6 +54,191 @@ def _docker_image_id(image: str) -> str | None:
     except FileNotFoundError:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _read_realization_record(
+    path: Path, realization_id: str, string_fields: tuple[str, ...],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read one of this realization's records, or say why it cannot be trusted."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, _redact_secret_text(str(exc))
+    if (
+        not isinstance(value, dict)
+        or value.get("realization_id") != realization_id
+        or not all(isinstance(value.get(field), str) for field in ("status", "observed_at", *string_fields))
+    ):
+        return None, "record is malformed"
+    return value, None
+
+
+def _finalize_dataset_handoff(
+    run_dir: Path,
+    realization_ref: str,
+    realization_id: str,
+    *,
+    execution_ended_at: str | None,
+) -> dict[str, Any] | None:
+    """Record terminal input evidence once, then remove only the disposable view."""
+    lock_path = run_dir / "resolved" / "dataset-input.lock.json"
+    if not lock_path.is_file():
+        return None
+    current = _load_status(run_dir)
+    if current.get("last_realization") != realization_ref:
+        return None
+    workspace = run_dir.parent.parent
+    lock_error: str | None = None
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        if not isinstance(lock, dict) or lock.get("schema_version") != 2:
+            return None
+    except (OSError, json.JSONDecodeError) as exc:
+        lock = None
+        lock_error = _redact_secret_text(str(exc))
+    postflight_ref = f"realizations/{realization_id}.dataset-input-postflight.json"
+    postflight_path = run_dir / postflight_ref
+    # status.json is projected only after both events are appended, so a
+    # matching projection proves they exist without rescanning events.jsonl.
+    # The scan remains only for a crash between the append and the projection.
+    announced = current.get("dataset_input_postflight")
+    announced = announced if isinstance(announced, dict) else {}
+    existing, existing_error = (
+        _read_realization_record(postflight_path, realization_id, ("source_stat_verification", "view_link_verification"))
+        if postflight_path.is_file() else (None, None)
+    )
+    if existing is not None:
+        postflight = existing
+    elif existing_error is not None:
+        # Records are immutable: keep the unreadable file as found and project
+        # the run as uncheckable instead of aborting reconcile.
+        postflight = {
+            "schema_version": 1,
+            "realization_id": realization_id,
+            "observed_at": _now(),
+            "execution_ended_at": execution_ended_at,
+            "status": "uncheckable",
+            "source_stat_verification": "uncheckable",
+            "view_link_verification": "uncheckable",
+            "source_changes": [],
+            "view_changes": [],
+            "error": f"existing dataset input postflight record is unreadable: {existing_error}",
+            "input_sha256": lock.get("input_sha256") if isinstance(lock, dict) else None,
+        }
+    else:
+        try:
+            if lock_error is not None or lock is None:
+                raise ValueError(lock_error or "dataset input lock is unavailable")
+            source_changes = inspect_dataset_sources(workspace, lock)
+            view_changes = inspect_dataset_view(workspace, lock)
+            status = "changed" if source_changes or view_changes else "matched"
+            postflight = {
+                "schema_version": 1,
+                "realization_id": realization_id,
+                "observed_at": _now(),
+                "execution_ended_at": execution_ended_at,
+                "status": status,
+                "source_stat_verification": "changed" if source_changes else "matched",
+                "view_link_verification": "changed" if view_changes else "matched",
+                "source_changes": source_changes,
+                "view_changes": view_changes,
+                "input_sha256": lock.get("input_sha256"),
+            }
+        except (OSError, ValueError) as exc:
+            postflight = {
+                "schema_version": 1,
+                "realization_id": realization_id,
+                "observed_at": _now(),
+                "execution_ended_at": execution_ended_at,
+                "status": "uncheckable",
+                "source_stat_verification": "uncheckable",
+                "view_link_verification": "uncheckable",
+                "source_changes": [],
+                "view_changes": [],
+                "error": _redact_secret_text(str(exc)),
+                "input_sha256": lock.get("input_sha256") if isinstance(lock, dict) else None,
+            }
+        _write_json(postflight_path, postflight)
+    if announced.get("record") != postflight_ref and not _event_exists(
+        run_dir, event="dataset_input_postflight", realization_id=realization_id, record=postflight_ref,
+    ):
+        append_run_event(run_dir, {
+            "event": "dataset_input_postflight",
+            "timestamp": postflight["observed_at"],
+            "realization_id": realization_id,
+            "record": postflight_ref,
+            "status": postflight["status"],
+            "source_stat_verification": postflight["source_stat_verification"],
+            "view_link_verification": postflight["view_link_verification"],
+            "input_sha256": postflight.get("input_sha256"),
+        })
+
+    cleanup_allowed = (
+        current.get("publication_state") in {"completed", "not-required", "legacy-unverified"}
+        and not current.get("recovery_required", False)
+    )
+    cleanup_ref = f"realizations/{realization_id}.dataset-view-cleanup.json"
+    cleanup_path = run_dir / cleanup_ref
+    if not cleanup_allowed or lock is None:
+        cleanup = {"status": "deferred"}
+        cleanup_ref = None
+    elif cleanup_path.is_file() and (
+        existing_cleanup := _read_realization_record(cleanup_path, realization_id, ())[0]
+    ) is not None:
+        cleanup = existing_cleanup
+    else:
+        try:
+            result = remove_dataset_views(workspace, run_dir, lock)
+            cleanup = {
+                "schema_version": 1,
+                "realization_id": realization_id,
+                "observed_at": _now(),
+                **result,
+            }
+        except (OSError, ValueError) as exc:
+            cleanup = {
+                "schema_version": 1,
+                "realization_id": realization_id,
+                "observed_at": _now(),
+                "status": "failed",
+                "error": _redact_secret_text(str(exc)),
+            }
+        # An unreadable record keeps its name; the retry is recorded beside it.
+        if cleanup["status"] == "failed" or cleanup_path.exists():
+            cleanup_ref = f"realizations/{realization_id}.dataset-view-cleanup-attempt-{_realization_id()}.json"
+            cleanup_path = run_dir / cleanup_ref
+        _write_json(cleanup_path, cleanup)
+    if (
+        cleanup_ref is not None
+        and announced.get("cleanup_record") != cleanup_ref
+        and not _event_exists(
+            run_dir, event="dataset_view_cleanup", realization_id=realization_id, record=cleanup_ref,
+        )
+    ):
+        append_run_event(run_dir, {
+            "event": "dataset_view_cleanup",
+            "timestamp": cleanup["observed_at"],
+            "realization_id": realization_id,
+            "record": cleanup_ref,
+            "status": cleanup["status"],
+            **({"path": cleanup["path"]} if isinstance(cleanup.get("path"), str) else {}),
+        })
+
+    warning = dataset_input_drift_warning(postflight["status"])
+    projected = {
+        "status": postflight["status"],
+        "record": postflight_ref,
+        "view_cleanup": cleanup["status"],
+        **({"cleanup_record": cleanup_ref} if cleanup_ref is not None else {}),
+        **({"warning": warning} if warning else {}),
+        **({"cleanup_warning": cleanup.get("error", "dataset view cleanup failed")} if cleanup["status"] == "failed" else {}),
+    }
+
+    def record(latest: dict[str, Any]) -> None:
+        if latest.get("last_realization") == realization_ref:
+            latest["dataset_input_postflight"] = projected
+
+    return _mutate_run_status(run_dir, record)
 
 
 def _memory_available_bytes() -> int | None:
@@ -138,6 +332,8 @@ def docker_command(
     gpu: bool,
     realization_id: str,
     workspace_target: str = CONTAINER_WORKSPACE,
+    *,
+    mount_workspace: bool = True,
 ) -> tuple[list[str], dict[str, str], str]:
     """Build a detached Docker command and direct container output into the run mount."""
     name = _container_name(run_dir.name, realization_id)
@@ -152,7 +348,9 @@ def docker_command(
     host_user = _host_user()
     if host_user:
         command.extend(["--user", host_user])
-    command.extend(["--workdir", spec["cwd"], "--volume", f"{workspace.resolve()}:{workspace_target}"])
+    command.extend(["--workdir", spec["cwd"]])
+    if mount_workspace:
+        command.extend(["--volume", f"{workspace.resolve()}:{workspace_target}"])
     for mount in mounts:
         source = _resolve_mount_source(workspace, mount["source"])
         suffix = ":ro" if mount.get("mode") == "ro" else ""
@@ -164,8 +362,19 @@ def docker_command(
     if spec_secret_keys:
         raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
     runtime_env["KURA_LOG_PATH"] = log_path
+    runtime_env["KURA_WORKSPACE"] = workspace_target.rstrip("/")
     runtime_env["KURA_RUN_ID"] = run_dir.name
-    runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(workspace_mount_mappings(workspace, mounts, container_root=workspace_target), ensure_ascii=False, separators=(",", ":"))
+    runtime_env["KURA_REALIZATION_ID"] = realization_id
+    runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(
+        workspace_mount_mappings(
+            workspace,
+            mounts,
+            container_root=workspace_target,
+            include_workspace_root=mount_workspace,
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     # Container output is redirected to a mounted file; force Python progress
     # messages through immediately instead of waiting for its file buffer.
     runtime_env.setdefault("PYTHONUNBUFFERED", "1")
@@ -200,9 +409,37 @@ def docker_command(
 def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, dockerfile: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, min_free_gb: int = MIN_FREE_SPACE_GIB) -> tuple[list[str], str | None]:
     """Start a detached Docker realization; completion is recovered by reconcile."""
     realization_id = _realization_id()
-    effective_mounts = _effective_mounts(mounts, workspace_target)
+    mount_workspace = True
+    input_lock_path = run_dir / "resolved" / "dataset-input.lock.json"
+    input_lock = None
+    dataset_view = None
+    if input_lock_path.is_file():
+        input_lock = json.loads(input_lock_path.read_text(encoding="utf-8"))
+    if isinstance(input_lock, dict) and input_lock.get("schema_version") == 2:
+        effective_mounts = local_training_mounts(workspace, run_dir, input_lock, configured=mounts)
+        mount_workspace = False
+        if not dry_run:
+            # The Docker executor is the only owner of the local view: it is
+            # created here, immediately before the mounts that expose it.
+            materialize_dataset_view(workspace, input_lock)
+            dataset_view = {
+                "verification": "matched",
+                "link_count": sum(len(view.get("links", [])) for view in input_lock.get("views", [])),
+            }
+    else:
+        effective_mounts = _effective_mounts(mounts, workspace_target)
     preflight = {} if dry_run else docker_preflight(workspace, effective_mounts, min_free_gb=min_free_gb)
-    command, runtime_env, name = docker_command(workspace, run_dir, spec, image, effective_mounts, gpu, realization_id, workspace_target)
+    command, runtime_env, name = docker_command(
+        workspace,
+        run_dir,
+        spec,
+        image,
+        effective_mounts,
+        gpu,
+        realization_id,
+        workspace_target,
+        mount_workspace=mount_workspace,
+    )
     output_baseline = existing_output_snapshot(run_dir) if spec.get("output_contract") is not None else {}
     safe_command = _safe_command(command)
     image_id = _docker_image_id(image)
@@ -229,10 +466,12 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}),
         "image_identity": image_reference_identity(image, image_id),
         "container": {"id": container_id, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
-        "docker_command": safe_command, "workspace_mount": {"source": str(workspace.resolve()), "target": workspace_target},
+        "docker_command": safe_command,
+        "workspace_mount": ({"source": str(workspace.resolve()), "target": workspace_target} if mount_workspace else None),
         "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in effective_mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
         "output_baseline": output_baseline,
+        **({"dataset_view": dataset_view} if dataset_view is not None else {}),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
         "platform": platform.platform(), "host": platform.node(), "kura_version": __version__, "preflight": preflight,
@@ -279,11 +518,13 @@ def reconcile_docker(
         observed_at = _now()
         ended: str | None = None
         ended_source: str | None = None
+        container_missing = False
         if result.returncode:
             missing = "no such object" in (result.stderr + result.stdout).lower() or "no such container" in (result.stderr + result.stdout).lower()
             if not missing:
                 raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container state unavailable"))
             state, exit_code = "unknown", None
+            container_missing = True
             detail = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "container no longer exists")
         else:
             try:
@@ -318,6 +559,9 @@ def reconcile_docker(
             "ended": ended,
             "ended_source": ended_source,
             "detail": detail,
+            # Docker reported the container absent; the only evidence that no
+            # later reconcile can finish this realization's handoff cleanup.
+            "container_missing": container_missing,
         }
         recorded = False
 
@@ -429,6 +673,15 @@ def reconcile_docker(
                     latest["publication_state"] = "blocked" if state_error else "not-required"
 
             status = _mutate_run_status(run_dir, record_publication, blocking=blocking)
+            if state != "unknown":
+                finalized = _finalize_dataset_handoff(
+                    run_dir,
+                    realization_ref,
+                    realization["id"],
+                    execution_ended_at=ended,
+                )
+                if finalized is not None:
+                    status = finalized
         if recorded:
             append_run_event(run_dir, {"event": "run_reconciled", **observation})
         return status

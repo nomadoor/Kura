@@ -111,8 +111,13 @@ declared directories, and explicit item mappings may resolve to the same
 observations. Unknown layouts are incomplete evidence, not errors merely for
 being unfamiliar.
 
-Any agent-authored mapping used for compilation is frozen under `resolved/`.
-Conversation-only mappings are not reproducible input.
+That permissiveness applies to observation and manifest drafting, not to
+first-class compilation. Compilation requires a versioned, authored dataset
+manifest; a missing manifest, unsafe reference, or selected input that the
+adapter cannot represent is an error before model acquisition. The authored
+manifest remains with the dataset. Its run-selected content and effective
+backend projection are frozen under `resolved/`. Conversation-only mappings
+are not reproducible input.
 
 ## Decision 5: adapters own native meaning and rejection
 
@@ -120,12 +125,16 @@ The minimal adapter responsibility is:
 
 ```text
 compile(run) -> native config + command + opaque artifact requirements
+                + consumed/unrepresentable dataset inputs
+                + generated native files or views
 ```
 
 An adapter may reject a selected native combination with a concrete error. It
 owns the meaning of its model-role labels and native selectors. Core treats
 roles as opaque keys and mechanically checks the files or acquisition records
-the adapter returns.
+the adapter returns. Core also checks that every run-selected dataset input
+is accounted for in the adapter's projection report; a declared but
+unrepresentable input blocks first-class compilation.
 
 Adapter-local mappings may exist to avoid inconsistent native command
 generation. For example, a Musubi-only mapping may translate an opaque Wan
@@ -168,7 +177,10 @@ its own image and would create a second, potentially mutable runtime identity.
 
 Core blocks Kura-owned invariant failures such as malformed files, missing
 explicit paths, immutable-input changes, unsafe path escapes, and missing
-resolved artifacts.
+resolved artifacts. This includes missing versioned dataset manifests,
+unrepresented selected inputs, and known unwritable isolated write roots.
+Those checks stop expensive-late handoff errors before backend-managed model
+acquisition without turning observations into a model-quality verdict.
 
 Adapters block contradictions they own when doing so avoids an expensive-late
 or cryptic trainer failure. Core does not reproduce upstream validation merely

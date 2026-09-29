@@ -21,10 +21,12 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
+from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
+from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
-from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, append_run_event, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
 
 
 class RunPodAPIError(ValueError):
@@ -451,7 +453,9 @@ def _is_runpod_transient_error(exc: ValueError) -> bool:
     return "runpod api is unreachable" in text or any(f"({code})" in text for code in (429, 500, 502, 503, 504))
 
 
-def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_id: str) -> dict[str, str]:
+def _runpod_training_env(
+    spec_env: dict[str, str], *, workspace_path: str, run_id: str, realization_id: str,
+) -> dict[str, str]:
     log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
     runtime_env = dict(spec_env)
     runtime_env.update({
@@ -461,6 +465,7 @@ def _runpod_training_env(spec_env: dict[str, str], *, workspace_path: str, run_i
         "HF_HUB_CACHE": f"{workspace_path}/cache/huggingface/hub",
         "KURA_WORKSPACE": workspace_path,
         "KURA_RUN_ID": run_id,
+        "KURA_REALIZATION_ID": realization_id,
     })
     return runtime_env
 
@@ -518,19 +523,64 @@ def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
     return client, settings
 
 
+def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
+    """Stage exactly the files a manifest-v2 run's frozen handoff selected."""
+    inventory = build_transfer_inventory(workspace, run_dir, run)
+    estimate = estimate_transfer(inventory)
+    transfer_dir = run_dir / "transfer"
+    transfer_dir.mkdir(exist_ok=True)
+    free = shutil.disk_usage(transfer_dir).free
+    if free < estimate["local_stage_free_bytes"]:
+        raise ValueError(
+            f"RunPod stage needs {estimate['local_stage_free_bytes']} bytes free in {transfer_dir}, "
+            f"but only {free} bytes are available"
+        )
+    archive_name = f"kura-upload-{run_dir.name}.tar"
+    archive_path = transfer_dir / archive_name
+    manifest_path = transfer_dir / f"kura-upload-{run_dir.name}.manifest.json"
+    proof = write_transfer_archive(workspace, run_dir, inventory, archive_path)
+    write_transfer_manifest(manifest_path, proof)
+    record = {
+        "timestamp": _now(),
+        "executor": "runpod",
+        "storage_mode": "upload",
+        "transfer": "selected-files",
+        "archive": str(archive_path.relative_to(run_dir)),
+        "archive_name": archive_name,
+        "manifest": str(manifest_path.relative_to(run_dir)),
+        "total_bytes": proof["payload_bytes"],
+        "remote_peak_bytes": proof["tar_bytes"] + proof["payload_bytes"],
+        **proof,
+    }
+    stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
+    stage_path.parent.mkdir(exist_ok=True)
+    _write_json(stage_path, record)
+    status = _load_status(run_dir)
+    status["last_stage"] = str(stage_path.relative_to(run_dir))
+    _write_status(run_dir, status)
+    append_run_event(run_dir, {
+        "event": "run_staged",
+        **{key: value for key, value in record.items() if key != "entries"},
+        "files": len(record["entries"]),
+    })
+    return record
+
+
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
     """Explicitly upload the compiled inputs needed by a RunPod Pod."""
     settings = _runpod_settings(config)
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is experimental and disabled; use storage_mode=upload")
-    raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
-    ids = list(dict.fromkeys(item for item in raw_ids if item))
     try:
         run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise ValueError("cannot stage invalid resolved manifest") from exc
     if not isinstance(run, dict):
         raise ValueError("cannot stage invalid resolved manifest")
+    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        return _stage_selected_files(workspace=workspace, run_dir=run_dir, run=run)
+    raw_ids = dataset_ids or ([dataset_id] if dataset_id else [])
+    ids = list(dict.fromkeys(item for item in raw_ids if item))
     dependency = resume_artifact_directory(workspace, run)
     sources = [run_dir / "run.yaml", run_dir / "resolved", *(workspace / "datasets" / item for item in ids)]
     if dependency is not None:
@@ -571,6 +621,195 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     _write_status(run_dir, status)
     append_run_event(run_dir, {"event": "run_staged", **record})
     return record
+
+
+_POSTFLIGHT_STATUSES = frozenset({"matched", "changed", "uncheckable"})
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    """Read a record written outside this process; anything but a JSON object is a ValueError."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"record {path.name} is unreadable: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"record {path.name} is not a JSON object")
+    return value
+
+
+def _remote_postflight(path: Path) -> tuple[str, str, str]:
+    """The Pod's postflight verdicts, or ``uncheckable`` for anything missing or malformed."""
+    try:
+        record = _read_json_object(path)
+    except ValueError:
+        return "uncheckable", "uncheckable", "uncheckable"
+
+    def verdict(key: str, allowed: frozenset[str]) -> str:
+        value = record.get(key)
+        return value if isinstance(value, str) and value in allowed else "uncheckable"
+
+    sources = verdict("source_stat_verification", frozenset({"matched", "changed"}))
+    links = verdict("view_link_verification", frozenset({"matched", "changed"}))
+    derived = (
+        "uncheckable" if "uncheckable" in {sources, links}
+        else "changed" if "changed" in {sources, links}
+        else "matched"
+    )
+    # The overall verdict must agree with its parts; anything else is untrusted.
+    status = derived if verdict("status", frozenset({"matched", "changed"})) == derived else "uncheckable"
+    return status, sources, links
+
+
+def _announce_postflight(run_dir: Path, realization_id: str, ref: str, record: dict[str, Any]) -> None:
+    """Append the postflight event once for ``ref``."""
+    # A projection proves the event exists only when it says the event was
+    # recorded; otherwise scan, which also backfills an event whose append
+    # failed earlier or was lost in a crash before the projection.
+    announced = _load_status(run_dir).get("dataset_input_postflight")
+    proven = isinstance(announced, dict) and announced.get("record") == ref and announced.get("event_recorded") is True
+    if not proven and not _event_exists(
+        run_dir, event="dataset_input_postflight", realization_id=realization_id, record=ref,
+    ):
+        append_run_event(run_dir, {
+            "event": "dataset_input_postflight",
+            "timestamp": record["observed_at"],
+            "realization_id": realization_id,
+            "record": ref,
+            "status": record["status"],
+        })
+
+
+def _postflight_projection(ref: str, record: dict[str, Any]) -> dict[str, Any]:
+    warning = dataset_input_drift_warning(record["status"])
+    return {
+        "status": record["status"],
+        "record": ref,
+        # A Pod is discarded with its disposable view; nothing is left to clean.
+        "view_cleanup": "not-required",
+        **({"warning": warning} if warning else {}),
+    }
+
+
+def finalize_runpod_dataset_handoff(
+    run_dir: Path, downloaded_run: Path, realization_id: str,
+) -> tuple[str, dict[str, Any]] | None:
+    """Bring the Pod's input records home and write the post-training input record.
+
+    Pod-owned remote records are copied into ``realizations/`` without
+    overwriting a record that already exists. The local source stat check is combined with
+    the Pod's own postflight. Records read from outside are validated here;
+    any problem is raised as ``ValueError`` or ``OSError`` for
+    ``project_runpod_dataset_handoff`` to record as uncheckable. Returns the
+    record reference and content; announcing it is the caller's separate step.
+    """
+    if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        return None
+    local = run_dir / "realizations"
+    local.mkdir(exist_ok=True)
+    remote = downloaded_run / "realizations"
+    conflicts: list[str] = []
+    # Only names the Pod writes come home. A snapshot file named like a
+    # controller-owned record (this postflight, the realization, a stage) must
+    # not appear locally and be trusted as the controller's own.
+    pod_owned = {
+        f"{realization_id}.runpod-input.json",
+        f"{realization_id}.runpod-input-postflight.json",
+        f"{realization_id}.ai-toolkit-video-preflight.json",
+        f"{realization_id}.musubi-video-preflight.json",
+    }
+    for record in sorted(remote.glob("*.json")) if remote.is_dir() else []:
+        if record.name not in pod_owned and not record.name.startswith("remote-exit-"):
+            continue
+        target = local / record.name
+        if not target.exists():
+            shutil.copyfile(record, target)
+        elif target.read_bytes() != record.read_bytes():
+            conflicts.append(record.name)
+    postflight_ref = f"realizations/{realization_id}.dataset-input-postflight.json"
+    postflight_path = run_dir / postflight_ref
+    if postflight_path.is_file():
+        postflight = _read_json_object(postflight_path)
+        if (
+            postflight.get("schema_version") != 1
+            or postflight.get("realization_id") != realization_id
+            or not isinstance(postflight.get("observed_at"), str)
+            or postflight.get("status") not in _POSTFLIGHT_STATUSES
+        ):
+            raise ValueError("existing dataset input postflight record is malformed")
+    else:
+        workspace = run_dir.parent.parent
+        try:
+            lock, _ = load_frozen_dataset_handoff(run_dir / "resolved")
+            source_changes = inspect_dataset_sources(workspace, lock)
+            local_status = "changed" if source_changes else "matched"
+        except (OSError, ValueError) as exc:
+            source_changes, local_status = [_redact_secret_text(str(exc))], "uncheckable"
+        remote_path = local / f"{realization_id}.runpod-input-postflight.json"
+        remote_status, remote_sources, remote_links = _remote_postflight(remote_path)
+        statuses = {local_status, remote_status}
+        status = "uncheckable" if "uncheckable" in statuses else "changed" if "changed" in statuses else "matched"
+        postflight = {
+            "schema_version": 1,
+            "realization_id": realization_id,
+            "observed_at": _now(),
+            "status": status,
+            "source_stat_verification": local_status,
+            "source_changes": source_changes,
+            "remote_record": f"realizations/{remote_path.name}",
+            "remote_source_stat_verification": remote_sources,
+            "remote_view_link_verification": remote_links,
+            **({"record_conflicts": conflicts} if conflicts else {}),
+        }
+        _write_json(postflight_path, postflight)
+    return postflight_ref, postflight
+
+
+def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realization_id: str) -> dict[str, Any] | None:
+    """Project post-training input drift for a download; never raises.
+
+    Drift is a warning, so recording it must never block the download that
+    lets the Pod be stopped. A failure becomes its own append-only
+    ``uncheckable`` record and event; status alone carries it only when even
+    that record cannot be written.
+    """
+    detail: str | None = None
+    try:
+        finalized = finalize_runpod_dataset_handoff(run_dir, downloaded_run, realization_id)
+        if finalized is None:
+            return None
+        ref, record = finalized
+    except (OSError, ValueError) as exc:
+        detail = _redact_secret_text(str(exc))
+        ref = f"realizations/{realization_id}.dataset-input-postflight-uncheckable-{_realization_id()}.json"
+        record = {
+            "schema_version": 1,
+            "realization_id": realization_id,
+            "observed_at": _now(),
+            "status": "uncheckable",
+            "error": detail,
+        }
+        try:
+            _write_json(run_dir / ref, record)
+        except OSError as write_error:
+            return {
+                "status": "uncheckable",
+                "view_cleanup": "not-required",
+                "warning": dataset_input_drift_warning("uncheckable"),
+                "error": f"{detail}; the uncheckable record could not be written: {_redact_secret_text(str(write_error))}",
+            }
+    # The record exists from here on; status always refers to it, and a missing
+    # event is noted rather than hiding the record.
+    projection = _postflight_projection(ref, record)
+    errors = [detail] if detail else []
+    try:
+        _announce_postflight(run_dir, realization_id, ref, record)
+        projection["event_recorded"] = True
+    except (OSError, ValueError) as event_error:
+        projection["event_recorded"] = False
+        errors.append(f"the postflight event could not be appended: {_redact_secret_text(str(event_error))}")
+    if errors:
+        projection["error"] = "; ".join(errors)
+    return projection
 
 
 def _runpod_state(pod: dict[str, Any]) -> tuple[str, int | None]:
@@ -623,11 +862,15 @@ def launch_runpod(
     workspace_path = settings["workspace_path"]
     write_paths = validated_write_roots(spec, workspace_path=workspace_path)
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
-    runtime_env = _runpod_training_env(spec["env"], workspace_path=workspace_path, run_id=run_dir.name)
+    runtime_env = _runpod_training_env(
+        spec["env"], workspace_path=workspace_path, run_id=run_dir.name, realization_id=realization_id,
+    )
     secret_keys = [key for key in runtime_env if _is_secret(key)]
     if secret_keys:
         raise ValueError("RunPod pod env must not contain secrets; use controller-side secret injection for " + ", ".join(sorted(secret_keys)))
     transfer_codes: dict[str, str] = {}
+    if (run_dir / "resolved" / "dataset-projection.lock.json").is_file() and settings["storage_mode"] != "upload":
+        raise ValueError("manifest-v2 RunPod runs require runpod.storage_mode=upload for the verified selected-file transfer")
     if settings["storage_mode"] == "object_staging":
         raise ValueError("runpod.storage_mode=object_staging is disabled until object-store credentials can be injected without Pod environment variables")
     elif settings["storage_mode"] == "upload":
@@ -638,9 +881,29 @@ def launch_runpod(
         stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
         if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
             raise ValueError("latest stage is not a runpod upload bundle")
+        if (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+            if stage.get("transfer") != "selected-files":
+                raise ValueError("manifest-v2 runs require a selected-file stage; stage the run again")
+            run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            pinned_manifest = f"realizations/{realization_id}.transfer-manifest.json"
+            manifest_sha256 = pin_transfer_manifest(
+                run_dir.parent.parent, run_dir, run, stage, run_dir / pinned_manifest,
+            )
         upload_code = os.environ.get("KURA_RUNPOD_UPLOAD_CODE") or f"kura-{run_dir.name}-upload-{secrets.token_hex(4)}"
         download_code = f"kura-{run_dir.name}-download-{secrets.token_hex(4)}"
         transfer_codes = {"upload_code": upload_code, "download_code": download_code, "archive": str(stage.get("archive")), "archive_name": stage["archive_name"]}
+        if stage.get("transfer") == "selected-files":
+            # Verified above, before the Pod exists.
+            transfer_codes.update({
+                "stage": stage_ref,
+                "archive_sha256": stage["archive_sha256"],
+                "input_sha256": stage["input_sha256"],
+                # The Pod accepts only this manifest; upload re-proves the stage
+                # against it before sending anything.
+                "pinned_manifest": pinned_manifest,
+                "manifest_sha256": manifest_sha256,
+                "verification": "stage-matches-compile-before-pod-creation",
+            })
         runtime_env.update({
             "KURA_UPLOAD_CODE": upload_code,
             "KURA_DOWNLOAD_CODE": download_code,

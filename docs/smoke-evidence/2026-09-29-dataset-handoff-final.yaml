@@ -1,0 +1,239 @@
+schema_version: 1
+campaign: manifest-v2 dataset handoff, final real smokes before merge
+observed_at: 2026-09-29
+runtime:
+  ai_toolkit_image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+  sd_scripts_image: nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+  local_gpu: NVIDIA GeForce RTX 4070 Ti
+  local_image_note: >-
+    The local tag nomadoor/kura-ai-toolkit:dev resolved to the same digest as
+    the RunPod default image, so local and remote smokes ran the same trainer.
+common_recipe:
+  backend: ai-toolkit
+  architecture: sd1
+  model: hf-internal-testing/tiny-stable-diffusion-pipe
+  resolution: 256x256
+  rank: 1
+  optimizer_steps: 1
+  purpose: handoff and lifecycle behavior only; no LoRA quality claim
+local_docker_handoff:
+  adapter_source: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+  runs:
+    - run_id: 20260929-0106_vivi-final-handoff_7e5b
+      dataset: Vivi
+      layout: images and caption files at the dataset root (the original mis-handoff layout)
+      trainer_dataset_path: /workspace/runs/20260929-0106_vivi-final-handoff_7e5b/cache/dataset-view/ai-toolkit/Vivi
+      view: {verification: matched, link_count: 6, generated_files: 6}
+      postflight: matched
+      view_cleanup: removed
+      publication: completed
+      safetensors_bytes: 55504
+    - run_id: 20260929-0106_images-final-handoff_47e0
+      dataset: flux2-klein-tiny
+      layout: images and caption files under images/
+      trainer_dataset_path: /workspace/runs/20260929-0106_images-final-handoff_47e0/cache/dataset-view/ai-toolkit/flux2-klein-tiny
+      view: {verification: matched, link_count: 1, generated_files: 1}
+      postflight: matched
+      view_cleanup: removed
+      publication: completed
+      safetensors_bytes: 55504
+  source_writes: >-
+    No file under either dataset changed during the runs; the only trainer
+    caches beside Vivi's sources predate the handoff redesign (2026-09-24).
+runpod_selected_file_transfer:
+  adapter_source: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+  gpu: NVIDIA A40 (SECURE, 0.49 USD/h at launch)
+  first_attempt:
+    run_id: 20260929-0117_vivi-runpod-transfer_a375
+    outcome: launch_failed before any Pod existed (A40 capacity); kura doctor runpod showed no Pod
+    facts_before_pod_creation: selected-file stage written and launch pin recorded
+  run_id: 20260929-0124_vivi-runpod-transfer-wait_e92e
+  capacity_policy: wait up to 30m, 30s poll; capacity found on probe 4
+  stage:
+    transfer: selected-files
+    source_entries: 12
+    envelope_entries: 10
+    payload: 12.2 MiB
+    excluded_examples: [items.legacy.jsonl, _latent_cache/, .aitk_size.json]
+  launch_pin: stage-matches-compile-before-pod-creation
+  pod_input_verification: {status: verified, entries: 22, content_verification: sha256-per-file-and-archive, view_links: 6}
+  pod_postflight: {status: matched, source_stat_verification: matched, view_link_verification: matched}
+  local_postflight: {status: matched, event_recorded: true}
+  records_promoted_to_realizations: true
+  publication: completed
+  pod_lifetime: about 7 minutes (01:30 to 01:37 JST)
+  pod_stopped: true
+  pods_after: 0
+runpod_selected_file_transfer_current_executor:
+  purpose: >-
+    Re-proves the selected-file transfer on the current RunPod executor source,
+    after the frozen command env export and failed-run download changes
+    (5a32712, e19a05e) made the run above predate the executor it supports.
+  recipe: same as 20260929-0124_vivi-runpod-transfer-wait_e92e
+  adapter_source: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+  executor_source: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
+  gpu: NVIDIA A40 (SECURE, 0.49 USD/h, EU-SE-1)
+  run_id: 20260929-0824_vivi-runpod-transfer-executor_8a16
+  stage:
+    transfer: selected-files
+    payload_bytes: 12829139
+    tar_bytes: 12851200
+    local_source_stat_verification: matched
+  pod_input_verification: {status: verified, entries: 22, content_verification: sha256-per-file-and-archive, view_links: 6}
+  pod_postflight: {status: matched, source_stat_verification: matched, view_link_verification: matched}
+  local_postflight: {status: matched, event_recorded: true}
+  publication: completed
+  safetensors_bytes: 55512
+  pod_lifetime: about 10 minutes (09:01 to 09:11 JST)
+  pod_stopped: true
+  pods_after: 0
+local_path_model:
+  adapter_source: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+  run_id: 20260929-0143_local-path-model_af11
+  base: /workspace/cache/huggingface/hub/models--hf-internal-testing--tiny-stable-diffusion-pipe/snapshots/3ee6c9f225f088ad5d35b624b6514b091e6a4849
+  mount: {mode: ro, workspace_mount: none}
+  download: none
+  postflight: matched
+  publication: completed
+resume:
+  adapter_source: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+  run_id: 20260929-0143_vivi-resume-final_44b0
+  source_run: 20260929-0106_vivi-final-handoff_7e5b
+  artifact_id: state-step-00000001-937e234b19cd
+  state_mount: {mode: ro, scope: selected artifact only}
+  kura_checks: [training state verified, optimizer Resume verified at step 1, RNG Resume verified at step 1]
+  logical_steps: 1 to 2
+  postflight: matched
+  publication: completed
+ai_toolkit_embedded_audio_preflight:
+  architecture: ltx2.5
+  dataset_config: {num_frames: 9, fps: 24, do_audio: true}
+  download_guard: >-
+    The base is a tiny hub repo, so any LTX-2.5 file resolution after the
+    preflight fails with a 404 instead of downloading LTX-2.5; no LTX weights
+    existed in the managed model cache.
+  defect_found:
+    runs: [20260929-0143_audio-missing-preflight_0370, 20260929-0143_audio-present-preflight_c149]
+    observation: >-
+      Both videos, with and without audio, failed inside the pinned loader
+      ("expected Tensor ... got Image") because the preflight called
+      load_and_process_video without the dataset's tensor transform.
+    fix_commit: 35f3b8a
+  adapter_source_after_fix: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+  negative:
+    run_id: 20260929-0146_audio-missing-preflight-fixed_0d5b
+    video: 2 s, 256x256, no audio stream
+    record_status: failed
+    error: the pinned AI-Toolkit loader produced no usable audio tensor
+    trainer_started: false
+  positive:
+    run_id: 20260929-0146_audio-present-preflight-fixed_8f1d
+    video: 2 s, 256x256, AAC 440 Hz
+    record_status: passed
+    trainer_started: true
+    later_failure: expected 404 for the LTX-2.5 transformer in the tiny repo; no download
+sd_scripts_avif:
+  command: python -c "import pillow_avif" inside the pinned sd-scripts image
+  result: ModuleNotFoundError (exit 1)
+  pillow: 11.0.0 without an AVIF plugin
+  upstream_gate: library/dataset.py adds .avif only after importing pillow_avif
+  conclusion: excluding .avif from SD_SCRIPTS_IMAGE_SUFFIXES matches the pinned image
+sd_scripts_manifest_v2:
+  adapter_source: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+  image: nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+  architecture: sd15
+  model: Comfy-Org/stable-diffusion-v1-5-archive v1-5-pruned-emaonly-fp16 (cached, 0 B downloaded)
+  dataset: kura-smoke-multiconcept (person/nested/ 3 samples, tiny/ 1 sample; two manifest groups)
+  first_attempt:
+    run_id: 20260929-0202_sd15-multiconcept-handoff_aa85
+    outcome: failed by recipe, not handoff; sd-scripts read the correct subset view but rejected large images at 256 with bucketing disabled
+  multi_concept:
+    run_id: 20260929-0204_sd15-multiconcept-bucketed_3b3d
+    subsets:
+      - {group: person, image_dir: cache/dataset-view/sd-scripts/kura-smoke-multiconcept/subset-000, num_repeats: 2}
+      - {group: tiny, image_dir: cache/dataset-view/sd-scripts/kura-smoke-multiconcept/subset-001, num_repeats: 1}
+    view: {verification: matched, link_count: 4}
+    postflight: matched
+    view_cleanup: removed
+    publication: completed
+  local_path_model:
+    run_id: 20260929-0206_sd15-local-path-model_b1d3
+    model_mount: ro
+    postflight: matched
+    publication: completed
+  resume:
+    run_id: 20260929-0210_sd15-resume-final_0a6e
+    source_run: 20260929-0204_sd15-multiconcept-bucketed_3b3d
+    state_mount: ro
+    kura_checks: [training state verified]
+    logical_steps: 1 to 2
+    postflight: matched
+    publication: completed
+musubi_manifest_v2:
+  adapter_source: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+  image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+  architecture: wan (T2V 1.3B)
+  models: cached Wan 2.1 dit, vae, and t5 (0 B downloaded)
+  dataset: musubi-video-smoke (1 video)
+  video_jsonl:
+    run_id: 20260929-0202_wan13-jsonl-handoff_2207
+    video_jsonl_file: cache/dataset-view/musubi/musubi-video-smoke/native/items.jsonl
+    frame_preflight: {status: passed, effective_frames: 5}
+    view: {verification: matched, link_count: 1}
+    postflight: matched
+    view_cleanup: removed
+    publication: completed
+  local_path_model:
+    run_id: 20260929-0206_wan13-local-path-model_1b3b
+    model_mounts: [ro, ro, ro]
+    postflight: matched
+    publication: completed
+  resume:
+    run_id: 20260929-0210_wan13-resume-final_1d4b
+    source_run: 20260929-0202_wan13-jsonl-handoff_2207
+    state_mount: ro
+    kura_checks: [training state verified]
+    logical_steps: 1 to 2
+    postflight: matched
+    publication: completed
+musubi_minimax_h3_guidance_cache_runpod:
+  adapter_source: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+  image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+  gpu: NVIDIA A40 (SECURE, 0.49 USD/h)
+  mode: one-frame text-to-image, guidance loss (scale 4.0, sigma_min 0.15)
+  dataset: flux2-klein-tiny (1 image) through the image JSONL handoff and selected-file transfer
+  defects_found:
+    - run_id: 20260929-0211_h3-guidance-cache-runpod-approved_2afd
+      observation: >-
+        The RunPod SSH job did not export the frozen command env, so the Musubi
+        dataset preflight stopped before model acquisition on a missing
+        KURA_MUSUBI_IMAGE_SUFFIXES. The download then refused to complete a
+        failed run without training state and held the Pod for about 35
+        minutes (about 0.33 USD).
+      fix_commits: [5a32712, e19a05e]
+  run_id: 20260929-0302_h3-guidance-cache-runpod-retry_c1ca
+  pod_input_verification: {status: verified, entries: 13, view_links: 1}
+  model_download: 42.5 GB on the Pod (explicitly allowed)
+  uncond_cache: /workspace/runs/20260929-0302_h3-guidance-cache-runpod-retry_c1ca/cache/musubi/minimax-h3-uncond.safetensors
+  uncond_cache_note: >-
+    Written by the cache step and read by training; resolved/ is not a write
+    target. The read-only resolved/ mount itself is proven by the local Docker
+    smokes; a disposable Pod has no bind mounts.
+  optimizer_steps: 1
+  training_state: state-step-00000001-e6decb9ee902 (best_effort_resume)
+  local_postflight: {status: matched, event_recorded: true}
+  publication: completed
+  pod_lifetime: about 20 minutes (07:36 to 07:56 JST)
+  pod_stopped: true
+  pods_after: 0
+scope: >-
+  Proves the final manifest-v2 handoff end to end on real trainers: the
+  AI-Toolkit trainer reads Kura's run-owned view for root-level and images/
+  layouts; the RunPod path transfers only selected files, verifies them on the
+  Pod before model acquisition, and returns its records; local-path models and
+  Resume state are mounted read-only; the embedded-audio preflight rejects a
+  silent video and accepts one with audio. sd-scripts proves a nested
+  multi-concept handoff with per-group subsets and repeats, and Musubi proves
+  the generated video JSONL handoff; both also prove read-only local-path
+  models and Resume state. It does not establish LoRA quality, LTX-2.5
+  training, or other architectures' runtime behavior.

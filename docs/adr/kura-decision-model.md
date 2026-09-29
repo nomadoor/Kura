@@ -109,8 +109,15 @@ rewrite the user's local ComfyUI configuration.
 
 ### validate / inspect split
 
+- Manifest drafting is a separate preparation action. Deterministic rules may
+  draft simple layouts, and an agent may help with ambiguous ones, but the
+  output is an authored, reviewable dataset file. AI review is not a
+  mandatory approval gate.
 - `kura dataset validate` — genuine pass/fail on structure: missing
-  `dataset.yaml`, broken JSON, missing required fields.
+  `dataset.yaml`, broken JSON, missing required fields, unsafe typed file
+  references, or a missing formal manifest version. First-class training
+  compilation requires the versioned manifest; inspect remains available
+  for unfamiliar layouts without declaring them valid training inputs.
 - `kura dataset inspect` — measurable facts, no verdicts: image count,
   resolution distribution, caption statistics (empty / duplicates / trigger
   word occurrences), pair integrity, video fps/length distribution.
@@ -143,12 +150,12 @@ error-prone in exactly the way quality gates fail.
 
 | # | Step | Layer |
 | --- | --- | --- |
-| 1 | Place the dataset | user |
+| 1 | Place the dataset; draft or author its versioned manifest once | user + code/agent aid |
 | 2 | `dataset inspect` (+ `validate` if needed) | code: facts |
 | 3 | Parameter proposal (skill + cards + inspect facts) | agent: judgment |
 | 4 | Draft `run.yaml` | free; not a gate |
 | 5 | RunPod only: draft `kura run plan` — live GPU stock/price, select immediate/wait intent | code facts + agent/user choice; not a gate |
-| 6 | `compile` — fail-fast checks, path resolution, backend contract | code: guard |
+| 6 | `compile` — require the authored manifest, freeze run selection and backend projection, fail-fast checks | code: guard |
 | 7 | Final `kura run plan` — resources, DL estimate, disk, warnings, frozen capacity policy | code: facts |
 | 8 | Last look — regret reminder note | agent: judgment |
 | 9 | User approval | **the only gate** |

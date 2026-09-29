@@ -28,7 +28,11 @@ If you keep ComfyUI running, you can also test-generate with the LoRA you traine
 | NVIDIA GPU | Needed for practical local training | Not needed if you only use RunPod |
 | [RunPod](https://www.runpod.io/) account | For training on cloud GPUs | Get an API key |
 
-- **Windows / WSL2:** enable Docker Desktop's WSL integration for your distribution.
+- **Windows:** run Kura inside WSL2 and keep the Kura folder on the WSL
+  filesystem (for example under `~/`), not under `/mnt/c`. Enable Docker
+  Desktop's WSL integration for your distribution. Native Windows is not
+  supported yet: Kura cannot open dataset files safely there and stops, and
+  files under `/mnt/c` are read several times slower by the containers.
 - A **Hugging Face token** is only needed for gated/private models.
 - For **render runs**, have ComfyUI running at `http://127.0.0.1:8188`.
 
@@ -36,8 +40,8 @@ If you keep ComfyUI running, you can also test-generate with the LoRA you traine
 
 ```sh
 # 0. Install uv (only if you don't have it yet; macOS / Linux / WSL)
+#    On Windows, run every command here in your WSL2 terminal.
 curl -LsSf https://astral.sh/uv/install.sh | sh
-# On Windows (PowerShell): irm https://astral.sh/uv/install.ps1 | iex
 
 # 1. Get Kura
 git clone https://github.com/nomadoor/Kura.git

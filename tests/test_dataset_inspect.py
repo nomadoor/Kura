@@ -20,6 +20,91 @@ def png_bytes(width: int, height: int) -> bytes:
 
 
 class DatasetInspectTests(unittest.TestCase):
+    def test_inspect_reports_v2_typed_inputs_and_caption_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "typed"
+            dataset.mkdir(parents=True)
+            (dataset / "target.png").write_bytes(png_bytes(2, 1))
+            (dataset / "control.png").write_bytes(png_bytes(1, 1))
+            (dataset / "caption.txt").write_text("hello", encoding="utf-8")
+            (dataset / "dataset.yaml").write_text(
+                "id: typed\nitems_schema_version: 2\n", encoding="utf-8",
+            )
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "pair",
+                "files": [
+                    {"type": "file", "role": "target", "path": "target.png"},
+                    {"type": "file", "role": "control", "path": "control.png"},
+                ],
+                "caption": {"file": {"type": "file", "path": "caption.txt"}},
+            }) + "\n", encoding="utf-8")
+
+            report = inspect_dataset("typed", workspace=root)
+
+        self.assertEqual(report["images"]["items_jsonl_count"], 1)
+        self.assertEqual(report["captions"]["total"], 1)
+        self.assertEqual(report["captions"]["empty"], 0)
+        self.assertEqual(report["paired_control"]["source_count"], 1)
+        self.assertEqual(report["paired_control"]["target_count"], 1)
+        self.assertEqual(report["paired_control"]["missing_source_count"], 0)
+        self.assertEqual(report["observations"]["condition_counts"], {"control": 1})
+
+    def test_inspect_reports_v2_typed_video_targets_and_caption_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            dataset = workspace / "datasets" / "clips"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("id: clips\nitems_schema_version: 2\n", encoding="utf-8")
+            for name in ("a.mp4", "b.mov", "unlisted.mp4"):
+                (dataset / name).write_bytes(b"video")
+            (dataset / "a.txt").write_text("a caption\n", encoding="utf-8")
+            rows = [
+                {"id": "a", "files": [{"type": "file", "role": "target", "path": "a.mp4"}],
+                 "caption": {"file": {"type": "file", "path": "a.txt"}}},
+                {"id": "b", "files": [{"type": "file", "role": "target", "path": "b.mov"}],
+                 "caption": {"text": "b caption"}},
+            ]
+            (dataset / "items.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8",
+            )
+
+            report = inspect_dataset("clips", workspace=workspace)
+            text = format_dataset_inspect(report)
+
+            self.assertEqual(report["videos"]["items_jsonl_count"], 2)
+            self.assertEqual(report["videos"]["count"], 3)
+            self.assertEqual(report["images"]["items_jsonl_count"], 0)
+            self.assertEqual(report["captions"]["empty"], 0)
+            self.assertEqual(report["observations"]["captions_missing"], 0)
+            self.assertIn("videos.items_jsonl_count: 2", text)
+            self.assertIn("videos.directory_count: 3", text)
+
+    def test_inspect_preserves_unicode_line_separator_in_v2_caption(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "typed"
+            dataset.mkdir(parents=True)
+            caption = "first\u2028second"
+            (dataset / "target.png").write_bytes(png_bytes(1, 1))
+            (dataset / "dataset.yaml").write_text(
+                "id: typed\nitems_schema_version: 2\n", encoding="utf-8",
+            )
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "target",
+                "files": [{"type": "file", "role": "target", "path": "target.png"}],
+                "caption": {"text": caption},
+            }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            report = inspect_dataset("typed", workspace=root)
+
+        self.assertEqual(report["items_jsonl"], {"records": 1, "parse_errors": 0})
+        self.assertEqual(report["captions"]["total"], 1)
+        self.assertEqual(report["captions"]["empty"], 0)
+        self.assertNotIn("invalid_items_jsonl", {
+            item.get("code") for item in report["structural_findings"]
+        })
+
     def test_image_only_declared_layout_is_not_paired_control(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

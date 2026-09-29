@@ -81,6 +81,11 @@ Kura is an agent-first, file-first workspace for reproducible training and rende
 
 The decision model (see `docs/adr/kura-decision-model.md`): the CLI measures, the files remember, the skill judges, the user decides. Code measures; code stops only irreversible accidents; the agent judges; the user approves once before launch; Last look is not a gate but a regret reminder.
 
+Built-in training requires the manifest contract in
+`docs/adr/dataset-projection-contract.md`: the dataset manifest inventories
+inputs, `run.yaml` selects them, and the `resolved/` input lock records the
+backend projection actually handed to the trainer.
+
 - `run.yaml` records human/agent intent.
 - `resolved/` contains immutable compile-time inputs.
 - Launch/runtime facts belong in append-only `realizations/`.

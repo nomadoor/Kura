@@ -19,6 +19,11 @@ from typing import Any
 import yaml
 
 from kura.backends import get_backend, validate_backend_config
+from kura.dataset_handoff import (
+    inspect_dataset_sources,
+    inspect_dataset_view,
+    load_frozen_dataset_projection,
+)
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -26,11 +31,12 @@ from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
+from kura.dataset_transfer import build_transfer_inventory, estimate_transfer
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
 from kura.run_commands.experiment import experiment_context, format_experiment_context
-from kura.run_envelope import backend_config, common_recipe, resume_intent, training_state_policy
+from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state
 
 
@@ -158,7 +164,7 @@ def _runpod_planning_gpus(compute: dict[str, Any], config: dict[str, Any]) -> tu
 
 def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any] | None:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    executor = run_executor(run)
     if executor != "runpod":
         return None
     selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
@@ -225,7 +231,7 @@ def _resources_payload(run: dict[str, Any], workspace_config: dict[str, Any], do
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     display = adapter_display if isinstance(adapter_display, dict) else _adapter_display(run)
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    executor = run_executor(run)
     requirements = model_requirements(run, download_estimate)
     return {
         "hardware": {"local_gpu": _local_gpu_payload()},
@@ -269,7 +275,6 @@ def _checkpoint_retention_policy_present(important_config: dict[str, Any]) -> bo
 def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> list[str]:
     run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
-    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     warnings: list[str] = []
     steps = _as_positive_int(run_recipe.get("steps"))
     save_every = _as_positive_int(important_config.get("save_every_n_steps"))
@@ -283,7 +288,7 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:
             warnings.append(f"sampling cadence may create about {expected_samples} sample batches")
-    if compute.get("executor") in (None, "docker"):
+    if run_executor(run) == "docker":
         warnings.append("local Docker launch requires a disk preflight; default minimum free space is 100GiB unless docker.min_free_gb is configured")
     return warnings
 
@@ -477,8 +482,7 @@ def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | N
 
 
 def _download_estimate_workspace(run: dict[str, Any], workspace: Path, *, executor: str | None = None) -> Path | None:
-    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    resolved_executor = executor or run_executor(run)
     if resolved_executor == "runpod":
         return None
     return workspace
@@ -596,35 +600,31 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
     return records
 
 
-def _sd_scripts_disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+def _run_adapter(run: dict[str, Any]) -> Any:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    if backend.get("name") != "sd-scripts":
-        return {"enabled": False, "bytes": 0, "status": "not-applicable"}
-    native = backend_config(run, "sd-scripts")
-    enabled = any(native.get(key) is True for key in ("cache_latents_to_disk", "cache_text_encoder_outputs_to_disk"))
-    if not enabled:
-        return {"enabled": False, "bytes": 0, "status": "disabled"}
-    value = native.get("disk_cache_estimate_gb")
-    if isinstance(value, bool):
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
     try:
-        gib = float(value)
-    except (TypeError, ValueError):
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "set backend.config.disk_cache_estimate_gb after measuring the smoke recipe"}
-    if not math.isfinite(gib) or gib <= 0:
-        return {"enabled": True, "bytes": 0, "status": "unknown", "detail": "disk_cache_estimate_gb must be a positive finite number"}
-    return {"enabled": True, "bytes": int(gib * 1024**3), "gib": gib, "status": "declared-estimate"}
+        return get_backend(backend.get("name"))
+    except ValueError:
+        return None
 
 
-def _sd_scripts_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
-    estimate = _sd_scripts_disk_cache_estimate(run)
+def _disk_cache_estimate(run: dict[str, Any]) -> dict[str, Any]:
+    adapter = _run_adapter(run)
+    if adapter is None or adapter.disk_cache_estimate is None:
+        return {"enabled": False, "bytes": 0, "status": "not-applicable"}
+    return adapter.disk_cache_estimate(run)
+
+
+def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
+    estimate = _disk_cache_estimate(run)
     if not estimate["enabled"]:
         return []
+    check = f"{_run_adapter(run).name}-disk-cache"
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if estimate["status"] == "unknown":
         severity = "info" if safety.get("allow_unknown_disk_cache") is True else "error"
-        return [_preflight_record("sd-scripts-disk-cache", severity, f"disk cache size is unknown; {estimate.get('detail')}", "run.yaml")]
-    return [_preflight_record("sd-scripts-disk-cache", "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
+        return [_preflight_record(check, severity, f"disk cache size is unknown; {estimate.get('detail')}", "run.yaml")]
+    return [_preflight_record(check, "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
 
 
 def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -643,15 +643,33 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> list[dict[str, Any]]:
+    run_id = run.get("id")
+    if isinstance(run_id, str) and run_id and "/" not in run_id and ".." not in run_id:
+        input_path = workspace / "runs" / run_id / "resolved" / "dataset-input.lock.json"
+        if input_path.is_file():
+            lock = json.loads(input_path.read_text(encoding="utf-8"))
+            if lock.get("schema_version") == 2:
+                changes = inspect_dataset_sources(workspace, lock)
+                if changes:
+                    return [_preflight_record("dataset-images", "error", "compiled dataset input changed: " + "; ".join(changes), "dataset-input.lock.json")]
+                return [_preflight_record("dataset-images", "info", "compiled dataset input stat matches", "dataset-input.lock.json")]
+            return [_preflight_record("dataset-images", "warning", "compiled native source input is unverified", "dataset-input.lock.json")]
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))
+    if adapter.project_dataset is not None:
+        return [_preflight_record(
+            "dataset-images",
+            "info",
+            "dataset manifest and backend projection will be verified during compilation",
+            "run.yaml",
+        )]
     if adapter.validate_dataset is None:
         return []
     try:
         adapter.validate_dataset(run, workspace)
     except ValueError as exc:
         return [_preflight_record("dataset-images", "error", str(exc), "run.yaml")]
-    return [_preflight_record("dataset-images", "info", "Musubi dataset image directories resolved", "run.yaml")]
+    return [_preflight_record("dataset-images", "info", f"{adapter.name} dataset sources resolved", "run.yaml")]
 
 
 def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> list[dict[str, Any]]:
@@ -698,14 +716,13 @@ def collect_run_preflight(
     download_estimate: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     workspace_config = config if isinstance(config, dict) else {}
-    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    resolved_executor = executor or compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    resolved_executor = executor or run_executor(run)
     estimate = download_estimate or _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)))
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
     records.extend(_model_download_preflight_report(run, estimate, executor=str(resolved_executor)))
-    records.extend(_sd_scripts_cache_preflight_report(run))
+    records.extend(_disk_cache_preflight_report(run))
     important = (_adapter_display(run).get("checkpoint") or {})
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
@@ -748,21 +765,43 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
     container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=50)
     container_disk_bytes = container_disk_gib * 1024**3
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    disk_cache_estimate = _sd_scripts_disk_cache_estimate(run)
-    estimated_write_bytes = int(download_estimate.get("bytes") or 0) + int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0)
+    disk_cache_estimate = _disk_cache_estimate(run)
+    transfer_estimate = _runpod_input_transfer_estimate(run)
+    estimated_write_bytes = (
+        int(download_estimate.get("bytes") or 0)
+        + int(checkpoint_estimate.get("bytes") or 0)
+        + int(disk_cache_estimate.get("bytes") or 0)
+        + int((transfer_estimate or {}).get("remote_peak_bytes") or 0)
+    )
     if estimated_write_bytes > container_disk_bytes and safety.get("allow_runpod_disk_risk") is not True:
         required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
         raise ValueError(
             f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
-            "(model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
+            "(selected input transfer, model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
             "safety.allow_runpod_disk_risk: true if intentional"
         )
     return {
         "container_disk_gib": container_disk_gib,
         "container_disk_bytes": container_disk_bytes,
         "estimated_write_bytes": estimated_write_bytes,
-        "estimates": {"model_downloads": download_estimate, "musubi_downloads": download_estimate, "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate},
+        "estimates": {
+            "model_downloads": download_estimate, "musubi_downloads": download_estimate,
+            "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate,
+            "input_transfer": transfer_estimate,
+        },
     }
+
+
+def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | None:
+    """Size the selected-file transfer of a compiled manifest-v2 run."""
+    run_id = run.get("id")
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    run_dir = _run_path(run_id)
+    if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+        return None
+    inventory = build_transfer_inventory(run_dir.parent.parent, run_dir, run, verify_resume=False)
+    return estimate_transfer(inventory)
 
 
 def _local_launch_disk_preflight(
@@ -790,7 +829,7 @@ def _local_launch_disk_preflight(
     if enforce_model_download_safety:
         _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
-    disk_cache_estimate = _sd_scripts_disk_cache_estimate(run)
+    disk_cache_estimate = _disk_cache_estimate(run)
     write_estimates = {
         "hf_cache": int(download_estimate.get("bytes") or 0),
         "workspace": int(checkpoint_estimate.get("bytes") or 0) + int(disk_cache_estimate.get("bytes") or 0),
@@ -880,6 +919,32 @@ def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
     return _configured_gib(value, default=50) * 1024**3
 
 
+def _general_resolution(run: dict[str, Any]) -> Any:
+    adapter = _run_adapter(run)
+    if adapter is None or adapter.general_resolution is None:
+        return None
+    return adapter.general_resolution(run)
+
+
+def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
+    projection = load_frozen_dataset_projection(
+        run_dir / "resolved", required=False,
+    )
+    if projection is None:
+        return []
+    adapter = get_backend(projection["backend"])
+    return adapter.runtime_checks(projection) if adapter.runtime_checks is not None else []
+
+
+def _command_write_roots(command_lock: Any) -> list[str]:
+    """Paths of the write roots a backend command lock records as {"role", "path", "env"}."""
+    raw_roots = command_lock.get("write_roots") if isinstance(command_lock, dict) else None
+    return [
+        item["path"] for item in (raw_roots if isinstance(raw_roots, list) else [])
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    ]
+
+
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
@@ -896,6 +961,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    plan_executor = run_executor(run)
+    input_path = run_dir / "resolved" / "dataset-input.lock.json"
     run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     contract_path = run_dir / "resolved" / "dataset-observations.lock.yaml"
@@ -929,6 +996,78 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
                 "structural_findings": len(issues),
             }
         datasets.append(dataset_payload)
+
+    dataset_input_payload = None
+    if input_path.is_file():
+        input_lock = json.loads(input_path.read_text(encoding="utf-8"))
+        if input_lock.get("schema_version") == 2:
+            changes = inspect_dataset_sources(workspace, input_lock)
+            materialized = any(
+                isinstance(view, dict)
+                and isinstance(view.get("root"), str)
+                and (workspace / view["root"]).is_dir()
+                for view in input_lock.get("views", [])
+            )
+            if materialized:
+                changes.extend(inspect_dataset_view(workspace, input_lock))
+            semantic = input_lock.get("semantic") if isinstance(input_lock.get("semantic"), dict) else {}
+            selection = semantic.get("datasets") if isinstance(semantic.get("datasets"), list) else []
+            views = [
+                {
+                    "dataset": view.get("dataset"),
+                    "id": view.get("id"),
+                    "root": view.get("root"),
+                    "repeat": view.get("repeat"),
+                    "links": len(view.get("links", [])) if isinstance(view.get("links"), list) else 0,
+                    "generated_files": len(view.get("files", [])) if isinstance(view.get("files"), list) else 0,
+                }
+                for view in input_lock.get("views", []) if isinstance(view, dict)
+            ]
+            verification = input_lock.get("verification")
+            postflight = None
+            status_path = run_dir / "status.json"
+            if status_path.is_file():
+                status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+                candidate = status_payload.get("dataset_input_postflight")
+                if isinstance(candidate, dict):
+                    postflight = candidate
+            dataset_input_payload = {
+                "status": "changed" if changes else "current",
+                "verification": verification,
+                "changes": changes,
+                "input_sha256": input_lock.get("input_sha256"),
+                "declared_differences": input_lock.get("declared_differences") or [],
+                "selection": selection,
+                "views": views,
+                "projection_rules": [
+                    {
+                        "dataset": item.get("id"),
+                        **item["policy"],
+                    }
+                    for item in semantic.get("projection", [])
+                    if isinstance(item, dict) and isinstance(item.get("policy"), dict)
+                ],
+                "postflight": postflight,
+                "runtime_checks": _dataset_runtime_checks(run_dir),
+                "general_resolution": _general_resolution(run),
+                "runpod_transfer": (
+                    _runpod_input_transfer_estimate(run) if plan_executor == "runpod" else None
+                ),
+            }
+        else:
+            dataset_input_payload = {
+                "status": "unverified", "verification": input_lock.get("verification"),
+                "changes": [], "input_sha256": None, "declared_differences": [],
+            }
+    elif manifest.is_file():
+        dataset_input_payload = {
+            "status": "legacy-unverified", "verification": "no-input-lock",
+            "changes": [], "input_sha256": None, "declared_differences": [],
+        }
+
+    command_path = run_dir / "resolved" / "backend-command.lock.json"
+    command_lock = json.loads(command_path.read_text(encoding="utf-8")) if command_path.is_file() else {}
+    write_roots = _command_write_roots(command_lock)
 
     plan_recipe = {
         "steps": run_recipe.get("steps"),
@@ -1013,6 +1152,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "native_state_path": native_state_path,
             "state_bytes": sum(item.get("size", 0) for item in files if isinstance(item, dict) and isinstance(item.get("size"), int)),
             "capture_policy": training_state_policy(run),
+            "dataset_input": lock.get("dataset_input") if lock_path.is_file() and isinstance(lock.get("dataset_input"), dict) else None,
         }
     return {
         "id": run_id,
@@ -1030,19 +1170,21 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "revision": model.get("revision") if isinstance(model, dict) else None,
         },
         "compute": {
-            "executor": compute.get("executor") if isinstance(compute, dict) else None,
+            "executor": plan_executor,
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
             "capacity": compute.get("capacity") if isinstance(compute.get("capacity"), dict) else None,
         },
         "resume": resume_payload,
         "training_state": training_state_payload,
         "datasets": datasets,
+        "dataset_input": dataset_input_payload,
+        "write_roots": write_roots,
         "recipe": {key: value for key, value in plan_recipe.items() if value is not None},
         "sampling": sampling_payload,
         "resources": resources,
         "runpod_capacity": _runpod_capacity_payload(run, workspace_config),
         "model_downloads": download_estimate,
-        "disk_cache": _sd_scripts_disk_cache_estimate(run),
+        "disk_cache": _disk_cache_estimate(run),
         "preflight": preflight,
         "experiment": experiment_context(workspace, run_id, run=run),
     }
@@ -1140,6 +1282,11 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         _append_kv(lines, "scheduler", resume.get("scheduler_behavior"))
         _append_kv(lines, "native_steps", f"{resume.get('native_start')} -> {resume.get('native_target')}")
         _append_kv(lines, "state_size", _format_bytes(resume.get("state_bytes")))
+        resume_input = resume.get("dataset_input")
+        if isinstance(resume_input, dict):
+            _append_kv(lines, "input_identity", resume_input.get("status"))
+            if resume_input.get("detail"):
+                _append_kv(lines, "input_warning", resume_input["detail"])
 
     training_state = payload.get("training_state") if isinstance(payload.get("training_state"), dict) else None
     if training_state is not None:
@@ -1214,6 +1361,105 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                 _append_kv(lines, "observed", contract, indent=4)
     else:
         lines.append("  - none")
+
+    dataset_input = payload.get("dataset_input") if isinstance(payload.get("dataset_input"), dict) else None
+    if dataset_input is not None:
+        _append_kv(lines, "input_status", dataset_input.get("status"))
+        _append_kv(lines, "input_verification", dataset_input.get("verification"))
+        for selection in dataset_input.get("selection", []):
+            if not isinstance(selection, dict):
+                continue
+            samples = selection.get("samples") if isinstance(selection.get("samples"), list) else []
+            file_count = sum(
+                len(sample.get("files", []))
+                for sample in samples
+                if isinstance(sample, dict) and isinstance(sample.get("files"), list)
+            )
+            caption_count = sum(1 for sample in samples if isinstance(sample, dict) and sample.get("caption") is not None)
+            lines.append(
+                f"  - selected {_format_plan_value(selection.get('dataset'))}: "
+                f"{len(samples)} samples / {file_count} files / {caption_count} captions"
+            )
+        for view in dataset_input.get("views", []):
+            if isinstance(view, dict):
+                lines.append(f"  - trainer view: {_format_plan_value(view.get('root'))}")
+                _append_kv(lines, "view_id", view.get("id"), indent=4)
+                _append_kv(lines, "repeat", view.get("repeat"), indent=4)
+                _append_kv(lines, "source_links", view.get("links"), indent=4)
+                _append_kv(lines, "generated_files", view.get("generated_files"), indent=4)
+        for rule in dataset_input.get("projection_rules", []):
+            if not isinstance(rule, dict):
+                continue
+            lines.append(f"  - projection rule for {_format_plan_value(rule.get('dataset'))}:")
+            _append_kv(lines, "profile", rule.get("profile"), indent=4)
+            _append_kv(lines, "codec", rule.get("codec"), indent=4)
+            _append_kv(lines, "control_selection", rule.get("control_selection"), indent=4)
+            _append_kv(lines, "control_order", rule.get("control_order"), indent=4)
+            _append_kv(lines, "caption_transform", rule.get("caption_transform"), indent=4)
+            _append_kv(lines, "audio_selection", rule.get("audio_selection"), indent=4)
+            _append_kv(lines, "do_i2v", rule.get("do_i2v"), indent=4)
+            groups = rule.get("block_groups")
+            settings = rule.get("block_settings")
+            if isinstance(groups, list) and isinstance(settings, list) and len(groups) == len(settings):
+                for group, setting in zip(groups, settings, strict=True):
+                    if not isinstance(setting, dict):
+                        continue
+                    resolution = setting.get("resolution")
+                    general = dataset_input.get("general_resolution")
+                    if isinstance(resolution, list):
+                        resolution_text = f", resolution {resolution}"
+                    elif general is not None:
+                        resolution_text = f", resolution {general} (general)"
+                    else:
+                        resolution_text = ""
+                    lines.append(
+                        f"    - group {_format_plan_value(group)}: repeats "
+                        f"{_format_plan_value(setting.get('num_repeats'))}{resolution_text}"
+                    )
+        transfer = dataset_input.get("runpod_transfer")
+        if isinstance(transfer, dict):
+            lines.append("  - RunPod selected-file transfer:")
+            _append_kv(lines, "payload", _format_bytes(transfer.get("payload_bytes")), indent=4)
+            _append_kv(lines, "tar", _format_bytes(transfer.get("tar_bytes")), indent=4)
+            _append_kv(lines, "local_stage_free", _format_bytes(transfer.get("local_stage_free_bytes")), indent=4)
+            _append_kv(lines, "pod_peak", _format_bytes(transfer.get("remote_peak_bytes")), indent=4)
+        for check in dataset_input.get("runtime_checks", []):
+            if not isinstance(check, dict):
+                continue
+            lines.append(
+                f"  - runtime input check: {_format_plan_value(check.get('kind'))} "
+                f"for {_format_plan_value(check.get('dataset'))}"
+            )
+            _append_kv(lines, "required_frames", check.get("required_frames"), indent=4)
+            _append_kv(lines, "timing", check.get("timing"), indent=4)
+            _append_kv(lines, "host_verification", check.get("host_verification"), indent=4)
+            _append_kv(lines, "released_frame_range", check.get("released_frame_range"), indent=4)
+            outside = check.get("released_range_warning")
+            if isinstance(outside, list) and outside:
+                _append_kv(
+                    lines,
+                    "warning",
+                    f"target_frames {outside} are outside the public MiniMax-H3 range 124..345",
+                    indent=4,
+                )
+        for change in dataset_input.get("changes", []):
+            lines.append(f"  - {_format_plan_value(change)}; recompile before launch")
+        postflight = dataset_input.get("postflight")
+        if isinstance(postflight, dict):
+            _append_kv(lines, "postflight", postflight.get("status"))
+            if postflight.get("warning"):
+                _append_kv(lines, "warning", postflight.get("warning"))
+            if postflight.get("cleanup_warning"):
+                _append_kv(lines, "cleanup_warning", postflight.get("cleanup_warning"))
+
+    lines.append("")
+    lines.append("Trainer write locations")
+    write_roots = payload.get("write_roots") if isinstance(payload.get("write_roots"), list) else []
+    if write_roots:
+        for path in write_roots:
+            lines.append(f"  - {_format_plan_value(path)}")
+    else:
+        lines.append("  - none declared")
 
     lines.append("")
     lines.append("Recipe")

@@ -68,20 +68,34 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def atomic_write_text(path: Path, text: str) -> None:
+def append_line_durably(path: Path, line: str) -> None:
+    """Append one line and fsync it (and a newly created file's directory).
+
+    Callers that project status after appending rely on the line being
+    durable first; a later status write must never outlive its event.
+    """
+    created = not path.exists()
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if created:
+        _fsync_directory(path.parent)
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
+            mode="wb",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
             temporary_name = handle.name
-            handle.write(text)
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
@@ -93,6 +107,10 @@ def atomic_write_text(path: Path, text: str) -> None:
                 os.unlink(temporary_name)
             except FileNotFoundError:
                 pass
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def atomic_write_json(path: Path, value: Any) -> None:

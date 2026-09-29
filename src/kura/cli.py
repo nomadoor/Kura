@@ -21,7 +21,9 @@ import yaml
 
 from kura import __version__
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
-from kura.dataset_inspect import format_dataset_inspect, inspect_dataset
+from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
+from kura.dataset_handoff import freeze_dataset_handoff
+from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, observe_run, reconcile_docker, reconcile_runpod
@@ -32,7 +34,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -129,12 +131,12 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     validate_backend_config(run)
     validated_recipe(run, required=native.get("command") is None)
     adapter = get_backend(backend_name)
-    if adapter.validate_dataset is not None:
+    if adapter.project_dataset is None and adapter.validate_dataset is not None:
         adapter.validate_dataset(run, _workspace())
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     capacity = compute.get("capacity")
     if capacity is not None:
-        if compute.get("executor") != "runpod":
+        if run_executor(run) != "runpod":
             raise ValueError("compute.capacity is only valid for RunPod runs")
         if not isinstance(capacity, dict):
             raise ValueError("compute.capacity must be a mapping")
@@ -153,66 +155,47 @@ def _now() -> datetime:
 
 
 def cmd_dataset_validate(args: argparse.Namespace) -> int:
-    directory = Path(args.dataset_dir)
-    errors: list[str] = []
-    warnings: list[str] = []
-    manifest = directory / "dataset.yaml"
-    items = directory / "items.jsonl"
-    if not manifest.exists():
-        errors.append("missing dataset.yaml")
-    if not items.exists():
-        errors.append("missing items.jsonl")
-    if errors:
-        print("dataset validation failed: " + "; ".join(errors), file=sys.stderr)
-        return 1
     try:
-        metadata = _load_yaml(manifest)
+        measured = measure_manifest(resolve_dataset_path(args.dataset_dir, workspace=_workspace()))
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"dataset validation failed: invalid dataset.yaml: {_safe_error(exc)}", file=sys.stderr)
+        print(f"dataset validation failed: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    count = 0
-    for number, line in enumerate(items.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            errors.append(f"items.jsonl:{number}: invalid JSON ({exc.msg})")
-            continue
-        if not isinstance(item, dict) or not item.get("id") or not item.get("path"):
-            errors.append(f"items.jsonl:{number}: item requires id and path")
-            count += 1
-            continue
-        item_path = Path(str(item["path"]))
-        if item_path.is_absolute():
-            errors.append(f"items.jsonl:{number}: path must be relative to the dataset directory")
-        else:
-            candidate = (directory / item_path).resolve(strict=False)
-            try:
-                candidate.relative_to(directory.resolve())
-            except ValueError:
-                errors.append(f"items.jsonl:{number}: path must stay inside the dataset directory")
-            else:
-                if not candidate.is_file():
-                    errors.append(f"items.jsonl:{number}: referenced file does not exist: {item['path']}")
-        if not item.get("caption"):
-            warnings.append(f"items.jsonl:{number}: missing caption")
-        if not item.get("hash"):
-            warnings.append(f"items.jsonl:{number}: missing hash")
-        count += 1
-    if count == 0:
-        errors.append("items.jsonl contains no items")
-    declared = metadata.get("stats", {}).get("count")
-    if declared != count:
-        warnings.append(f"stats.count is {declared!r}, but items.jsonl contains {count} items")
-    for warning in warnings:
+    for warning in measured["warnings"]:
         print(f"warning: {warning}", file=sys.stderr)
-    if errors:
-        for error in errors:
-            print(f"error: {error}", file=sys.stderr)
-        return 1
-    print(f"dataset valid: {count} items")
+    print(f"dataset valid: {measured['count']} items")
+    if measured["excluded_files"]:
+        print(f"excluded files ({len(measured['excluded_files'])}): " + ", ".join(measured["excluded_files"]))
+    if measured["excluded_directories"]:
+        print(
+            f"excluded directories ({len(measured['excluded_directories'])}): "
+            + ", ".join(measured["excluded_directories"])
+        )
     return 0
+
+
+def cmd_dataset_draft(args: argparse.Namespace) -> int:
+    directory = resolve_dataset_path(args.dataset_dir, workspace=_workspace())
+    try:
+        proposal = draft_manifest(directory)
+        if not args.write:
+            print(json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        metadata_path = directory / "dataset.v2.candidate.yaml"
+        items_path = directory / "items.v2.candidate.jsonl"
+        if metadata_path.exists() or items_path.exists():
+            raise ValueError("v2 candidate already exists; review it before replacing")
+        with metadata_path.open("x", encoding="utf-8") as stream:
+            yaml.safe_dump(proposal["dataset_yaml"], stream, allow_unicode=True, sort_keys=False)
+        with items_path.open("x", encoding="utf-8") as stream:
+            for item in proposal["items"]:
+                stream.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+        print(f"wrote review candidates: {metadata_path}, {items_path}")
+        for issue in proposal["issues"]:
+            print(f"review required: {issue}", file=sys.stderr)
+        return 0
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot draft dataset: {_safe_error(exc)}", file=sys.stderr)
+        return 1
 
 
 def cmd_dataset_inspect(args: argparse.Namespace) -> int:
@@ -417,6 +400,18 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
         print("backend.config recognized upstream values (not Kura support claims):")
         for field, choices in payload["config_value_choices"].items():
             print(f"  {field}: " + ", ".join(choices))
+    if payload["selector_aliases"]:
+        print("backend.config selector aliases:")
+        for field, aliases in payload["selector_aliases"].items():
+            authored = ", ".join(aliases["fields"]) or "(none)"
+            values = ", ".join(
+                f"{alias}->{canonical}"
+                for alias, canonical in aliases["values"].items()
+            ) or "(none)"
+            print(
+                f"  {field}: fields={authored}; values={values}; "
+                f"normalization={aliases['normalization']}"
+            )
     if payload["unsupported_fields"]:
         print("unsupported fields:")
         for field, reason in payload["unsupported_fields"].items():
@@ -501,7 +496,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             dataset_observations.append(projection)
         resolved.mkdir(exist_ok=True)
         source_identity = adapter_source_identity(backend.get("name"))
-        declared_executor = (run.get("compute") if isinstance(run.get("compute"), dict) else {}).get("executor") or "docker"
+        declared_executor = run_executor(run)
         config = _workspace_config()
         runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
         default_images = runpod_config.get("default_image") if isinstance(runpod_config.get("default_image"), dict) else {}
@@ -526,12 +521,6 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             "runtime_contract_sha256": runtime_contract,
         }
         _dump_yaml(resolved / "manifest.lock.yaml", locked)
-        compile_resume_lock(
-            _workspace(),
-            locked,
-            resolved,
-            target_runtime_identity=target_runtime_identity,
-        )
         _dump_yaml(
             resolved / "model-requirements.lock.yaml",
             {
@@ -548,7 +537,37 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
                 "datasets": dataset_observations,
             },
         )
-        command_spec = adapter.compile(locked, resolved, _workspace(), True)
+        explicit_native_command = (
+            "command" in adapter.surface.escape_hatches
+            and backend_config(locked, adapter.name).get("command") is not None
+        )
+        input_lock = None
+        if adapter.project_dataset is not None and not explicit_native_command:
+            input_lock = freeze_dataset_handoff(
+                locked,
+                _workspace(),
+                resolved,
+                backend=adapter.name,
+                project=lambda selection: adapter.project_dataset(locked, selection),
+            )
+        elif explicit_native_command:
+            input_lock = {
+                "schema_version": 1,
+                "backend": adapter.name,
+                "verification": "unverified-native-source",
+                "files": [],
+                "views": [],
+                "input_sha256": None,
+            }
+            atomic_write_json(resolved / "dataset-input.lock.json", input_lock)
+        command_spec = adapter.compile(locked, resolved)
+        compile_resume_lock(
+            _workspace(),
+            locked,
+            resolved,
+            target_runtime_identity=target_runtime_identity,
+            target_input_lock=input_lock,
+        )
         atomic_write_json(resolved / "backend-display.lock.json", adapter.display(locked))
         atomic_write_json(resolved / "backend-command.lock.json", {**command_spec, "backend": backend.get("name"), "adapter_source": source_identity})
         env = {
@@ -780,6 +799,23 @@ def _cleanup_path_item(workspace: Path, relative: str, *, classification: str) -
     }
 
 
+def _last_observation_container_missing(run_dir: Path, status: dict[str, Any]) -> bool:
+    """True only when the latest realization's own observation records a missing container."""
+    reference = status.get("last_observation")
+    realization = status.get("last_realization")
+    if not isinstance(reference, str) or not isinstance(realization, str):
+        return False
+    try:
+        observation = json.loads((run_dir / reference).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(observation, dict)
+        and observation.get("container_missing") is True
+        and f"realizations/{observation.get('realization_id')}.json" == realization
+    )
+
+
 def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_artifacts: bool) -> list[dict[str, Any]]:
     states = {"completed", "failed", "interrupted", "launch_failed"}
     runs: list[dict[str, Any]] = []
@@ -794,12 +830,39 @@ def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_art
             status = {}
         state = str(status.get("state") or "unknown")
         recency = status.get("ended") or status.get("started") or run.get("created") or run_dir.name
-        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir})
+        runs.append({"id": run_dir.name, "state": state, "recency": recency, "path": run_dir, "status": status})
     runs.sort(key=lambda item: str(item["recency"]), reverse=True)
     keep_ids = {item["id"] for item in runs[: max(keep_last, 0)]}
     actions: list[dict[str, Any]] = []
     for item in runs:
         run_dir = item["path"]
+        view = run_dir / "cache" / "dataset-view"
+        covered_by_transients = item["id"] not in keep_ids and item["state"] in states
+        if view.is_dir() and not covered_by_transients:
+            postflight = item["status"].get("dataset_input_postflight")
+            view_cleanup = postflight.get("view_cleanup") if isinstance(postflight, dict) else None
+            if item["state"] in states and view_cleanup == "failed":
+                note = "Removes only a disposable dataset view left by failed automatic cleanup."
+            elif _last_observation_container_missing(run_dir, item["status"]):
+                note = (
+                    "Removes only a disposable dataset view kept for recovery after Docker "
+                    "reported the container missing; launch rebuilds it from the frozen lock."
+                )
+            else:
+                note = None
+            if note is not None:
+                actions.append({
+                    "id": item["id"],
+                    "state": item["state"],
+                    "classification": "safe-run-dataset-view-remnant",
+                    "note": note,
+                    "targets": [{
+                        "target": str(view.relative_to(workspace)),
+                        "path": str(view),
+                        "exists": True,
+                        "size_bytes": _path_size_bytes(view),
+                    }],
+                })
         if item["id"] in keep_ids or item["state"] not in states:
             continue
         if delete_final_artifacts:
@@ -1265,8 +1328,12 @@ def main() -> None:
     dataset = sub.add_parser("dataset", help="Dataset utilities")
     dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
     validate = dataset_sub.add_parser("validate", help="Validate a dataset manifest")
-    validate.add_argument("dataset_dir")
+    validate.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
     validate.set_defaults(func=cmd_dataset_validate)
+    draft = dataset_sub.add_parser("draft", help="Preview or create reviewable v2 candidate files")
+    draft.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
+    draft.add_argument("--write", action="store_true", help="Write candidate files without replacing authored manifests")
+    draft.set_defaults(func=cmd_dataset_draft)
     inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")
     inspect.add_argument("dataset", help="Dataset ID under datasets/ or a dataset directory path")
     inspect.add_argument("--json", action="store_true", help="Print machine-readable inspection facts")

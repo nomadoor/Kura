@@ -18,7 +18,7 @@ import yaml
 
 from kura.backends import get_backend
 from kura.executors import ACTIVE_STATES, observe_run
-from kura.run_envelope import common_recipe
+from kura.run_envelope import common_recipe, run_executor
 
 
 DRAFT_STATE = "draft"
@@ -781,9 +781,8 @@ def _executor(run_type: str | None, config: dict[str, Any], status: dict[str, An
         executor = config.get("executor")
         if isinstance(executor, dict):
             return _string(executor.get("name"))
-    compute = config.get("compute")
-    if isinstance(compute, dict):
-        return _string(compute.get("executor"))
+    if run_type == "train":
+        return run_executor(config)
     return None
 
 

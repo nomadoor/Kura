@@ -11,8 +11,8 @@ from typing import Any
 
 import yaml
 
-IMAGE_SUFFIXES = {".avif", ".bmp", ".jpeg", ".jpg", ".png", ".webp"}
-VIDEO_SUFFIXES = {".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"}
+from kura.dataset_jsonl import items_jsonl_rows
+from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_VIDEO_SUFFIXES
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 
@@ -31,13 +31,20 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
 
     metadata = _load_dataset_yaml(dataset_path / "dataset.yaml")
     records = _load_items_jsonl(dataset_path / "items.jsonl")
-    images = [path for path in _iter_files(dataset_path) if path.suffix.lower() in IMAGE_SUFFIXES]
-    videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in VIDEO_SUFFIXES]
+    images = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_IMAGE_SUFFIXES]
+    videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_VIDEO_SUFFIXES]
     captions = [_caption_text(item) for item in records]
     trigger_word = metadata.get("trigger_word") if isinstance(metadata.get("trigger_word"), str) else None
     from kura.dataset_observations import observe_dataset
 
     observation = observe_dataset(dataset_path)
+    manifest_v2 = metadata.get("items_schema_version") == 2
+    observed_samples = observation.get("samples") if isinstance(observation.get("samples"), list) else []
+    if manifest_v2:
+        captions = [
+            sample.get("caption") if isinstance(sample.get("caption"), str) else ""
+            for sample in observed_samples if isinstance(sample, dict)
+        ]
 
     return {
         "dataset": {
@@ -47,15 +54,25 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
             "items_jsonl": (dataset_path / "items.jsonl").is_file(),
         },
         "images": {
-            "items_jsonl_count": _items_image_count(records),
+            "items_jsonl_count": (
+                _v2_target_count(observed_samples, KNOWN_IMAGE_SUFFIXES) if manifest_v2 else _items_image_count(records)
+            ),
             "directory_count": len(images),
             "resolution": _resolution_summary(images),
         },
         "captions": _caption_summary(captions, trigger_word=trigger_word),
-        "paired_control": _paired_summary(dataset_path, records, metadata),
+        "paired_control": _paired_summary(
+            dataset_path, records, metadata,
+            observed_samples=observed_samples if manifest_v2 else None,
+        ),
         "observations": observation["observations"],
         "structural_findings": observation["structural_findings"],
-        "videos": _video_summary(videos),
+        "videos": {
+            **_video_summary(videos),
+            "items_jsonl_count": (
+                _v2_target_count(observed_samples, KNOWN_VIDEO_SUFFIXES) if manifest_v2 else None
+            ),
+        },
         "items_jsonl": {
             "records": len(records),
             "parse_errors": sum(1 for item in records if item.get("_parse_error")),
@@ -122,7 +139,9 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
     for code, count in sorted(finding_codes.items()):
         lines.append(f"  structural_findings.{code}: {count}")
     videos = report.get("videos") if isinstance(report.get("videos"), dict) else {}
-    lines.append(f"  videos.count: {videos.get('count')}")
+    if videos.get("items_jsonl_count") is not None:
+        lines.append(f"  videos.items_jsonl_count: {videos.get('items_jsonl_count')}")
+    lines.append(f"  videos.directory_count: {videos.get('count')}")
     return "\n".join(lines)
 
 
@@ -141,7 +160,7 @@ def _load_items_jsonl(path: Path) -> list[dict[str, Any]]:
         return []
     records: list[dict[str, Any]] = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        lines = items_jsonl_rows(path.read_text(encoding="utf-8"))
     except OSError:
         return []
     for number, line in enumerate(lines, 1):
@@ -167,9 +186,20 @@ def _items_image_count(records: list[dict[str, Any]]) -> int:
     count = 0
     for item in records:
         values = [item.get(key) for key in TARGET_KEYS]
-        if any(isinstance(value, str) and Path(value).suffix.lower() in IMAGE_SUFFIXES for value in values):
+        if any(isinstance(value, str) and Path(value).suffix.lower() in KNOWN_IMAGE_SUFFIXES for value in values):
             count += 1
     return count
+
+
+def _v2_target_count(samples: list[Any], suffixes: frozenset[str]) -> int:
+    return sum(
+        1
+        for sample in samples if isinstance(sample, dict)
+        for reference in sample.get("files", []) if isinstance(reference, dict)
+        if reference.get("role") == "target"
+        and isinstance(reference.get("path"), str)
+        and Path(reference["path"]).suffix.lower() in suffixes
+    )
 
 
 def _caption_text(item: dict[str, Any]) -> str:
@@ -287,7 +317,32 @@ def _webp_size(data: bytes) -> tuple[int, int] | None:
     return None
 
 
-def _paired_summary(dataset_path: Path, records: list[dict[str, Any]], metadata: dict[str, Any]) -> dict[str, Any]:
+def _paired_summary(
+    dataset_path: Path, records: list[dict[str, Any]], metadata: dict[str, Any],
+    *, observed_samples: list[Any] | None = None,
+) -> dict[str, Any]:
+    if observed_samples is not None:
+        typed_samples = [sample for sample in observed_samples if isinstance(sample, dict)]
+        roles = [
+            {reference.get("role") for reference in sample.get("files", []) if isinstance(reference, dict)}
+            for sample in typed_samples
+        ]
+        source_roles = {"source", "control", "reference"}
+        source_count = sum(1 for present in roles if present & source_roles)
+        target_count = sum(1 for present in roles if "target" in present)
+        applicable = bool(source_count or _declares_paired_control(metadata))
+        dir_summary = _paired_directory_summary(dataset_path, metadata)
+        return {
+            "applicable": applicable,
+            "source_count": source_count if applicable else None,
+            "target_count": target_count if applicable else None,
+            "missing_source_count": sum(1 for present in roles if "target" in present and not present & source_roles) if applicable else None,
+            "missing_target_count": sum(1 for present in roles if present & source_roles and "target" not in present) if applicable else None,
+            "directory_source_count": dir_summary["source_count"],
+            "directory_target_count": dir_summary["target_count"],
+            "directory_missing_source_count": dir_summary["missing_source_count"] if applicable else None,
+            "directory_missing_target_count": dir_summary["missing_target_count"] if applicable else None,
+        }
     source_items = [item for item in records if _first_present(item, SOURCE_KEYS)]
     target_items = [item for item in records if _first_present(item, TARGET_KEYS)]
     dir_summary = _paired_directory_summary(dataset_path, metadata)
@@ -347,7 +402,7 @@ def _paired_directory_summary(dataset_path: Path, metadata: dict[str, Any]) -> d
 def _images_under_first_existing(directories: list[Path]) -> list[Path]:
     for directory in directories:
         if directory.is_dir():
-            return [path for path in _iter_files(directory) if path.suffix.lower() in IMAGE_SUFFIXES]
+            return [path for path in _iter_files(directory) if path.suffix.lower() in KNOWN_IMAGE_SUFFIXES]
     return []
 
 

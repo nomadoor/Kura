@@ -67,9 +67,10 @@ nested process YAML.  The remaining raw nested override is named
 does not accept both spellings because merge precedence would make the record
 ambiguous.
 
-Explicit `command`, native `extra_args`, AI-Toolkit `native_config`, and
-Musubi's native dataset configuration are escape hatches where applicable.
-Their presence is
+Explicit `command`, native `extra_args`, and AI-Toolkit `native_config` are
+escape hatches where applicable. Musubi native dataset configuration is
+generated from the verified manifest projection and is not an authored escape
+hatch. Escape-hatch presence is
 frozen in `manifest.lock.yaml`; capability output states that Kura does not
 validate their inner vocabulary.
 

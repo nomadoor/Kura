@@ -24,6 +24,11 @@ from typing import Any
 
 import yaml
 
+from kura.container_scripts import script_source
+from kura.executors.runpod import project_runpod_dataset_handoff
+from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
+from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
+
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.fsio import atomic_write_json
@@ -31,8 +36,8 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event
-from kura.run_commands.common import _safe_error
+from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, run_events
+from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
 from kura.runtime_io import validated_write_roots
@@ -519,15 +524,11 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         def record_recovery_download(recovery_artifacts: list[str]) -> None:
             if not recovery_artifacts:
                 return
-            events_path = run_dir / "logs" / "events.jsonl"
-            if events_path.is_file():
-                for line in events_path.read_text(encoding="utf-8").splitlines():
-                    try:
-                        prior = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if prior.get("event") == "run_recovery_artifacts_downloaded" and prior.get("artifacts") == recovery_artifacts:
-                        return
+            if any(
+                prior.get("event") == "run_recovery_artifacts_downloaded" and prior.get("artifacts") == recovery_artifacts
+                for prior in run_events(run_dir)
+            ):
+                return
             append_run_event(run_dir, {"event": "run_recovery_artifacts_downloaded", "timestamp": datetime.now().astimezone().isoformat(), "kind": "non-final-intermediate", "artifacts": recovery_artifacts})
 
         def materialize_downloaded_status() -> tuple[bool, list[str]]:
@@ -556,10 +557,20 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     published_states = [select_training_state(run_dir.parent.parent, run_id)]
                 except ValueError:
                     published_states = []
+            state_sync_error: str | None = None
             if state_capture_required and not published_states:
-                raise ValueError(
-                    "downloaded run snapshot has no valid training-state artifact; "
-                    "keep the Pod until recovery files are inspected or downloaded"
+                if exit_code == 0:
+                    # A completed trainer must leave a durable state; keep the Pod.
+                    raise ValueError(
+                        "downloaded run snapshot has no valid training-state artifact; "
+                        "keep the Pod until recovery files are inspected or downloaded"
+                    )
+                # A failed trainer may never have written state. The snapshot
+                # already holds everything the Pod had, so holding the Pod
+                # would only bill; record the gap as Docker does.
+                state_sync_error = (
+                    "remote run failed and its downloaded snapshot has no valid training-state artifact; "
+                    "inspect the backend state output before relying on Resume"
                 )
             outputs = materialize_primary_outputs(output_dir)
             publication_manifest: str | None = None
@@ -613,9 +624,23 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 if isinstance(configured_steps, int) and configured_steps > 0:
                     steps = configured_steps
 
+            realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
+            input_postflight = (
+                project_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
+                if isinstance(realization_ref, str) else None
+            )
+
             def mutate(status: dict[str, Any]) -> None:
+                if input_postflight is not None:
+                    status["dataset_input_postflight"] = input_postflight
                 status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
+                if state_sync_error is not None:
+                    status["training_state_sync_error"] = state_sync_error
+                else:
+                    # A final download that obtained (or never needed) state
+                    # supersedes any error recorded by an earlier mid-run sync.
+                    status.pop("training_state_sync_error", None)
                 status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
                 status.pop("publication_error", None)
                 if publication_manifest:
@@ -1604,14 +1629,54 @@ def _runpod_remote_job_script(
     *,
     workspace: str,
     run_id: str,
+    realization_id: str,
     remote_secret_path: str,
     archive_name: str,
     remote_archive: str,
     cwd: str,
     command: str,
     write_roots: list[dict[str, str]] | None = None,
+    transfer_manifest: str | None = None,
+    transfer_manifest_sha256: str | None = None,
+    command_env: dict[str, str] | None = None,
 ) -> str:
     declared_roots = write_roots or []
+    # An SSH session does not inherit the Pod's create-time environment, so
+    # the frozen command's env is exported here; Kura's own values below win.
+    command_exports = []
+    for key, value in sorted((command_env or {}).items()):
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str):
+            raise ValueError(f"frozen command env has an invalid entry: {key!r}")
+        command_exports.append(f"export {key}={shlex.quote(value)}")
+    command_env_block = "\n".join(command_exports)
+    if transfer_manifest is None:
+        receive_inputs = (
+            f'tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?'
+        )
+        inputs_postflight = ""
+    else:
+        # Selected-file transfers are verified before anything reaches the
+        # workspace; a failure leaves exit_code non-zero so the trainer (and
+        # its model acquisition) never starts.
+        verifier = script_source("runpod_input_verify.py")
+        media = shlex.quote(frozen_suffixes(KNOWN_MEDIA_SUFFIXES))
+        receive_inputs = (
+            f"export KURA_KNOWN_MEDIA_SUFFIXES={media}\n"
+            f"python - {shlex.quote(remote_archive)} {shlex.quote(transfer_manifest)} "
+            f"{shlex.quote(str(transfer_manifest_sha256))} "
+            f">> \"$KURA_LOG_PATH\" 2>&1 <<'KURA_RUNPOD_INPUT_VERIFY' || exit_code=$?\n"
+            f"{verifier}\n"
+            "KURA_RUNPOD_INPUT_VERIFY\n"
+            "inputs_verified=$exit_code"
+        )
+        # Runs after the trainer whatever its exit code; it only records drift.
+        inputs_postflight = (
+            'if [ "$inputs_verified" -eq 0 ]; then\n'
+            "python - --postflight >> \"$KURA_LOG_PATH\" 2>&1 <<'KURA_RUNPOD_INPUT_POSTFLIGHT' || true\n"
+            f"{verifier}\n"
+            "KURA_RUNPOD_INPUT_POSTFLIGHT\n"
+            "fi"
+        )
     paths = validated_write_roots(
         {"env": {item["env"]: item["path"] for item in declared_roots}, "write_roots": declared_roots},
         workspace_path=workspace,
@@ -1629,9 +1694,11 @@ trap cleanup EXIT
 if [ -f "$secret_file" ]; then
   . "$secret_file"
 fi
+{command_env_block}
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 export KURA_WORKSPACE={shlex.quote(workspace)}
 export KURA_RUN_ID={shlex.quote(run_id)}
+export KURA_REALIZATION_ID={shlex.quote(realization_id)}
 export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
 export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
@@ -1707,7 +1774,7 @@ collect_runtime_diagnostics() {{
 export KURA_CGROUP_OOM_KILL_BEFORE=$(read_oom_kill)
 collect_runtime_diagnostics before_backend
 exit_code=0
-tar -xzf {shlex.quote(remote_archive)} -C "$KURA_WORKSPACE" >> "$KURA_LOG_PATH" 2>&1 || exit_code=$?
+{receive_inputs}
 if [ "$exit_code" -eq 0 ]; then
   cd {shlex.quote(cwd)} || exit_code=$?
 fi
@@ -1716,6 +1783,7 @@ if [ "$exit_code" -eq 0 ]; then
   exit_code=$?
 fi
 collect_runtime_diagnostics after_backend
+{inputs_postflight}
 export KURA_CGROUP_OOM_KILL_AFTER=$(read_oom_kill)
 export KURA_CGROUP_MEMORY_PEAK=$(read_memory_peak)
 export KURA_EXIT_CODE="$exit_code"
@@ -1769,7 +1837,21 @@ exit "$exit_code"
 """.strip()
 
 
-def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+def _prepare_remote_upload(run_dir: Path) -> dict[str, Any]:
+    """Decide everything the upload needs before the first SSH action.
+
+    Nothing has run on the Pod yet, so any failure here is a refusal: the
+    caller stops the unused Pod instead of leaving it billing.
+    """
+    try:
+        return _prepare_remote_upload_unchecked(run_dir)
+    except TransferRefused:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as error:
+        raise TransferRefused(f"remote job preparation failed before upload: {_safe_error(error)}") from error
+
+
+def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
     stage = _latest_runpod_stage(run_dir)
     archive = stage.get("archive")
     archive_name = stage.get("archive_name")
@@ -1777,7 +1859,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
         raise ValueError("latest RunPod stage has no upload archive")
     archive_path = run_dir / archive
     if not archive_path.is_file():
-        raise ValueError(f"upload archive is missing: {archive_path}")
+        raise TransferRefused(f"upload archive is missing: {archive_path}")
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     realization_ref = status.get("last_realization")
     if not isinstance(realization_ref, str):
@@ -1789,23 +1871,75 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     argv = realization.get("backend_command")
     if not isinstance(workspace, str) or not isinstance(cwd, str) or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
         raise ValueError("latest realization has no runnable RunPod command")
+    selected_files = stage.get("transfer") == "selected-files"
+    remote_manifest_sha256: str | None = None
+    pinned_manifest: Path | None = None
+    if selected_files:
+        # Refusals here happen before any upload, so the Pod is safe to stop.
+        if workspace != "/workspace":
+            # Frozen view links target /workspace/datasets/...
+            raise TransferRefused("selected-file RunPod transfer requires KURA_WORKSPACE=/workspace")
+        # Send only what launch pinned before the Pod existed, after proving the
+        # stage still equals it; the Pod trusts nothing but the pinned digest.
+        pin = realization.get("transfer") if isinstance(realization.get("transfer"), dict) else {}
+        pinned, remote_manifest_sha256 = pin.get("pinned_manifest"), pin.get("manifest_sha256")
+        if not isinstance(pinned, str) or not isinstance(remote_manifest_sha256, str) or pin.get("stage") != status.get("last_stage"):
+            raise StagedTransferChanged("the realization has no pin for the current stage")
+        locked_run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
+        pinned_manifest = run_dir / pinned
+        verify_pinned_transfer(
+            run_dir.parent.parent, run_dir, locked_run, stage, pinned_manifest, remote_manifest_sha256,
+        )
+    frozen = _load_frozen_command(run_dir, _load_yaml(run_dir / "resolved" / "manifest.lock.yaml"))
+    command_env = frozen.get("env") if isinstance(frozen.get("env"), dict) else {}
+    return {
+        "command_env": command_env,
+        "stage": stage, "archive_path": archive_path, "archive_name": archive_name, "status": status,
+        "realization": realization, "realization_ref": realization_ref, "workspace": workspace,
+        "run_id": run_id, "cwd": cwd, "argv": argv, "selected_files": selected_files,
+        "pinned_manifest": pinned_manifest, "remote_manifest_sha256": remote_manifest_sha256,
+    }
+
+
+def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+    prepared_upload = _prepare_remote_upload(run_dir)
+    status = prepared_upload["status"]
+    realization = prepared_upload["realization"]
+    realization_ref = prepared_upload["realization_ref"]
+    workspace = prepared_upload["workspace"]
+    run_id = prepared_upload["run_id"]
+    cwd = prepared_upload["cwd"]
+    argv = prepared_upload["argv"]
+    archive_path = prepared_upload["archive_path"]
+    archive_name = prepared_upload["archive_name"]
+    selected_files = prepared_upload["selected_files"]
+    pinned_manifest = prepared_upload["pinned_manifest"]
+    remote_manifest_sha256 = prepared_upload["remote_manifest_sha256"]
+    command_env = prepared_upload["command_env"]
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
-    remote_archive = f"{workspace}/{archive_name}"
-    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(workspace)}"], context="ssh workspace preparation")
+    remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
+    remote_archive = f"{remote_dir}/{archive_name}"
+    remote_manifest: str | None = None
+    uploads = [(archive_path, remote_archive)]
+    if pinned_manifest is not None:
+        remote_manifest = f"{remote_dir}/transfer-manifest.json"
+        uploads.append((pinned_manifest, remote_manifest))
+    prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_dir)}"], context="ssh workspace preparation")
     if prepared.returncode:
         raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
-    scp = [
-        "scp",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-P", str(details["port"]),
-        "-i", str(details["key"]),
-        str(archive_path),
-        f"root@{details['ip']}:{remote_archive}",
-    ]
-    uploaded = _run_bounded(scp, context="scp upload")
-    if uploaded.returncode:
-        raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
+    for local, remote in uploads:
+        scp = [
+            "scp",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-P", str(details["port"]),
+            "-i", str(details["key"]),
+            str(local),
+            f"root@{details['ip']}:{remote}",
+        ]
+        uploaded = _run_bounded(scp, context="scp upload")
+        if uploaded.returncode:
+            raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
     command = " ".join(shlex.quote(arg) for arg in argv)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
     secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
@@ -1826,12 +1960,16 @@ chmod 600 {shlex.quote(remote_secret_path)}
     remote_job_script = _runpod_remote_job_script(
         workspace=workspace,
         run_id=run_id,
+        realization_id=str(realization.get("id") or Path(realization_ref).stem),
         remote_secret_path=remote_secret_path,
         archive_name=archive_name,
         remote_archive=remote_archive,
         cwd=cwd,
         command=command,
         write_roots=realization.get("write_roots"),
+        transfer_manifest=remote_manifest,
+        transfer_manifest_sha256=remote_manifest_sha256,
+        command_env=command_env,
     )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"

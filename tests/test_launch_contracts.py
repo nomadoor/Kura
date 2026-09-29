@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from kura.backends import command_musubi_tuner
-from kura.backends.ai_toolkit import command_ai_toolkit
+from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_PROJECTION_PROFILES, MUSUBI_VIDEO_SUFFIXES
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, command_ai_toolkit
 from kura.executors.docker import docker_command
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
 from kura.run_commands.common import _load_frozen_command
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+from kura.media_types import frozen_suffixes
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,19 @@ COMFYUI_PREPARE_PATH = ROOT / "docker" / "comfyui" / "kura_comfy_prepare.py"
 SECRET_OPTIONAL = {"HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "KURA_REMOTE_NOTIFY_NTFY"}
 DEFAULTED_OPTIONAL = {"COMFYUI_ROOT", "SD_SCRIPTS_ROOT"}
 RETRY_OPTIONAL = {"KURA_HF_DOWNLOAD_ATTEMPTS", "KURA_HF_DOWNLOAD_POLL_SEC", "KURA_HF_DOWNLOAD_NO_PROGRESS_SEC"}
+# Supplied by the RunPod job script to its selected-file transfer verifier.
+TRANSFER_SCOPED = {"KURA_KNOWN_MEDIA_SUFFIXES"}
+BACKEND_SCOPED = {
+    "KURA_AI_TOOLKIT_VIDEO_SUFFIXES",
+    "KURA_MUSUBI_AUDIO_SUFFIXES",
+    "KURA_MUSUBI_ARCHITECTURE",
+    "KURA_MUSUBI_NATIVE_DATASET_ARCHITECTURE",
+    "KURA_MUSUBI_IMAGE_SUFFIXES",
+    "KURA_MUSUBI_TARGET_FPS",
+    "KURA_MUSUBI_FPS_RESAMPLE_MODE",
+    "KURA_MUSUBI_PROFILES",
+    "KURA_MUSUBI_VIDEO_SUFFIXES",
+}
 
 
 def _literal_env_name(node: ast.AST) -> str | None:
@@ -68,6 +83,8 @@ def required_env_names(paths: list[Path]) -> set[str]:
         for name in consumed_env_names(paths)
         if name not in DEFAULTED_OPTIONAL
         and name not in RETRY_OPTIONAL
+        and name not in BACKEND_SCOPED
+        and name not in TRANSFER_SCOPED
         and name not in SECRET_OPTIONAL
         and not name.startswith("KURA_NTFY_")
     }
@@ -104,6 +121,25 @@ def _minimal_flux2_run() -> dict[str, Any]:
 
 
 class LaunchEnvironmentContractTests(unittest.TestCase):
+    def test_ai_toolkit_audio_preflight_runs_before_the_trainer(self) -> None:
+        spec = command_ai_toolkit({
+            "id": "audio-video",
+            "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "ltx2.5",
+                "dataset_config": {
+                    "num_frames": 49, "fps": 24, "do_audio": True,
+                },
+            }},
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+        })
+
+        script = " ".join(spec["argv"])
+        self.assertLess(
+            script.index("AI-Toolkit embedded-audio preflight"),
+            script.index("ai_toolkit_state"),
+        )
+
     def test_ai_toolkit_declares_its_backend_managed_model_write_root(self) -> None:
         spec = command_ai_toolkit({
             "id": "contract-run",
@@ -130,6 +166,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         remote = _runpod_remote_job_script(
             workspace="/workspace",
             run_id="contract-run",
+            realization_id="r1",
             remote_secret_path="/tmp/contract.env",
             archive_name="contract.tar.gz",
             remote_archive="/workspace/contract.tar.gz",
@@ -145,6 +182,54 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         self.assertEqual(spec["output_contract"], {
             "required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}],
         })
+        self.assertEqual(spec["env"]["KURA_MUSUBI_IMAGE_SUFFIXES"], frozen_suffixes(MUSUBI_IMAGE_SUFFIXES))
+        self.assertEqual(spec["env"]["KURA_MUSUBI_VIDEO_SUFFIXES"], frozen_suffixes(MUSUBI_VIDEO_SUFFIXES))
+        self.assertEqual(spec["env"]["KURA_MUSUBI_AUDIO_SUFFIXES"], frozen_suffixes(MUSUBI_AUDIO_SUFFIXES))
+
+    def test_ai_toolkit_builtin_command_freezes_video_suffixes(self) -> None:
+        spec = command_ai_toolkit({
+            "id": "contract-run",
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+            "backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl"}},
+        })
+        self.assertEqual(
+            spec["env"]["KURA_AI_TOOLKIT_VIDEO_SUFFIXES"],
+            frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+        )
+
+    def test_musubi_h3_guidance_cache_is_a_writable_run_cache(self) -> None:
+        spec = command_musubi_tuner({
+            "id": "h3-run",
+            "model": {"base": "example/model"},
+            "recipe": {"steps": 1, "seed": 1},
+            "backend": {"name": "musubi-tuner", "config": {
+                "architecture": "minimax_h3",
+                "task": "t2va",
+                "model_bundle": "none",
+                "model_paths": {
+                    "dit": "/models/dit.safetensors",
+                    "video_vae": "/models/video-vae.safetensors",
+                    "audio_vae": "/models/audio-vae.safetensors",
+                    "text_encoder": "/models/text-encoder.safetensors",
+                },
+            }},
+        })
+        cache = "/workspace/runs/h3-run/cache/musubi"
+        self.assertEqual(spec["write_roots"], [{
+            "role": "backend-cache", "path": cache, "env": "KURA_MUSUBI_CACHE",
+        }])
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_dir = workspace / "runs" / "h3-run"
+            run_dir.mkdir(parents=True)
+            argv, _, _ = docker_command(
+                workspace, run_dir, spec, "example:image", [], False, "r1",
+            )
+        wrapper = argv[argv.index("kura-job") - 1]
+        self.assertIn(f'mkdir -p "$HOME"', wrapper)
+        self.assertIn(f'"{cache}"', wrapper)
+        self.assertIn(f'test -w "{cache}"', wrapper)
 
     def test_ai_toolkit_explicit_command_keeps_model_cache_managed(self) -> None:
         run = {
@@ -168,8 +253,22 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
                 )
 
     def test_container_env_inventory_is_derived_from_sources(self) -> None:
-        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {"HF_HOME", "HF_HUB_CACHE", "KURA_WORKSPACE_PATH_MAPS"})
+        self.assertEqual(required_env_names(CONTAINER_SCRIPT_PATHS), {
+            "HF_HOME", "HF_HUB_CACHE", "KURA_REALIZATION_ID", "KURA_RUN_ID", "KURA_WORKSPACE", "KURA_WORKSPACE_PATH_MAPS",
+        })
         self.assertEqual(required_env_names([COMFYUI_PREPARE_PATH]), {"HF_HUB_CACHE", "KURA_WORKSPACE"})
+
+    def test_runpod_job_script_supplies_the_transfer_scoped_env(self) -> None:
+        from kura.run_commands.runpod_ssh import _runpod_remote_job_script
+
+        script = _runpod_remote_job_script(
+            workspace="/workspace", run_id="r", realization_id="x", remote_secret_path="/tmp/s",
+            archive_name="a.tar", remote_archive="/workspace/.kura-transfer/r/a.tar", cwd="/opt/tool",
+            command="true", transfer_manifest="/workspace/.kura-transfer/r/m.json",
+            transfer_manifest_sha256="0" * 64,
+        )
+        for name in TRANSFER_SCOPED:
+            self.assertIn(f"export {name}=", script)
 
     def test_local_docker_env_satisfies_container_script_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -188,16 +287,18 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             )
         self.assertTrue(required_env_names(CONTAINER_SCRIPT_PATHS) <= set(runtime_env))
         self.assertIn("KURA_LOG_PATH", runtime_env)
+        self.assertEqual(runtime_env["KURA_REALIZATION_ID"], "r1")
         mappings = json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"])
         self.assertTrue(_hf_home_has_workspace_mapping(runtime_env["HF_HOME"], mappings))
         self.assertEqual(runtime_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
 
     def test_runpod_pod_env_satisfies_training_and_session_contracts(self) -> None:
-        training_env = _runpod_training_env({}, workspace_path="/workspace", run_id="contract-run")
+        training_env = _runpod_training_env({}, workspace_path="/workspace", run_id="contract-run", realization_id="r1")
         self.assertEqual(training_env["HF_HOME"], "/workspace/cache/huggingface")
         self.assertEqual(training_env["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
         self.assertEqual(training_env["KURA_WORKSPACE"], "/workspace")
         self.assertEqual(training_env["KURA_RUN_ID"], "contract-run")
+        self.assertEqual(training_env["KURA_REALIZATION_ID"], "r1")
         self.assertIn("KURA_LOG_PATH", training_env)
         self.assertTrue(_posix_prefix(training_env["HF_HOME"], "/workspace"))
 
@@ -213,6 +314,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
         script = _runpod_remote_job_script(
             workspace="/workspace",
             run_id="contract-run",
+            realization_id="r1",
             remote_secret_path="/tmp/kura-secrets/contract-run.env",
             archive_name="bundle.tar.gz",
             remote_archive="/workspace/bundle.tar.gz",
@@ -228,6 +330,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             self.fail(f"missing line containing {needle!r}")
 
         export_hf = line_index('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"')
+        self.assertIn("export KURA_REALIZATION_ID=r1", script)
         export_hub = line_index('export HF_HUB_CACHE="$HF_HOME/hub"')
         mkdir_hf = line_index('mkdir -p "$HF_HUB_CACHE" "$KURA_WORKSPACE/cache/models"')
         contract_check = line_index("HF_HOME must be under KURA_WORKSPACE before remote job start")
@@ -242,6 +345,16 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
     def test_musubi_container_command_asserts_dataset_before_download(self) -> None:
         script = command_musubi_tuner(_minimal_flux2_run())["argv"][2]
         self.assertLess(script.index("musubi_dataset_assert.py"), script.index("hf_hub_download"))
+
+    def test_musubi_video_profiles_own_preflight_frame_rates(self) -> None:
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["wan-video"]["target_fps"], 16.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["hunyuan-video"]["target_fps"], 24.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["hunyuan-video-1.5-video"]["target_fps"], 24.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["framepack-video"]["target_fps"], 30.0)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["framepack-f1-video"]["target_fps"], 30.0)
+        self.assertNotIn("hunyuan-video-1.5-image", MUSUBI_PROJECTION_PROFILES)
+        self.assertEqual(MUSUBI_PROJECTION_PROFILES["h3-video-t2va"]["target_fps"], 24.0)
+        self.assertNotIn("target_fps", MUSUBI_PROJECTION_PROFILES["ordinary-image"])
 
 
 if __name__ == "__main__":

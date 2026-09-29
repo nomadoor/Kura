@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from copy import deepcopy
 import hashlib
 import io
 import importlib.util
@@ -25,14 +26,16 @@ from unittest.mock import Mock, patch
 import yaml
 
 from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
+from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolkit_dataset
+from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
 from kura.backends.musubi_command import display_musubi_tuner
-from kura.backends.musubi_datasets import _write_musubi_dataset_config, validate_musubi_dataset_layout
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.run_commands.runpod_ssh import _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env
+from kura.media_types import frozen_suffixes
 from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error, _runpod_request
 from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
@@ -43,6 +46,9 @@ from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_d
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 class InitCommandTests(unittest.TestCase):
@@ -169,8 +175,14 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 dataset = root / "datasets" / "tiny"
                 dataset.mkdir(parents=True)
-                (dataset / "dataset.yaml").write_text("id: tiny\n", encoding="utf-8")
-                (dataset / "items.jsonl").write_text("{}\n", encoding="utf-8")
+                (dataset / "dataset.yaml").write_text(
+                    "id: tiny\nitems_schema_version: 2\n", encoding="utf-8",
+                )
+                (dataset / "items.jsonl").write_text(json.dumps({
+                    "id": "missing",
+                    "files": [{"type": "file", "role": "target", "path": "missing.png"}],
+                    "caption": None,
+                }) + "\n", encoding="utf-8")
                 stdout = io.StringIO()
                 with patch("sys.stdout", stdout):
                     self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="empty-musubi", backend="musubi-tuner", executor="docker", gpu=None)), 0)
@@ -189,7 +201,8 @@ class InitCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("dataset tiny has no images/ directory and no image files at its root", stderr.getvalue())
+        self.assertIn("missing.png", stderr.getvalue())
+        self.assertIn("does not exist", stderr.getvalue())
         self.assertFalse(manifest_exists)
 
     def test_run_compile_rejects_removed_backend_overrides(self) -> None:
@@ -265,8 +278,8 @@ class InitCommandTests(unittest.TestCase):
             root = Path(directory)
             dataset = root / "datasets" / "tiny"
             dataset.mkdir(parents=True)
-            (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
-            (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+            (dataset / "dataset.yaml").write_text("id: tiny\nitems_schema_version: 2\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text('{"id":"1","files":[{"type":"file","role":"target","path":"images/001.png"}],"caption":{"text":"ok"}}\n', encoding="utf-8")
             stderr = io.StringIO()
             with patch("sys.stderr", stderr):
                 self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 1)
@@ -282,8 +295,8 @@ class InitCommandTests(unittest.TestCase):
             dataset.mkdir(parents=True)
             outside = root / "outside.png"
             outside.write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
-            (dataset / "items.jsonl").write_text('{"id":"1","path":"../../outside.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+            (dataset / "dataset.yaml").write_text("id: tiny\nitems_schema_version: 2\n", encoding="utf-8")
+            (dataset / "items.jsonl").write_text('{"id":"1","files":[{"type":"file","role":"target","path":"../../outside.png"}],"caption":{"text":"ok"}}\n', encoding="utf-8")
 
             stderr = io.StringIO()
             with patch("sys.stderr", stderr):
@@ -291,7 +304,7 @@ class InitCommandTests(unittest.TestCase):
 
             self.assertIn("path must stay inside the dataset directory", stderr.getvalue())
 
-    def test_run_compile_preserves_requested_executor_in_env_lock(self) -> None:
+    def test_provider_only_manifest_v2_runpod_compiles_and_plans_the_selected_transfer(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -301,38 +314,47 @@ class InitCommandTests(unittest.TestCase):
                 dataset = root / "datasets" / "tiny"
                 (dataset / "images").mkdir(parents=True)
                 (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-                (dataset / "dataset.yaml").write_text("id: tiny\nstats:\n  count: 1\n", encoding="utf-8")
-                (dataset / "items.jsonl").write_text('{"id":"1","path":"images/001.png","caption":"ok","hash":"sha256:abc"}\n', encoding="utf-8")
+                (dataset / "dataset.yaml").write_text(
+                    "id: tiny\nitems_schema_version: 2\nstats:\n  count: 1\n", encoding="utf-8",
+                )
+                (dataset / "items.jsonl").write_text(
+                    '{"id":"1","files":[{"type":"file","role":"target","path":"images/001.png"}],"caption":{"text":"ok"}}\n',
+                    encoding="utf-8",
+                )
                 stdout = io.StringIO()
                 with patch("sys.stdout", stdout):
                     self.assertEqual(cmd_run_new(argparse.Namespace(experiment="exp", slug="runpod", backend="ai-toolkit", executor="runpod", gpu="NVIDIA A40")), 0)
                 run_id = stdout.getvalue().strip()
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
-                run["model"]["base"] = "black-forest-labs/FLUX.2-klein-base-4B"
+                run["model"]["base"] = "stabilityai/stable-diffusion-xl-base-1.0"
+                run["backend"]["config"]["model_arch"] = "sdxl"
                 run["datasets"] = [{"id": "tiny"}]
                 run["recipe"] = {"steps": 1, "seed": 1}
+                run["compute"] = {"provider": "runpod", "gpu": "NVIDIA A40"}
                 run_path.write_text(yaml.safe_dump(run), encoding="utf-8")
-                self.assertEqual(cmd_run_compile(argparse.Namespace(run_id=run_id)), 0)
+                (dataset / "unselected.bin").write_bytes(b"x" * 4096)
+                stderr = io.StringIO()
+                with patch("sys.stderr", stderr), patch("sys.stdout", io.StringIO()):
+                    code = cmd_run_compile(argparse.Namespace(run_id=run_id))
+                self.assertEqual(code, 0, stderr.getvalue())
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"size": None, "error": "offline"}):
+                    payload = plan_run(run_id)
+                    locked = yaml.safe_load((root / "runs" / run_id / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+                    disk = _runpod_launch_disk_preflight(locked, {"container_disk_gb": 50}, {"bytes": 0})
             finally:
                 os.chdir(previous)
 
-            env_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "env.lock").read_text(encoding="utf-8"))
-            self.assertEqual(env_lock["declared_executor"], "runpod")
-            self.assertEqual(
-                env_lock["selected_image"],
-                "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
-            )
-            self.assertEqual(env_lock["selected_image_identity"]["reference"], env_lock["selected_image"])
-            requirements_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "model-requirements.lock.yaml").read_text(encoding="utf-8"))
-            self.assertEqual(requirements_lock["schema_version"], 1)
-            self.assertEqual(requirements_lock["requirements"][0]["acquisition"], "backend")
-            self.assertEqual(requirements_lock["requirements"][0]["identity"]["repo_id"], "black-forest-labs/FLUX.2-klein-base-4B")
-            contract_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "dataset-observations.lock.yaml").read_text(encoding="utf-8"))
-            self.assertEqual(contract_lock["schema_version"], 1)
-            self.assertEqual(contract_lock["datasets"][0]["dataset"], "tiny")
-            self.assertEqual(contract_lock["datasets"][0]["observations"]["sample_count"], 1)
-            self.assertEqual(contract_lock["datasets"][0]["samples"][0]["target"], "images/001.png")
+            transfer = payload["dataset_input"]["runpod_transfer"]
+            self.assertEqual(transfer["payload_bytes"] > 0, True)
+            self.assertEqual(transfer["remote_peak_bytes"], transfer["tar_bytes"] + transfer["payload_bytes"])
+            self.assertEqual(disk["estimates"]["input_transfer"], transfer)
+            self.assertGreaterEqual(disk["estimated_write_bytes"], transfer["remote_peak_bytes"])
+            from kura.dataset_transfer import build_transfer_inventory
+
+            inventory = build_transfer_inventory(root, root / "runs" / run_id, locked)
+            sources = [item["destination"] for item in inventory["entries"] if item["namespace"] == "source"]
+            self.assertEqual(sources, ["datasets/tiny/images/001.png"])
 
     def test_init_repairs_cache_directories_in_existing_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -614,6 +636,77 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertFalse((run / "cache").exists())
             self.assertTrue((run / "outputs").exists())
             self.assertFalse(payload["dry_run"])
+
+    def test_cleanup_runs_offers_only_disposable_dataset_view_remnants(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            dataset_file = root / "datasets" / "tiny" / "a.png"
+            dataset_file.parent.mkdir(parents=True)
+            dataset_file.write_bytes(b"image")
+            missing = {"realization_id": "launch", "state": "unknown", "container_missing": True}
+            unclear = {"realization_id": "launch", "state": "unknown", "container_missing": False}
+            observed = {
+                "state": "unknown", "started": "2026-01-04T00:00:00+00:00",
+                "last_realization": "realizations/launch.json",
+                "last_observation": "realizations/launch.observed.json",
+            }
+            observations = {"gone": missing, "deferred-then-gone": missing, "unclear": unclear}
+            runs = {
+                "gone": (observed, True),
+                "deferred-then-gone": ({
+                    **observed, "state": "recovery_required", "recovery_required": True,
+                    "dataset_input_postflight": {"view_cleanup": "deferred"},
+                }, True),
+                "unclear": (observed, False),
+                "failed-cleanup": ({
+                    "state": "completed", "ended": "2026-01-03T00:00:00+00:00",
+                    "dataset_input_postflight": {"view_cleanup": "failed"},
+                }, True),
+                "deferred": ({
+                    "state": "completed", "ended": "2026-01-02T00:00:00+00:00",
+                    "recovery_required": True,
+                    "dataset_input_postflight": {"view_cleanup": "deferred"},
+                }, False),
+                "running": ({"state": "running", "started": "2026-01-01T00:00:00+00:00"}, False),
+            }
+            for run_id, (status, _) in runs.items():
+                view = root / "runs" / run_id / "cache" / "dataset-view" / "ai-toolkit" / "tiny"
+                view.mkdir(parents=True)
+                (view / "a.png").symlink_to(dataset_file)
+                (root / "runs" / run_id / "status.json").write_text(json.dumps(status), encoding="utf-8")
+                if run_id in observations:
+                    record = root / "runs" / run_id / "realizations" / "launch.observed.json"
+                    record.parent.mkdir()
+                    record.write_text(json.dumps(observations[run_id]), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                ):
+                    code = cmd_cleanup(argparse.Namespace(target="runs", keep_last=30, delete_final_artifacts=False, yes=False))
+                payload = json.loads(stdout.getvalue())
+                run_actions = next(item for item in payload["actions"] if item.get("target") == "runs/*")["run_actions"]
+                offered = {item["id"] for item in run_actions if item["classification"] == "safe-run-dataset-view-remnant"}
+                self.assertEqual(code, 0)
+                self.assertEqual(offered, {run_id for run_id, (_, expected) in runs.items() if expected})
+                for run_id in runs:
+                    self.assertTrue((root / "runs" / run_id / "cache" / "dataset-view").is_dir())
+
+                with (
+                    patch("kura.cli._path_size_bytes", return_value=1),
+                    patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": []}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO),
+                ):
+                    self.assertEqual(cmd_cleanup(argparse.Namespace(target="runs", keep_last=30, delete_final_artifacts=False, yes=True)), 0)
+            finally:
+                os.chdir(previous)
+            self.assertFalse((root / "runs" / "gone" / "cache" / "dataset-view").exists())
+            self.assertTrue((root / "runs" / "deferred" / "cache" / "dataset-view").is_dir())
+            self.assertTrue(dataset_file.is_file())
 
     def test_cleanup_runs_requires_explicit_final_delete_for_whole_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1479,11 +1572,12 @@ class RunPlanTests(unittest.TestCase):
                             "network_dim": 16,
                             "network_alpha": 1024,
                             "learning_rate": "0.00005",
-                            "dataset_config": {"general": {"batch_size": 2, "resolution": [768]}},
+                            "batch_size": 2,
+                            "resolution": [768],
                             "fp8_base": True,
                             "gradient_checkpointing": True,
                             "save_every_n_steps": 100,
-                            "extra_args": ["--blocks_to_swap", "3"],
+                            "blocks_to_swap": 3,
                         }
                     },
                     },
@@ -1902,11 +1996,12 @@ class RunPlanTests(unittest.TestCase):
                         "recipe": {"steps": 3000},
             "backend": {"name": "musubi-tuner", "config": {
                     "save_every_n_steps": 100,
-                    "extra_args": ["--save_last_n_steps", "300"],
+                    "save_last_n_steps": 300,
                 }
             },
         }
         _checkpoint_safety_preflight(run)
+        run["backend"]["config"].pop("save_last_n_steps")
         run["backend"]["config"]["extra_args"] = ["--save_last_n_epochs=2"]
         _checkpoint_safety_preflight(run)
 
@@ -3863,15 +3958,21 @@ class AiToolkitBackendTests(unittest.TestCase):
         return {
             "id": "ai-toolkit-example",
             "type": "train",
-            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False, "dataset_folder": "/workspace/datasets/tiny/images"}},
+            "backend": {"name": "ai-toolkit", "adapter_version": 1, "config": {"model_arch": "flux2_klein_4b", "network_dim": 4, "network_alpha": 4, "learning_rate": 1.0e-4, "batch_size": 1, "gradient_checkpointing": False, "optimizer_type": "adamw8bit", "quantize": False, "quantize_te": False, "low_vram": False}},
             "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"},
             "datasets": [{"id": "tiny", "digest": "sha256:abc"}],
             "recipe": {"steps": 1, "seed": 42},
         }
 
+    def _write_frozen_projection(self, run: dict[str, object], destination: Path) -> str:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        report = freeze_fixture(run, destination.parent)
+        return report["datasets"][0]["native"]["folder_path"]
+
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
+            folder_path = self._write_frozen_projection(self._run(), destination)
             compile_ai_toolkit(self._run(), destination)
             config = yaml.safe_load((destination.with_suffix(".yaml")).read_text(encoding="utf-8"))
         command = command_ai_toolkit(self._run())
@@ -3879,7 +3980,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(config["config"]["name"], "ai-toolkit-example")
         process = config["config"]["process"][0]
         self.assertEqual(process["model"]["name_or_path"], "black-forest-labs/FLUX.2-klein-base-4B")
-        self.assertEqual(process["datasets"][0]["folder_path"], "/workspace/datasets/tiny/images")
+        self.assertEqual(process["datasets"][0]["folder_path"], folder_path)
         self.assertEqual(process["network"]["linear"], 4)
         self.assertEqual(process["train"]["steps"], 1)
         self.assertFalse(process["train"]["gradient_checkpointing"])
@@ -3890,7 +3991,52 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertEqual(command["argv"][:2], ["python", "-c"])
         self.assertIn("hook_before_train_loop", command["argv"][2])
         self.assertIn("ai-toolkit.yaml", command["argv"][3])
-        self.assertEqual(command["env"], {"SEED": "42", "MODELS_PATH": "/workspace/cache/ai-toolkit/models"})
+        self.assertEqual(command["env"], {
+            "SEED": "42",
+            "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
+            "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
+        })
+
+    def test_provider_only_runpod_command_uses_runpod_working_directory(self) -> None:
+        run = self._run()
+        run["compute"] = {"provider": "runpod"}
+
+        command = command_ai_toolkit(run)
+
+        self.assertEqual(command["cwd"], "/app/ai-toolkit")
+
+    def test_compile_has_no_directory_inference_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "requires a frozen manifest projection"):
+                compile_ai_toolkit(self._run(), Path(directory) / "ai-toolkit")
+
+    def test_compile_rejects_legacy_minimal_projection_lock(self) -> None:
+        run = self._run()
+        dataset_id = str(run["datasets"][0]["id"])
+        view = f"runs/{run['id']}/cache/dataset-view/ai-toolkit/{dataset_id}"
+        legacy_lock = {
+            "backend": "ai-toolkit",
+            "datasets": [{
+                "id": dataset_id,
+                "native": {
+                    "folder_path": f"/workspace/{view}",
+                    "caption_ext": ".txt",
+                    "cache_latents_to_disk": True,
+                },
+                "views": [{"consumers": [{
+                    "kind": "recursive-directory",
+                    "native_pointer": "/folder_path",
+                    "path": view,
+                }]}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            (destination.parent / "dataset-projection.lock.json").write_text(
+                json.dumps(legacy_lock), encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
+                compile_ai_toolkit(run, destination)
 
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()
@@ -3905,6 +4051,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
+            self._write_frozen_projection(run, destination)
             command = compile_ai_toolkit(run, destination)
             process = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))["config"]["process"][0]
         self.assertEqual(process["train"]["steps"], 150)
@@ -3915,18 +4062,24 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertIn("state-1", command["argv"][2] + " ".join(command["argv"][3:]))
 
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
-        run = self._run()
+        projection_run = self._run()
+        run = deepcopy(projection_run)
         run["backend"] = {"name": "ai-toolkit", "config": {"native_config": ["not", "a", "mapping"]}}
         with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            self._write_frozen_projection(projection_run, destination)
             with self.assertRaisesRegex(ValueError, "backend.config.native_config"):
-                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+                compile_ai_toolkit(run, destination)
 
     def test_compile_rejects_native_steps_that_duplicate_recipe(self) -> None:
-        run = self._run()
+        projection_run = self._run()
+        run = deepcopy(projection_run)
         run["backend"]["config"]["native_config"] = {"train": {"steps": 2}}
         with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "ai-toolkit"
+            self._write_frozen_projection(projection_run, destination)
             with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
-                compile_ai_toolkit(run, Path(directory) / "ai-toolkit")
+                compile_ai_toolkit(run, destination)
 
     def test_removed_backend_overrides_are_rejected(self) -> None:
         run = self._run()
@@ -3937,424 +4090,11 @@ class AiToolkitBackendTests(unittest.TestCase):
 
 
 class MusubiBackendTests(unittest.TestCase):
-    def test_compile_musubi_minimax_h3_projects_typed_dataset_contracts(self) -> None:
-        cases = (
-            ("fl2va-video", "fl2va", False, "guidance", None, {"source": "video_directory", "path": "videos", "target_frames": [124]}, 'video_directory = "/workspace/datasets/tiny/videos"'),
-            ("ref2va-video", "ref2va", False, "guidance", None, {"source": "video_jsonl", "path": "items.jsonl", "target_frames": [124]}, 'video_jsonl_file = "/workspace/datasets/tiny/items.jsonl"'),
-            ("fl2va-image", "fl2va", True, "guidance", None, {"source": "image_directory", "path": "targets", "control_subdir": "controls", "fp_1f_clean_indices": [0], "fp_1f_target_index": 24}, "fp_1f_clean_indices = [0]"),
-            ("fl2va-image-jsonl", "fl2va", True, "guidance", None, {"source": "image_jsonl", "path": "items.jsonl", "fp_1f_clean_indices": [0], "fp_1f_target_index": 24}, 'image_jsonl_file = "/workspace/datasets/tiny/items.jsonl"'),
-            ("teacher-endpoints", "t2va", False, "teacher_matching", "first,last", {"source": "video_directory", "path": "videos", "target_frames": [124]}, 'video_directory = "/workspace/datasets/tiny/videos"'),
-            ("teacher-ref", "t2va", False, "teacher_matching", "ref", {"source": "video_jsonl", "path": "items.jsonl", "target_frames": [124]}, 'video_jsonl_file = "/workspace/datasets/tiny/items.jsonl"'),
-            ("teacher-image", "t2va", True, "teacher_matching", "subject_ref", {"source": "image_jsonl", "path": "items.jsonl"}, 'image_jsonl_file = "/workspace/datasets/tiny/items.jsonl"'),
-        )
-        for run_id, task, one_frame, loss_method, teacher_conditions, dataset, expected in cases:
-            with self.subTest(run_id=run_id), tempfile.TemporaryDirectory() as directory:
-                run = self._run()
-                run["id"] = run_id
-                run["backend"] = {"name": "musubi-tuner", "config": {
-                    "architecture": "minimax_h3",
-                    "task": task,
-                    "model_bundle": "none",
-                    "model_paths": {
-                        "dit": "/models/minimax-h3.safetensors",
-                        "video_vae": "/models/minimax-h3-video-vae.safetensors",
-                        "audio_vae": "/models/minimax-h3-audio-vae.safetensors",
-                        "text_encoder": "/models/minimax-h3-text-encoder.safetensors",
-                    },
-                    "h3_loss_method": loss_method,
-                    "h3_teacher_conditions": teacher_conditions,
-                    "one_frame": one_frame,
-                    "video_only": one_frame,
-                    "h3_dataset_config": {
-                        "general": {"resolution": [1024, 1024], "batch_size": 1},
-                        "datasets": [dataset],
-                    },
-                }}
-                if loss_method != "teacher_matching":
-                    del run["backend"]["config"]["h3_teacher_conditions"]
-                destination = Path(directory) / "musubi"
-
-                BACKENDS["musubi-tuner"].compile(run, destination, Path(directory), False)
-
-                rendered = (destination / "musubi" / "dataset.toml").read_text(encoding="utf-8")
-                self.assertIn(expected, rendered)
-                self.assertNotIn("source =", rendered)
-                self.assertNotIn("path =", rendered)
-
-    def test_compile_musubi_minimax_h3_keeps_distinct_video_blocks_for_one_dataset(self) -> None:
-        run = self._run()
-        run["datasets"] = [
-            {"id": "tiny", "role": "short"},
-            {"id": "tiny", "role": "long"},
-        ]
-        run["backend"] = {"name": "musubi-tuner", "config": {
-            "architecture": "minimax_h3",
-            "task": "t2va",
-            "h3_dataset_config": {"datasets": [
-                {"source": "video_directory", "path": "short", "target_frames": [22]},
-                {"source": "video_directory", "path": "long", "target_frames": [39]},
-            ]},
-        }}
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "musubi"
-
-            BACKENDS["musubi-tuner"].compile(run, destination, Path(directory), False)
-
-            rendered = (destination / "musubi" / "dataset.toml").read_text(encoding="utf-8")
-        self.assertIn('video_directory = "/workspace/datasets/tiny/short"', rendered)
-        self.assertIn('target_frames = [22]', rendered)
-        self.assertIn('video_directory = "/workspace/datasets/tiny/long"', rendered)
-        self.assertIn('target_frames = [39]', rendered)
-
-    def test_musubi_minimax_h3_typed_dataset_contract_rejects_ambiguous_or_incomplete_shapes(self) -> None:
-        base = self._run()
-        base["backend"] = {"name": "musubi-tuner", "config": {
-            "architecture": "minimax_h3",
-            "task": "fl2va",
-            "one_frame": True,
-            "video_only": True,
-            "model_paths": {
-                "dit": "/models/minimax-h3.safetensors",
-                "video_vae": "/models/minimax-h3-video-vae.safetensors",
-                "audio_vae": "/models/minimax-h3-audio-vae.safetensors",
-                "text_encoder": "/models/minimax-h3-text-encoder.safetensors",
-            },
-            "h3_dataset_config": {"datasets": [{"source": "image_directory", "path": "targets"}]},
-        }}
-        cases = (
-            ({"dataset_config": {"datasets": []}}, "cannot be combined"),
-            ({}, "control_subdir"),
-            ({"h3_dataset_config": {"datasets": [{"source": "image_directory", "path": "../outside", "control_subdir": "controls", "fp_1f_clean_indices": [0], "fp_1f_target_index": 24}]}}, "relative path"),
-            ({"task": "t2va", "h3_dataset_config": {"datasets": [{"source": "image_directory", "path": "targets", "control_subdir": "controls"}]}}, "control_subdir applies only"),
-            ({"task": "ref2va", "h3_dataset_config": {"datasets": [{"source": "image_directory", "path": "targets", "control_subdir": "controls", "fp_1f_target_index": 24}]}}, "fp_1f_target_index applies only"),
-        )
-        for changes, expected in cases:
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
-                run = json.loads(json.dumps(base))
-                run["backend"]["config"].update(changes)
-                with self.assertRaisesRegex(ValueError, expected):
-                    BACKENDS["musubi-tuner"].compile(run, Path(directory), Path(directory), False)
-
-    def test_musubi_minimax_h3_typed_dataset_requires_batch_size_one(self) -> None:
-        run = self._run()
-        run["backend"] = {"name": "musubi-tuner", "config": {
-            "architecture": "minimax_h3",
-            "h3_dataset_config": {
-                "general": {"batch_size": 2},
-                "datasets": [{"source": "video_directory", "path": "videos", "target_frames": [124]}],
-            },
-        }}
-
-        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(ValueError, "must be 1"):
-            BACKENDS["musubi-tuner"].compile(run, Path(directory), Path(directory), False)
-
-    def test_musubi_minimax_h3_video_dataset_requires_valid_target_frames(self) -> None:
-        run = self._run()
-        run["backend"] = {"name": "musubi-tuner", "config": {
-            "architecture": "minimax_h3",
-            "h3_dataset_config": {
-                "datasets": [{"source": "video_directory", "path": "videos"}],
-            },
-        }}
-
-        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(ValueError, "target_frames is required"):
-            BACKENDS["musubi-tuner"].compile(run, Path(directory), Path(directory), False)
-
-        for invalid in ([1], [4], [5, 123], [124, True], "124"):
-            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
-                run["backend"]["config"]["h3_dataset_config"]["datasets"][0]["target_frames"] = invalid
-                with self.assertRaisesRegex(ValueError, "target_frames must"):
-                    BACKENDS["musubi-tuner"].compile(run, Path(directory), Path(directory), False)
-
-        run["backend"]["config"]["h3_dataset_config"]["datasets"][0]["target_frames"] = [124]
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "musubi"
-            BACKENDS["musubi-tuner"].compile(run, destination, Path(directory), False)
-            rendered = (destination / "musubi" / "dataset.toml").read_text(encoding="utf-8")
-            self.assertIn("target_frames = [124]", rendered)
-
-    def test_musubi_minimax_h3_teacher_ref_requires_reference_jsonl(self) -> None:
-        run = self._run()
-        run["backend"] = {"name": "musubi-tuner", "config": {
-            "architecture": "minimax_h3",
-            "task": "t2va",
-            "h3_loss_method": "teacher_matching",
-            "h3_teacher_conditions": "ref",
-            "h3_dataset_config": {"datasets": [{"source": "video_directory", "path": "videos", "target_frames": [124]}]},
-        }}
-
-        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(ValueError, "video_jsonl"):
-            BACKENDS["musubi-tuner"].compile(run, Path(directory), Path(directory), False)
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            (dataset / "target.mp4").write_bytes(b"video")
-            (dataset / "items.jsonl").write_text(
-                json.dumps({"video_path": "target.mp4", "caption": "target"}) + "\n",
-                encoding="utf-8",
-            )
-            run["backend"]["config"]["h3_dataset_config"]["datasets"] = [
-                {"source": "video_jsonl", "path": "items.jsonl", "target_frames": [124]}
-            ]
-
-            with self.assertRaisesRegex(ValueError, "requires references"):
-                validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_validates_reference_jsonl_records(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            (dataset / "target.png").write_bytes(b"png")
-            (dataset / "reference.png").write_bytes(b"png")
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "ref2va",
-                "one_frame": True,
-                "video_only": True,
-                "h3_dataset_config": {"datasets": [{"source": "image_jsonl", "path": "items.jsonl"}]},
-            }}
-            jsonl = dataset / "items.jsonl"
-            jsonl.write_text(json.dumps({"image_path": "target.png", "caption": "target"}) + "\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(ValueError, "references"):
-                validate_musubi_dataset_layout(run, root)
-
-            jsonl.write_text(json.dumps({
-                "image_path": "target.png",
-                "caption": "target",
-                "references": [{"type": "image", "path": "reference.png"}],
-            }) + "\n", encoding="utf-8")
-            validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_reference_jsonl_rejects_one_frame_audio_and_reference_overflow(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            (dataset / "target.png").write_bytes(b"png")
-            (dataset / "reference.png").write_bytes(b"png")
-            (dataset / "reference.wav").write_bytes(b"wav")
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "ref2va",
-                "one_frame": True,
-                "video_only": True,
-                "h3_dataset_config": {"datasets": [{"source": "image_jsonl", "path": "items.jsonl"}]},
-            }}
-            jsonl = dataset / "items.jsonl"
-            cases = (
-                ([{"type": "audio", "path": "reference.wav"}], "standalone audio"),
-                ([{"type": "image", "path": "reference.png"}] * 10, "reference limits"),
-            )
-            for references, expected in cases:
-                with self.subTest(expected=expected):
-                    jsonl.write_text(json.dumps({
-                        "image_path": "target.png", "caption": "target", "references": references,
-                    }) + "\n", encoding="utf-8")
-                    with self.assertRaisesRegex(ValueError, expected):
-                        validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_reference_jsonl_combines_all_audio_bearing_limits(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            for name in ("target.mp4", "reference.png", "standalone.wav", "one.mp4", "two.mp4", "three.mp4", "one.wav", "two.wav", "three.wav"):
-                (dataset / name).write_bytes(b"fixture")
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "ref2va",
-                "h3_dataset_config": {"datasets": [{"source": "video_jsonl", "path": "items.jsonl", "target_frames": [124]}]},
-            }}
-            references = [
-                {"type": "image", "path": "reference.png"},
-                {"type": "audio", "path": "standalone.wav"},
-                {"type": "video", "path": "one.mp4", "audio_path": "one.wav"},
-                {"type": "video", "path": "two.mp4", "audio_path": "two.wav"},
-                {"type": "video", "path": "three.mp4", "audio_path": "three.wav"},
-            ]
-            (dataset / "items.jsonl").write_text(json.dumps({
-                "video_path": "target.mp4", "caption": "target", "references": references,
-            }) + "\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(ValueError, "audio reference limits"):
-                validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_jsonl_rejects_mode_inapplicable_conditions(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            for name in ("target.mp4", "control.png", "audio.wav"):
-                (dataset / name).write_bytes(b"fixture")
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "t2va",
-                "h3_dataset_config": {"datasets": [{"source": "video_jsonl", "path": "items.jsonl", "target_frames": [124]}]},
-            }}
-            jsonl = dataset / "items.jsonl"
-            cases = (
-                ({"video_path": "target.mp4", "caption": "target", "control_path": "control.png"}, "control paths apply only"),
-                ({"video_path": "target.mp4", "caption": "target", "references": [{"type": "image", "path": "control.png"}]}, "references apply only"),
-            )
-            for record, expected in cases:
-                with self.subTest(expected=expected):
-                    jsonl.write_text(json.dumps(record) + "\n", encoding="utf-8")
-                    with self.assertRaisesRegex(ValueError, expected):
-                        validate_musubi_dataset_layout(run, root)
-
-            run["backend"]["config"].update({
-                "one_frame": True,
-                "video_only": True,
-                "h3_dataset_config": {"datasets": [{"source": "image_jsonl", "path": "items.jsonl"}]},
-            })
-            (dataset / "target.png").write_bytes(b"fixture")
-            jsonl.write_text(json.dumps({
-                "image_path": "target.png", "caption": "target", "audio_path": "audio.wav",
-            }) + "\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "audio_path is not allowed in one-frame"):
-                validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_one_frame_fl2va_jsonl_requires_per_record_controls(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            (dataset / "target.png").write_bytes(b"fixture")
-            (dataset / "control.png").write_bytes(b"fixture")
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "fl2va",
-                "one_frame": True,
-                "video_only": True,
-                "h3_dataset_config": {"datasets": [{
-                    "source": "image_jsonl",
-                    "path": "items.jsonl",
-                    "fp_1f_clean_indices": [0],
-                    "fp_1f_target_index": 24,
-                }]},
-            }}
-            jsonl = dataset / "items.jsonl"
-            jsonl.write_text(json.dumps({
-                "image_path": "target.png", "caption": "target",
-            }) + "\n", encoding="utf-8")
-
-            with self.assertRaisesRegex(ValueError, "requires control paths"):
-                validate_musubi_dataset_layout(run, root)
-
-            jsonl.write_text(json.dumps({
-                "image_path": "target.png", "caption": "target", "control_path": "control.png",
-            }) + "\n", encoding="utf-8")
-            validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_typed_video_source_is_validated_on_disk(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            videos = root / "datasets" / "tiny" / "videos"
-            videos.mkdir(parents=True)
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "t2va",
-                "h3_dataset_config": {"datasets": [{"source": "video_directory", "path": "videos", "target_frames": [124]}]},
-            }}
-
-            with self.assertRaisesRegex(ValueError, "has no video files"):
-                validate_musubi_dataset_layout(run, root)
-
-            (videos / "target.mp4").write_bytes(b"video")
-            validate_musubi_dataset_layout(run, root)
-
-    def test_musubi_minimax_h3_typed_sources_cannot_escape_through_symlinks(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            outside = root / "outside"
-            dataset.mkdir(parents=True)
-            outside.mkdir()
-            (outside / "target.mp4").write_bytes(b"video")
-            (dataset / "videos").symlink_to(outside, target_is_directory=True)
-            run = self._run()
-            run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "minimax_h3",
-                "task": "t2va",
-                "h3_dataset_config": {"datasets": [{"source": "video_directory", "path": "videos", "target_frames": [124]}]},
-            }}
-
-            with self.assertRaisesRegex(ValueError, "escapes dataset"):
-                validate_musubi_dataset_layout(run, root)
-
-    def test_video_directory_is_a_native_source_without_image_sentinel(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            videos = root / "datasets" / "video" / "videos"
-            videos.mkdir(parents=True)
-            (videos / "0001.mp4").write_bytes(b"video")
-            destination = root / "runs" / "video-run" / "resolved" / "musubi" / "dataset.toml"
-            run = {
-                "id": "video-run",
-                "datasets": [{"id": "video"}],
-                "backend": {"name": "musubi-tuner", "config": {"dataset_config": {"datasets": [
-                    {"video_directory": "/workspace/datasets/video/videos"}
-                ]}}},
-            }
-
-            _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
-
-            rendered = destination.read_text(encoding="utf-8")
-            self.assertIn('video_directory = "/workspace/datasets/video/videos"', rendered)
-            self.assertNotIn("image_directory", rendered)
-
-    def test_video_jsonl_is_a_native_source_without_default_images(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "datasets" / "video" / "videos.jsonl"
-            source.parent.mkdir(parents=True)
-            source.write_text('{}\n', encoding="utf-8")
-            destination = root / "runs" / "video-run" / "resolved" / "musubi" / "dataset.toml"
-            run = {
-                "id": "video-run",
-                "datasets": [{"id": "video"}],
-                "backend": {"name": "musubi-tuner", "config": {"dataset_config": {"datasets": [
-                    {"video_jsonl_file": "/workspace/datasets/video/videos.jsonl"}
-                ]}}},
-            }
-
-            _write_musubi_dataset_config(run, destination, workspace=root, strict=True)
-
-            rendered = destination.read_text(encoding="utf-8")
-            self.assertIn('video_jsonl_file = "/workspace/datasets/video/videos.jsonl"', rendered)
-            self.assertNotIn("image_directory", rendered)
-
-    def test_explicit_image_directory_does_not_require_default_images_layout(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            target = root / "datasets" / "paired" / "pose" / "target"
-            target.mkdir(parents=True)
-            (target / "0001.png").write_bytes(b"png")
-            run = {
-                "id": "paired-layout",
-                "datasets": [{"id": "paired"}],
-                "backend": {
-                    "name": "musubi-tuner",
-                    "config": {
-                        "dataset_config": {
-                            "datasets": [
-                                {"image_directory": "/workspace/datasets/paired/pose/target"}
-                            ]
-                        }
-                    },
-                },
-            }
-            validate_musubi_dataset_layout(run, root)
+    def _write_frozen_projection(self, run: dict[str, Any], destination: Path) -> None:
+        architecture = str(run.get("backend", {}).get("config", {}).get("architecture") or "")
+        target = "sample.mp4" if architecture in {"minimax_h3", "minimaxh3"} else "sample.png"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        freeze_fixture(run, destination.parent, target=target)
 
     def _run(self) -> dict[str, object]:
         return {
@@ -4369,7 +4109,8 @@ class MusubiBackendTests(unittest.TestCase):
                     "network_dim": 4,
                     "network_alpha": 4,
                     "learning_rate": 1.0e-4,
-                    "dataset_config": {"general": {"batch_size": 1, "resolution": [512, 512]}},
+                    "batch_size": 1,
+                    "resolution": [512, 512],
                     "model_paths": {
                         "dit": "/models/flux2-klein-base-4b.safetensors",
                         "vae": "/models/flux2-vae.safetensors",
@@ -4433,7 +4174,7 @@ class MusubiBackendTests(unittest.TestCase):
                     "target_step": 40,
                     "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
                 }
-                with self.assertRaisesRegex(ValueError, "constant scheduler"):
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
                     command_musubi_tuner(run)
 
     def test_musubi_rejects_duplicate_value_flags_in_extra_args(self) -> None:
@@ -4442,8 +4183,35 @@ class MusubiBackendTests(unittest.TestCase):
             "--blocks_to_swap", "2", "--blocks_to_swap=3",
         ]
 
-        with self.assertRaisesRegex(ValueError, "duplicates --blocks_to_swap"):
+        with self.assertRaisesRegex(ValueError, "adapter-owned flag.*--blocks_to_swap"):
             command_musubi_tuner(run)
+
+    def test_musubi_extra_args_cannot_override_adapter_owned_flags_or_abbreviate_them(self) -> None:
+        for extra_args in (
+            ["--dataset_config", "/workspace/datasets/unsafe.toml"],
+            ["--dataset_conf=/workspace/datasets/unsafe.toml"],
+            ["--output_dir", "/workspace/datasets/unsafe-output"],
+            ["--res", "/workspace/artifacts/training-state/unsafe/payload"],
+        ):
+            with self.subTest(extra_args=extra_args):
+                run = self._run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                    command_musubi_tuner(run)
+
+    def test_musubi_extra_args_are_refused_only_where_the_architecture_emits_the_flag(self) -> None:
+        # flux2 emits --timestep_sampling and --weighting_scheme itself.
+        for extra_args in (["--timestep_sampling", "sigmoid"], ["--timestep_samp=sigmoid"], ["--weighting_scheme=none"]):
+            with self.subTest(extra_args=extra_args):
+                run = self._run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                    command_musubi_tuner(run)
+        # It does not emit --discrete_flow_shift, so the native flag passes through.
+        run = self._run()
+        run["backend"]["config"]["extra_args"] = ["--discrete_flow_shift", "2.5"]
+        command = command_musubi_tuner(run)
+        self.assertIn("--discrete_flow_shift 2.5", " ".join(command["argv"]))
 
     def test_musubi_resume_rejects_invalid_state_save_cadence_cleanly(self) -> None:
         for cadence in ("10", True, 0, -1):
@@ -4464,11 +4232,18 @@ class MusubiBackendTests(unittest.TestCase):
     def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
+            self._write_frozen_projection(self._run(), destination)
             command = compile_musubi_tuner(self._run(), destination)
             dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
-        self.assertIn("image_directory = \"/workspace/datasets/tiny/images\"", dataset_toml)
-        self.assertIn("cache_directory = \"/workspace/runs/musubi-example/cache/musubi/tiny\"", dataset_toml)
+        self.assertIn(
+            'image_jsonl_file = "/workspace/runs/musubi-example/cache/dataset-view/musubi/tiny/native/items.jsonl"',
+            dataset_toml,
+        )
+        self.assertIn(
+            'cache_directory = "/workspace/runs/musubi-example/cache/dataset-view/musubi/tiny/cache"',
+            dataset_toml,
+        )
         self.assertEqual(command["cwd"], "/opt/musubi-tuner")
         self.assertEqual(command["argv"][:2], ["bash", "-lc"])
         self.assertIn('export PATH="/opt/conda/bin:/usr/local/bin:$PATH"', command["argv"][2])
@@ -4493,6 +4268,25 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(expected["text_encoder"], "qwen3_4b_text_encoder")
         self.assertEqual(bundle["output"]["lora_format"], "comfyui")
 
+    def test_compile_musubi_explicit_command_does_not_generate_dataset_toml(self) -> None:
+        run = self._run()
+        run["backend"]["config"] = {
+            "command": {
+                "cwd": "/opt/musubi-tuner",
+                "argv": ["python", "custom_train.py"],
+                "env": {},
+            },
+        }
+        run.pop("recipe")
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "musubi"
+
+            command = compile_musubi_tuner(run, destination)
+
+            self.assertFalse((destination / "dataset.toml").exists())
+            self.assertFalse((destination / "model-bundle.lock.yaml").exists())
+            self.assertEqual(command["argv"], ["python", "custom_train.py"])
+
     def test_command_musubi_rejects_native_steps_that_duplicate_recipe(self) -> None:
         run = self._run()
         run["backend"]["config"]["max_train_steps"] = 2
@@ -4514,42 +4308,17 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_rejects_recipe_duplicates_in_extra_args(self) -> None:
         run = self._run()
         run["backend"]["config"]["extra_args"] = ["--max_train_steps=2"]
-        with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
+        with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
             command_musubi_tuner(run)
-
-    def test_compile_musubi_uses_dataset_root_when_images_subdir_is_absent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            dataset.mkdir(parents=True)
-            (dataset / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            run = self._run()
-            destination = root / "runs" / "musubi-example" / "resolved" / "musubi"
-
-            compile_musubi_tuner(run, destination)
-
-            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
-        self.assertIn('image_directory = "/workspace/datasets/tiny"', dataset_toml)
-
-    def test_compile_musubi_prefers_images_subdir_when_present(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "tiny"
-            (dataset / "images").mkdir(parents=True)
-            (dataset / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            run = self._run()
-            destination = root / "runs" / "musubi-example" / "resolved" / "musubi"
-
-            compile_musubi_tuner(run, destination)
-
-            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
-        self.assertIn('image_directory = "/workspace/datasets/tiny/images"', dataset_toml)
 
     def test_command_musubi_only_adds_memory_saving_flags_when_explicit(self) -> None:
         run = self._run()
-        run["backend"]["config"]["gradient_checkpointing"] = True
-        run["backend"]["config"]["extra_args"] = ["--fp8_base", "--fp8_scaled", "--blocks_to_swap", "4"]
+        run["backend"]["config"].update({
+            "gradient_checkpointing": True,
+            "fp8_base": True,
+            "fp8_scaled": True,
+            "blocks_to_swap": 4,
+        })
 
         script = command_musubi_tuner(run)["argv"][2]
 
@@ -4576,7 +4345,10 @@ class MusubiBackendTests(unittest.TestCase):
 
     def test_command_musubi_rejects_h2d_block_swap_without_gradient_checkpointing(self) -> None:
         run = self._run()
-        run["backend"]["config"]["extra_args"] = ["--blocks_to_swap", "4", "--block_swap_h2d_only"]
+        run["backend"]["config"].update({
+            "blocks_to_swap": 4,
+            "block_swap_h2d_only": True,
+        })
 
         with self.assertRaisesRegex(ValueError, "H2D-only block swap requires explicit gradient_checkpointing"):
             command_musubi_tuner(run)
@@ -4638,7 +4410,7 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
         run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["backend"]["config"].update({"model_version": "klein-base-9b", "dataset_config": {"general": {"batch_size": 4, "resolution": [512, 512]}}})
+        run["backend"]["config"].update({"model_version": "klein-base-9b", "batch_size": 4, "resolution": [512, 512]})
 
         with self.assertRaisesRegex(ValueError, "batch_size=4 has been observed to OOM"):
             command_musubi_tuner(run)
@@ -4650,7 +4422,7 @@ class MusubiBackendTests(unittest.TestCase):
         run["backend"]["config"].update({
                 "model_version": "klein-base-9b",
                 "gradient_checkpointing": True,
-                "extra_args": ["--gradient_accumulation_steps", "4"],
+                "gradient_accumulation_steps": 4,
             })
 
         script = command_musubi_tuner(run)["argv"][2]
@@ -4662,7 +4434,7 @@ class MusubiBackendTests(unittest.TestCase):
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
         run["compute"] = {"executor": "docker", "gpu": "NVIDIA A40"}
-        run["backend"]["config"].update({"model_version": "klein-base-9b", "network_dim": 32, "dataset_config": {"general": {"batch_size": 1, "resolution": [1024, 1024]}}})
+        run["backend"]["config"].update({"model_version": "klein-base-9b", "network_dim": 32, "batch_size": 1, "resolution": [1024, 1024]})
 
         with self.assertRaisesRegex(ValueError, "observed to OOM even with batch_size=1"):
             command_musubi_tuner(run)
@@ -4681,7 +4453,12 @@ class MusubiBackendTests(unittest.TestCase):
 
         command = command_musubi_tuner(run)
 
-        self.assertEqual(command["env"], {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+        self.assertEqual(command["env"], {
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "KURA_MUSUBI_IMAGE_SUFFIXES": frozen_suffixes(MUSUBI_IMAGE_SUFFIXES),
+            "KURA_MUSUBI_VIDEO_SUFFIXES": frozen_suffixes(MUSUBI_VIDEO_SUFFIXES),
+            "KURA_MUSUBI_AUDIO_SUFFIXES": frozen_suffixes(MUSUBI_AUDIO_SUFFIXES),
+        })
 
     def test_command_musubi_rejects_secret_generated_env(self) -> None:
         run = self._run()
@@ -4696,166 +4473,6 @@ class MusubiBackendTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "extra_args must be a list of strings"):
             command_musubi_tuner(run)
-
-    def test_compile_musubi_can_write_paired_control_jsonl_dataset(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "paired"
-            (dataset / "paired" / "target").mkdir(parents=True)
-            (dataset / "paired" / "cond").mkdir()
-            (dataset / "paired" / "caption").mkdir()
-            (dataset / "paired" / "target" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "paired" / "cond" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "paired" / "caption" / "item1.txt").write_text("control caption\n", encoding="utf-8")
-            run = self._run()
-            run["id"] = "paired-run"
-            run["datasets"] = [{"id": "paired", "digest": "sha256:abc"}]
-            run["backend"]["config"]["dataset_config"] = {
-                "general": {"resolution": [1024, 1024], "batch_size": 4},
-                "datasets": [
-                    {
-                        "paired_jsonl": {
-                            "filename": "paired_1024.jsonl",
-                            "target_dir": "paired/target",
-                            "control_dir": "paired/cond",
-                            "caption_dir": "paired/caption",
-                        },
-                        "resolution": [1024, 1024],
-                        "control_resolution": [1024, 1024],
-                    }
-                ],
-            }
-            destination = root / "runs" / "paired-run" / "resolved" / "musubi"
-
-            compile_musubi_tuner(run, destination)
-
-            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
-            rows = (destination / "paired_1024.jsonl").read_text(encoding="utf-8").splitlines()
-            payload = json.loads(rows[0])
-        self.assertIn('image_jsonl_file = "/workspace/runs/paired-run/resolved/musubi/paired_1024.jsonl"', dataset_toml)
-        self.assertNotIn("image_directory", dataset_toml)
-        self.assertIn("control_resolution = [1024, 1024]", dataset_toml)
-        self.assertEqual(payload["image_path"], "/workspace/datasets/paired/paired/target/item1.png")
-        self.assertEqual(payload["control_path"], "/workspace/datasets/paired/paired/cond/item1.png")
-        self.assertEqual(payload["caption"], "control caption")
-
-    def test_compile_musubi_paired_jsonl_uses_explicit_workspace(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "paired"
-            (dataset / "paired" / "target").mkdir(parents=True)
-            (dataset / "paired" / "cond").mkdir()
-            (dataset / "paired" / "caption").mkdir()
-            (dataset / "paired" / "target" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "paired" / "cond" / "item1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-            (dataset / "paired" / "caption" / "item1.txt").write_text("control caption\n", encoding="utf-8")
-            run = self._run()
-            run["id"] = "paired-run"
-            run["datasets"] = [{"id": "paired", "digest": "sha256:abc"}]
-            run["backend"]["config"]["dataset_config"] = {
-                "datasets": [{"paired_jsonl": {"filename": "paired.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"}}],
-            }
-            destination = root / "scratch" / "musubi"
-
-            compile_musubi_tuner(run, destination, workspace=root)
-
-            self.assertTrue((destination / "paired.jsonl").is_file())
-
-    def test_compile_musubi_rejects_duplicate_resolution_sections_for_same_paired_dataset(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "paired"
-            (dataset / "paired" / "target").mkdir(parents=True)
-            (dataset / "paired" / "cond").mkdir()
-            (dataset / "paired" / "caption").mkdir()
-            for name in ("item1", "item2"):
-                (dataset / "paired" / "target" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-                (dataset / "paired" / "cond" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-                (dataset / "paired" / "caption" / f"{name}.txt").write_text("control caption\n", encoding="utf-8")
-            run = self._run()
-            run["id"] = "paired-buckets"
-            run["datasets"] = [{"id": "paired", "role": "paired-768"}, {"id": "paired", "role": "paired-1024"}]
-            run["backend"]["config"]["dataset_config"] = {
-                "general": {"resolution": [1024, 1024], "batch_size": 4, "enable_bucket": True},
-                "datasets": [
-                    {
-                        "paired_jsonl": {"filename": "paired_768.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"},
-                        "resolution": [768, 768],
-                        "control_resolution": [768, 768],
-                        "batch_size": 4,
-                    },
-                    {
-                        "paired_jsonl": {"filename": "paired_1024.jsonl", "target_dir": "paired/target", "control_dir": "paired/cond", "caption_dir": "paired/caption"},
-                        "resolution": [1024, 1024],
-                        "control_resolution": [1024, 1024],
-                        "batch_size": 4,
-                    },
-                ],
-            }
-            destination = root / "runs" / "paired-buckets" / "resolved" / "musubi"
-
-            with self.assertRaisesRegex(ValueError, "ambiguous Musubi duplicate dataset blocks"):
-                compile_musubi_tuner(run, destination)
-
-    def test_compile_musubi_allows_disjoint_resolution_sections_for_same_paired_dataset(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset = root / "datasets" / "paired"
-            (dataset / "paired" / "target").mkdir(parents=True)
-            (dataset / "paired" / "cond").mkdir()
-            (dataset / "paired" / "caption").mkdir()
-            for name in ("item1", "item2", "item3", "item4"):
-                (dataset / "paired" / "target" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-                (dataset / "paired" / "cond" / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
-                (dataset / "paired" / "caption" / f"{name}.txt").write_text("control caption\n", encoding="utf-8")
-            run = self._run()
-            run["id"] = "paired-buckets"
-            run["datasets"] = [{"id": "paired", "role": "paired-768"}, {"id": "paired", "role": "paired-1024"}]
-            run["backend"]["config"]["dataset_config"] = {
-                "general": {"resolution": [1024, 1024], "batch_size": 4, "enable_bucket": True},
-                "datasets": [
-                    {
-                        "paired_jsonl": {
-                            "filename": "paired_768.jsonl",
-                            "target_dir": "paired/target",
-                            "control_dir": "paired/cond",
-                            "caption_dir": "paired/caption",
-                            "select": {"modulo": 2, "remainder": 0},
-                        },
-                        "resolution": [768, 768],
-                        "control_resolution": [768, 768],
-                        "batch_size": 4,
-                    },
-                    {
-                        "paired_jsonl": {
-                            "filename": "paired_1024.jsonl",
-                            "target_dir": "paired/target",
-                            "control_dir": "paired/cond",
-                            "caption_dir": "paired/caption",
-                            "select": {"modulo": 2, "remainder": 1},
-                        },
-                        "resolution": [1024, 1024],
-                        "control_resolution": [1024, 1024],
-                        "batch_size": 4,
-                    },
-                ],
-            }
-            destination = root / "runs" / "paired-buckets" / "resolved" / "musubi"
-
-            compile_musubi_tuner(run, destination)
-
-            dataset_toml = (destination / "dataset.toml").read_text(encoding="utf-8")
-            jsonl_files = sorted(path.name for path in destination.glob("*.jsonl"))
-            rows_768 = (destination / "paired_768.jsonl").read_text(encoding="utf-8").splitlines()
-            rows_1024 = (destination / "paired_1024.jsonl").read_text(encoding="utf-8").splitlines()
-        self.assertEqual(dataset_toml.count("[[datasets]]"), 2)
-        self.assertIn("resolution = [768, 768]", dataset_toml)
-        self.assertIn("resolution = [1024, 1024]", dataset_toml)
-        self.assertIn("control_resolution = [768, 768]", dataset_toml)
-        self.assertIn("control_resolution = [1024, 1024]", dataset_toml)
-        self.assertEqual(jsonl_files, ["paired_1024.jsonl", "paired_768.jsonl"])
-        self.assertEqual(len(rows_768), 2)
-        self.assertEqual(len(rows_1024), 2)
 
     def test_command_musubi_requires_explicit_model_paths(self) -> None:
         run = self._run()
@@ -4963,22 +4580,31 @@ class MusubiBackendTests(unittest.TestCase):
             "gradient_checkpointing": True,
         }}
 
-        script = command_musubi_tuner(run)["argv"][2]
+        spec = command_musubi_tuner(run)
+        script = spec["argv"][2]
 
         self.assertIn("minimax_h3_cache_latents.py", script)
         self.assertIn("--video_vae /models/minimax-h3-video-vae.safetensors", script)
         self.assertIn("--audio_vae /models/minimax-h3-audio-vae.safetensors", script)
         self.assertIn("minimax_h3_cache_text_encoder_outputs.py", script)
-        self.assertIn("--uncond_output /workspace/runs/musubi-example/resolved/musubi/minimax-h3-uncond.safetensors", script)
+        cache_path = "/workspace/runs/musubi-example/cache/musubi/minimax-h3-uncond.safetensors"
+        self.assertIn(f"--uncond_output {cache_path}", script)
         self.assertIn("minimax_h3_train_network.py", script)
         self.assertGreaterEqual(script.count("--task t2va"), 3)
         self.assertIn("--h3_guidance_loss_scale 4.0", script)
         self.assertIn("--h3_guidance_loss_sigma_min 0.15", script)
-        self.assertIn("--h3_guidance_loss_uncond_cache /workspace/runs/musubi-example/resolved/musubi/minimax-h3-uncond.safetensors", script)
+        self.assertIn(f"--h3_guidance_loss_uncond_cache {cache_path}", script)
         self.assertIn("--blocks_to_swap 48", script)
         self.assertIn("--text_encoder_blocks_to_swap 50", script)
         self.assertIn("--video_only", script)
         self.assertIn("--gradient_checkpointing", script)
+        self.assertNotIn("KURA_MUSUBI_TARGET_FPS", spec["env"])
+        self.assertEqual(spec["env"]["KURA_MUSUBI_CACHE"], "/workspace/runs/musubi-example/cache/musubi")
+        self.assertEqual(spec["write_roots"], [{
+            "role": "backend-cache",
+            "path": "/workspace/runs/musubi-example/cache/musubi",
+            "env": "KURA_MUSUBI_CACHE",
+        }])
 
     def test_command_musubi_minimax_h3_guidance_requires_precache(self) -> None:
         run = self._run()
@@ -5218,10 +4844,12 @@ class MusubiBackendTests(unittest.TestCase):
             }
         }
 
-        script = command_musubi_tuner(run)["argv"][2]
+        spec = command_musubi_tuner(run)
+        script = spec["argv"][2]
 
         self.assertIn("--dit_high_noise /models/wan22-high.safetensors", script)
         self.assertIn("--timestep_boundary 0.875", script)
+        self.assertNotIn("KURA_MUSUBI_TARGET_FPS", spec["env"])
 
     def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
         run = self._run()
@@ -5242,6 +4870,7 @@ class MusubiBackendTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
+            self._write_frozen_projection(run, destination)
             command = compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
             script = command["argv"][2]
@@ -5374,8 +5003,32 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--one_frame_no_2x", script)
         self.assertIn("--one_frame_no_4x", script)
 
+    def test_command_musubi_framepack_freezes_latent_window_size_in_cache_and_train(self) -> None:
+        run = self._run()
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "framepack",
+            "model_paths": {
+                "dit": "/models/framepack.safetensors",
+                "vae": "/models/fpack-vae.safetensors",
+                "text_encoder1": "/models/te1.safetensors",
+                "text_encoder2": "/models/te2.safetensors",
+                "image_encoder": "/models/siglip.safetensors",
+            },
+            "precache": True,
+        }}
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertEqual(script.count("--latent_window_size 9"), 1)
+
     def test_command_musubi_qwen_model_versions_reach_all_three_stages(self) -> None:
-        for model_version in ("original", "edit", "edit-2509", "edit-2511", "layered"):
+        for model_version, expected in (
+            ("original", "original"),
+            ("edit", "edit"),
+            ("edit-2509", "edit-2509"),
+            ("EDIT_2511", "edit-2511"),
+            ("layered", "layered"),
+        ):
             with self.subTest(model_version=model_version):
                 run = self._run()
                 run["backend"] = {"name": "musubi-tuner", "config": {
@@ -5391,7 +5044,24 @@ class MusubiBackendTests(unittest.TestCase):
 
                 script = command_musubi_tuner(run)["argv"][2]
 
-                self.assertEqual(script.count(f"--model_version {model_version}"), 3)
+                self.assertEqual(script.count(f"--model_version {expected}"), 3)
+
+    def test_command_musubi_qwen_layered_can_remove_the_base_from_training_targets(self) -> None:
+        run = self._run()
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "qwen_image",
+            "model_version": "layered",
+            "remove_first_image_from_target": True,
+            "model_paths": {
+                "dit": "/models/qwen-layered-dit.safetensors",
+                "vae": "/models/qwen-layered-vae.safetensors",
+                "text_encoder": "/models/qwen-vl.safetensors",
+            },
+        }}
+
+        script = command_musubi_tuner(run)["argv"][2]
+
+        self.assertEqual(script.count("--remove_first_image_from_target"), 1)
 
     def test_command_musubi_hunyuan_15_i2v_updates_cache_and_train(self) -> None:
         run = self._run()
@@ -5421,7 +5091,6 @@ class MusubiBackendTests(unittest.TestCase):
                 "task": "i2i",
                 "model_type": "dev",
                 "model_paths": {"dit": "/models/hidream-dev.safetensors"},
-                "dataset_config": {"datasets": [{"control_directory": "/workspace/datasets/tiny/control"}]},
                 "extra_args": ["--network_args", "conv_dim=4", "conv_alpha=1"],
             }
         }
@@ -5610,6 +5279,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--text_encoder /workspace/cache/models/musubi/black-forest-labs--FLUX.2-klein-base-9B/text_encoder/text_encoder/model-00001-of-00004.safetensors", script)
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
+            self._write_frozen_projection(run, destination)
             compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
@@ -5646,6 +5316,7 @@ class MusubiBackendTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
+            self._write_frozen_projection(run, destination)
             compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         self.assertEqual(bundle["architecture"], "krea2")
@@ -5661,6 +5332,7 @@ class MusubiBackendTests(unittest.TestCase):
             "architecture": "minimax_h3",
             "model_bundle": "minimax-h3-pruned-int8",
             "video_only": True,
+            "dataset_options": {"tiny": {"target_frames": [5]}},
         }}
 
         command = command_musubi_tuner(run)
@@ -5676,6 +5348,7 @@ class MusubiBackendTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
+            self._write_frozen_projection(run, destination)
             compile_musubi_tuner(run, destination)
             bundle = yaml.safe_load((destination / "model-bundle.lock.yaml").read_text(encoding="utf-8"))
         self.assertEqual(bundle["architecture"], "minimax_h3")
@@ -5755,24 +5428,6 @@ class MusubiBackendTests(unittest.TestCase):
                 run["backend"]["config"].update(changes)
                 with self.assertRaisesRegex(ValueError, expected):
                     command_musubi_tuner(run)
-
-    def test_command_musubi_krea2_rejects_paired_control_dataset(self) -> None:
-        run = self._run()
-        run["backend"] = {"name": "musubi-tuner", "config": {
-                "architecture": "krea2",
-                "dataset_config": {
-                    "datasets": [
-                        {
-                            "id": "tiny",
-                            "paired_jsonl": [{"image": "a.png", "conditioning_image": "b.png", "caption": "caption"}],
-                        }
-                    ]
-                },
-            }
-        }
-
-        with self.assertRaisesRegex(ValueError, "plain image/caption datasets only"):
-            command_musubi_tuner(run)
 
     def test_command_musubi_infers_flux2_model_version_from_model_base(self) -> None:
         run = self._run()
@@ -7908,6 +7563,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
             (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"SEED": "1"},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
             (run_dir / "transfer").mkdir()
             (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
             stage_path = run_dir / "realizations" / "stage.json"
@@ -7966,6 +7627,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         script = _runpod_remote_job_script(
             workspace="/workspace",
             run_id="example",
+            realization_id="r1",
             remote_secret_path="/tmp/kura-secrets/example.env",
             archive_name="bundle.tar.gz",
             remote_archive="/workspace/bundle.tar.gz",
@@ -7980,6 +7642,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
             (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"SEED": "1"},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
             (run_dir / "transfer").mkdir()
             (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
             (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")

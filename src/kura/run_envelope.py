@@ -20,6 +20,16 @@ def backend_name(run: dict[str, Any]) -> str | None:
     return name if isinstance(name, str) and name else None
 
 
+def run_executor(run: dict[str, Any]) -> str:
+    """Resolve the executor from the common run envelope in one place."""
+
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    executor = compute.get("executor")
+    if isinstance(executor, str) and executor:
+        return executor
+    return "runpod" if compute.get("provider") == "runpod" else "docker"
+
+
 def backend_config(run: dict[str, Any], name: str | None = None) -> dict[str, Any]:
     """Return the selected backend's opaque primary config."""
 

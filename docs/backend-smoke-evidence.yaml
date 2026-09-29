@@ -1,7 +1,9 @@
 schema_version: 1
 description: >-
   Historical execution observations. Records are evidence for the stated
-  identity tuple, not declarations of backend capability.
+  identity tuple, not declarations of backend capability. RunPod records
+  declare native_path.transfer; selected-files records also bind
+  executor_source to the RunPod executor identity.
 invalidations:
   - id: sd-scripts-default-training-state-contract-2026-08-27
     backend: sd-scripts
@@ -12,6 +14,198 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+    executor_source:
+      kind: source-tree-sha256
+      value: 15e858f7070d5c080d5dd1d33491b7ee1c1c863caf28e730e5014a7bed9d1786
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      architecture: minimax_h3
+      mode: one-frame-text-to-image-guidance-loss
+      executor: runpod
+      transfer: selected-files
+      dataset_format: image JSONL
+      uncond_cache: runs/<id>/cache/musubi/minimax-h3-uncond.safetensors
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+    native_path:
+      architecture: sd15
+      executor: docker
+      dataset_layout: nested multi-concept groups to subsets
+      local_path_model: read-only
+      resume: 1-to-2
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: musubi-wan-video-jsonl-docker-2026-09-29
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      architecture: wan
+      task: t2v-1.3B
+      executor: docker
+      transport: generated video JSONL
+      local_path_model: read-only
+      resume: 1-to-2
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-manifest-v2-handoff-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      dataset_layouts: root-level and images/
+      optimizer_steps: 1
+      view_cleanup: removed
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+    executor_source:
+      kind: source-tree-sha256
+      value: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      pod_input_verification: verified
+      optimizer_steps: 1
+      pod_stopped: true
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-selected-file-transfer-runpod-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    executor_source:
+      kind: source-tree-sha256
+      value: 11f37dd45c666d4f568c0799938c82daf8b6373cdb4d10233fcaa985c22992bc
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      pod_input_verification: verified
+      optimizer_steps: 1
+      pod_stopped: true
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+    superseded_by: ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+  - id: ai-toolkit-local-path-model-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      model_acquisition: local-path read-only
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-resume-manifest-v2-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: docker
+      restoration: partial_resume
+      logical_steps: 1-to-2
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-embedded-audio-preflight-docker-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: ltx2.5
+      executor: docker
+      preflight: rejects silent video, accepts AAC video
+      optimizer_steps: 0
+    evidence_kind: real-runtime
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: sd-scripts-avif-absent-image-probe-2026-09-29
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+    native_path:
+      probe: import pillow_avif fails
+      image_suffixes: avif excluded
+    evidence_kind: real-runtime
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
   - id: ai-toolkit-sd1-publication-docker-2026-09-23
     backend: ai-toolkit
     adapter_source:
@@ -42,6 +236,7 @@ records:
       architecture: minimax_h3
       mode: one-frame-text-to-image-guidance-loss
       executor: runpod
+      transfer: legacy-upload
       target_frames: 1
       block_swap: h2d-only-ring-1
       optimizer_steps: 1
@@ -63,6 +258,7 @@ records:
       architecture: minimax_h3
       mode: image-lora
       executor: runpod
+      transfer: legacy-upload
       gradient_checkpointing: false
       optimizer_steps: 1
       finite_nonzero_lora_b: 208/208
@@ -83,6 +279,7 @@ records:
       architecture: minimax_h3
       mode: t2va-guidance-loss
       executor: runpod
+      transfer: legacy-upload
       target_frames: 124
       block_swap: h2d-only-ring-1
       optimizer_steps: 1
@@ -134,6 +331,7 @@ records:
       architecture: minimax_h3
       mode: lora
       executor: runpod
+      transfer: legacy-upload
       gradient_checkpointing: false
       optimizer_steps: 1
       finite_nonzero_lora_b: 208/208
@@ -341,6 +539,7 @@ records:
     native_path:
       architecture: sdxl
       executor: runpod
+      transfer: legacy-upload
     evidence_kind: real-optimizer-step
     outcome: passed
     observed_at: 2026-07-12
@@ -389,6 +588,7 @@ records:
       architecture: wan
       task: t2v-1.3B
       executor: runpod
+      transfer: legacy-upload
     evidence_kind: real-optimizer-step
     outcome: passed
     observed_at: 2026-07-12

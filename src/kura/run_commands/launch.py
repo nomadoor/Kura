@@ -7,12 +7,14 @@ import json
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker
+from kura.executors.common import append_run_event
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -29,6 +31,8 @@ from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
+from kura.dataset_transfer import TransferRefused
+from kura.run_envelope import run_executor
 
 
 def run_remote(
@@ -105,6 +109,14 @@ def run_remote(
         notify_body = f"Run {run_id} {state_word} with exit code {exit_code}.{stop_note}"
         _notify(notify_channels, subject=notify_subject, body=notify_body)
         return exit_code
+    except TransferRefused as exc:
+        # Refused before any upload: nothing ran remotely, so stop at once;
+        # there is nothing to review.
+        safe_to_stop = True
+        hold_for_sec = 0
+        print(f"cannot run remote job: {_safe_error(exc)}; stopping the unused Pod", file=sys.stderr)
+        _notify(notify_channels, subject=f"Kura run refused: {run_id}", body=f"Run {run_id} was refused before upload:\n{_safe_error(exc)}\nThe unused Pod is being stopped.")
+        return 1
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         message = _safe_error(exc)
         print(f"cannot run remote job: {message}", file=sys.stderr)
@@ -179,7 +191,7 @@ def execute_run(
         print(f"cannot execute run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
     compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
-    executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    executor = run_executor(locked)
     if executor == "runpod":
         capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
         frozen_wait = capacity.get("timeout", "24h") if capacity.get("mode", "immediate") == "wait" else "0"
@@ -286,8 +298,7 @@ def launch_run(
             if not dry_run:
                 _notify(notify_channels, subject=f"Kura render failed: {run_id}", body=f"Render {run_id} failed before completion:\n{message}", priority="3")
             return 1
-    compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
-    compiled_executor = compute.get("executor") or ("runpod" if compute.get("provider") == "runpod" else "docker")
+    compiled_executor = run_executor(locked)
     if executor != compiled_executor:
         print(
             f"cannot launch run: manifest was compiled for executor.name={compiled_executor}; "
@@ -299,6 +310,7 @@ def launch_run(
     if continuation is not None and continuation.get("mode") == "resume" and image is not None:
         print("cannot launch run: Resume runtime image is frozen at compile time; remove --image or create and compile a new run", file=sys.stderr)
         return 1
+    input_preflight = None
     try:
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
@@ -307,13 +319,40 @@ def launch_run(
         stale_capacity_wait = status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict)
         if status.get("state") not in allowed_states and not stale_capacity_wait:
             raise ValueError("run must be compiled before launch")
+        input_lock = None
+        input_path = run_dir / "resolved" / "dataset-input.lock.json"
+        if input_path.is_file():
+            input_lock = json.loads(input_path.read_text(encoding="utf-8"))
         config = _workspace_config()
         enforce_preflight_errors(collect_run_preflight(locked, _workspace(), config=config, executor=executor))
         spec = _load_frozen_command(run_dir, locked)
+        if isinstance(input_lock, dict) and input_lock.get("schema_version") == 2:
+            from kura.dataset_handoff import inspect_dataset_sources
+
+            # Executor-neutral check. The executor that consumes the lock owns
+            # its transport (a local view for Docker) and records that fact in
+            # its realization.
+            changes = inspect_dataset_sources(_workspace(), input_lock)
+            if changes:
+                raise ValueError(
+                    "compiled dataset input changed; recompile the run: " + "; ".join(changes[:5])
+                )
+            input_preflight = {
+                "event": "dataset_input_preflight",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "executor": executor,
+                "compile_verification": input_lock.get("verification"),
+                "launch_verification": "stat-match",
+                "source_stat_verification": "matched",
+                "input_sha256": input_lock.get("input_sha256"),
+                "runpod_transfer_preflight": None,
+            }
     except (OSError, ValueError, yaml.YAMLError, json.JSONDecodeError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     try:
+        if not dry_run and input_preflight is not None:
+            append_run_event(run_dir, input_preflight)
         config = _workspace_config()
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
         adapter = get_backend(backend_name)

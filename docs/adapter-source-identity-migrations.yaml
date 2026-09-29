@@ -1,12 +1,1553 @@
 schema_version: 1
 description: >-
-  Mechanical identity transitions. These records explain source-identity
+  Mechanical identity transitions for backend adapters (keyed by backend) and
+  executors (keyed by executor). These records explain source-identity
   changes only; they do not transfer runtime evidence to behavior changes.
   The legacy helper applies the old algorithm to the current tree and therefore
   cannot reproduce these previous values without the corresponding historical
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: musubi-architecture-scoped-extra-args-ownership-2026-09-29
+    backend: musubi-tuner
+    reason: >-
+      --timestep_sampling, --discrete_flow_shift, --weighting_scheme, and
+      --timestep_boundary leave the architecture-wide owned-flag set; an
+      extra_args flag is now refused when it repeats or abbreviates a flag
+      the architecture's own command emits. Generated configuration and
+      commands are unchanged unless extra_args names one of these flags, and
+      no listed record did; the change only admits these flags for
+      architectures whose command does not carry them.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+      - musubi-wan-video-jsonl-docker-2026-09-29
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7276982864b30738addc3decf29e077923cee0bb03b7d932435a0c752c24ecf5
+  - id: runpod-executor-shared-module-scope-and-pod-record-allowlist-2026-09-29
+    executor: runpod
+    reason: >-
+      The RunPod executor identity now also hashes the shared modules the
+      transfer consumes (dataset_handoff.py, media_types.py,
+      executors/common.py, fsio.py, run_envelope.py); their contents are
+      unchanged. The download now copies only Pod-owned record names
+      (runpod-input, runpod-input-postflight, the video preflights, and
+      remote-exit) into realizations/. The recorded smokes produced only
+      those names, so their transfer, Pod-side verification, postflight, and
+      Pod stop are unchanged; a snapshot file named like a controller record
+      is now ignored instead of trusted.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 42f789bf70df5fb8494a7d6c71f1e7b9af0a6dca7de84daba560da1309842911
+  - id: runpod-executor-final-download-clears-stale-sync-error-2026-09-29
+    executor: runpod
+    reason: >-
+      A final RunPod download that obtained, or never needed, a training state
+      now clears a training_state_sync_error left by an earlier mid-run sync.
+      Transfer, Pod-side verification, trainer execution, and Pod stop are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 15e858f7070d5c080d5dd1d33491b7ee1c1c863caf28e730e5014a7bed9d1786
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
+  - id: ai-toolkit-audio-preflight-transform-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      The AI-Toolkit embedded-audio preflight now passes the pinned dataset's
+      tensor transform (ToTensor plus the pinned RescaleTransform) to
+      FileItemDTO.load_and_process_video. With no transform the pinned loader
+      cannot stack video frames, so the previous preflight rejected every
+      video, with or without audio; a real container smoke exposed this.
+      Training commands are otherwise unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-manifest-v2-handoff-docker-2026-09-29
+      - ai-toolkit-selected-file-transfer-runpod-2026-09-29
+      - ai-toolkit-local-path-model-docker-2026-09-29
+      - ai-toolkit-resume-manifest-v2-docker-2026-09-29
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+  - id: runpod-selected-file-transfer-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Lift the manifest-v2 RunPod rejection now that the selected-file
+      transfer is verified at stage, before Pod creation, and on the Pod;
+      remove the rejection helper from the shared dataset handoff module.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e5cfb85a372fdb83cc72e77545d18822922eceb9598cc4fba2f99a578e5d2140
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
+  - id: runpod-selected-file-transfer-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Lift the manifest-v2 RunPod rejection now that the selected-file
+      transfer is verified at stage, before Pod creation, and on the Pod;
+      remove the rejection helper from the shared dataset handoff module.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 9974b883ec01bbf28d687982c18986587ec8ee56d1469e53406bd540bc885b3f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+  - id: runpod-selected-file-transfer-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Lift the manifest-v2 RunPod rejection now that the selected-file
+      transfer is verified at stage, before Pod creation, and on the Pod;
+      remove the rejection helper from the shared dataset handoff module.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4fcce4be9f8cac5a425735ee7222c0ed4294966ae9594d8e576b34ac83b4768e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+  - id: handoff-read-reverification-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Re-verify a frozen dataset handoff on every read: the reader rebuilds
+      the verified selection from the input lock and reruns the same full
+      projection verification freeze uses, requiring the result to equal the
+      stored lock, so view roots, links, consumers, and write roots are
+      checked again after freeze. load_frozen_dataset_handoff returns the
+      bound lock and report together. Generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a8c9c3f36739571cea76f7743f0a98d5cd1223460e1fb5651864dc735e631012
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e5cfb85a372fdb83cc72e77545d18822922eceb9598cc4fba2f99a578e5d2140
+  - id: handoff-read-reverification-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Re-verify a frozen dataset handoff on every read: the reader rebuilds
+      the verified selection from the input lock and reruns the same full
+      projection verification freeze uses, requiring the result to equal the
+      stored lock, so view roots, links, consumers, and write roots are
+      checked again after freeze. load_frozen_dataset_handoff returns the
+      bound lock and report together. Generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c734002ff7831de82632b098d2d942ec0ea851ef82e0fd1093e7b141eda04302
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 9974b883ec01bbf28d687982c18986587ec8ee56d1469e53406bd540bc885b3f
+  - id: handoff-read-reverification-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Re-verify a frozen dataset handoff on every read: the reader rebuilds
+      the verified selection from the input lock and reruns the same full
+      projection verification freeze uses, requiring the result to equal the
+      stored lock, so view roots, links, consumers, and write roots are
+      checked again after freeze. load_frozen_dataset_handoff returns the
+      bound lock and report together. Generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d8c293a69381594327163385d8efe19cd47fcf53650d777abd9c826116f8cfce
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4fcce4be9f8cac5a425735ee7222c0ed4294966ae9594d8e576b34ac83b4768e
+  - id: small-adapter-cleanups-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Make the AI-Toolkit folder codec the single field that decides whether
+      control folders are projected, removing the parallel has_control flag,
+      and scan each Musubi video directory once when rejecting implicit audio
+      sidecars. Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fdfe8708f56743644b28604f3ccb7140d8ffdf3a89fdbdf35272e13bdae19ae
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a8c9c3f36739571cea76f7743f0a98d5cd1223460e1fb5651864dc735e631012
+  - id: small-adapter-cleanups-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Make the AI-Toolkit folder codec the single field that decides whether
+      control folders are projected, removing the parallel has_control flag,
+      and scan each Musubi video directory once when rejecting implicit audio
+      sidecars. Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: bd9699d11a0d422d8b9ce878a22acb24bf7914226c5c742c57ce2ee94f24853e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c734002ff7831de82632b098d2d942ec0ea851ef82e0fd1093e7b141eda04302
+  - id: plan-facts-adapter-hooks-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Move backend-specific planning facts behind adapter hooks: container
+      runtime checks, the declared disk-cache estimate, and the inherited
+      general resolution. plan renders them without importing backend tables.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d2b5efa58eb1619cfd23c078ea656a2236b73ffc102618f364d7e986c326a442
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fdfe8708f56743644b28604f3ccb7140d8ffdf3a89fdbdf35272e13bdae19ae
+  - id: plan-facts-adapter-hooks-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Move backend-specific planning facts behind adapter hooks: container
+      runtime checks, the declared disk-cache estimate, and the inherited
+      general resolution. plan renders them without importing backend tables.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7b5cbf79ff21623ca5fd48676d4595f5fb3359f30539a2332b567636165e3fa5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: bd9699d11a0d422d8b9ce878a22acb24bf7914226c5c742c57ce2ee94f24853e
+  - id: plan-facts-adapter-hooks-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Move backend-specific planning facts behind adapter hooks: container
+      runtime checks, the declared disk-cache estimate, and the inherited
+      general resolution. plan renders them without importing backend tables.
+      Generated configuration and commands are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b6320be3d1cc8f4600972658b5525f7dfba623b8ba9e4b0118d5bfac19777d6a
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d8c293a69381594327163385d8efe19cd47fcf53650d777abd9c826116f8cfce
+  - id: projection-report-validator-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Check projection report structure in one core validator used both when
+      freeze_dataset_handoff writes the report and when the frozen report is
+      read; the input-lock digest remains the tamper check. The lock writer is
+      private to freeze. Valid public compile output is unchanged; malformed
+      reports are rejected even when their digest is rebound.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 854a3c0c3f90f2e27521f45c2a16f5e0bc5d9bd33a644f5ad4a0c1c1f1cc4b8c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d2b5efa58eb1619cfd23c078ea656a2236b73ffc102618f364d7e986c326a442
+  - id: projection-report-validator-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Check projection report structure in one core validator used both when
+      freeze_dataset_handoff writes the report and when the frozen report is
+      read; the input-lock digest remains the tamper check. The lock writer is
+      private to freeze. Valid public compile output is unchanged; malformed
+      reports are rejected even when their digest is rebound.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 971518ecfcff3197aaa6b8f9f3c003ebed1760ba2e1d17a9d16f3e177c8fed28
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7b5cbf79ff21623ca5fd48676d4595f5fb3359f30539a2332b567636165e3fa5
+  - id: projection-report-validator-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Check projection report structure in one core validator used both when
+      freeze_dataset_handoff writes the report and when the frozen report is
+      read; the input-lock digest remains the tamper check. The lock writer is
+      private to freeze. Valid public compile output is unchanged; malformed
+      reports are rejected even when their digest is rebound.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 33058fdf52200309e6c5dc05b9f8941979aeaea148f538d979b1acf2b4fd01ef
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b6320be3d1cc8f4600972658b5525f7dfba623b8ba9e4b0118d5bfac19777d6a
+  - id: unused-compile-parameters-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Remove the workspace and strict parameters that the compiler and dataset
+      config writer accepted and immediately discarded. The frozen projection
+      is the only compile input; generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: dc13c116488bf74f5062878f0d79e2521a3021fa74226b54ef986b5c4b5e990f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 854a3c0c3f90f2e27521f45c2a16f5e0bc5d9bd33a644f5ad4a0c1c1f1cc4b8c
+  - id: unused-compile-parameters-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Remove the workspace and strict parameters that the compiler and dataset
+      config writer accepted and immediately discarded. The frozen projection
+      is the only compile input; generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c36e64bb5a2fd59a58332cd04dd85212155dfec44be8c0ade5cfb8f29a0e14a2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 971518ecfcff3197aaa6b8f9f3c003ebed1760ba2e1d17a9d16f3e177c8fed28
+  - id: unused-compile-parameters-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Remove the workspace and strict parameters that the compiler and dataset
+      config writer accepted and immediately discarded. The frozen projection
+      is the only compile input; generated configuration and commands are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 30ff71d0ab94d978a61afaf93692477b87d4b9a677f9ce0c575860235fb2cef5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 33058fdf52200309e6c5dc05b9f8941979aeaea148f538d979b1acf2b4fd01ef
+  - id: core-frozen-projection-reader-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Load frozen dataset-projection locks through one core reader shared by
+      all built-in adapters. The report schema is checked only when
+      freeze_dataset_handoff writes it; the input lock records its digest and
+      the reader accepts only a report matching that digest. Valid public
+      compile output is unchanged; unbound or altered locks are rejected.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 878281fbf87850c77b35d6249266572e59ef5d3d97e9d9d80d81560b95a7ded3
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: dc13c116488bf74f5062878f0d79e2521a3021fa74226b54ef986b5c4b5e990f
+  - id: core-frozen-projection-reader-musubi-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Route frozen dataset-projection loading through the core reader, which
+      accepts only the report bound by digest to the input lock, and pass that
+      report to Musubi configuration and video-preflight consumers. Valid
+      public compile output is unchanged; unbound or altered locks are rejected.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 455227b1c88bf7984c5532763664e9dffb17df8fb52edb013949c9e83fce36a1
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c36e64bb5a2fd59a58332cd04dd85212155dfec44be8c0ade5cfb8f29a0e14a2
+  - id: core-frozen-projection-reader-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Route frozen dataset-projection loading through the core reader, which
+      accepts only the report bound by digest to the input lock, and pass that
+      report to the sd-scripts TOML writer. Valid public compile output is
+      unchanged; unbound or altered locks are rejected.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d3698b6d75cd0accef4d7ac071af4ab6dbb01570a6594368597b1246ca7611fa
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 30ff71d0ab94d978a61afaf93692477b87d4b9a677f9ce0c575860235fb2cef5
+  - id: ai-toolkit-manifest-projection-lock-shape-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Reject pre-manifest minimal projection locks and require the complete
+      projection report emitted by the public manifest handoff. Public compile
+      already froze that complete report, so recorded trainer configuration,
+      commands, runtime behavior, and artifacts are unchanged. Direct compiler
+      tests now obtain their locks from the same projector instead of preserving
+      a test-only inferred transport.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 61267fcf0364bf290da9dadc80c091a3bb2576ae06241f52976c1cb4b8cd7dac
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 878281fbf87850c77b35d6249266572e59ef5d3d97e9d9d80d81560b95a7ded3
+  - id: shared-surface-musubi-alias-expansion-ai-toolkit-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Add adapter-declared selector normalization to the shared surface
+      validator so Musubi aliases are resolved before applicability checks.
+      AI-Toolkit fields, projection, commands, runtime behavior, and artifacts
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 889ae4cf3219db78e69cd48e08625299f8edc22026f89a9a7c55007f2e9ad907
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 61267fcf0364bf290da9dadc80c091a3bb2576ae06241f52976c1cb4b8cd7dac
+  - id: shared-surface-musubi-alias-expansion-sd-scripts-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Add adapter-declared selector normalization to the shared surface
+      validator so Musubi aliases are resolved before applicability checks.
+      sd-scripts fields, projection, commands, runtime behavior, and artifacts
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6b10b104c008912ce110f25154b44217d581e8e2477a3a6a2d4b3713df743441
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d3698b6d75cd0accef4d7ac071af4ab6dbb01570a6594368597b1246ca7611fa
+  - id: musubi-canonical-architecture-aliases-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Normalize every accepted Musubi architecture alias once at the adapter
+      and authored-surface boundaries and keep only canonical keys in dataset,
+      command, model, task, and condition tables. Pass the pinned dataset helper
+      its documented short architecture name. Existing evidence uses canonical
+      authored spellings, and FramePack follows the same non-H3 rounding branch,
+      so generated trainer inputs, frame results, runtime behavior, and
+      artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 73835bbdacd307886443379fafdb13c5819c7846ee8521cae1f12dc7e0fefe41
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 455227b110304e5bb25c0dfa8f4ee96d876068ccae554012d871cb4ac52c3795
+  - id: sd-scripts-pinned-image-avif-capability-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Match first-class image suffixes to the pinned sd-scripts image: the
+      loader adds AVIF only when pillow_avif imports successfully, while the
+      image installs the pinned requirements and editable package, neither of
+      which declares that optional plugin. Existing evidence uses PNG or JPEG
+      inputs, so selected inputs, generated views, native configuration,
+      commands, and artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f483e359a4a21d293bd0f561f3e1ee0e9278cd4ad9b3883dcd665ed2c79ac2cf
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6b10b104c008912ce110f25154b44217d581e8e2477a3a6a2d4b3713df743441
+  - id: frozen-ai-toolkit-loader-suffix-capability-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Separate Kura's broad media vocabulary from the pinned trainer's loader
+      capability and freeze AI-Toolkit's exact video suffix set into the
+      resolved command consumed by embedded-audio preflight. Existing evidence
+      uses suffixes already accepted by the pinned loader, so selected inputs,
+      trainer behavior, artifacts, and publication are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fbcac30c03f5d6731874dd1bfecfe31134ea43dddd53a4d5f871ac63358b53c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 889ae4cf3219db78e69cd48e08625299f8edc22026f89a9a7c55007f2e9ad907
+  - id: frozen-musubi-loader-suffix-capability-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Freeze the pinned Musubi image, video, and audio loader suffix sets into
+      the resolved command and make container preflight consume only those
+      values. The video set now mirrors every unconditional extension in the
+      pinned loader. Existing evidence uses previously accepted image, MP4, or
+      WebM inputs, so its native configuration and runtime behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 76947fec6a0cbc0b9fdaeb97ffbfb5239805f2bd3359a9d36c8aada834cd322e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 73835bbdacd307886443379fafdb13c5819c7846ee8521cae1f12dc7e0fefe41
+  - id: core-media-vocabulary-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Separate Kura's broad media vocabulary from SD-scripts' pinned loader
+      capability and record the pinned-source origin beside that backend set.
+      Existing evidence uses extensions already accepted by the pinned loader,
+      so selected inputs, generated views, native configuration, and artifacts
+      are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 470b99fd2364210f7aa643fabfcceb4e402c8cf2d639d14a623d7e79fde7d2f8
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f483e359a4a21d293bd0f561f3e1ee0e9278cd4ad9b3883dcd665ed2c79ac2cf
+  - id: ai-toolkit-audio-preflight-sample-context-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Record dataset and sample identity directly on each verified view link,
+      then resolve audio-preflight diagnostics from those explicit fields
+      instead of decoding the core's internal input-ID format.
+      Existing evidence-scoped runs do not enable the embedded-audio preflight,
+      so their selected inputs, generated views, commands, artifacts, and
+      cleanup behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: db487458367bf608096ae2dcc646b62dc5f6eb3a023d24590fefe33a5ec78f11
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 1fbcac30c03f5d6731874dd1bfecfe31134ea43dddd53a4d5f871ac63358b53c
+  - id: explicit-view-link-sample-context-musubi-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Record dataset and sample identity directly on each verified view link,
+      then consume those explicit fields in the Musubi video preflight instead
+      of decoding the core's internal input-ID format. Existing evidence sees
+      the same selected inputs and diagnostics, so native configuration,
+      commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: ec77b8ccc4fcbcfa8e4bd85f8e0dacc416e054806e9328d5f45ad8bf9d0e2501
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 76947fec6a0cbc0b9fdaeb97ffbfb5239805f2bd3359a9d36c8aada834cd322e
+  - id: explicit-view-link-sample-context-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Record dataset and sample identity directly on each verified view link.
+      The added lock metadata does not change SD-scripts' selected inputs,
+      generated views, native TOML, commands, artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 476412572349a1f5016211a2bb2559ae91d38a5528801f107aa7e3a2e7e2e16d
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 470b99fd2364210f7aa643fabfcceb4e402c8cf2d639d14a623d7e79fde7d2f8
+  - id: manifest-lf-only-jsonl-ai-toolkit-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Parse authored items.jsonl rows through one shared physical-LF helper in
+      manifest validation, legacy draft import, observation, and inspection.
+      Existing evidence manifests do not contain raw Unicode line separators
+      inside JSON strings, so their selected inputs, captions, generated views,
+      commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e91a3116d3cb6ad8d15de894774bd4d8e82d132548921f7f855dde158aec2667
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: db487458367bf608096ae2dcc646b62dc5f6eb3a023d24590fefe33a5ec78f11
+  - id: manifest-lf-only-jsonl-musubi-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Parse authored items.jsonl rows through one shared physical-LF helper in
+      manifest validation, legacy draft import, observation, and inspection.
+      Existing evidence manifests do not contain raw Unicode line separators
+      inside JSON strings, so their selected inputs, captions, generated JSONL,
+      native TOML, commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2ec4e3c55e04902229821e0ded33fb10e7002f4b6933621f9a9c6d07363ecf6b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: ec77b8ccc4fcbcfa8e4bd85f8e0dacc416e054806e9328d5f45ad8bf9d0e2501
+  - id: manifest-lf-only-jsonl-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Parse authored items.jsonl rows through one shared physical-LF helper in
+      manifest validation, legacy draft import, observation, and inspection.
+      Existing evidence manifests do not contain raw Unicode line separators
+      inside JSON strings, so their selected inputs, captions, generated views,
+      native TOML, commands, artifacts, and cleanup are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 96de098507d38d8d7a5b909b765071e9dc6c10c56e24c5f6984e5a1be0f7d2b2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 476412572349a1f5016211a2bb2559ae91d38a5528801f107aa7e3a2e7e2e16d
+  - id: ai-toolkit-dataset-profile-source-identity-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Include the shared dataset profile implementation and the imported run
+      envelope symbols, including their same-module dependency closures, in
+      AI-Toolkit's adapter source identity. AI-Toolkit already consumed these
+      helpers when the recorded evidence ran; this change corrects provenance
+      coverage without changing generated views, native configuration,
+      commands, optimizer behavior, artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 41798b56aa222b023c589c401276a79202a00a0bfaf307865f1852e0a3744903
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e91a3116d3cb6ad8d15de894774bd4d8e82d132548921f7f855dde158aec2667
+  - id: musubi-imported-helper-source-identity-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Include the imported shared _int_or_none helper and imported run envelope
+      symbols, including their same-module dependency closures, in Musubi's
+      adapter source identity. Musubi already consumed these helpers when the
+      recorded evidence ran; this change corrects provenance coverage without
+      changing generated JSONL, native TOML, commands, optimizer behavior,
+      artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 43e465592863ad9d463ebce101e137a578bb761d88939560c29cacee055395b7
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2ec4e3c55e04902229821e0ded33fb10e7002f4b6933621f9a9c6d07363ecf6b
+  - id: sd-scripts-run-envelope-source-identity-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Include the imported run envelope symbols and their same-module
+      dependency closures in sd-scripts' adapter source identity. sd-scripts
+      already consumed these helpers when the recorded evidence ran; this
+      change corrects provenance coverage without changing generated views,
+      native TOML, commands, optimizer behavior, artifacts, or cleanup.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 590650fb193552ed9fe1df85b5c86363e78d9861494d163f6192308df1a4b0fa
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 96de098507d38d8d7a5b909b765071e9dc6c10c56e24c5f6984e5a1be0f7d2b2
+  - id: runpod-manifest-v2-early-rejection-ai-toolkit-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Reject manifest-v2 RunPod runs during compile, plan, staging, and launch
+      before the legacy whole-dataset archive can be created. Existing evidence used
+      the historical pre-manifest transfer path, so its native configuration,
+      commands, optimizer behavior, artifacts, and recorded RunPod cleanup are
+      unchanged. The shared executor resolver also preserves those evidence
+      commands because the recorded runs explicitly selected RunPod. This
+      migration does not claim evidence for the not-yet-built selected-file
+      transfer path.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+      - ai-toolkit-0.13.18-class-import-2026-09-21
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6ec7371bb302e6f8f26282107510dea095fc795f60117b5625943b85221dacae
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 41798b56aa222b023c589c401276a79202a00a0bfaf307865f1852e0a3744903
+  - id: runpod-manifest-v2-early-rejection-musubi-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Reject manifest-v2 RunPod runs during compile, plan, staging, and launch
+      before the legacy whole-dataset archive can be created. Existing evidence used
+      the historical pre-manifest transfer path, so its native configuration,
+      commands, optimizer behavior, artifacts, and recorded RunPod cleanup are
+      unchanged. This migration does not claim evidence for the not-yet-built
+      selected-file transfer path.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e52672e4994590afad3a1c8cfe6f09b7764c4396a4e4b172492780a0ace8d593
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 43e465592863ad9d463ebce101e137a578bb761d88939560c29cacee055395b7
+  - id: runpod-manifest-v2-early-rejection-sd-scripts-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Reject manifest-v2 RunPod runs during compile, plan, staging, and launch
+      before the legacy whole-dataset archive can be created. Existing evidence used
+      the historical pre-manifest transfer path, so its native configuration,
+      commands, optimizer behavior, artifacts, and recorded RunPod cleanup are
+      unchanged. This migration does not claim evidence for the not-yet-built
+      selected-file transfer path.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+      - sd-scripts-tier1-image-2026-07-31
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c6dabd5ae21ec76069c71f93de886731d2d4ffe385948635437b254cd51f8a76
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 590650fb193552ed9fe1df85b5c86363e78d9861494d163f6192308df1a4b0fa
+  - id: musubi-minimax-h3-dataset-requirements-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Restore the pinned MiniMax-H3 dataset guards as architecture requirements:
+      batch_size must be 1 and every effective resolution must contain positive
+      multiples of 32. Existing evidence-scoped runs use batch size 1 and valid
+      default or authored resolutions, so their generated JSONL, native TOML,
+      commands, optimizer behavior, and artifacts remain unchanged. This
+      migration does not claim evidence for a configuration rejected by the new
+      guard.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: cb39421edf298215f7198c85dacb04f12baa4a9ee77222c9cccfc01d402749b4
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f0f6483186381094bb0de139f34062c3c56f6da7acb1c1fc79a417a9c5246040
+  - id: ai-toolkit-explicit-group-blocks-existing-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      Add explicit grouped-manifest block projection, typed repeat settings,
+      and nested semantic/runtime native verification. Existing evidence-scoped
+      runs use one ungrouped dataset with no dataset_options or flatten_groups,
+      for which the generated view, native dataset mapping, trainer command,
+      optimizer behavior, and publication contract remain unchanged. The
+      historical flat one-block projection is deliberately retained so an
+      unchanged dataset can Resume against its existing input identity; only
+      explicit authored blocks use the native dataset-list form, and that
+      compatibility boundary is isolated in named encode/decode helpers. This
+      migration does not claim runtime evidence for grouped blocks.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c8e52a2538ec44d8afa5993ed5bd5d7b51d8532e18936f25494adea6adc9ec72
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6ec7371bb302e6f8f26282107510dea095fc795f60117b5625943b85221dacae
+  - id: musubi-nested-native-verifier-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Generalize the shared projection verifier so semantic and runtime-only
+      leaves may be disjoint inside matching nested dataset containers. Musubi's
+      existing generated JSONL projections already produce the same verified
+      native TOML, commands, optimizer behavior, and artifacts; no Musubi
+      projection or runtime behavior changes in this transition.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a93e340f2b4f191eceb91a19c74c0faf746c9dab92b1123aa1d36108e192d241
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: cb39421edf298215f7198c85dacb04f12baa4a9ee77222c9cccfc01d402749b4
+  - id: sd-scripts-nested-native-verifier-existing-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Generalize the shared projection verifier so semantic and runtime-only
+      leaves may be disjoint inside matching nested dataset containers.
+      SD-scripts' existing generated subset projections keep the same verified
+      native TOML, commands, optimizer behavior, Resume state, and artifacts;
+      no SD-scripts projection or runtime behavior changes in this transition.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 666ae26034ee8cbde74958844a83db290bf258e203763b4c7e3688c5195c6aae
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c6dabd5ae21ec76069c71f93de886731d2d4ffe385948635437b254cd51f8a76
+  - id: ai-toolkit-shared-caption-projection-verifier-existing-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      The shared dataset handoff verifier now validates explicitly declared
+      generated-caption transforms. AI-Toolkit's evidence-scoped projections
+      continue to use identity-preserving generated captions and the same
+      selected media, native settings, commands, optimizer behavior, and
+      publications. This migration does not claim a new runtime path.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e7fbad4cd272e6455ae369e982db76c8480b5d873527a0e046a5d834af39acf9
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: c8e52a2538ec44d8afa5993ed5bd5d7b51d8532e18936f25494adea6adc9ec72
+  - id: musubi-owned-extra-args-and-caption-verifier-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      Reject exact and argparse-abbreviated adapter-owned flags in extra_args,
+      and extend the shared handoff verifier for generated-caption transforms.
+      Recorded successful Musubi commands contain no conflicting extra_args and
+      use JSONL caption references rather than generated caption files, so their
+      inputs, native settings, optimizer behavior, and artifacts are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0d0d921164306f78b21b7b97b9cbc36d9d8d49446f7280593d497edc42b13093
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a93e340f2b4f191eceb91a19c74c0faf746c9dab92b1123aa1d36108e192d241
+  - id: sd-scripts-owned-extra-args-and-caption-loader-existing-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      Reject exact and argparse-abbreviated adapter-owned dataset/caption flags,
+      and materialize the pinned DreamBooth loader's effective caption text with
+      an explicitly verified transform. Recorded successful SD1 captions are
+      single-line and their commands contain no conflicting extra_args, so the
+      selected text, native TOML, optimizer behavior, Resume, and publication
+      evidence are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 20f757d0a62c074325d07826d52879865f179a920a951441dbbaa47771fe57a8
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 666ae26034ee8cbde74958844a83db290bf258e203763b4c7e3688c5195c6aae
+  - id: ai-toolkit-closed-local-input-mounts-existing-evidence-2026-09-28
+    backend: ai-toolkit
+    reason: >-
+      The shared local-Docker handoff now mounts frozen Resume state and
+      workspace local-path models read-only instead of leaving those inputs
+      unreachable after removal of the broad workspace bind. Evidence-scoped
+      dataset projection, native settings, trainer command, optimizer behavior,
+      publication, and recovery semantics are unchanged. This migration does
+      not claim a new real-container Resume or local-model smoke.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 15895a9ce7fb8e58ec087b4657704a9c5be43fdd1f0bdbc120b6c17f06c3df9b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e7fbad4cd272e6455ae369e982db76c8480b5d873527a0e046a5d834af39acf9
+  - id: musubi-closed-local-input-mounts-existing-evidence-2026-09-28
+    backend: musubi-tuner
+    reason: >-
+      The shared local-Docker handoff now mounts frozen Resume state and
+      workspace local-path models read-only. MiniMax-H3 guidance writes its
+      unconditional cache to the run-owned cache instead of immutable resolved
+      input. The cache bytes remain an internal producer-consumer handoff and
+      do not change selected data, native dataset settings, optimizer behavior,
+      or published artifacts. This migration does not claim the pending
+      real-container mount and guidance-cache smokes.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6a2974be58cb8304a5ad9eb9937c654e1745d365db2c803085f9176082a3807c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0d0d921164306f78b21b7b97b9cbc36d9d8d49446f7280593d497edc42b13093
+  - id: sd-scripts-closed-local-input-mounts-existing-evidence-2026-09-28
+    backend: sd-scripts
+    reason: >-
+      The shared local-Docker handoff now mounts frozen Resume state and
+      workspace local-path models read-only after removal of the broad workspace
+      bind. The evidence-scoped SD1 selected inputs, native TOML, command,
+      optimizer, Resume payload, and publication semantics are unchanged. This
+      migration does not claim the pending real-container mount smoke.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d0817f908d618b2e81a9bed61f2cdfd46298ce797fe1b8cc6f836362273b348f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 20f757d0a62c074325d07826d52879865f179a920a951441dbbaa47771fe57a8
+  - id: ai-toolkit-removes-legacy-dataset-selectors-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      The adapter removes the obsolete dataset_folder and control_subdir
+      directory-inference compile path after all built-in first-class dataset
+      handoffs moved to frozen manifest projections. Evidence-scoped compiled
+      trainer settings, commands, optimizer behavior, publication, and recovery
+      are unchanged; the authored migration now fails before execution with an
+      actionable manifest-v2 correction. This migration does not claim runtime
+      evidence for a newly added model or dataset mode.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b71f9528bb18c596bceea53d4e7631a25c5a0addd311089f59d0933ac82f4d30
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 15895a9ce7fb8e58ec087b4657704a9c5be43fdd1f0bdbc120b6c17f06c3df9b
+  - id: ai-toolkit-ref2va-manifest-references-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      The adapter adds a source-audited MiniMax-H3 Ref2VA profile for video
+      targets with same-stem ordered image and video reference folders. The
+      evidence-scoped SD1, SDXL, and base MiniMax-H3 runs select no Ref2VA
+      profile or reference folders, so their selected bytes, native dataset
+      settings, command, optimizer, publication, and recovery behavior are
+      unchanged. This migration does not claim Ref2VA runtime evidence.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a55e6a2b244c4ccecf05bd498965c1a248f2a52be7b4f23a1ee9c7a5be3979c9
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b71f9528bb18c596bceea53d4e7631a25c5a0addd311089f59d0933ac82f4d30
+  - id: ai-toolkit-manifest-video-audio-preflight-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      The adapter adds first-class manifest projection for AI-Toolkit video
+      datasets and a pinned-loader embedded-audio preflight that runs only when
+      do_audio is explicitly enabled. The evidence-scoped SD1, SDXL, and
+      MiniMax-H3 runs do not enable do_audio, so their selected bytes, native
+      dataset settings, command, optimizer, publication, and recovery behavior
+      are unchanged. The existing MiniMax-H3 video observation remains evidence
+      only for its base video path; this migration does not claim runtime
+      evidence for the new manifest video projection, I2V, or audio preflight.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 98057597da3004dd96e6d2612244e5a537aa17ee371d238bb4e6e1bac7f25769
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a55e6a2b244c4ccecf05bd498965c1a248f2a52be7b4f23a1ee9c7a5be3979c9
+  - id: ai-toolkit-ordered-control-slots-existing-evidence-2026-09-27
+    backend: ai-toolkit
+    reason: >-
+      Core now verifies optional ordered slots when one manifest role must be
+      projected into several native directories, and the AI-Toolkit adapter adds
+      source-audited image-control profiles. The evidence-scoped SD1, SDXL, and
+      MiniMax-H3 runs use no repeated-role slot binding, so their selected bytes,
+      native dataset settings, command, optimizer, publication, and recovery
+      behavior are unchanged. This migration does not claim runtime evidence for
+      any newly added control profile.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-sdxl-docker-2026-07-12
+      - ai-toolkit-sdxl-runpod-2026-07-12
+      - ai-toolkit-sd1-publication-docker-2026-09-23
+      - ai-toolkit-minimax-h3-runpod-2026-09-21
+      - ai-toolkit-minimax-h3-image-runpod-2026-09-22
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 122634fa9b5ef9e5901fee80486f470ceabefa28e5d0deb6e591efb873299c94
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 98057597da3004dd96e6d2612244e5a537aa17ee371d238bb4e6e1bac7f25769
+  - id: musubi-ordered-control-slots-existing-evidence-2026-09-27
+    backend: musubi-tuner
+    reason: >-
+      Core accepts an optional ordered slot on directory-binding members. Existing
+      Musubi JSONL consumers use row-reference verification rather than directory
+      bindings, and existing directory bindings declare no repeated-role slots,
+      so the evidence-scoped native TOML, input identity, commands, optimizer,
+      publication, and recovery behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 081aa2d6375c708dd4d2d6185c130e498199c23ab8b16a0fe0d98b719721f9a2
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6a2974be58cb8304a5ad9eb9937c654e1745d365db2c803085f9176082a3807c
+  - id: sd-scripts-ordered-control-slots-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      Core accepts an optional ordered slot on directory-binding members. The
+      evidence-scoped SD1 path has one target and one caption root and declares no
+      repeated-role slots, so its selected bytes, native TOML, input identity,
+      command, optimizer, Resume, and publication behavior are unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 84da8cb8807b6e8a1be6fd486b5ec5a703f16b0a8743dc59b11b5f0cd87ad5cb
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d0817f908d618b2e81a9bed61f2cdfd46298ce797fe1b8cc6f836362273b348f
+  - id: sd-scripts-mixed-partition-preservation-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      The backend-shared partition helper now preserves an explicitly declared
+      ungrouped partition alongside named groups instead of rejecting that
+      complete mapping. The evidence-scoped SD 1.5 run has one ungrouped
+      dataset and one ungrouped subset, so its selected files, generated TOML,
+      input identity, command, optimizer, Resume, and publication behavior are
+      unchanged. This migration does not claim evidence for mixed grouped and
+      ungrouped sd-scripts datasets.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: fe466969d9c0efc1094df4ecc083692ea935c7f7f9abfbab3738d5fe3ff676a5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 84da8cb8807b6e8a1be6fd486b5ec5a703f16b0a8743dc59b11b5f0cd87ad5cb
+  - id: sd-scripts-caption-policy-and-flattening-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      Effective inherited caption and cache settings are now recorded explicitly
+      in semantic input identity, and explicit flatten_groups uses the existing
+      N-subset resolver. The evidence-scoped ungrouped SD 1.5 run does not use
+      flattening, and its generated native TOML, effective caption bytes and
+      controls, repeat, command, optimizer, Resume, and publication behavior are
+      unchanged. Block/subset partitioning is now backend-shared; the recorded
+      ungrouped N=1 path resolves to the same sole subset with the same native
+      settings and input identity. This migration does not claim runtime evidence
+      for grouped, flattened, LLLite, SDXL, FLUX.1, or Anima paths.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e8177ad847ecc610f68f470895b507356770828e5b4e82d63665911c3e95106f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: fe466969d9c0efc1094df4ecc083692ea935c7f7f9abfbab3738d5fe3ff676a5
+  - id: sd-scripts-shared-profile-contract-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      Profile selection now uses the backend-shared media shape and caption
+      requirement contract, and the ordinary N=1 subset follows the same path
+      as grouped N-subset datasets. For the evidence-scoped ungrouped SD 1.5
+      path, the generated native TOML, target and caption bytes, repeat count,
+      input identity, command, optimizer, Resume, and publication behavior are
+      unchanged. This migration does not claim runtime evidence for grouped,
+      LLLite, SDXL, FLUX.1, or Anima paths.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0b0fdd0f0059ec999f12fb4b672ef5eec10406d4a2f231ab0e1a9a84ba347752
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e8177ad847ecc610f68f470895b507356770828e5b4e82d63665911c3e95106f
+  - id: sd-scripts-manifest-groups-and-control-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      The manifest codec learned separate caption sources, explicit group-to-subset
+      views, and paired LLLite control roots. The evidence-scoped ungrouped SD 1.5
+      path still presents the same target and effective caption bytes with the
+      same repeat and native dataset controls; only run-owned view bookkeeping
+      was generalized. This migration does not claim current evidence for grouped,
+      LLLite, SDXL, FLUX.1, or Anima execution.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a2e2f1e17c10d19ada515a3fd1997206e77ddfe6400db2f7528a05d7c093ec5c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 0b0fdd0f0059ec999f12fb4b672ef5eec10406d4a2f231ab0e1a9a84ba347752
+  - id: sd-scripts-manifest-image-handoff-sd15-evidence-2026-09-27
+    backend: sd-scripts
+    reason: >-
+      The old backend-specific staging script was replaced by the shared
+      manifest handoff for the ordinary one-target, one-caption SD 1.5 path.
+      The evidence-scoped training meaning is unchanged: the same target bytes
+      and exact caption bytes are presented as a same-stem pair, the same
+      explicit repeat and native dataset controls reach sd-scripts, and the
+      training entrypoint, model roles, optimizer, Resume state, and publication
+      behavior are unchanged. Run-owned filenames and the prelaunch verification
+      mechanism changed, but neither changes the recorded optimizer-step and
+      learned-weight equivalence claim. This migration is only for the recorded
+      SD 1.5 image-caption evidence; SDXL, FLUX.1, Anima, control, and multi-subset
+      compile claims remain migration pending until their manifest paths are
+      separately evidenced.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 607c98ded3ddb21fddf55cf13953e7f0b82d7e9edbd2546791aa67a0cb7b9937
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: a2e2f1e17c10d19ada515a3fd1997206e77ddfe6400db2f7528a05d7c093ec5c
+  - id: sd-scripts-shared-dataset-contract-identity-2026-09-26
+    backend: sd-scripts
+    reason: >-
+      Shared manifest and dataset-handoff sources are now included in adapter
+      identity. The sd-scripts adapter does not consume the new projection in
+      this increment, so its native dataset configuration, command, Resume
+      behavior, and the listed SD1.5 equivalence observation are unchanged.
+      The later generalized association validator is also not called by the
+      current sd-scripts staging path and therefore does not change that
+      observation's native TOML, staged files, command, or training behavior.
+      Its subsequent binding-key, sample, and role-root uniqueness checks are
+      likewise outside that staging path. The generated-JSONL verifier is
+      opt-in through a projection report field that the current sd-scripts
+      staging path does not emit, so this increment also leaves the recorded
+      native TOML, staged files, command, and training behavior unchanged. The
+      multi-view consumer validator is likewise not called by the current
+      sd-scripts staging path. Closed classification of native strings and
+      write-root pointers is also confined to projection reports, which this
+      staging path does not yet emit. Tightening the shared path-like string
+      predicate for declared projection literals is therefore also outside
+      the recorded staging path. The optional projection-policy envelope and
+      Musubi-only stripped-caption reference kind are likewise absent from the
+      sd-scripts report, native TOML, staged files, and command. Allowing a
+      declared generated-JSONL literal field to be absent from some rows is
+      also confined to reports with native JSONL and cannot affect this
+      directory/TOML-based SD1.5 observation.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 3b88a376dd4b2081c61d8a196422fce3f55f648b853a20dfdd7169528ed6e6c0
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 607c98ded3ddb21fddf55cf13953e7f0b82d7e9edbd2546791aa67a0cb7b9937
   - id: ai-toolkit-registered-selector-validation-sd1-2026-09-23
     backend: ai-toolkit
     reason: >-
@@ -14,8 +1555,48 @@ records:
       upstream registry before compilation. The recorded SD1 optimizer smoke
       used the registered sd1 selector, and its generated native model.arch,
       runtime command, optimizer step, and published output are unchanged.
+      The manifest handoff adds an independently verified run-owned view for
+      that same image-and-caption path without changing the selector or native
+      training meaning; the shared manifest and handoff sources are now part
+      of adapter identity. The generalized association report replaces the
+      internal same-directory binding with a checked relative-stem key. For
+      this recorded single image-and-caption path, the generated view paths,
+      caption bytes, native folder_path, runtime command, and cache behavior
+      remain unchanged. Requiring one unique binding key per sample and one
+      role root per input kind only rejects ambiguous reports; the recorded
+      one-image, one-caption projection already satisfies those invariants.
+      The generated-JSONL verifier is not exercised when the projection has
+      no native JSONL files, so it does not change this recorded image-caption
+      view, native configuration, command, or training behavior. The view is
+      now reported through the generalized multi-view envelope, whose native
+      consumer check still resolves to the same folder_path; generated paths,
+      command, and trainer behavior remain unchanged. The closed native-string
+      classification now proves that folder_path is the declared consumer and
+      write-root pointer and that caption_ext is an adapter-declared string;
+      it does not change either native value or the emitted configuration.
+      Declared strings that look like paths are now rejected, while the
+      caption_ext value `.txt` remains an explicitly allowed extension token.
+      The optional projection-policy envelope and Musubi-only stripped-caption
+      reference kind are not emitted by AI-Toolkit and do not alter its view,
+      caption bytes, native configuration, command, or publication behavior.
+      Allowing a declared generated-JSONL literal field to be absent from some
+      rows is likewise confined to native JSONL verification; AI-Toolkit's
+      directory view emits no native JSONL and remains byte-for-byte unchanged.
+      The ordinary N=1 dataset path now uses the same manifest partition helper
+      as Musubi and sd-scripts, and first-class projection no longer invents an
+      SDXL architecture when the author omitted one. The recorded smoke
+      explicitly selected model_arch=sd1 and used one ungrouped dataset, so its
+      selected files, native configuration, runtime command, optimizer step,
+      cache placement, and published artifact remain unchanged.
+      The ordinary-image profile now admits additional fixed-source image
+      selectors, while a separate architecture-requirements table gives
+      Flex.2 a typed bypass_guidance_embedding train field and Z-Image L2P a
+      typed extras_name_or_path companion-model field and requirement. Neither
+      architecture requirement applies to model_arch=sd1, so the recorded SD1
+      native dataset, acquisition, and trainer command remain unchanged.
       This migration applies only to that evidence, not to unregistered or
-      custom-image selectors.
+      custom-image selectors, grouped datasets, or architectures whose
+      ordinary-image profile is not yet owner-approved.
     behavior_changed: false
     evidence_ids:
       - ai-toolkit-sd1-publication-docker-2026-09-23
@@ -26,7 +1607,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v2
-      value: c95615c9c951b006bfa18ccc7c4324e3446ff2ea156a9b0026e24c01c5f267c0
+      value: 122634fa9b5ef9e5901fee80486f470ceabefa28e5d0deb6e591efb873299c94
   - id: sd-scripts-output-publication-contract-2026-09-23
     backend: sd-scripts
     reason: >-

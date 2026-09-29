@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import contextlib
-import io
 import json
 import struct
 import tempfile
@@ -12,17 +10,22 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from kura.backends import backend_capabilities, validate_backend_config
-from kura.backends.sd_scripts import OWNED_FLAGS, command_sd_scripts, compile_sd_scripts, display_sd_scripts
+from kura.backends.sd_scripts import OWNED_FLAGS, command_sd_scripts, display_sd_scripts
 from kura.backends.sd_scripts_datasets import (
     DATASET_KEYS,
     GENERAL_KEYS,
     SUBSET_KEYS,
     _validate_field,
-    write_sd_scripts_dataset_config,
+    validate_sd_scripts_dataset_config,
 )
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.container_scripts import script_source
-from kura.run_commands.plan import _sd_scripts_cache_preflight_report, _sd_scripts_disk_cache_estimate
+from kura.run_commands.plan import _disk_cache_estimate as _sd_scripts_disk_cache_estimate, _disk_cache_preflight_report as _sd_scripts_cache_preflight_report
+from kura.backends.sd_scripts import compile_sd_scripts
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handoff_fixtures import freeze_fixture  # noqa: E402
 
 
 def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
@@ -44,7 +47,7 @@ def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
                 "model_paths": roles[architecture],
                 "dataset_config": {
                     "general": {"resolution": [512, 512], "caption_extension": ".txt"},
-                    "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "sample", "image_subdir": "images", "num_repeats": 1}]}],
+                    "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "sample", "num_repeats": 1}]}],
                 },
                 "network_dim": 8,
                 "learning_rate": 0.0001,
@@ -68,6 +71,55 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
         offset += 4
     encoded = json.dumps(header, separators=(",", ":")).encode("utf-8")
     path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + body)
+
+
+class SdScriptsManifestCompileTests(unittest.TestCase):
+    """Every built-in LoRA architecture compiles through the manifest profile/codec path."""
+
+    CASES = {
+        "sd15": ({"base": "/workspace/models/sd15.safetensors"}, "train_network.py"),
+        "sdxl": ({"base": "/workspace/models/sdxl.safetensors"}, "sdxl_train_network.py"),
+        "flux1": ({
+            "dit": "/workspace/models/flux1-dev.safetensors", "clip_l": "/workspace/models/clip_l.safetensors",
+            "t5xxl": "/workspace/models/t5xxl.safetensors", "ae": "/workspace/models/ae.safetensors",
+        }, "flux_train_network.py"),
+        "anima": ({
+            "dit": "/workspace/models/anima.safetensors", "qwen3": "/workspace/models/qwen3.safetensors",
+            "vae": "/workspace/models/anima-vae.safetensors",
+        }, "anima_train_network.py"),
+    }
+
+    def test_every_lora_architecture_compiles_through_the_frozen_manifest_view(self) -> None:
+        for architecture, (model_paths, script) in self.CASES.items():
+            with self.subTest(architecture=architecture), tempfile.TemporaryDirectory() as directory:
+                run = {
+                    "id": "example",
+                    "type": "train",
+                    "backend": {"name": "sd-scripts", "config": {
+                        "architecture": architecture, "mode": "lora", "model_paths": model_paths,
+                        "dataset_config": {
+                            "general": {"caption_extension": ".txt", "resolution": [256, 256]},
+                            "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "tiny", "num_repeats": 2}]}],
+                        },
+                    }},
+                    "model": {"base": architecture},
+                    "datasets": [{"id": "tiny"}],
+                    "recipe": {"steps": 1, "seed": 1},
+                }
+                resolved = Path(directory) / "runs" / "example" / "resolved"
+                resolved.mkdir(parents=True)
+                report = freeze_fixture(run, resolved)
+
+                command = compile_sd_scripts(run, resolved / "sd-scripts")
+
+                projected = report["datasets"][0]
+                self.assertEqual(projected["policy"]["profile"], "ordinary-image-lora")
+                self.assertEqual(projected["policy"]["codec"], "dreambooth-image-subset")
+                toml = tomllib.loads((resolved / "sd-scripts" / "dataset.toml").read_text(encoding="utf-8"))
+                subset = toml["datasets"][0]["subsets"][0]
+                self.assertEqual(subset["num_repeats"], 2)
+                self.assertTrue(subset["image_dir"].startswith("/workspace/runs/example/cache/dataset-view/sd-scripts/"))
+                self.assertIn(script, json.dumps(command))
 
 
 class SdScriptsBackendTests(unittest.TestCase):
@@ -129,36 +181,6 @@ class SdScriptsBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     command_sd_scripts(run)
 
-    def test_caption_dropout_is_supported_at_every_upstream_inheritance_level(self) -> None:
-        for level in ("general", "dataset", "subset"):
-            with self.subTest(level=level), tempfile.TemporaryDirectory() as directory:
-                run = base_run("anima", "controlnet_lllite")
-                config = run["backend"]["config"]["dataset_config"]
-                target = {
-                    "general": config["general"],
-                    "dataset": config["datasets"][0],
-                    "subset": config["datasets"][0]["subsets"][0],
-                }[level]
-                target.update(
-                    {
-                        "caption_dropout_rate": 0.15,
-                        "caption_dropout_every_n_epochs": 2,
-                        "caption_tag_dropout_rate": 0.1,
-                    }
-                )
-
-                destination = Path(directory) / "dataset.toml"
-                write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
-                parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
-                emitted = {
-                    "general": parsed["general"],
-                    "dataset": parsed["datasets"][0],
-                    "subset": parsed["datasets"][0]["subsets"][0],
-                }[level]
-                self.assertEqual(emitted["caption_dropout_rate"], 0.15)
-                self.assertEqual(emitted["caption_dropout_every_n_epochs"], 2)
-                self.assertEqual(emitted["caption_tag_dropout_rate"], 0.1)
-
     def test_reviewed_nested_dataset_scope_is_explicit_at_each_level(self) -> None:
         subset_native = {
             "num_repeats", "caption_extension", "shuffle_caption", "keep_tokens",
@@ -173,13 +195,21 @@ class SdScriptsBackendTests(unittest.TestCase):
             "min_bucket_reso", "max_bucket_reso", "bucket_reso_steps",
             "network_multiplier", "skip_image_resolution",
         }
-        staging_only = {"dataset_id", "image_subdir", "caption_subdir", "conditioning_subdir"}
+        staging_only = {"dataset_id", "group"}
 
         self.assertEqual(GENERAL_KEYS, subset_native | dataset_native)
         self.assertEqual(DATASET_KEYS, subset_native | dataset_native)
         self.assertEqual(SUBSET_KEYS, subset_native | staging_only)
         for deliberately_unsupported in ("validation_seed", "validation_split", "custom_attributes"):
             self.assertNotIn(deliberately_unsupported, GENERAL_KEYS | DATASET_KEYS | SUBSET_KEYS)
+
+    def test_legacy_folder_selectors_name_the_manifest_migration(self) -> None:
+        run = base_run()
+        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["caption_subdir"] = "captions"
+        with self.assertRaisesRegex(
+            ValueError, r"replaces folder selector.*caption_subdir.*items\.jsonl.*manifest group",
+        ):
+            validate_sd_scripts_dataset_config(run)
 
     def test_nested_dataset_surface_rejects_unknown_invalid_types_and_ranges(self) -> None:
         cases = (
@@ -195,20 +225,7 @@ class SdScriptsBackendTests(unittest.TestCase):
                 target = config["general"] if key == "enable_bucket" else config["datasets"][0]["subsets"][0]
                 target[key] = value
                 with self.assertRaisesRegex(ValueError, message):
-                    write_sd_scripts_dataset_config(
-                        run, Path(directory) / "dataset.toml", workspace=None, strict=False
-                    )
-
-    def test_caption_dropout_every_n_epochs_zero_is_an_accepted_disabled_value(self) -> None:
-        run = base_run("anima", "controlnet_lllite")
-        native = run["backend"]["config"]
-        native["cache_text_encoder_outputs_to_disk"] = True
-        native["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_every_n_epochs"] = 0
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "dataset.toml"
-            write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
-            parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
-        self.assertEqual(parsed["datasets"][0]["subsets"][0]["caption_dropout_every_n_epochs"], 0)
+                    validate_sd_scripts_dataset_config(run)
 
     def test_field_validator_enforces_arbitrary_declared_bounds(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least 2"):
@@ -244,37 +261,6 @@ class SdScriptsBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "caption_extension must start with a dot"):
                     validate_backend_config(run)
 
-    def test_anima_lllite_caption_rate_can_be_combined_with_text_encoder_disk_cache(self) -> None:
-        run = base_run("anima", "controlnet_lllite")
-        native = run["backend"]["config"]
-        native["cache_text_encoder_outputs_to_disk"] = True
-        native["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_rate"] = 0.15
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "resolved"
-            compile_sd_scripts(run, destination, workspace=None, strict=False)
-            parsed = tomllib.loads((destination / "dataset.toml").read_text(encoding="utf-8"))
-        self.assertEqual(parsed["datasets"][0]["subsets"][0]["caption_dropout_rate"], 0.15)
-        self.assertIn("--cache_text_encoder_outputs_to_disk", command_sd_scripts(run)["argv"][2])
-
-    def test_caption_dropout_is_frozen_for_runtime_dataset_logging(self) -> None:
-        run = base_run("anima", "controlnet_lllite")
-        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["caption_dropout_rate"] = 0.15
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "dataset.toml"
-            lock = write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
-        self.assertEqual(lock["effective_controls"][0]["caption_dropout_rate"], 0.15)
-
-    def test_default_num_repeats_is_frozen_for_runtime_dataset_logging(self) -> None:
-        run = base_run("anima", "controlnet_lllite")
-        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0].pop("num_repeats")
-        with tempfile.TemporaryDirectory() as directory:
-            destination = Path(directory) / "dataset.toml"
-            lock = write_sd_scripts_dataset_config(run, destination, workspace=None, strict=False)
-            parsed = tomllib.loads(destination.read_text(encoding="utf-8"))
-
-        self.assertEqual(parsed["datasets"][0]["subsets"][0]["num_repeats"], 1)
-        self.assertEqual(lock["effective_controls"][0]["num_repeats"], 1)
-
     def test_dynamic_caption_controls_rejected_when_text_encoder_cache_cannot_preserve_them(self) -> None:
         for key, value in (("caption_dropout_every_n_epochs", 2), ("caption_tag_dropout_rate", 0.1)):
             with self.subTest(key=key), tempfile.TemporaryDirectory() as directory:
@@ -283,7 +269,30 @@ class SdScriptsBackendTests(unittest.TestCase):
                 native["cache_text_encoder_outputs_to_disk"] = True
                 native["dataset_config"]["datasets"][0]["subsets"][0][key] = value
                 with self.assertRaisesRegex(ValueError, rf"{key}.*text-encoder cache"):
-                    compile_sd_scripts(run, Path(directory) / "resolved", workspace=None, strict=False)
+                    validate_sd_scripts_dataset_config(run)
+
+    def test_inherited_caption_controls_are_checked_against_text_encoder_cache(self) -> None:
+        for level in ("general", "dataset"):
+            with self.subTest(level=level):
+                run = base_run("sd15", "lora")
+                native = run["backend"]["config"]
+                native["cache_text_encoder_outputs_to_disk"] = True
+                target = (
+                    native["dataset_config"]["general"]
+                    if level == "general"
+                    else native["dataset_config"]["datasets"][0]
+                )
+                target["shuffle_caption"] = True
+                with self.assertRaisesRegex(ValueError, r"shuffle_caption.*text-encoder cache"):
+                    validate_sd_scripts_dataset_config(run)
+
+    def test_flatten_groups_is_a_typed_first_class_sd_scripts_field(self) -> None:
+        capabilities = backend_capabilities("sd-scripts")
+        self.assertIn("flatten_groups", capabilities["config_fields"])
+        run = base_run()
+        run["backend"]["config"]["flatten_groups"] = "yes"
+        with self.assertRaisesRegex(ValueError, r"flatten_groups must be true or false"):
+            validate_sd_scripts_dataset_config(run)
 
     def test_sd_scripts_capabilities_expose_nested_dataset_contract(self) -> None:
         nested = backend_capabilities("sd-scripts")["nested_config_fields"]
@@ -352,24 +361,6 @@ class SdScriptsBackendTests(unittest.TestCase):
         self.assertEqual([item["filename"] for item in specs], ["primary.safetensors", "companion.json"])
         self.assertTrue(paths["base"].endswith("/primary.safetensors"))
 
-    def test_dataset_config_rejects_missing_declared_dataset_and_invalid_caption_extension(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            destination = root / "dataset.toml"
-            run = base_run()
-            run["datasets"] = []
-            run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0].pop("dataset_id")
-            with self.assertRaisesRegex(ValueError, "at least one declared dataset"):
-                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=False)
-
-            run = base_run()
-            run["backend"]["config"]["dataset_config"]["general"]["caption_extension"] = "txt"
-            images = root / "datasets" / "sample" / "images"
-            images.mkdir(parents=True)
-            (images / "one.png").write_bytes(b"image")
-            with self.assertRaisesRegex(ValueError, "must start with a dot"):
-                write_sd_scripts_dataset_config(run, destination, workspace=root, strict=True)
-
     def test_disk_cache_estimate_rejects_boolean_and_non_finite_values(self) -> None:
         for value in (True, float("nan"), float("inf")):
             with self.subTest(value=value):
@@ -402,137 +393,6 @@ class SdScriptsBackendTests(unittest.TestCase):
                     self.assertIn("--max_train_steps 1", script)
                     self.assertIn("--mixed_precision bf16", script)
                     self.assertIn("--gradient_accumulation_steps 1", script)
-
-    def test_compile_writes_two_level_toml_and_frozen_stage_lock(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            images = workspace / "datasets" / "sample" / "images"
-            images.mkdir(parents=True)
-            (images / "one.png").write_bytes(b"png")
-            (images / "one.txt").write_text("caption", encoding="utf-8")
-            destination = workspace / "runs" / "sd-smoke" / "resolved" / "sd-scripts"
-
-            compile_sd_scripts(base_run(), destination, workspace=workspace, strict=True)
-
-            toml = (destination / "dataset.toml").read_text(encoding="utf-8")
-            lock = json.loads((destination / "dataset-stage.lock.json").read_text(encoding="utf-8"))
-            self.assertTrue((destination / "state-runner.py").is_file())
-        self.assertIn("[[datasets]]", toml)
-        self.assertIn("[[datasets.subsets]]", toml)
-        self.assertIn('image_dir = "/workspace/runs/sd-smoke/cache/sd-scripts/datasets/000-000/images"', toml)
-        self.assertIn("num_repeats = 1", toml)
-        self.assertNotIn("/workspace/datasets/", toml)
-        self.assertEqual(len(lock["files"]), 2)
-        self.assertTrue(all(item["identity"]["sha256"] for item in lock["files"]))
-
-    def test_dataset_level_caption_extension_controls_staged_caption_selection(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            images = workspace / "datasets" / "sample" / "images"
-            images.mkdir(parents=True)
-            (images / "one.png").write_bytes(b"png")
-            (images / "one.caption").write_text("caption", encoding="utf-8")
-            run = base_run()
-            config = run["backend"]["config"]["dataset_config"]
-            config["general"].pop("caption_extension")
-            config["datasets"][0]["caption_extension"] = ".caption"
-            destination = workspace / "resolved"
-
-            compile_sd_scripts(run, destination, workspace=workspace, strict=True)
-
-            lock = json.loads((destination / "dataset-stage.lock.json").read_text(encoding="utf-8"))
-            staged_sources = {item["source"] for item in lock["files"]}
-        self.assertIn("datasets/sample/images/one.caption", staged_sources)
-
-    def test_staging_keeps_shared_dataset_unchanged(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            source = workspace / "datasets" / "sample" / "images" / "one.png"
-            source.parent.mkdir(parents=True)
-            source.write_bytes(b"png")
-            lock = {
-                "stage_root": "runs/x/cache/sd-scripts/datasets",
-                "files": [{"source": "datasets/sample/images/one.png", "destination": "runs/x/cache/sd-scripts/datasets/000/images/one.png", "identity": {"size_bytes": 3, "sha256": __import__("hashlib").sha256(b"png").hexdigest()}}],
-            }
-            lock_path = workspace / "lock.json"
-            lock_path.write_text(json.dumps(lock), encoding="utf-8")
-            before = sorted(path.relative_to(workspace / "datasets").as_posix() for path in (workspace / "datasets").rglob("*") if path.is_file())
-            namespace = {"__name__": "__test__"}
-            exec(script_source("sd_scripts_dataset_stage.py"), namespace)
-            with patch("sys.argv", ["stage", str(lock_path), str(workspace)]):
-                namespace["main"]()
-            staged = workspace / "runs" / "x" / "cache" / "sd-scripts" / "datasets" / "000" / "images" / "one.png"
-            staged.with_suffix(".npz").write_bytes(b"cache")
-            staged_is_symlink = staged.is_symlink()
-            after = sorted(path.relative_to(workspace / "datasets").as_posix() for path in (workspace / "datasets").rglob("*") if path.is_file())
-        self.assertTrue(staged_is_symlink)
-        self.assertEqual(before, after)
-
-    def test_staging_logs_frozen_effective_dataset_controls(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            lock_path = workspace / "lock.json"
-            lock_path.write_text(
-                json.dumps(
-                    {
-                        "stage_root": "runs/x/cache/sd-scripts/datasets",
-                        "files": [],
-                        "effective_controls": [
-                            {"dataset_index": 0, "subset_index": 0, "caption_dropout_rate": 0.15}
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            namespace = {"__name__": "__test__"}
-            exec(script_source("sd_scripts_dataset_stage.py"), namespace)
-            output = io.StringIO()
-            with patch("sys.argv", ["stage", str(lock_path), str(workspace)]), contextlib.redirect_stdout(output):
-                namespace["main"]()
-        self.assertIn("dataset 0 subset 0 caption_dropout_rate: 0.15", output.getvalue())
-
-    def test_staging_rejects_a_changed_frozen_dataset_source(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            source = workspace / "datasets" / "sample" / "images" / "one.png"
-            source.parent.mkdir(parents=True)
-            source.write_bytes(b"changed")
-            lock = {"stage_root": "runs/x/cache/sd-scripts/datasets", "files": [{"source": "datasets/sample/images/one.png", "destination": "runs/x/cache/sd-scripts/datasets/000/images/one.png", "identity": {"size_bytes": 3, "sha256": "0" * 64}}]}
-            lock_path = workspace / "lock.json"
-            lock_path.write_text(json.dumps(lock), encoding="utf-8")
-            namespace = {"__name__": "__test__"}
-            exec(script_source("sd_scripts_dataset_stage.py"), namespace)
-            with patch("sys.argv", ["stage", str(lock_path), str(workspace)]), self.assertRaisesRegex(SystemExit, "size changed"):
-                namespace["main"]()
-
-    def test_staging_rejects_destructive_stage_root_before_removal(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            dataset = workspace / "datasets" / "keep"
-            dataset.mkdir(parents=True)
-            marker = dataset / "one.png"
-            marker.write_bytes(b"keep")
-            lock_path = workspace / "lock.json"
-            lock_path.write_text(json.dumps({"stage_root": "datasets", "files": []}), encoding="utf-8")
-            namespace = {"__name__": "__test__"}
-            exec(script_source("sd_scripts_dataset_stage.py"), namespace)
-            with patch("sys.argv", ["stage", str(lock_path), str(workspace)]), self.assertRaisesRegex(SystemExit, "run-scoped"):
-                namespace["main"]()
-            self.assertEqual(marker.read_bytes(), b"keep")
-
-    def test_paired_dataset_requires_matching_stems(self) -> None:
-        run = base_run("anima", "controlnet_lllite")
-        run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["conditioning_subdir"] = "conditioning"
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            images = workspace / "datasets" / "sample" / "images"
-            conditions = workspace / "datasets" / "sample" / "conditioning"
-            images.mkdir(parents=True)
-            conditions.mkdir()
-            (images / "one.png").write_bytes(b"png")
-            (conditions / "two.png").write_bytes(b"png")
-            with self.assertRaisesRegex(ValueError, "stems do not match"):
-                compile_sd_scripts(run, workspace / "resolved", workspace=workspace, strict=True)
 
     def test_anima_publication_converts_all_checkpoints_and_has_non_output_recovery(self) -> None:
         script = command_sd_scripts(base_run("anima", "lora"))["argv"][2]
@@ -807,6 +667,19 @@ class SdScriptsBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "duplicates"):
                     command_sd_scripts(run)
 
+    def test_extra_args_cannot_abbreviate_or_override_dataset_caption_fields(self) -> None:
+        for extra_args in (
+            ["--dataset_conf=/workspace/datasets/unsafe.toml"],
+            ["--caption_pref", "untracked"],
+            ["--caption_dropout_rate", "0.5"],
+            ["--shuffle_caption"],
+        ):
+            with self.subTest(extra_args=extra_args):
+                run = base_run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                    command_sd_scripts(run)
+
     def test_every_generated_option_is_adapter_owned(self) -> None:
         generated: set[str] = set()
         runs = [base_run("sd15"), base_run("sdxl"), base_run("flux1"), base_run("anima", "lora"), base_run("anima", "controlnet_lllite")]
@@ -943,32 +816,6 @@ class SdScriptsBackendTests(unittest.TestCase):
             write_safetensors(output, ["lllite_conditioning1.conv1.weight"], {})
             with self.assertRaisesRegex(SystemExit, "lllite.version=2"):
                 namespace["validate_output"]({"pattern": str(output), "kind": "anima-lllite"})
-
-    def test_all_tier1_selectors_compile_from_frozen_dataset(self) -> None:
-        for architecture, mode in (
-            ("sd15", "lora"),
-            ("sdxl", "lora"),
-            ("flux1", "lora"),
-            ("anima", "lora"),
-            ("anima", "controlnet_lllite"),
-        ):
-            with self.subTest(architecture=architecture, mode=mode), tempfile.TemporaryDirectory() as directory:
-                workspace = Path(directory)
-                images = workspace / "datasets" / "sample" / "images"
-                images.mkdir(parents=True)
-                (images / "one.png").write_bytes(b"png")
-                (images / "one.txt").write_text("caption", encoding="utf-8")
-                run = base_run(architecture, mode)
-                if mode == "controlnet_lllite":
-                    conditions = workspace / "datasets" / "sample" / "conditioning"
-                    conditions.mkdir()
-                    (conditions / "one.png").write_bytes(b"condition")
-                    run["backend"]["config"]["dataset_config"]["datasets"][0]["subsets"][0]["conditioning_subdir"] = "conditioning"
-                destination = workspace / "runs" / run["id"] / "resolved" / "sd-scripts"
-                compile_sd_scripts(run, destination, workspace=workspace, strict=True)
-                self.assertTrue((destination / "dataset.toml").is_file())
-                self.assertTrue((destination / "dataset-stage.lock.json").is_file())
-
 
 if __name__ == "__main__":
     unittest.main()

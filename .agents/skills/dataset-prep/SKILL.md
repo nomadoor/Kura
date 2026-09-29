@@ -55,9 +55,35 @@ editing the dataset automatically.
   the resulting limit; do not make visual inspection a hidden gate.
 - Never copy dataset pixels into repo documentation, run metadata, or fixtures.
 
-Minimal `items.jsonl` rows need `id` and `path`; include `caption` and `hash`
-when available:
+First-class training uses manifest v2. Set `items_schema_version: 2` in
+`dataset.yaml`; each `items.jsonl` row uses ordered typed file references and
+an explicit caption value:
 
 ```json
-{"id":"one","path":"images/one.png","caption":"trigger word, short caption","hash":"sha256:..."}
+{"id":"one","files":[{"type":"file","role":"target","path":"images/one.png"}],"caption":{"text":"trigger word, short caption"},"metadata":{}}
 ```
+
+Pair target, control, reference, and audio inputs by placing their typed
+references in the same row. Role meaning belongs to the selected backend. In
+particular, Musubi FLUX.2 reference images are authored with `role: "control"`
+because its generated JSONL consumes them as `control_path` /
+`control_path_N`; do not author a separate `reference` role for that path.
+Use `sha256` on an individual file reference only when the author intends to
+assert that exact digest. See `docs/dataset-handoff-implementation-spec.md`
+for the complete closed schema.
+
+## Migrating old AI-Toolkit dataset selectors
+
+Historical run records stay unchanged. When using an old `run.yaml` as the
+starting point for a new run:
+
+- replace `backend.config.dataset_folder` by listing each selected media file
+  in manifest-v2 `items.jsonl` with `role: "target"`;
+- replace `backend.config.dataset_config.control_subdir` by adding the matching
+  per-sample files with `role: "control"`, in the order the trainer must
+  receive them; and
+- remove both old selectors, validate the dataset, then compile again.
+
+Kura does not infer either replacement during compile. Use `kura dataset draft`
+only to create a reviewable candidate manifest; confirm its sample associations
+before adopting it.
