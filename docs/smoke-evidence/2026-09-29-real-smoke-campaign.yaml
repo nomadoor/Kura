@@ -178,5 +178,145 @@ runs:
     cost_per_h: 0.49
     launched_at: '2026-09-29T15:42:13.717007+09:00'
     pod_stopped_at: '2026-09-29T15:52:12.179082+09:00'
+  ai-toolkit-anima-2026-09-29:
+    run_id: 20260929-1625_ai-toolkit-anima_fbd7
+    model: circlestone-labs/Anima-Base-v1.0-Diffusers
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.2108
+    - 0.2108
+    - 0.2108
+    outputs:
+    - 20260929-1625_ai-toolkit-anima_fbd7.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T16:37:05.111734+09:00'
+    pod_stopped_at: '2026-09-29T16:42:11.643294+09:00'
+  ai-toolkit-flux2-klein-4b-2026-09-29:
+    run_id: 20260929-1652_ai-toolkit-flux2-klein-4b_4a94
+    model: black-forest-labs/FLUX.2-klein-base-4B
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.05554
+    - 0.05554
+    - 0.05554
+    outputs:
+    - 20260929-1652_ai-toolkit-flux2-klein-4b_4a94.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T17:05:33.996047+09:00'
+    pod_stopped_at: '2026-09-29T17:10:41.749573+09:00'
+  ai-toolkit-zimage-2026-09-29:
+    run_id: 20260929-1652_ai-toolkit-zimage_5535
+    model: Tongyi-MAI/Z-Image
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.06847
+    - 0.06847
+    - 0.06847
+    outputs:
+    - 20260929-1652_ai-toolkit-zimage_5535.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T17:10:43.637414+09:00'
+    pod_stopped_at: '2026-09-29T17:13:47.313280+09:00'
+  ai-toolkit-chroma-2026-09-29:
+    run_id: 20260929-1652_ai-toolkit-chroma_3144
+    model: lodestones/Chroma1-Base
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.08465
+    - 0.08465
+    - 0.08465
+    outputs:
+    - 20260929-1652_ai-toolkit-chroma_3144.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T17:13:49.690022+09:00'
+    pod_stopped_at: '2026-09-29T17:18:10.434337+09:00'
+  ai-toolkit-flux-kontext-2026-09-29:
+    run_id: 20260929-1652_ai-toolkit-flux-kontext_3f98
+    model: black-forest-labs/FLUX.1-Kontext-dev
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.06432
+    - 0.06432
+    - 0.06432
+    outputs:
+    - 20260929-1652_ai-toolkit-flux-kontext_3f98.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T17:31:30.728772+09:00'
+    pod_stopped_at: '2026-09-29T17:35:03.072456+09:00'
+  ai-toolkit-qwen-image-2-2026-09-29:
+    run_id: 20260929-1652_ai-toolkit-qwen-image-2_d500
+    model: Comfy-Org/Qwen-Image-2.1
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.03978
+    - 0.03978
+    - 0.03978
+    outputs:
+    - 20260929-1652_ai-toolkit-qwen-image-2_d500.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T17:50:42.649878+09:00'
+    pod_stopped_at: '2026-09-29T17:55:41.074508+09:00'
 scope: Each listed selector completed one optimizer step with a finite loss, published
   its adapter, and matched its input postflight; RunPod runs also stopped their Pod.
+ai_toolkit_failures:
+  flux2_klein_4b_first_attempt:
+    run_id: 20260929-1625_ai-toolkit-flux2-klein-4b_5c88
+    error: 'diffusers FlowMatch set_timesteps: mu must be passed when use_dynamic_shifting
+      is True'
+    cause: the run carried no train.noise_scheduler, so AI-Toolkit took its DDPM branch;
+      the retry with the UI training defaults passed
+  krea2:
+    run_id: 20260929-1652_ai-toolkit-krea2_c692
+    error: mu must be passed when use_dynamic_shifting is True
+    cause: the smoke carried only the architecture entry, not the UI base job noise_scheduler
+      flowmatch
+  flex2:
+    run_id: 20260929-1652_ai-toolkit-flex2_b442
+    error: 'AttributeError: ''NoneType'' object has no attribute ''shape'' in flex2.condition_noisy_latents'
+    cause: Kura always emits cache_latents_to_disk true; pinned flex2.py reads batch.tensor,
+      which is None while latents are cached (Kontext, Qwen Edit, and HiDream E1 guard
+      this case)
+  flux:
+    run_id: 20260929-1652_ai-toolkit-flux_3392
+    error: CUDA out of memory on a 44 GiB A40
+    cause: not yet diagnosed; the upstream example targets 24 GB
+  hidream:
+    run_id: 20260929-1652_ai-toolkit-hidream_e1eb
+    error: process killed (137) while loading checkpoint shards
+    cause: likely host RAM exhaustion on the about 50 GB A40 Pod before quantization
+  qwen_image:
+    run_id: 20260929-1652_ai-toolkit-qwen-image_2975
+    error: process killed (137) while loading the model
+    cause: likely host RAM exhaustion on the about 50 GB A40 Pod before quantization
+  qwen_image_edit:
+    run_id: 20260929-1652_ai-toolkit-qwen-image-edit_1396
+    error: process killed (137) while loading checkpoint shards
+    cause: likely host RAM exhaustion on the about 50 GB A40 Pod before quantization
+  mageflow:
+    run_id: null
+    cause: 'not run: the pinned UI default microsoft/Mage-Flow-Base does not exist
+      on the Hub'
