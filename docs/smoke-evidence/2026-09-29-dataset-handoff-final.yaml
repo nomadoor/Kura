@@ -87,6 +87,31 @@ runpod_selected_file_transfer_current_executor:
   pod_lifetime: about 10 minutes (09:01 to 09:11 JST)
   pod_stopped: true
   pods_after: 0
+runpod_selected_file_transfer_main:
+  purpose: >-
+    Re-proves the selected-file transfer on main after the review fixes that
+    changed the RunPod executor (Pod-owned record allowlist, shared-module
+    executor identity, stage path resolution), so the evidence no longer relies
+    on behavior-preserving executor migrations.
+  recipe: same as 20260929-0124_vivi-runpod-transfer-wait_e92e
+  adapter_source: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+  executor_source: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+  gpu: NVIDIA A40 (SECURE, 0.49 USD/h)
+  run_id: 20260929-1428_vivi-runpod-transfer-main_776d
+  stage:
+    transfer: selected-files
+    payload_bytes: 12828809
+    tar_bytes: 12851200
+    local_source_stat_verification: matched
+  pod_input_verification: {status: verified, entries: 22, view_links: 6}
+  pod_postflight: {status: matched, source_stat_verification: matched, view_link_verification: matched}
+  local_postflight: {status: matched, event_recorded: true}
+  promoted_records: [runpod-input, runpod-input-postflight, remote-exit]
+  publication: completed
+  safetensors_bytes: 55504
+  pod_lifetime: about 4.5 minutes (14:33 to 14:38 JST)
+  pod_stopped: true
+  pods_after: 0
 local_path_model:
   adapter_source: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
   run_id: 20260929-0143_local-path-model_af11

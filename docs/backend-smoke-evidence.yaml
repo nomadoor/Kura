@@ -94,6 +94,28 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+  - id: ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      executor: runpod
+      transfer: selected-files
+      pod_input_verification: verified
+      optimizer_steps: 1
+      pod_stopped: true
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
   - id: ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
     backend: ai-toolkit
     adapter_source:
@@ -116,6 +138,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-dataset-handoff-final.yaml
+    superseded_by: ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
   - id: ai-toolkit-selected-file-transfer-runpod-2026-09-29
     backend: ai-toolkit
     adapter_source:

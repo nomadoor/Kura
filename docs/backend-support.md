@@ -115,7 +115,7 @@ SHA-256 while writing; launch re-proves the staged archive against the compile
 before a Pod exists; the Pod verifies every file and the archive, publishes the
 verified tree, and builds the frozen views before model acquisition. A real
 A40 smoke proved this path end to end
-(`ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29`, on the current RunPod executor source); older RunPod evidence
+(`ai-toolkit-selected-file-transfer-runpod-main-2026-09-29`, on the current RunPod executor source); older RunPod evidence
 below records the execution contract verified at that time.
 
 ## Support matrix
@@ -123,7 +123,7 @@ below records the execution contract verified at that time.
 | Backend | Model family | Adapter | Status | Verified scope |
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |
-| AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Pinned-image local `sd1` path completed one optimizer step and Kura structural publication; non-root model-cache acquisition also passed. The final manifest-v2 handoff completed one step for root-level and `images/` layouts, over the RunPod selected-file transfer, with a read-only local-path model, and as a Resume. Evidence: `ai-toolkit-sd1-publication-docker-2026-09-23`, `ai-toolkit-manifest-v2-handoff-docker-2026-09-29`, `ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29`, `ai-toolkit-local-path-model-docker-2026-09-29`, `ai-toolkit-resume-manifest-v2-docker-2026-09-29` |
+| AI-Toolkit | SD 1.5 | Generic native-config projection | 🔥 | Pinned-image local `sd1` path completed one optimizer step and Kura structural publication; non-root model-cache acquisition also passed. The final manifest-v2 handoff completed one step for root-level and `images/` layouts, over the RunPod selected-file transfer, with a read-only local-path model, and as a Resume. Evidence: `ai-toolkit-sd1-publication-docker-2026-09-23`, `ai-toolkit-manifest-v2-handoff-docker-2026-09-29`, `ai-toolkit-selected-file-transfer-runpod-main-2026-09-29`, `ai-toolkit-local-path-model-docker-2026-09-29`, `ai-toolkit-resume-manifest-v2-docker-2026-09-29` |
 | AI-Toolkit | FLUX.1 / Kontext / Flex.2 / Chroma | Typed manifest projection | 🧩 | Fixed-source ordinary image+caption covers FLUX.1, Chroma, Chroma Radiance, and control-free Kontext. The typed paired-folder codec covers one-control Kontext and Flex.2 authored control alternatives; typed `generated_controls` covers the pinned Flex.2 derivations. Flex.2 requires `bypass_guidance_embedding: true` and records that the trainer randomly selects one control per step. No optimizer claim for these selectors. |
 | AI-Toolkit | Qwen Image | Typed manifest projection | ⚠️ | Fixed-source ordinary image+caption T2I is first-class. Typed paired folders cover original Edit with one control and Edit Plus with one to three controls; no current optimizer smoke. |
 | AI-Toolkit | Qwen-Image 2.1 | Typed manifest projection | 🧪 | T2I and ordered multi-control Edit compile fixtures pass; the control slot count must be uniform across samples. Pinned-image class import passes; no real smoke. |
