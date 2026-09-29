@@ -14,6 +14,93 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-hidream-2026-09-30-0052
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: hidream
+      model_arch: hidream
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-30
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-qwen-image-2026-09-30-0040
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: qwen_image
+      model_arch: qwen_image
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-30
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-qwen-image-edit-2026-09-30-0040
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: qwen_image_edit
+      model_arch: qwen_image_edit
+      executor: runpod
+      dataset: real-smoke-image-control
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-30
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: musubi-framepack-2026-09-30-0201
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 7276982864b30738addc3decf29e077923cee0bb03b7d932435a0c752c24ecf5
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    native_path:
+      architecture: framepack
+      executor: runpod
+      dataset: real-smoke-video-30fps
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-30
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
   - id: ai-toolkit-sd1-2026-09-29-2323
     backend: ai-toolkit
     adapter_source:
