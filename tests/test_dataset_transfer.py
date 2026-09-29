@@ -360,6 +360,17 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             self.assertFalse(any((run_dir / "transfer").iterdir()))
 
 
+    def test_plan_reads_write_roots_in_the_command_lock_shape(self) -> None:
+        from kura.run_commands.plan import _command_write_roots
+
+        lock = {"write_roots": [
+            {"role": "model-cache", "path": "/workspace/cache/ai-toolkit/models", "env": "MODELS_PATH"},
+            {"role": "broken"}, "not-a-mapping",
+        ]}
+        self.assertEqual(_command_write_roots(lock), ["/workspace/cache/ai-toolkit/models"])
+        self.assertEqual(_command_write_roots({}), [])
+        self.assertEqual(_command_write_roots(None), [])
+
     def test_plan_shows_the_four_transfer_sizes_separately(self) -> None:
         from kura.run_commands.plan import format_run_plan
 
@@ -828,6 +839,27 @@ class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
             ]
             self.assertEqual([item["event"] for item in events].count("dataset_input_postflight"), 1)
 
+    def test_snapshot_records_with_controller_owned_names_are_not_promoted(self) -> None:
+        from kura.executors.runpod import project_runpod_dataset_handoff
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, downloaded = self._downloaded(Path(directory), "matched")
+            forged = {
+                "schema_version": 1, "realization_id": "real-1", "observed_at": "2026-01-01T00:00:00+00:00",
+                "status": "matched", "source_stat_verification": "matched", "view_link_verification": "matched",
+            }
+            for name in ("real-1.dataset-input-postflight.json", "stage-forged.json", "real-1.transfer-manifest.json"):
+                (downloaded / "realizations" / name).write_text(json.dumps(forged), encoding="utf-8")
+            (Path(directory) / "datasets" / "tiny" / "a.png").write_bytes(b"edited after compile")
+
+            projected = project_runpod_dataset_handoff(run_dir, downloaded, "real-1")
+
+            # The controller inspected the host itself instead of trusting the forged record.
+            self.assertEqual(projected["status"], "changed")
+            self.assertFalse((run_dir / "realizations" / "stage-forged.json").exists())
+            self.assertFalse((run_dir / "realizations" / "real-1.transfer-manifest.json").exists())
+            self.assertTrue((run_dir / "realizations" / "real-1.runpod-input.json").is_file())
+
     def test_local_or_remote_drift_projects_a_warning_and_never_overwrites_records(self) -> None:
         from kura.executors.runpod import project_runpod_dataset_handoff as finalize_runpod_dataset_handoff
 
@@ -958,3 +990,54 @@ class RunEventReaderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DockerFinalizeRecordTests(unittest.TestCase):
+    def _run_dir(self, root: Path, publication_state: str) -> Path:
+        run_dir = root / "runs" / "example"
+        (run_dir / "resolved").mkdir(parents=True)
+        (run_dir / "realizations").mkdir()
+        (run_dir / "resolved" / "dataset-input.lock.json").write_text(
+            json.dumps({"schema_version": 2, "input_sha256": "sha256:" + "0" * 64}), encoding="utf-8",
+        )
+        (run_dir / "status.json").write_text(json.dumps({
+            "state": "completed", "last_realization": "realizations/real-1.json",
+            "publication_state": publication_state,
+        }), encoding="utf-8")
+        return run_dir
+
+    def test_unreadable_postflight_record_is_kept_and_projected_as_uncheckable(self) -> None:
+        from kura.executors.docker import _finalize_dataset_handoff
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory), "failed")
+            record = run_dir / "realizations" / "real-1.dataset-input-postflight.json"
+            record.write_text("{truncated", encoding="utf-8")
+
+            status = _finalize_dataset_handoff(run_dir, "realizations/real-1.json", "real-1", execution_ended_at=None)
+
+            self.assertEqual(status["dataset_input_postflight"]["status"], "uncheckable")
+            events = (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"status": "uncheckable"', events)
+            self.assertEqual(record.read_text(encoding="utf-8"), "{truncated")
+
+    def test_unreadable_cleanup_record_is_kept_and_cleanup_is_recorded_beside_it(self) -> None:
+        from kura.executors import docker
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory), "completed")
+            (run_dir / "realizations" / "real-1.dataset-input-postflight.json").write_text(json.dumps({
+                "schema_version": 1, "realization_id": "real-1", "observed_at": "2026-01-01T00:00:00+00:00",
+                "status": "matched", "source_stat_verification": "matched", "view_link_verification": "matched",
+            }), encoding="utf-8")
+            cleanup = run_dir / "realizations" / "real-1.dataset-view-cleanup.json"
+            cleanup.write_text("[]", encoding="utf-8")
+
+            with patch.object(docker, "remove_dataset_views", return_value={"status": "removed"}):
+                status = docker._finalize_dataset_handoff(run_dir, "realizations/real-1.json", "real-1", execution_ended_at=None)
+
+            projected = status["dataset_input_postflight"]
+            self.assertEqual(projected["status"], "matched")
+            self.assertEqual(projected["view_cleanup"], "removed")
+            self.assertIn("dataset-view-cleanup-attempt-", projected["cleanup_record"])
+            self.assertEqual(cleanup.read_text(encoding="utf-8"), "[]")

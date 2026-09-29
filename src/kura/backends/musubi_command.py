@@ -43,31 +43,34 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Flags Kura owns for every architecture. Flags Kura emits only for some
+# architectures (for example --timestep_sampling) are refused by
+# _reject_emitted_duplicates only where that architecture's command carries them.
 MUSUBI_OWNED_FLAGS = frozenset({
     "--audio_vae", "--base_weights", "--batch_size", "--block_swap_h2d_only",
     "--block_swap_ring_size", "--blocks_to_swap", "--byt5", "--cache_seed",
-    "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config",
-    "--discrete_flow_shift", "--dit", "--dit_dtype", "--dit_high_noise", "--f1",
-    "--fp8", "--fp8_base", "--fp8_llm", "--fp8_scaled", "--fp8_t5", "--fp8_te",
-    "--fp8_text_encoder", "--fp8_vl", "--gradient_accumulation_steps",
-    "--gradient_checkpointing", "--gradient_checkpointing_cpu_offload",
-    "--h3_guidance_loss_scale", "--h3_guidance_loss_sigma_min",
-    "--h3_guidance_loss_uncond_cache", "--h3_teacher_conditions",
-    "--h3_teacher_matching", "--i2v", "--image_encoder", "--latent_window_size",
-    "--learning_rate", "--lr_scheduler", "--max_data_loader_n_workers",
-    "--max_train_steps", "--mixed_precision", "--model_type", "--model_version",
-    "--network_alpha", "--network_dim", "--network_module", "--noise_clip_std",
-    "--noise_scale_end", "--noise_scale_start", "--one_frame", "--one_frame_no_2x",
-    "--one_frame_no_4x", "--optimizer_type", "--output_dir", "--output_name",
+    "--clip", "--convrot_int8", "--convrot_int8_bwd", "--dataset_config", "--dit",
+    "--dit_dtype", "--dit_high_noise", "--f1", "--fp8", "--fp8_base", "--fp8_llm",
+    "--fp8_scaled", "--fp8_t5", "--fp8_te", "--fp8_text_encoder", "--fp8_vl",
+    "--gradient_accumulation_steps", "--gradient_checkpointing",
+    "--gradient_checkpointing_cpu_offload", "--h3_guidance_loss_scale",
+    "--h3_guidance_loss_sigma_min", "--h3_guidance_loss_uncond_cache",
+    "--h3_teacher_conditions", "--h3_teacher_matching", "--i2v", "--image_encoder",
+    "--latent_window_size", "--learning_rate", "--lr_scheduler",
+    "--max_data_loader_n_workers", "--max_train_steps", "--mixed_precision",
+    "--model_type", "--model_version", "--network_alpha", "--network_dim",
+    "--network_module", "--noise_clip_std", "--noise_scale_end",
+    "--noise_scale_start", "--one_frame", "--one_frame_no_2x", "--one_frame_no_4x",
+    "--optimizer_type", "--output_dir", "--output_name",
     "--persistent_data_loader_workers", "--quantized_qwen", "--resume",
     "--save_every_n_steps", "--save_last_n_steps", "--save_last_n_steps_state",
     "--save_precision", "--save_state", "--save_state_on_train_end", "--sdpa",
     "--seed", "--skip_existing", "--t5", "--task", "--teacher_conditions",
     "--text_cache_dtype", "--text_encoder", "--text_encoder1", "--text_encoder2",
     "--text_encoder_blocks_to_swap", "--text_encoder_clip", "--text_encoder_qwen",
-    "--timestep_boundary", "--timestep_sampling", "--turbo_dit", "--uncond_output",
-    "--use_pinned_memory_for_block_swap", "--vae", "--vae_chunk_size", "--vae_dtype",
-    "--vae_tiling", "--video_only", "--video_vae", "--weighting_scheme",
+    "--turbo_dit", "--uncond_output", "--use_pinned_memory_for_block_swap", "--vae",
+    "--vae_chunk_size", "--vae_dtype", "--vae_tiling", "--video_only",
+    "--video_vae",
 })
 
 
@@ -94,6 +97,21 @@ def _extra_arg_value(arguments: list[str], flag: str) -> str | None:
     if len(values) > 1:
         raise ValueError(f"Musubi backend.config.extra_args duplicates {flag}")
     return values[0] if values else None
+
+
+def _reject_emitted_duplicates(train: list[str], extra_args: list[str]) -> None:
+    """Refuse an extra argument that repeats or abbreviates a flag Kura emitted for this architecture."""
+    extra_flags = [argument.split("=", 1)[0] for argument in extra_args if argument.startswith("--")]
+    emitted = [argument.split("=", 1)[0] for argument in train if argument.startswith("--")]
+    for flag in extra_flags:
+        if flag in emitted:
+            emitted.remove(flag)
+    duplicates = sorted({
+        candidate for candidate in extra_flags
+        if any(flag.startswith(candidate) for flag in emitted)
+    })
+    if duplicates:
+        raise ValueError("Musubi Tuner extra_args duplicates adapter-owned flag(s): " + ", ".join(duplicates))
 
 
 def _script_command(commands: list[list[str]], override: dict[str, Any], run: dict[str, Any] | None = None) -> list[str]:
@@ -187,6 +205,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         if any(arg == flag or arg.startswith(flag + "=") for arg in train):
             raise ValueError(f"Musubi backend.config.{key} duplicates backend.config.extra_args {flag}")
         train.append(flag)
+    _reject_emitted_duplicates(train, _extra_args(override))
     return _shared_script_command(commands, step_name="musubi")
 
 

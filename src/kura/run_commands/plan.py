@@ -936,6 +936,15 @@ def _dataset_runtime_checks(run_dir: Path) -> list[dict[str, Any]]:
     return adapter.runtime_checks(projection) if adapter.runtime_checks is not None else []
 
 
+def _command_write_roots(command_lock: Any) -> list[str]:
+    """Paths of the write roots a backend command lock records as {"role", "path", "env"}."""
+    raw_roots = command_lock.get("write_roots") if isinstance(command_lock, dict) else None
+    return [
+        item["path"] for item in (raw_roots if isinstance(raw_roots, list) else [])
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    ]
+
+
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
@@ -1058,9 +1067,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
 
     command_path = run_dir / "resolved" / "backend-command.lock.json"
     command_lock = json.loads(command_path.read_text(encoding="utf-8")) if command_path.is_file() else {}
-    write_roots = command_lock.get("write_roots") if isinstance(command_lock, dict) else None
-    if not isinstance(write_roots, list) or not all(isinstance(item, str) for item in write_roots):
-        write_roots = []
+    write_roots = _command_write_roots(command_lock)
 
     plan_recipe = {
         "steps": run_recipe.get("steps"),

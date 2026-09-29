@@ -8,6 +8,59 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: musubi-architecture-scoped-extra-args-ownership-2026-09-29
+    backend: musubi-tuner
+    reason: >-
+      --timestep_sampling, --discrete_flow_shift, --weighting_scheme, and
+      --timestep_boundary leave the architecture-wide owned-flag set; an
+      extra_args flag is now refused when it repeats or abbreviates a flag
+      the architecture's own command emits. Generated configuration and
+      commands are unchanged unless extra_args names one of these flags, and
+      no listed record did; the change only admits these flags for
+      architectures whose command does not carry them.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+      - musubi-wan-video-jsonl-docker-2026-09-29
+      - musubi-minimax-h3-image-runpod-2026-09-22
+      - musubi-minimax-h3-runpod-2026-09-22
+      - musubi-v0.3.5-entrypoints-2026-09-21
+      - musubi-wan-t2v-1.3b-docker-2026-07-12
+      - musubi-framepack-video-docker-2026-07-12
+      - musubi-wan-t2v-1.3b-runpod-2026-07-12
+      - musubi-flux-kontext-fp8-t5-failure-2026-07-12
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4bc66c4b072cad4a0eb6116e2b96552fb19c04acf29579a6bc0d45e6ba227a28
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7276982864b30738addc3decf29e077923cee0bb03b7d932435a0c752c24ecf5
+  - id: runpod-executor-shared-module-scope-and-pod-record-allowlist-2026-09-29
+    executor: runpod
+    reason: >-
+      The RunPod executor identity now also hashes the shared modules the
+      transfer consumes (dataset_handoff.py, media_types.py,
+      executors/common.py, fsio.py, run_envelope.py); their contents are
+      unchanged. The download now copies only Pod-owned record names
+      (runpod-input, runpod-input-postflight, the video preflights, and
+      remote-exit) into realizations/. The recorded smokes produced only
+      those names, so their transfer, Pod-side verification, postflight, and
+      Pod stop are unchanged; a snapshot file named like a controller record
+      is now ignored instead of trusted.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 42f789bf70df5fb8494a7d6c71f1e7b9af0a6dca7de84daba560da1309842911
   - id: runpod-executor-final-download-clears-stale-sync-error-2026-09-29
     executor: runpod
     reason: >-

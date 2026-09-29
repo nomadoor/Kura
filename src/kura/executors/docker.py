@@ -56,6 +56,23 @@ def _docker_image_id(image: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _read_realization_record(
+    path: Path, realization_id: str, string_fields: tuple[str, ...],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Read one of this realization's records, or say why it cannot be trusted."""
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, _redact_secret_text(str(exc))
+    if (
+        not isinstance(value, dict)
+        or value.get("realization_id") != realization_id
+        or not all(isinstance(value.get(field), str) for field in ("status", "observed_at", *string_fields))
+    ):
+        return None, "record is malformed"
+    return value, None
+
+
 def _finalize_dataset_handoff(
     run_dir: Path,
     realization_ref: str,
@@ -86,8 +103,28 @@ def _finalize_dataset_handoff(
     # The scan remains only for a crash between the append and the projection.
     announced = current.get("dataset_input_postflight")
     announced = announced if isinstance(announced, dict) else {}
-    if postflight_path.is_file():
-        postflight = json.loads(postflight_path.read_text(encoding="utf-8"))
+    existing, existing_error = (
+        _read_realization_record(postflight_path, realization_id, ("source_stat_verification", "view_link_verification"))
+        if postflight_path.is_file() else (None, None)
+    )
+    if existing is not None:
+        postflight = existing
+    elif existing_error is not None:
+        # Records are immutable: keep the unreadable file as found and project
+        # the run as uncheckable instead of aborting reconcile.
+        postflight = {
+            "schema_version": 1,
+            "realization_id": realization_id,
+            "observed_at": _now(),
+            "execution_ended_at": execution_ended_at,
+            "status": "uncheckable",
+            "source_stat_verification": "uncheckable",
+            "view_link_verification": "uncheckable",
+            "source_changes": [],
+            "view_changes": [],
+            "error": f"existing dataset input postflight record is unreadable: {existing_error}",
+            "input_sha256": lock.get("input_sha256") if isinstance(lock, dict) else None,
+        }
     else:
         try:
             if lock_error is not None or lock is None:
@@ -145,8 +182,10 @@ def _finalize_dataset_handoff(
     if not cleanup_allowed or lock is None:
         cleanup = {"status": "deferred"}
         cleanup_ref = None
-    elif cleanup_path.is_file():
-        cleanup = json.loads(cleanup_path.read_text(encoding="utf-8"))
+    elif cleanup_path.is_file() and (
+        existing_cleanup := _read_realization_record(cleanup_path, realization_id, ())[0]
+    ) is not None:
+        cleanup = existing_cleanup
     else:
         try:
             result = remove_dataset_views(workspace, run_dir, lock)
@@ -164,7 +203,8 @@ def _finalize_dataset_handoff(
                 "status": "failed",
                 "error": _redact_secret_text(str(exc)),
             }
-        if cleanup["status"] == "failed":
+        # An unreadable record keeps its name; the retry is recorded beside it.
+        if cleanup["status"] == "failed" or cleanup_path.exists():
             cleanup_ref = f"realizations/{realization_id}.dataset-view-cleanup-attempt-{_realization_id()}.json"
             cleanup_path = run_dir / cleanup_ref
         _write_json(cleanup_path, cleanup)

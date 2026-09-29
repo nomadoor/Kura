@@ -695,8 +695,8 @@ def finalize_runpod_dataset_handoff(
 ) -> tuple[str, dict[str, Any]] | None:
     """Bring the Pod's input records home and write the post-training input record.
 
-    Remote records are copied into ``realizations/`` without overwriting a
-    record that already exists. The local source stat check is combined with
+    Pod-owned remote records are copied into ``realizations/`` without
+    overwriting a record that already exists. The local source stat check is combined with
     the Pod's own postflight. Records read from outside are validated here;
     any problem is raised as ``ValueError`` or ``OSError`` for
     ``project_runpod_dataset_handoff`` to record as uncheckable. Returns the
@@ -708,7 +708,18 @@ def finalize_runpod_dataset_handoff(
     local.mkdir(exist_ok=True)
     remote = downloaded_run / "realizations"
     conflicts: list[str] = []
+    # Only names the Pod writes come home. A snapshot file named like a
+    # controller-owned record (this postflight, the realization, a stage) must
+    # not appear locally and be trusted as the controller's own.
+    pod_owned = {
+        f"{realization_id}.runpod-input.json",
+        f"{realization_id}.runpod-input-postflight.json",
+        f"{realization_id}.ai-toolkit-video-preflight.json",
+        f"{realization_id}.musubi-video-preflight.json",
+    }
     for record in sorted(remote.glob("*.json")) if remote.is_dir() else []:
+        if record.name not in pod_owned and not record.name.startswith("remote-exit-"):
+            continue
         target = local / record.name
         if not target.exists():
             shutil.copyfile(record, target)

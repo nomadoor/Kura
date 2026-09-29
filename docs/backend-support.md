@@ -179,8 +179,9 @@ first frame. `do_audio` selects only embedded target-video audio and runs the
 pinned trainer's own video/audio loader before model acquisition; authored
 audio sidecars are rejected. In pinned `toolkit/dataloader_mixins.py:740-838`,
 a video with no audio stream leaves `audio_tensor` as `None`; no zero-filled
-audio is synthesized. The future real-container smoke must mix in one such
-video and prove that preflight stops before acquisition. Short videos are
+audio is synthesized. A real-container smoke confirmed that preflight rejects
+such a video before acquisition
+(`ai-toolkit-embedded-audio-preflight-docker-2026-09-29`). Short videos are
 stretched by the pinned loader rather than silently skipped. Paired image/edit runs use manifest control roles
 projected into ordered run-owned folders. The protected native `datasets` list
 cannot bypass Kura's dataset source contract.

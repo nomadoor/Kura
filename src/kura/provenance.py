@@ -73,15 +73,23 @@ def _source_symbol(path: Path, symbol: str) -> bytes:
 
 
 # Source files whose behavior an executor's transport and lifecycle evidence
-# depends on. RunPod evidence proves these, not the adapter, so it is bound to
-# this identity separately.
+# depends on, including the shared modules they consume (handoff inventory,
+# media suffixes, event and file durability, executor selection). RunPod
+# evidence proves these, not the adapter, so it is bound to this identity
+# separately. A change to a shared module therefore needs a re-smoke or a
+# declared behavior-preserving executor migration.
 EXECUTOR_SOURCE_FILES: dict[str, tuple[str, ...]] = {
     "runpod": (
         "container_scripts/runpod_input_verify.py",
+        "dataset_handoff.py",
         "dataset_transfer.py",
+        "executors/common.py",
         "executors/runpod.py",
+        "fsio.py",
+        "media_types.py",
         "run_commands/launch.py",
         "run_commands/runpod_ssh.py",
+        "run_envelope.py",
     ),
 }
 

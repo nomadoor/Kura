@@ -4199,6 +4199,20 @@ class MusubiBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
                     command_musubi_tuner(run)
 
+    def test_musubi_extra_args_are_refused_only_where_the_architecture_emits_the_flag(self) -> None:
+        # flux2 emits --timestep_sampling and --weighting_scheme itself.
+        for extra_args in (["--timestep_sampling", "sigmoid"], ["--timestep_samp=sigmoid"], ["--weighting_scheme=none"]):
+            with self.subTest(extra_args=extra_args):
+                run = self._run()
+                run["backend"]["config"]["extra_args"] = extra_args
+                with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
+                    command_musubi_tuner(run)
+        # It does not emit --discrete_flow_shift, so the native flag passes through.
+        run = self._run()
+        run["backend"]["config"]["extra_args"] = ["--discrete_flow_shift", "2.5"]
+        command = command_musubi_tuner(run)
+        self.assertIn("--discrete_flow_shift 2.5", " ".join(command["argv"]))
+
     def test_musubi_resume_rejects_invalid_state_save_cadence_cleanly(self) -> None:
         for cadence in ("10", True, 0, -1):
             with self.subTest(cadence=cadence):

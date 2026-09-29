@@ -123,8 +123,9 @@ selectors. Krea 2 is ordinary only while
 `model_config.extras_name_or_path` for its tokenizer and text encoder at
 `extensions_built_in/diffusion_models/z_image/z_image_l2p_model.py:291-295,447-450`;
 its ordinary-image architecture contract therefore requires the typed companion
-source and does not silently reuse the L2P weight path. Flex.2 generated/external
-The fixed loader resolves `control_path` as one or more directories and matches
+source and does not silently reuse the L2P weight path.
+
+For control-folder profiles, the fixed loader resolves `control_path` as one or more directories and matches
 each target basename against each directory (`toolkit/dataloader_mixins.py`,
 lines 1100-1147); authored targets, captions, and control slots therefore use
 the same generated stem in separate run-owned folders. Kontext and HiDream E1
