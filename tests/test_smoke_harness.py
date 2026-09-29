@@ -130,6 +130,42 @@ class RealSmokeHarnessTests(unittest.TestCase):
                     (run_dir / "logs" / "stdout.log").write_text(log, encoding="utf-8")
                     self.assertFalse(MODULE.verify(workspace, run_dir.name)["checks"]["finite_loss"])
 
+    def test_evidence_binds_identities_and_refuses_an_unverified_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_id = "20260101-0000_musubi-zimage_abcd"
+            run_dir = workspace / "runs" / run_id
+            for relative in ("outputs", "logs", "resolved", "realizations"):
+                (run_dir / relative).mkdir(parents=True)
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"argv": ["zimage_train_network.py"]}), encoding="utf-8")
+            (run_dir / "outputs" / "adapter.safetensors").write_bytes(b"x")
+            (run_dir / "logs" / "stdout.log").write_text("avr_loss=0.5\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("backend:\n  config:\n    architecture: zimage\n", encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({
+                "executor": "runpod",
+                "adapter_source": {"kind": "source-tree-sha256", "value": "a" * 64},
+                "image_identity": {"reference": "image@sha256:" + "b" * 64, "pinning": {"value": "sha256:" + "b" * 64}},
+                "pod": {"machine": {"gpu_display_name": "A40"}, "cost_per_h": 0.49},
+            }), encoding="utf-8")
+            status = {
+                "state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "runpod",
+                "publication_state": "completed", "dataset_input_postflight": {"status": "matched"},
+                "pod_stopped_at": "2026-01-01T00:10:00+00:00", "last_realization": "realizations/r1.json",
+            }
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
+
+            record, summary = MODULE.evidence(workspace, run_id, artifact="smoke-evidence/x.yaml")
+
+            self.assertEqual(record["id"], "musubi-zimage-2026-01-01")
+            self.assertEqual(record["adapter_source"]["value"], "a" * 64)
+            self.assertEqual(record["runtime_image"]["value"], "sha256:" + "b" * 64)
+            self.assertEqual(record["native_path"]["transfer"], "selected-files")
+            self.assertIn("executor_source", record)
+            self.assertEqual(summary["gpu"], "A40")
+            (run_dir / "status.json").write_text(json.dumps({**status, "publication_state": "blocked"}), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "did not pass verify"):
+                MODULE.evidence(workspace, run_id, artifact="smoke-evidence/x.yaml")
+
 
 if __name__ == "__main__":
     unittest.main()

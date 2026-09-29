@@ -452,6 +452,61 @@ def verify(workspace: Path, run_id: str) -> dict[str, Any]:
     return {"run_id": run_id, "smoke": slug, "checks": checks, "ok": all(checks.values()), "outputs": [path.name for path in outputs]}
 
 
+def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the backend-smoke-evidence record and the campaign summary for a verified run."""
+    result = verify(workspace, run_id)
+    if not result["ok"]:
+        raise SystemExit(f"{run_id} did not pass verify: {result['checks']}")
+    run_dir = workspace / "runs" / run_id
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+    run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+    smoke = SMOKES[result["smoke"]]
+    config = run["backend"]["config"]
+    image = realization["image_identity"]["pinning"]["value"]
+    native: dict[str, Any] = {"architecture": smoke.architecture}
+    for key in ("mode", "model_arch", "model_version", "task", "model_type"):
+        if key in config:
+            native[key] = config[key]
+    native.update({"executor": realization["executor"] if isinstance(realization.get("executor"), str) else smoke.executor, "dataset": smoke.dataset})
+    record: dict[str, Any] = {
+        "id": f"{result['smoke']}-{run_id[:4]}-{run_id[4:6]}-{run_id[6:8]}",
+        "backend": smoke.backend,
+        "adapter_source": {"kind": realization["adapter_source"]["kind"], "value": realization["adapter_source"]["value"]},
+    }
+    if smoke.executor == "runpod":
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        from kura.provenance import executor_source_identity
+
+        native["transfer"] = "selected-files"
+        record["executor_source"] = {"kind": "source-tree-sha256", "value": executor_source_identity("runpod")["value"]}
+    native["optimizer_steps"] = 1
+    record.update({
+        "runtime_image": {"kind": "docker-image-digest", "value": image},
+        "native_path": native,
+        "evidence_kind": "real-optimizer-step",
+        "outcome": "passed",
+        "observed_at": f"{run_id[:4]}-{run_id[4:6]}-{run_id[6:8]}",
+        "artifact": artifact,
+    })
+    log = (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8", errors="replace")
+    pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
+    summary = {
+        "run_id": run_id,
+        "model": smoke.model_base,
+        "dataset": smoke.dataset,
+        "image": realization["image_identity"]["reference"],
+        "losses": [float(value) for value in _LOSS.findall(log)],
+        "outputs": result["outputs"],
+        "input_postflight": status["dataset_input_postflight"]["status"],
+        "publication": status["publication_state"],
+    }
+    if pod:
+        machine = pod.get("machine") if isinstance(pod.get("machine"), dict) else {}
+        summary.update({"gpu": machine.get("gpu_display_name"), "cost_per_h": pod.get("cost_per_h"), "launched_at": realization.get("launched_at"), "pod_stopped_at": status.get("pod_stopped_at")})
+    return record, summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -460,6 +515,9 @@ def main() -> int:
     prepare_parser.add_argument("smoke", nargs="+", choices=sorted(SMOKES))
     verify_parser = commands.add_parser("verify", help="Check a finished run")
     verify_parser.add_argument("run_id", nargs="+")
+    evidence_parser = commands.add_parser("evidence", help="Print evidence records for verified runs")
+    evidence_parser.add_argument("--artifact", required=True, help="Path under docs/ of the campaign smoke-evidence file")
+    evidence_parser.add_argument("run_id", nargs="+")
     args = parser.parse_args()
     workspace = Path.cwd()
     if not (workspace / "workspace.yaml").is_file():
@@ -471,6 +529,10 @@ def main() -> int:
     if args.command == "prepare":
         for smoke_id in args.smoke:
             print(json.dumps({"smoke": smoke_id, "run_id": prepare(workspace, smoke_id)}))
+        return 0
+    if args.command == "evidence":
+        pairs = [evidence(workspace, run_id, artifact=args.artifact) for run_id in args.run_id]
+        print(yaml.safe_dump({"records": [record for record, _ in pairs], "runs": {record["id"]: summary for record, summary in pairs}}, sort_keys=False, allow_unicode=True))
         return 0
     results = [verify(workspace, run_id) for run_id in args.run_id]
     print(json.dumps(results, indent=2))
