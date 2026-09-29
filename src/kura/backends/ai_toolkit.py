@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry
 from kura.backends.dataset_profiles import (
     classify_dataset_shape,
     resolve_projection_partitions,
@@ -40,8 +41,11 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-# Registry snapshot from Kura image sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
-# (AI-Toolkit 0.13.18, embedded commit 31ddc709c35d3d3b820c636745397561f806b246).
+AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a"
+AI_TOOLKIT_PINNED_COMMIT = "31ddc709c35d3d3b820c636745397561f806b246"
+
+# Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.18,
+# embedded commit AI_TOOLKIT_PINNED_COMMIT).
 # It is the union of
 # toolkit.util.get_model.LEGACY_ARCHS and the imported AI_TOOLKIT_MODELS archs.
 # Keep this backend-local and refresh it whenever the pinned image changes.
@@ -695,7 +699,6 @@ def _project_ai_toolkit_folder_block(
         )
     semantic = {
         "caption_ext": ".txt",
-        "cache_latents_to_disk": True,
         **{
             native_key: deepcopy(dataset_config[field])
             for field, native_key in profile.get("native_options", {}).items()
@@ -1138,11 +1141,17 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
     datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
     first_dataset = datasets[0] if datasets and isinstance(datasets[0], dict) else {}
     dataset_config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
+    try:
+        baseline = ai_toolkit_baseline(run)
+    except ValueError as exc:
+        baseline = {"error": str(exc)}
+    filled = baseline if isinstance(baseline, dict) and "error" not in baseline else {"train": {}, "model": {}}
     return {
+        "baseline": baseline,
         "architecture": native.get("model_arch") or _nested(config, "model", "arch"),
         "rank": native.get("network_dim") or _nested(config, "network", "linear"),
         "alpha": native.get("network_alpha") or _nested(config, "network", "linear_alpha"),
-        "learning_rate": native.get("learning_rate") or _nested(config, "train", "lr"),
+        "learning_rate": native.get("learning_rate") or _nested(config, "train", "lr") or filled["train"].get("lr"),
         "scheduler": native.get("lr_scheduler") or _nested(config, "train", "lr_scheduler"),
         "batch_size": native.get("batch_size") or _nested(config, "train", "batch_size"),
         "gradient_accumulation_steps": native.get("gradient_accumulation_steps") or _nested(config, "train", "gradient_accumulation_steps"),
@@ -1159,13 +1168,13 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         ),
         "resolution": first_dataset.get("resolution") or native.get("resolution"),
         "dataset": deepcopy(dataset_config),
-        "optimizer": native.get("optimizer_type") or _nested(config, "train", "optimizer"),
-        "precision": native.get("mixed_precision") or _nested(config, "train", "dtype"),
+        "optimizer": native.get("optimizer_type") or _nested(config, "train", "optimizer") or filled["train"].get("optimizer"),
+        "precision": native.get("mixed_precision") or _nested(config, "train", "dtype") or filled["train"].get("dtype"),
         "memory": {
             "gradient_checkpointing": native.get("gradient_checkpointing") if "gradient_checkpointing" in native else _nested(config, "train", "gradient_checkpointing"),
-            "low_vram": native.get("low_vram") if "low_vram" in native else _nested(config, "model", "low_vram"),
-            "quantize": native.get("quantize") if "quantize" in native else _nested(config, "model", "quantize"),
-            "quantize_te": native.get("quantize_te") if "quantize_te" in native else _nested(config, "model", "quantize_te"),
+            "low_vram": native.get("low_vram") if "low_vram" in native else _nested(config, "model", "low_vram") if _nested(config, "model", "low_vram") is not None else filled["model"].get("low_vram"),
+            "quantize": native.get("quantize") if "quantize" in native else _nested(config, "model", "quantize") if _nested(config, "model", "quantize") is not None else filled["model"].get("quantize"),
+            "quantize_te": native.get("quantize_te") if "quantize_te" in native else _nested(config, "model", "quantize_te") if _nested(config, "model", "quantize_te") is not None else filled["model"].get("quantize_te"),
         },
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps") or _nested(config, "save", "save_every"),
@@ -1227,6 +1236,89 @@ def _ai_toolkit_frozen_native_blocks(
             f"AI-Toolkit frozen projection for dataset {dataset_id!r} has inconsistent blocks"
         )
     return native_datasets, views, wrapped
+
+
+# Kura-typed fields that author a baseline key (docs/adr/upstream-training-baseline.md).
+_AI_TOOLKIT_AUTHORED_BASELINE_KEYS = {
+    ("train", "lr"): "learning_rate",
+    ("train", "optimizer"): "optimizer_type",
+    ("train", "dtype"): "mixed_precision",
+    ("model", "low_vram"): "low_vram",
+    ("model", "quantize"): "quantize",
+    ("model", "quantize_te"): "quantize_te",
+}
+
+
+def ai_toolkit_baseline(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the pinned UI baseline values this run leaves unset.
+
+    Authored values win: a Kura field or a ``native_config`` key removes the
+    matching baseline value. Mapping values (``model_kwargs``,
+    ``optimizer_params``) fill only their missing subkeys. Returns None for an
+    explicit ``command`` run, which owns its native configuration. An
+    architecture without a baseline entry refuses unless the values that decide
+    whether training runs at all are authored.
+    """
+    override = _ai_toolkit_backend_override(run)
+    if override.get("command") is not None:
+        return None
+    native = override.get("native_config") if isinstance(override.get("native_config"), dict) else {}
+    arch = override.get("model_arch")
+    selected = (
+        select_baseline_entry(arch, _normalize_ai_toolkit_architecture(arch), (run.get("model") or {}).get("base"))
+        if isinstance(arch, str) else None
+    )
+    if selected is None:
+        missing = [
+            label for label, authored in (
+                ("backend.config.native_config.train.noise_scheduler", _nested(native, "train", "noise_scheduler") is not None),
+                ("backend.config.mixed_precision", "mixed_precision" in override or _nested(native, "train", "dtype") is not None),
+            ) if not authored
+        ]
+        if missing:
+            raise ValueError(
+                f"AI-Toolkit model_arch {arch!r} has no unambiguous entry in the pinned UI training baseline, "
+                "so Kura cannot choose its noise scheduler or precision; author " + ", ".join(missing)
+            )
+        return {"entry": None, "commit": load_baseline()["upstream"]["commit"], "train": {}, "model": {}, "dataset": {}}
+    name, entry = selected
+    values: dict[str, Any] = {"entry": name, "commit": load_baseline()["upstream"]["commit"]}
+    for section in ("train", "model"):
+        authored = native.get(section) if isinstance(native.get(section), dict) else {}
+        filled: dict[str, Any] = {}
+        for key in BASELINE_KEYS[section]:
+            if key not in entry[section] or _AI_TOOLKIT_AUTHORED_BASELINE_KEYS.get((section, key)) in override:
+                continue
+            value = entry[section][key]
+            if isinstance(value, dict):
+                current = authored.get(key) if isinstance(authored.get(key), dict) else {}
+                if section == "model" and key == "model_kwargs" and "model_edit" in override:
+                    current = {**current, "edit": override["model_edit"]}
+                missing_subkeys = {sub: deepcopy(item) for sub, item in value.items() if sub not in current}
+                if missing_subkeys:
+                    filled[key] = missing_subkeys
+            elif key not in authored:
+                filled[key] = deepcopy(value)
+        values[section] = filled
+    values["dataset"] = {key: deepcopy(entry["dataset"][key]) for key in BASELINE_KEYS["dataset"] if key in entry["dataset"]}
+    return values
+
+
+def _apply_ai_toolkit_baseline(run: dict[str, Any], process: dict[str, Any]) -> None:
+    baseline = ai_toolkit_baseline(run)
+    if baseline is None:
+        return
+    for section in ("train", "model"):
+        target = process.setdefault(section, {})
+        for key, value in baseline[section].items():
+            if isinstance(value, dict):
+                target.setdefault(key, {}).update(deepcopy(value))
+            else:
+                target[key] = deepcopy(value)
+    for dataset in process.get("datasets", []):
+        if isinstance(dataset, dict):
+            for key, value in baseline["dataset"].items():
+                dataset.setdefault(key, deepcopy(value))
 
 
 def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]:
@@ -1320,7 +1412,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
                 "save": {},
                 "datasets": projected_datasets,
                 "train": {"steps": recipe.get("steps"), "train_unet": True, "train_text_encoder": False, "disable_sampling": True, "seed": recipe.get("seed")},
-                "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch"), "quantize": False, "quantize_te": False, "low_vram": False},
+                "model": {"name_or_path": model.get("base"), "arch": override.get("model_arch")},
             }],
         },
     }
@@ -1371,6 +1463,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         process.setdefault("model", {}).setdefault("model_kwargs", {})["edit"] = deepcopy(
             override["model_edit"]
         )
+    _apply_ai_toolkit_baseline(run, process)
     if override.get("resolution") is not None:
         for dataset in process.get("datasets", []):
             if isinstance(dataset, dict):

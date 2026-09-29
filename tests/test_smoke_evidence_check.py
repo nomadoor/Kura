@@ -11,6 +11,7 @@ import yaml
 from kura.provenance import adapter_source_identity, executor_source_identity
 
 from scripts.check_smoke_evidence import (
+    _chain_reaches_current,
     _executor_identity_reaches_current,
     _historical_record_is_retired,
     _identity_reaches_current,
@@ -20,7 +21,11 @@ from scripts.check_smoke_evidence import (
 
 
 class SmokeEvidenceCheckTests(unittest.TestCase):
-    def test_sd1_evidence_migration_reaches_current_ai_toolkit_identity(self) -> None:
+    def test_sd1_evidence_migration_chain_is_scoped_and_behavior_preserving(self) -> None:
+        # The chain ends at the last behavior-preserving AI-Toolkit identity.
+        # The pinned UI training baseline (docs/adr/upstream-training-baseline.md)
+        # changed generated configuration, so it is not a migration and the SD1
+        # claim needs a re-smoke on the current adapter.
         repository = Path(__file__).resolve().parents[1]
         evidence = yaml.safe_load((repository / "docs" / "backend-smoke-evidence.yaml").read_text(encoding="utf-8"))
         migrations = yaml.safe_load((repository / "docs" / "adapter-source-identity-migrations.yaml").read_text(encoding="utf-8"))
@@ -31,20 +36,21 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
             if item["id"]
             == "ai-toolkit-audio-preflight-transform-ai-toolkit-2026-09-28"
         )
+        target = latest["replacement"]["value"]
 
         self.assertEqual(migration["backend"], record["backend"])
         self.assertIs(migration["behavior_changed"], False)
         self.assertEqual(migration["evidence_ids"], [record["id"]])
         self.assertEqual(migration["previous"]["value"], record["adapter_source"]["value"])
         self.assertIn(record["id"], latest["evidence_ids"])
-        self.assertEqual(latest["replacement"]["value"], adapter_source_identity("ai-toolkit")["value"])
-        self.assertTrue(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], migrations["records"]))
+        self.assertNotEqual(target, adapter_source_identity("ai-toolkit")["value"])
+        self.assertTrue(_chain_reaches_current(record["id"], "backend", record["backend"], record["adapter_source"]["value"], target, migrations["records"]))
         for field, invalid in (("backend", "musubi-tuner"), ("behavior_changed", True), ("evidence_ids", [])):
             with self.subTest(field=field):
                 altered = deepcopy(migrations["records"])
                 item = next(entry for entry in altered if entry["id"] == latest["id"])
                 item[field] = invalid
-                self.assertFalse(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], altered))
+                self.assertFalse(_chain_reaches_current(record["id"], "backend", record["backend"], record["adapter_source"]["value"], target, altered))
 
     def test_selected_file_runpod_evidence_binds_the_executor_identity(self) -> None:
         self.assertEqual(

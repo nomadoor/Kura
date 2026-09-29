@@ -153,6 +153,8 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
     if backend_name == "ai-toolkit":
         paths = [
             backend_root / "ai_toolkit.py",
+            backend_root / "ai_toolkit_baseline.py",
+            backend_root / "ai_toolkit_baseline.json",
             backend_root / "dataset_profiles.py",
         ]
         symbols = [

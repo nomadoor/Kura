@@ -99,6 +99,9 @@ def _musubi_video_preflight_env(run: dict, destination: Path) -> dict[str, str]:
     return _musubi_video_preflight_env_impl(run, projection)
 
 
+# The pinned AI-Toolkit UI baseline dataset keys (docs/adr/upstream-training-baseline.md).
+BASELINE_DATASET = {"cache_latents_to_disk": False}
+
 class FrozenDatasetProjectionReaderTests(unittest.TestCase):
     @staticmethod
     def _frozen(directory: str) -> tuple[dict, Path]:
@@ -946,7 +949,8 @@ class DatasetHandoffTests(unittest.TestCase):
             "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny/control-0",
             "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny/control-1",
         ])
-        self.assertEqual(process["datasets"], [native])
+        # Compile adds only the pinned UI baseline dataset keys to the projection.
+        self.assertEqual(process["datasets"], [{**native, **BASELINE_DATASET}])
         self.assertEqual(
             [consumer["native_pointer"] for consumer in lock["views"][0]["consumers"]],
             ["/folder_path", "/control_path/0", "/control_path/1"],
@@ -1167,7 +1171,7 @@ class DatasetHandoffTests(unittest.TestCase):
             "generated-random-one-per-step",
         )
         self.assertEqual(projected["semantic"]["controls"], ["depth", "line", "inpaint"])
-        self.assertEqual(process["datasets"], [projected["native"]])
+        self.assertEqual(process["datasets"], [{**projected["native"], **BASELINE_DATASET}])
         self.assertEqual(
             lock["semantic"]["projection"][0]["policy"]["generated_controls"],
             ["depth", "line", "inpaint"],
@@ -1525,7 +1529,7 @@ class DatasetHandoffTests(unittest.TestCase):
             [item["num_repeats"] for item in projection["native"]["datasets"]],
             [2, 3],
         )
-        self.assertEqual(process["datasets"], projection["native"]["datasets"])
+        self.assertEqual(process["datasets"], [{**item, **BASELINE_DATASET} for item in projection["native"]["datasets"]])
         self.assertEqual(
             projection["policy"]["block_settings"],
             [{"num_repeats": 2}, {"num_repeats": 3}],
@@ -1668,7 +1672,6 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["native"], {
                 "folder_path": "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny",
                 "caption_ext": ".txt",
-                "cache_latents_to_disk": True,
             })
 
     def make_run(self, root: Path) -> tuple[dict, Path]:
@@ -3194,7 +3197,6 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(projected["native"], {
                 "folder_path": "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny",
                 "caption_ext": ".txt",
-                "cache_latents_to_disk": True,
             })
             self.assertEqual(projected["unrepresentable"], [])
             self.assertEqual(len(lock["views"][0]["links"]), 1)
@@ -6126,7 +6128,7 @@ class DatasetHandoffTests(unittest.TestCase):
                 [{
                     "folder_path": "/workspace/runs/example/cache/dataset-view/ai-toolkit/tiny",
                     "caption_ext": ".txt",
-                    "cache_latents_to_disk": True,
+                    **BASELINE_DATASET,
                 }],
             )
             self.assertFalse((resolved / "ai-toolkit" / "dataset-stage.lock.json").exists())
@@ -6213,7 +6215,7 @@ class DatasetHandoffTests(unittest.TestCase):
             native = yaml.safe_load((run_dir / "resolved" / "ai-toolkit.yaml").read_text(encoding="utf-8"))
             self.assertEqual(
                 native["config"]["process"][0]["datasets"][0],
-                projection["datasets"][0]["native"],
+                {**projection["datasets"][0]["native"], **BASELINE_DATASET},
             )
 
     def test_v2_local_mounts_have_no_broad_writable_workspace_alias(self) -> None:

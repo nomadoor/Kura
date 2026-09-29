@@ -1,6 +1,6 @@
 # ADR: Unset trainer settings come from the pinned upstream baseline
 
-Status: proposed owner decision.
+Status: accepted owner decision (2026-09-29).
 
 Date: 2026-09-29
 
@@ -65,6 +65,37 @@ the pinned source and records it. Kura does not author these values.
    missing architecture fails regeneration, and the old baseline is not kept
    silently. The UI source is not a stable API. This brittleness is accepted as
    a bridge until upstream exposes a supported configuration API.
+
+## Implementation notes
+
+- `scripts/extract_ai_toolkit_baseline.py` runs
+  `scripts/ai_toolkit_baseline_extract.js` with Node inside the pinned image,
+  with no network. It transpiles the UI modules with the image's own
+  TypeScript and evaluates them the way the UI loader does. It then repeats the
+  UI's architecture switch (base job, restore the start arch's unselected
+  defaults, apply the new arch's selected defaults). The result is
+  `src/kura/backends/ai_toolkit_baseline.json`.
+- The baseline fills only listed native keys: `train` scheduler, timestep type,
+  precision, optimizer and its parameters, learning rate, loss, and
+  text-encoder caching; `model` quantization, `low_vram`, and `model_kwargs`
+  (missing subkeys only); and each dataset's `cache_latents_to_disk`. Paths,
+  steps, seed, and sampling stay Kura-owned.
+- Several UI entries can share one arch (`zimage`, `zimage:turbo`). The entry
+  whose model path equals `model.base` wins, then the entry named like the
+  authored selector, then the entry named after the arch, then a sole entry.
+  Anything else is ambiguous and treated as unknown.
+- One UI name differs from the pinned arch: the `sd15` entry builds a Stable
+  Diffusion 1.5 job, which the registry selects as `sd1`. The extractor records
+  this as a named alias.
+- For an unknown or ambiguous arch, compile requires
+  `native_config.train.noise_scheduler` and `mixed_precision`, the two values
+  observed to decide whether a run trains at all.
+- With the forced `cache_latents_to_disk: true` removed, no Kura input can turn
+  latent caching on for AI-Toolkit. The Flex.2 refusal described above therefore
+  has no reachable input today. It becomes necessary if caching becomes an
+  authored option.
+- Existing AI-Toolkit optimizer evidence predates the baseline. The generated
+  configuration changed, so it is not migrated and needs a re-smoke.
 
 ## Enforcement
 
