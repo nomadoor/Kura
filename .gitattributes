@@ -1,0 +1,4 @@
+# Check out text with LF everywhere. Source identities hash file bytes, and
+# the Linux containers read these files, so a Windows checkout must not
+# rewrite line endings.
+* text=auto eol=lf
