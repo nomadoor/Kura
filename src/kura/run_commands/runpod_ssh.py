@@ -637,6 +637,10 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
                 if state_sync_error is not None:
                     status["training_state_sync_error"] = state_sync_error
+                else:
+                    # A final download that obtained (or never needed) state
+                    # supersedes any error recorded by an earlier mid-run sync.
+                    status.pop("training_state_sync_error", None)
                 status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
                 status.pop("publication_error", None)
                 if publication_manifest:

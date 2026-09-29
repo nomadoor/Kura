@@ -160,9 +160,9 @@ claim is silently reassigned to a different test.
 | Failing case | Disposition |
 | --- | --- |
 | Tier-1 compile: SD 1.5 LoRA | Delete the obsolete stage-lock assertion. Existing real-run evidence remains; the new manifest path has its own independent regression. |
-| Tier-1 compile: SDXL LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
-| Tier-1 compile: FLUX.1 LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
-| Tier-1 compile: Anima LoRA | Delete the obsolete stage-lock assertion; support-matrix compile coverage is migration pending until the manifest path is evidenced. |
+| Tier-1 compile: SDXL LoRA | Delete the obsolete stage-lock assertion; the manifest path is evidenced by `SdScriptsManifestCompileTests` (frozen view, native TOML, trainer command), and the support matrix records compile coverage. |
+| Tier-1 compile: FLUX.1 LoRA | Delete the obsolete stage-lock assertion; the manifest path is evidenced by `SdScriptsManifestCompileTests` (frozen view, native TOML, trainer command), and the support matrix records compile coverage. |
+| Tier-1 compile: Anima LoRA | Delete the obsolete stage-lock assertion; the manifest path is evidenced by `SdScriptsManifestCompileTests` (frozen view, native TOML, trainer command), and the support matrix records compile coverage. |
 | Tier-1 compile: Anima ControlNet-LLLite | Delete the obsolete stage-lock assertion; the typed-control converter is now covered by manifest projection tests, while current-identity runtime evidence remains pending. |
 | LLLite caption dropout with text-cache | Restored at the authored-config validation seam; dynamic caption behavior that the text cache cannot preserve is rejected before projection. |
 | Zero `caption_dropout_every_n_epochs` emission | Restored through verified manifest TOML and the effective per-subset semantic caption policy. |
