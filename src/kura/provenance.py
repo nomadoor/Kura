@@ -72,6 +72,38 @@ def _source_symbol(path: Path, symbol: str) -> bytes:
     return b"\0".join(parts)
 
 
+# Source files whose behavior an executor's transport and lifecycle evidence
+# depends on. RunPod evidence proves these, not the adapter, so it is bound to
+# this identity separately.
+EXECUTOR_SOURCE_FILES: dict[str, tuple[str, ...]] = {
+    "runpod": (
+        "container_scripts/runpod_input_verify.py",
+        "dataset_transfer.py",
+        "executors/runpod.py",
+        "run_commands/launch.py",
+        "run_commands/runpod_ssh.py",
+    ),
+}
+
+
+def executor_source_identity(executor: str, *, read: Any = None) -> dict[str, str]:
+    """Hash the executor transport and lifecycle sources.
+
+    ``read`` maps a package-relative path to its bytes; it defaults to the
+    installed package and lets tooling hash a historical tree.
+    """
+    files = EXECUTOR_SOURCE_FILES.get(executor)
+    if files is None:
+        raise ValueError(f"unsupported executor for source identity: {executor}")
+    package_root = Path(__file__).resolve().parent
+    reader = read or (lambda relative: (package_root / relative).read_bytes())
+    parts = [(relative, reader(relative)) for relative in files]
+    identity = _hash_source_parts(parts, executor, scope="executor-v1")
+    identity.pop("backend")
+    identity["executor"] = executor
+    return identity
+
+
 def legacy_adapter_source_identity(backend_name: str) -> dict[str, str]:
     """Calculate the old whole-file algorithm on the current tree.
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from kura.provenance import adapter_source_identity
+from kura.provenance import adapter_source_identity, executor_source_identity
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,38 @@ def _support_evidence_claims(text: str) -> list[tuple[int, str, str, list[str]]]
         if status == "✅" or references:
             claims.append((line_number, backend, status, references))
     return claims
+
+
+def _executor_identity_reaches_current(record_id: str, executor: str, value: str, migrations: list[object]) -> bool:
+    """Like _identity_reaches_current, over migrations declared for an executor."""
+    current = executor_source_identity(executor)["value"]
+    seen: set[str] = set()
+    while value != current and value not in seen:
+        seen.add(value)
+        candidates = [
+            item for item in migrations
+            if isinstance(item, dict)
+            and item.get("executor") == executor
+            and item.get("behavior_changed") is False
+            and isinstance(item.get("evidence_ids"), list)
+            and record_id in item["evidence_ids"]
+            and isinstance(item.get("previous"), dict)
+            and item["previous"].get("value") == value
+            and isinstance(item.get("replacement"), dict)
+            and isinstance(item["replacement"].get("value"), str)
+        ]
+        if len(candidates) != 1:
+            return False
+        value = candidates[0]["replacement"]["value"]
+    return value == current
+
+
+def _requires_executor_identity(record: dict[str, object]) -> str | None:
+    """Selected-file RunPod evidence proves executor code, so it binds that executor's identity."""
+    native = record.get("native_path")
+    if isinstance(native, dict) and native.get("executor") == "runpod" and native.get("transfer") == "selected-files":
+        return "runpod"
+    return None
 
 
 def _identity_reaches_current(record_id: str, backend: str, value: str, migrations: list[object]) -> bool:
@@ -128,6 +160,17 @@ def main() -> int:
                 failures.append(f"{label}.{key} requires kind and value")
         if not isinstance(record.get("native_path"), dict) or not record["native_path"]:
             failures.append(f"{label}.native_path must be a non-empty opaque mapping")
+        executor = _requires_executor_identity(record)
+        if executor is not None and not _historical_record_is_retired(record, invalidation_ids):
+            identity = record.get("executor_source")
+            value = identity.get("value") if isinstance(identity, dict) else None
+            if not isinstance(identity, dict) or not IDENTITY_KEYS <= set(identity) or not isinstance(value, str):
+                failures.append(f"{label}.executor_source requires kind and value for {executor} transfer evidence")
+            elif not _executor_identity_reaches_current(str(record_id), executor, value, migrations):
+                failures.append(
+                    f"{label} executor identity does not reach the current {executor} executor through a "
+                    "behavior-preserving migration chain; re-smoke or retire the record"
+                )
         if record.get("evidence_kind") not in EVIDENCE_KINDS:
             failures.append(f"{label}.evidence_kind is unknown")
         if not isinstance(record.get("observed_at"), (str, date, datetime)):

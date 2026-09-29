@@ -8,9 +8,15 @@ from pathlib import Path
 
 import yaml
 
-from kura.provenance import adapter_source_identity
+from kura.provenance import adapter_source_identity, executor_source_identity
 
-from scripts.check_smoke_evidence import _historical_record_is_retired, _identity_reaches_current, _support_evidence_claims
+from scripts.check_smoke_evidence import (
+    _executor_identity_reaches_current,
+    _historical_record_is_retired,
+    _identity_reaches_current,
+    _requires_executor_identity,
+    _support_evidence_claims,
+)
 
 
 class SmokeEvidenceCheckTests(unittest.TestCase):
@@ -39,6 +45,46 @@ class SmokeEvidenceCheckTests(unittest.TestCase):
                 item = next(entry for entry in altered if entry["id"] == latest["id"])
                 item[field] = invalid
                 self.assertFalse(_identity_reaches_current(record["id"], record["backend"], record["adapter_source"]["value"], altered))
+
+    def test_selected_file_runpod_evidence_binds_the_executor_identity(self) -> None:
+        self.assertEqual(
+            _requires_executor_identity({"native_path": {"executor": "runpod", "transfer": "selected-files"}}),
+            "runpod",
+        )
+        self.assertIsNone(_requires_executor_identity({"native_path": {"executor": "runpod"}}))
+        self.assertIsNone(_requires_executor_identity({"native_path": {"executor": "local-docker", "transfer": "selected-files"}}))
+
+    def test_executor_migration_chain_is_scoped_to_the_executor_and_the_evidence(self) -> None:
+        current = executor_source_identity("runpod")["value"]
+        migration = {
+            "executor": "runpod",
+            "behavior_changed": False,
+            "evidence_ids": ["proof"],
+            "previous": {"value": "old"},
+            "replacement": {"value": current},
+        }
+
+        self.assertTrue(_executor_identity_reaches_current("proof", "runpod", current, []))
+        self.assertTrue(_executor_identity_reaches_current("proof", "runpod", "old", [migration]))
+        self.assertFalse(_executor_identity_reaches_current("other-proof", "runpod", "old", [migration]))
+        for field, invalid in (("executor", "local-docker"), ("behavior_changed", True), ("evidence_ids", [])):
+            with self.subTest(field=field):
+                self.assertFalse(_executor_identity_reaches_current("proof", "runpod", "old", [{**migration, field: invalid}]))
+        adapter_keyed = {key: value for key, value in migration.items() if key != "executor"} | {"backend": "runpod"}
+        self.assertFalse(_executor_identity_reaches_current("proof", "runpod", "old", [adapter_keyed]))
+
+    def test_executor_identity_follows_its_declared_sources(self) -> None:
+        baseline = executor_source_identity("runpod", read=lambda relative: relative.encode())
+        changed = executor_source_identity(
+            "runpod",
+            read=lambda relative: relative.encode() + (b"!" if relative == "dataset_transfer.py" else b""),
+        )
+
+        self.assertEqual(baseline["executor"], "runpod")
+        self.assertEqual(baseline["scope"], "executor-v1")
+        self.assertNotEqual(baseline["value"], changed["value"])
+        with self.assertRaises(ValueError):
+            executor_source_identity("local-docker")
 
     def test_verified_support_without_evidence_is_returned_for_validation(self) -> None:
         claims = _support_evidence_claims(

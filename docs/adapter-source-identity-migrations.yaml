@@ -1,12 +1,31 @@
 schema_version: 1
 description: >-
-  Mechanical identity transitions. These records explain source-identity
+  Mechanical identity transitions for backend adapters (keyed by backend) and
+  executors (keyed by executor). These records explain source-identity
   changes only; they do not transfer runtime evidence to behavior changes.
   The legacy helper applies the old algorithm to the current tree and therefore
   cannot reproduce these previous values without the corresponding historical
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-final-download-clears-stale-sync-error-2026-09-29
+    executor: runpod
+    reason: >-
+      A final RunPod download that obtained, or never needed, a training state
+      now clears a training_state_sync_error left by an earlier mid-run sync.
+      Transfer, Pod-side verification, trainer execution, and Pod stop are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 15e858f7070d5c080d5dd1d33491b7ee1c1c863caf28e730e5014a7bed9d1786
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
   - id: ai-toolkit-audio-preflight-transform-ai-toolkit-2026-09-28
     backend: ai-toolkit
     reason: >-

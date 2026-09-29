@@ -64,6 +64,29 @@ runpod_selected_file_transfer:
   pod_lifetime: about 7 minutes (01:30 to 01:37 JST)
   pod_stopped: true
   pods_after: 0
+runpod_selected_file_transfer_current_executor:
+  purpose: >-
+    Re-proves the selected-file transfer on the current RunPod executor source,
+    after the frozen command env export and failed-run download changes
+    (5a32712, e19a05e) made the run above predate the executor it supports.
+  recipe: same as 20260929-0124_vivi-runpod-transfer-wait_e92e
+  adapter_source: b5cfb76927baa383b24452bdb0ddc3c96d7a188ccb29540748a8a26feb35be71
+  executor_source: 899c2ffa6c7c85815aa223356ffe94b59dc19e1113060149288019ef149de6af
+  gpu: NVIDIA A40 (SECURE, 0.49 USD/h, EU-SE-1)
+  run_id: 20260929-0824_vivi-runpod-transfer-executor_8a16
+  stage:
+    transfer: selected-files
+    payload_bytes: 12829139
+    tar_bytes: 12851200
+    local_source_stat_verification: matched
+  pod_input_verification: {status: verified, entries: 22, content_verification: sha256-per-file-and-archive, view_links: 6}
+  pod_postflight: {status: matched, source_stat_verification: matched, view_link_verification: matched}
+  local_postflight: {status: matched, event_recorded: true}
+  publication: completed
+  safetensors_bytes: 55512
+  pod_lifetime: about 10 minutes (09:01 to 09:11 JST)
+  pod_stopped: true
+  pods_after: 0
 local_path_model:
   adapter_source: a11b5b436edde4d24c8f655799386a91325b59e32adff815ea187d664eed54ac
   run_id: 20260929-0143_local-path-model_af11
