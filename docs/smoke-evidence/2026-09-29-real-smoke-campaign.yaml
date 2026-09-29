@@ -510,6 +510,74 @@ runs:
     cost_per_h: 0.49
     launched_at: '2026-09-29T23:55:57.528205+09:00'
     pod_stopped_at: '2026-09-30T00:01:22.240999+09:00'
+  ai-toolkit-hidream-2026-09-30-0052:
+    run_id: 20260930-0052_ai-toolkit-hidream_e2ed
+    model: HiDream-ai/HiDream-I1-Full
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 2.193
+    - 2.193
+    - 2.193
+    outputs:
+    - outputs/20260930-0052_ai-toolkit-hidream_e2ed.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A100 PCIe
+    cost_per_h: 1.19
+    launched_at: '2026-09-30T00:57:15.501723+09:00'
+    pod_stopped_at: '2026-09-30T01:15:36.047408+09:00'
+  ai-toolkit-qwen-image-2026-09-30-0040:
+    run_id: 20260930-0040_ai-toolkit-qwen-image_e508
+    model: Qwen/Qwen-Image
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.01801
+    - 0.01801
+    - 0.01801
+    outputs:
+    - outputs/20260930-0040_ai-toolkit-qwen-image_e508.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A100 PCIe
+    cost_per_h: 1.19
+    launched_at: '2026-09-30T01:15:37.685842+09:00'
+    pod_stopped_at: '2026-09-30T01:34:02.604334+09:00'
+  ai-toolkit-qwen-image-edit-2026-09-30-0040:
+    run_id: 20260930-0040_ai-toolkit-qwen-image-edit_48cb
+    model: Qwen/Qwen-Image-Edit
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.1609
+    - 0.1609
+    - 0.1609
+    outputs:
+    - outputs/20260930-0040_ai-toolkit-qwen-image-edit_48cb.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A100 PCIe
+    cost_per_h: 1.19
+    launched_at: '2026-09-30T01:34:04.101254+09:00'
+    pod_stopped_at: '2026-09-30T01:49:14.301248+09:00'
+  musubi-framepack-2026-09-30-0201:
+    run_id: 20260930-0201_musubi-framepack_09f1
+    model: Kijai/HunyuanVideo_comfy
+    dataset: real-smoke-video-30fps
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.00973
+    - 0.00973
+    outputs:
+    - outputs/20260930-0201_musubi-framepack_09f1-step00000001.safetensors
+    - outputs/20260930-0201_musubi-framepack_09f1.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-30T02:01:54.574839+09:00'
+    pod_stopped_at: '2026-09-30T02:10:53.307067+09:00'
 scope: Each listed selector completed one optimizer step with a finite loss, published
   its adapter, and matched its input postflight; RunPod runs also stopped their Pod.
 ai_toolkit_failures:
@@ -567,6 +635,16 @@ ai_toolkit_baseline_rerun:
     flex2: ai-toolkit-flex2-2026-09-29-2323 passed with the baseline cache_latents_to_disk
       false
   still_open:
-  - 'hidream, qwen_image, qwen_image_edit: need a Pod with more host RAM than the
-    about 50 GB A40'
   - 'mageflow: pinned default repository does not exist'
+host_ram_and_framepack_follow_up:
+  host_ram: The A40 Pod container is capped at 50 GB of host RAM (cgroup memory.max
+    49999998976, memory.peak at the cap, oom_kill 1) for AI-Toolkit HiDream, Qwen-Image,
+    and Qwen-Image-Edit. The same smokes passed on an A100 80GB PCIe Pod (COMMUNITY
+    1.19 USD/h).
+  a100_ssh_retry: The first A100 HiDream attempt (20260930-0040_ai-toolkit-hidream_e5dc)
+    never reached SSH; Kura left the Pod running because completion was not confirmed,
+    and it was stopped after checking no upload had happened (about 0.22 USD).
+  framepack: The pinned Musubi loader only drops frames and stops at the converted
+    index, so a 24 fps source cannot fill FramePack's 37-frame window at its 30 fps
+    target (a 73-frame 24 fps video also converted to 30). A 45-frame 30 fps smoke
+    video yields 37 frames and passed.
