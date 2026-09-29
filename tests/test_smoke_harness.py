@@ -111,12 +111,13 @@ class RealSmokeHarnessTests(unittest.TestCase):
             (run_dir / "logs").mkdir()
             (run_dir / "resolved").mkdir()
             (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"argv": ["zimage_train_network.py"]}), encoding="utf-8")
-            (run_dir / "outputs" / "adapter.safetensors").write_bytes(b"x")
+            (run_dir / "outputs" / "nested").mkdir()
+            (run_dir / "outputs" / "nested" / "adapter.safetensors").write_bytes(b"x")
             (run_dir / "logs" / "stdout.log").write_text("steps: 1/1 avr_loss=0.123\n", encoding="utf-8")
             status = {
                 "state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "runpod",
                 "publication_state": "completed", "dataset_input_postflight": {"status": "matched"},
-                "pod_stopped_at": "2026-01-01T00:00:00+00:00",
+                "pod_stopped_at": "2026-01-01T00:00:00+00:00", "outputs": ["outputs/nested/adapter.safetensors"],
             }
             (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
             self.assertTrue(MODULE.verify(workspace, run_dir.name)["ok"])
@@ -151,12 +152,13 @@ class RealSmokeHarnessTests(unittest.TestCase):
                 "state": "completed", "exit_code": 0, "last_step": 1, "total_steps": 1, "host": "runpod",
                 "publication_state": "completed", "dataset_input_postflight": {"status": "matched"},
                 "pod_stopped_at": "2026-01-01T00:10:00+00:00", "last_realization": "realizations/r1.json",
+                "outputs": ["outputs/adapter.safetensors"],
             }
             (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
 
             record, summary = MODULE.evidence(workspace, run_id, artifact="smoke-evidence/x.yaml")
 
-            self.assertEqual(record["id"], "musubi-zimage-2026-01-01")
+            self.assertEqual(record["id"], "musubi-zimage-2026-01-01-0000")
             self.assertEqual(record["adapter_source"]["value"], "a" * 64)
             self.assertEqual(record["runtime_image"]["value"], "sha256:" + "b" * 64)
             self.assertEqual(record["native_path"]["transfer"], "selected-files")

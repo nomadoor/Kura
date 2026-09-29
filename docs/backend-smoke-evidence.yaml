@@ -14,6 +14,240 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-sd1-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sd1
+      model_arch: sd1
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-sdxl-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: sdxl
+      model_arch: sdxl
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-anima-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: anima
+      model_arch: anima
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: flux2_klein_4b
+      model_arch: flux2_klein_4b
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-zimage-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: zimage
+      model_arch: zimage
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-chroma-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: chroma
+      model_arch: chroma
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-flux-kontext-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: flux_kontext
+      model_arch: flux_kontext
+      executor: runpod
+      dataset: real-smoke-image-control
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-qwen-image-2-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: qwen_image_2
+      model_arch: qwen_image_2
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-krea2-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: krea2
+      model_arch: krea2
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-flux-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: flux
+      model_arch: flux
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+  - id: ai-toolkit-flex2-2026-09-29-2323
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    executor_source:
+      kind: source-tree-sha256
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: flex2
+      model_arch: flex2
+      executor: runpod
+      dataset: real-smoke-image-control
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-09-29
+    artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
   - id: musubi-kandinsky5-lite-2026-09-29
     backend: musubi-tuner
     adapter_source:
@@ -101,6 +335,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+    superseded_by: ai-toolkit-anima-2026-09-29-2323
   - id: ai-toolkit-flux2-klein-4b-2026-09-29
     backend: ai-toolkit
     adapter_source:
@@ -123,6 +358,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+    superseded_by: ai-toolkit-flux2-klein-4b-2026-09-29-2323
   - id: ai-toolkit-zimage-2026-09-29
     backend: ai-toolkit
     adapter_source:
@@ -145,6 +381,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+    superseded_by: ai-toolkit-zimage-2026-09-29-2323
   - id: ai-toolkit-chroma-2026-09-29
     backend: ai-toolkit
     adapter_source:
@@ -167,6 +404,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+    superseded_by: ai-toolkit-chroma-2026-09-29-2323
   - id: ai-toolkit-flux-kontext-2026-09-29
     backend: ai-toolkit
     adapter_source:
@@ -189,6 +427,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+    superseded_by: ai-toolkit-flux-kontext-2026-09-29-2323
   - id: ai-toolkit-qwen-image-2-2026-09-29
     backend: ai-toolkit
     adapter_source:
@@ -211,6 +450,7 @@ records:
     outcome: passed
     observed_at: 2026-09-29
     artifact: smoke-evidence/2026-09-29-real-smoke-campaign.yaml
+    superseded_by: ai-toolkit-qwen-image-2-2026-09-29-2323
   - id: musubi-flux-kontext-2026-09-29
     backend: musubi-tuner
     adapter_source:

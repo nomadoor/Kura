@@ -443,7 +443,12 @@ def verify(workspace: Path, run_id: str) -> dict[str, Any]:
     stdout_path = run_dir / "logs" / "stdout.log"
     log = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.is_file() else ""
     losses = [float(value) for value in _LOSS.findall(log)]
-    outputs = sorted((run_dir / "outputs").glob("*.safetensors"))
+    # Published outputs as Kura recorded them; local AI-Toolkit nests them
+    # under outputs/<run-id>/.
+    outputs = sorted(
+        run_dir / str(item) for item in status.get("outputs") or []
+        if str(item).endswith(".safetensors") and (run_dir / str(item)).is_file()
+    )
     postflight = status.get("dataset_input_postflight") if isinstance(status.get("dataset_input_postflight"), dict) else {}
     slug = run_id.split("_", 1)[1].rsplit("_", 1)[0]
     smoke = SMOKES.get(slug)
@@ -458,7 +463,7 @@ def verify(workspace: Path, run_id: str) -> dict[str, Any]:
         "input_postflight_matched": postflight.get("status") == "matched",
         "pod_stopped": not remote or isinstance(status.get("pod_stopped_at"), str),
     }
-    return {"run_id": run_id, "smoke": slug, "checks": checks, "ok": all(checks.values()), "outputs": [path.name for path in outputs]}
+    return {"run_id": run_id, "smoke": slug, "checks": checks, "ok": all(checks.values()), "outputs": [path.relative_to(run_dir).as_posix() for path in outputs]}
 
 
 def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -479,7 +484,8 @@ def evidence(workspace: Path, run_id: str, *, artifact: str) -> tuple[dict[str, 
             native[key] = config[key]
     native.update({"executor": realization["executor"] if isinstance(realization.get("executor"), str) else smoke.executor, "dataset": smoke.dataset})
     record: dict[str, Any] = {
-        "id": f"{result['smoke']}-{run_id[:4]}-{run_id[4:6]}-{run_id[6:8]}",
+        # Date and launch minute keep several smokes of one selector apart.
+        "id": f"{result['smoke']}-{run_id[:4]}-{run_id[4:6]}-{run_id[6:8]}-{run_id[9:13]}",
         "backend": smoke.backend,
         "adapter_source": {"kind": realization["adapter_source"]["kind"], "value": realization["adapter_source"]["value"]},
     }
