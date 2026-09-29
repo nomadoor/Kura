@@ -33,6 +33,7 @@ FORBIDDEN_SUFFIXES = {
     ".Zone.Identifier",
 }
 ALLOWED_PREFIXES = {
+    ".github/workflows/",
     "examples/",
     "tests/",
     "docs/",
