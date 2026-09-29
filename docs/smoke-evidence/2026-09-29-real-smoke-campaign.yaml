@@ -280,6 +280,57 @@ runs:
     cost_per_h: 0.49
     launched_at: '2026-09-29T17:50:42.649878+09:00'
     pod_stopped_at: '2026-09-29T17:55:41.074508+09:00'
+  musubi-kandinsky5-lite-2026-09-29:
+    run_id: 20260929-1857_musubi-kandinsky5-lite_f516
+    model: kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s
+    dataset: real-smoke-video
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0535
+    - 0.0535
+    outputs:
+    - 20260929-1857_musubi-kandinsky5-lite_f516-step00000001.safetensors
+    - 20260929-1857_musubi-kandinsky5-lite_f516.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T19:02:32.800730+09:00'
+    pod_stopped_at: '2026-09-29T19:09:11.015269+09:00'
+  musubi-hunyuan-video-2026-09-29:
+    run_id: 20260929-1857_musubi-hunyuan-video_8d3c
+    model: hunyuanvideo-community/HunyuanVideo
+    dataset: real-smoke-video
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.19
+    - 0.19
+    outputs:
+    - 20260929-1857_musubi-hunyuan-video_8d3c-step00000001.safetensors
+    - 20260929-1857_musubi-hunyuan-video_8d3c.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T19:09:17.008047+09:00'
+    pod_stopped_at: '2026-09-29T19:16:54.899132+09:00'
+  musubi-hunyuan-video-1-5-2026-09-29:
+    run_id: 20260929-1857_musubi-hunyuan-video-1-5_0208
+    model: Comfy-Org/HunyuanVideo_1.5_repackaged
+    dataset: real-smoke-video
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.05
+    - 0.05
+    outputs:
+    - 20260929-1857_musubi-hunyuan-video-1-5_0208-step00000001.safetensors
+    - 20260929-1857_musubi-hunyuan-video-1-5_0208.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T19:18:32.553292+09:00'
+    pod_stopped_at: '2026-09-29T19:23:41.324973+09:00'
 scope: Each listed selector completed one optimizer step with a finite loss, published
   its adapter, and matched its input postflight; RunPod runs also stopped their Pod.
 ai_toolkit_failures:
@@ -320,3 +371,11 @@ ai_toolkit_failures:
     run_id: null
     cause: 'not run: the pinned UI default microsoft/Mage-Flow-Base does not exist
       on the Hub'
+musubi_video_preflight_stop:
+  framepack:
+    run_id: 20260929-1857_musubi-framepack_7e73
+    observation: Kura's container frame preflight found 30 converted frames where
+      target_frames requires 37 and stopped before model acquisition; the transfer
+      and input postflight matched and the Pod stopped
+    cause: the generated 37-frame smoke video is too short after the pinned loader's
+      frame conversion; a longer smoke video is needed, not a Kura change
