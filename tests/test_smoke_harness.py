@@ -125,8 +125,10 @@ class RealSmokeHarnessTests(unittest.TestCase):
                     (run_dir / "status.json").write_text(json.dumps({**status, key: value}), encoding="utf-8")
                     self.assertFalse(MODULE.verify(workspace, run_dir.name)["ok"])
             (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
-            (run_dir / "logs" / "stdout.log").write_text("avr_loss=nan\n", encoding="utf-8")
-            self.assertFalse(MODULE.verify(workspace, run_dir.name)["checks"]["finite_loss"])
+            for log in ("avr_loss=nan\n", "loss=0.12\navr_loss=nan\n", "loss: 0.5\nloss: inf\n", "avr_loss=-Infinity\n"):
+                with self.subTest(log=log):
+                    (run_dir / "logs" / "stdout.log").write_text(log, encoding="utf-8")
+                    self.assertFalse(MODULE.verify(workspace, run_dir.name)["checks"]["finite_loss"])
 
 
 if __name__ == "__main__":

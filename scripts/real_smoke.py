@@ -423,7 +423,7 @@ def prepare(workspace: Path, smoke_id: str) -> str:
     return run_id
 
 
-_LOSS = re.compile(r"(?:\bloss:\s*|\bavr_loss=|\bloss=)([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
+_LOSS = re.compile(r"(?:\bloss:\s*|\bavr_loss=|\bloss=)([+-]?(?:nan|inf(?:inity)?|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?))", re.IGNORECASE)
 
 
 def verify(workspace: Path, run_id: str) -> dict[str, Any]:
