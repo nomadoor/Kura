@@ -59,5 +59,124 @@ runs:
     cost_per_h: 0.49
     launched_at: '2026-09-29T15:23:31.166195+09:00'
     pod_stopped_at: '2026-09-29T15:29:58.702755+09:00'
+  musubi-flux-kontext-2026-09-29:
+    run_id: 20260929-1531_musubi-flux-kontext_f348
+    model: black-forest-labs/FLUX.1-Kontext-dev
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0849
+    - 0.0849
+    outputs:
+    - 20260929-1531_musubi-flux-kontext_f348-step00000001.safetensors
+    - 20260929-1531_musubi-flux-kontext_f348.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T16:04:11.725402+09:00'
+    pod_stopped_at: '2026-09-29T16:10:57.226095+09:00'
+  musubi-flux2-klein-4b-2026-09-29:
+    run_id: 20260929-1531_musubi-flux2-klein-4b_7eb4
+    model: black-forest-labs/FLUX.2-klein-base-4B
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.064
+    - 0.064
+    outputs:
+    - 20260929-1531_musubi-flux2-klein-4b_7eb4-step00000001.safetensors
+    - 20260929-1531_musubi-flux2-klein-4b_7eb4.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T15:36:26.245808+09:00'
+    pod_stopped_at: '2026-09-29T15:42:08.774714+09:00'
+  musubi-hidream-o1-2026-09-29:
+    run_id: 20260929-1531_musubi-hidream-o1_5190
+    model: Comfy-Org/HiDream-O1-Image
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0435
+    - 0.0435
+    outputs:
+    - 20260929-1531_musubi-hidream-o1_5190-step00000001.safetensors
+    - 20260929-1531_musubi-hidream-o1_5190.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T15:52:15.193563+09:00'
+    pod_stopped_at: '2026-09-29T15:55:41.607836+09:00'
+  musubi-ideogram4-2026-09-29:
+    run_id: 20260929-1531_musubi-ideogram4_7fbc
+    model: Comfy-Org/Ideogram-4
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.078
+    - 0.078
+    outputs:
+    - 20260929-1531_musubi-ideogram4_7fbc-step00000001.safetensors
+    - 20260929-1531_musubi-ideogram4_7fbc.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T15:58:49.265718+09:00'
+    pod_stopped_at: '2026-09-29T16:03:33.428570+09:00'
+  musubi-krea2-2026-09-29:
+    run_id: 20260929-1531_musubi-krea2_d83d
+    model: krea/Krea-2-Raw
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0124
+    - 0.0124
+    outputs:
+    - 20260929-1531_musubi-krea2_d83d-step00000001.safetensors
+    - 20260929-1531_musubi-krea2_d83d.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T16:11:02.569201+09:00'
+    pod_stopped_at: '2026-09-29T16:14:56.460367+09:00'
+  musubi-qwen-image-2026-09-29:
+    run_id: 20260929-1531_musubi-qwen-image_1b52
+    model: Comfy-Org/Qwen-Image_ComfyUI
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0221
+    - 0.0221
+    outputs:
+    - 20260929-1531_musubi-qwen-image_1b52-step00000001.safetensors
+    - 20260929-1531_musubi-qwen-image_1b52.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T16:16:02.441933+09:00'
+    pod_stopped_at: '2026-09-29T16:23:43.019469+09:00'
+  musubi-zimage-2026-09-29:
+    run_id: 20260929-1531_musubi-zimage_8b56
+    model: Comfy-Org/z_image
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0742
+    - 0.0742
+    outputs:
+    - 20260929-1531_musubi-zimage_8b56-step00000001.safetensors
+    - 20260929-1531_musubi-zimage_8b56.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T15:42:13.717007+09:00'
+    pod_stopped_at: '2026-09-29T15:52:12.179082+09:00'
 scope: Each listed selector completed one optimizer step with a finite loss, published
   its adapter, and matched its input postflight; RunPod runs also stopped their Pod.

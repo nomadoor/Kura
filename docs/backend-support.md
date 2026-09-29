@@ -140,15 +140,15 @@ below records the execution contract verified at that time.
 | AI-Toolkit | YuE2 | — | ❌ | Audio is outside the current training contract |
 | AI-Toolkit | Qwen2.5-Omni | — | ❌ | LLM training is outside the current training contract |
 | AI-Toolkit | Other image families | Native override only | ⚠️ | Model-specific review required |
-| Musubi Tuner | FLUX.2 | Built-in | 🧪 | dev; Klein/base 4B and 9B; reference-image path compiles |
+| Musubi Tuner | FLUX.2 | Built-in | 🔥 | dev; Klein/base 4B and 9B; reference-image path compiles. The Klein base 4B selector completed a RunPod A40 run over the selected-file transfer and finished one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-flux2-klein-4b-2026-09-29` |
 | Musubi Tuner | MiniMax-H3 | Built-in | 🔥 | Typed T2VA, FL2VA, Ref2VA, one-frame, timed-control, ordered-reference, guidance, training-adapter, and asymmetric teacher-matching contracts compile; official bundles resolve; all three v0.3.5 entrypoints pass image smoke. T2VA guidance loss and plain one-frame image guidance loss are optimizer/lifecycle verified on A40; other supported modes are marked compile/image verified with no optimizer observation in the generated matrix. Evidence: `musubi-minimax-h3-runpod-2026-09-22`, `musubi-minimax-h3-image-runpod-2026-09-22`, `musubi-minimax-h3-guidance-cache-runpod-2026-09-29` |
 | Musubi Tuner | Wan 2.1 / 2.2 | Built-in | ✅ | T2V/I2V, Fun Control, dual-DiT, and Single Frame covered. Evidence: `musubi-wan-t2v-1.3b-docker-2026-07-12`, `musubi-wan-t2v-1.3b-runpod-2026-07-12`, `musubi-wan-video-jsonl-docker-2026-09-29` |
-| Musubi Tuner | Krea 2 | Built-in | 🧪 | Broader Krea validation remains separate |
-| Musubi Tuner | Qwen-Image | Built-in | 🧪 | Original, Edit, 2509, 2511, and Layered compile paths covered |
-| Musubi Tuner | Z-Image | Built-in | 🧪 | — |
-| Musubi Tuner | FLUX.1 Kontext | Built-in | 🧪 | Paired/control dataset path covered |
-| Musubi Tuner | Ideogram 4 | Built-in | 🧪 | — |
-| Musubi Tuner | HiDream-O1-Image | Built-in | 🧪 | T2I and I2I compile paths covered |
+| Musubi Tuner | Krea 2 | Built-in | 🔥 | Broader Krea validation remains separate. A RunPod A40 run over the selected-file transfer completed one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-krea2-2026-09-29` |
+| Musubi Tuner | Qwen-Image | Built-in | 🔥 | Original, Edit, 2509, 2511, and Layered compile paths covered. The original model version completed a RunPod A40 run over the selected-file transfer and finished one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-qwen-image-2026-09-29` |
+| Musubi Tuner | Z-Image | Built-in | 🔥 | A RunPod A40 run over the selected-file transfer completed one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-zimage-2026-09-29` |
+| Musubi Tuner | FLUX.1 Kontext | Built-in | 🔥 | Paired/control dataset path covered. A RunPod A40 run over the selected-file transfer completed one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-flux-kontext-2026-09-29` |
+| Musubi Tuner | Ideogram 4 | Built-in | 🔥 | A RunPod A40 run over the selected-file transfer completed one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-ideogram4-2026-09-29` |
+| Musubi Tuner | HiDream-O1-Image | Built-in | 🔥 | T2I and I2I compile paths covered. The dev T2I selector completed a RunPod A40 run over the selected-file transfer and finished one optimizer step with a finite loss, a published adapter, a matched input postflight, and a stopped Pod. Evidence: `musubi-hidream-o1-2026-09-29` |
 | Musubi Tuner | HunyuanVideo | Built-in | 🧪 | — |
 | Musubi Tuner | HunyuanVideo 1.5 | Built-in | 🧪 | T2V and I2V compile paths covered |
 | Musubi Tuner | FramePack | Built-in | 🔥 | Normal, F1, and Single Frame compile paths covered. Evidence: `musubi-framepack-video-docker-2026-07-12` |
