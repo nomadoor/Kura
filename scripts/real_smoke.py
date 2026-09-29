@@ -113,8 +113,6 @@ def _aitk(name: str, model_arch: str, model_base: str, dataset: str = IMAGE_DATA
     return Smoke("ai-toolkit", name, model_base, dataset, {"model_arch": model_arch, **_AITK_COMMON, **config}, expected_script="run.py")
 
 
-
-
 SMOKES: dict[str, Smoke] = {
     # sd-scripts: the pre-contract optimizer smokes are historical only.
     "sd-scripts-sdxl": Smoke(
