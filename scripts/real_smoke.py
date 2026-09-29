@@ -317,19 +317,19 @@ def _caption(path: str) -> dict[str, Any]:
     return {"file": {"type": "file", "path": path}}
 
 
-def _create_image_dataset(root: Path) -> None:
+def _create_image_dataset(root: Path, dataset_id: str) -> None:
     (root / "0001.png").write_bytes(_png())
     (root / "0001.txt").write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
-    _write_manifest(root, root.name, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.png"}], "caption": _caption("0001.txt")}])
+    _write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.png"}], "caption": _caption("0001.txt")}])
 
 
-def _create_control_dataset(root: Path) -> None:
+def _create_control_dataset(root: Path, dataset_id: str) -> None:
     (root / "target").mkdir()
     (root / "control").mkdir()
     (root / "target" / "0001.png").write_bytes(_png())
     (root / "control" / "0001.png").write_bytes(_png(variant=1))
     (root / "target" / "0001.txt").write_text("a tiny synthetic smoke-test image\n", encoding="utf-8")
-    _write_manifest(root, root.name, [{
+    _write_manifest(root, dataset_id, [{
         "id": "0001",
         "files": [
             {"type": "file", "role": "target", "path": "target/0001.png"},
@@ -354,7 +354,7 @@ writer.release()
 '''
 
 
-def _create_video_dataset(root: Path, frames: int = 37, fps: float = 24.0) -> None:
+def _create_video_dataset(root: Path, dataset_id: str, frames: int = 37, fps: float = 24.0) -> None:
     docker = shutil.which("docker")
     if docker is None:
         raise SystemExit(f"creating {VIDEO_DATASET} needs Docker to encode the MP4 inside {MUSUBI_IMAGE}")
@@ -366,14 +366,14 @@ def _create_video_dataset(root: Path, frames: int = 37, fps: float = 24.0) -> No
     if result.returncode:
         raise SystemExit(result.stderr or result.stdout or "video generation failed")
     (root / "0001.txt").write_text("a tiny synthetic smoke-test video\n", encoding="utf-8")
-    _write_manifest(root, root.name, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": _caption("0001.txt")}])
+    _write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": _caption("0001.txt")}])
 
 
 _CREATORS = {
     IMAGE_DATASET: _create_image_dataset,
     CONTROL_DATASET: _create_control_dataset,
     VIDEO_DATASET: _create_video_dataset,
-    FPS30_VIDEO_DATASET: lambda root: _create_video_dataset(root, frames=45, fps=30.0),
+    FPS30_VIDEO_DATASET: lambda root, dataset_id: _create_video_dataset(root, dataset_id, frames=45, fps=30.0),
 }
 
 
@@ -389,7 +389,7 @@ def ensure_dataset(workspace: Path, dataset_id: str) -> str:
     if staging.exists():
         raise SystemExit(f"{staging} is left from an interrupted creation; remove it and retry")
     staging.mkdir(parents=True)
-    _CREATORS[dataset_id](staging)
+    _CREATORS[dataset_id](staging, dataset_id)
     staging.rename(root)
     result = _kura(workspace, "dataset", "validate", dataset_id)
     if result.returncode:
