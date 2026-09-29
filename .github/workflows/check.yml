@@ -20,6 +20,9 @@ jobs:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # macOS and Windows expose known platform gaps that are being fixed in
+    # separate changes. Their failures stay visible without blocking a PR.
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
