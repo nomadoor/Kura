@@ -821,8 +821,8 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "verified only for flex2"):
             validate_backend_config(invalid)
 
-    def test_ai_toolkit_sdxl_evidence_settings_preserve_legacy_process_semantics(self) -> None:
-        """The two migrated 2026-07-12 smokes differed only by executor."""
+    def test_ai_toolkit_sdxl_evidence_settings_survive_and_the_baseline_fills_the_rest(self) -> None:
+        """Authored SDXL evidence settings win; the pinned UI baseline fills only unset keys."""
         ordinary = {
             "model_arch": "sdxl", "network_dim": 1, "network_alpha": 1,
             "save_every_n_steps": 1, "save_last_n_steps": 1,
@@ -849,16 +849,20 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "save": {"save_every": 1, "max_step_saves_to_keep": 1},
                     "datasets": [{
                         "folder_path": f"/workspace/runs/{run_id}/cache/dataset-view/ai-toolkit/flux2-klein-tiny", "caption_ext": ".txt",
-                        "cache_latents_to_disk": True, "resolution": [256, 256],
+                        "cache_latents_to_disk": False, "resolution": [256, 256],
                     }],
                     "train": {
                         "steps": 1, "train_unet": True, "train_text_encoder": False, "disable_sampling": True,
                         "seed": 1, "lr": 1.0e-6, "optimizer": "adamw8bit", "dtype": "bf16",
                         "batch_size": 1, "gradient_accumulation_steps": 1, "gradient_checkpointing": True,
+                        "noise_scheduler": "ddpm", "timestep_type": "sigmoid", "optimizer_params": {"weight_decay": 0.0001},
+                        "content_or_style": "balanced", "loss_type": "mse",
+                        "unload_text_encoder": False, "cache_text_embeddings": False,
                     },
                     "model": {
                         "name_or_path": "stabilityai/stable-diffusion-xl-base-1.0", "arch": "sdxl",
-                        "quantize": False, "quantize_te": False, "low_vram": True,
+                        "low_vram": True, "quantize": False, "qtype": "qfloat8", "quantize_te": False,
+                        "qtype_te": "qfloat8",
                     },
                 })
                 self.assertEqual(command["cwd"], expected_cwd)
@@ -869,6 +873,76 @@ class BackendSurfaceContractTests(unittest.TestCase):
                     "MODELS_PATH": "/workspace/cache/ai-toolkit/models",
                     "KURA_AI_TOOLKIT_VIDEO_SUFFIXES": frozen_suffixes(AI_TOOLKIT_VIDEO_SUFFIXES),
                 })
+
+    def test_ai_toolkit_baseline_fills_only_unset_values(self) -> None:
+        from kura.backends.ai_toolkit import ai_toolkit_baseline
+
+        run = {
+            "id": "klein", "backend": {"name": "ai-toolkit", "config": {
+                "model_arch": "flux2_klein_4b", "mixed_precision": "fp16",
+                "native_config": {"train": {"timestep_type": "sigmoid"}, "model": {"model_kwargs": {"extra": 1}}},
+            }},
+            "model": {"base": "black-forest-labs/FLUX.2-klein-base-4B"}, "datasets": [{"id": "tiny"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        baseline = ai_toolkit_baseline(run)
+        self.assertEqual(baseline["entry"], "flux2_klein_4b")
+        self.assertEqual(baseline["train"]["noise_scheduler"], "flowmatch")
+        self.assertNotIn("dtype", baseline["train"])  # authored mixed_precision wins
+        self.assertNotIn("timestep_type", baseline["train"])  # authored native value wins
+        self.assertEqual(baseline["model"]["model_kwargs"], {"match_target_res": False})  # only missing subkeys
+        self.assertEqual(baseline["dataset"], {"cache_latents_to_disk": False})
+
+        tagged = deepcopy(run)
+        tagged["backend"]["config"]["model_arch"] = "zimage:turbo"
+        tagged["model"]["base"] = "not/a-listed-path"
+        self.assertEqual(ai_toolkit_baseline(tagged)["entry"], "zimage:turbo")
+
+        # krea2:turbo and krea2:o_edit_turbo share one model path; the selector
+        # decides, and edit mode never comes from the baseline.
+        for selector, expected in (("krea2:turbo", "krea2:turbo"), ("krea2", None)):
+            with self.subTest(selector=selector):
+                turbo = deepcopy(run)
+                turbo["backend"]["config"] = {"model_arch": selector}
+                turbo["model"]["base"] = "krea/Krea-2-Turbo"
+                if expected is None:
+                    with self.assertRaisesRegex(ValueError, "no unambiguous entry"):
+                        ai_toolkit_baseline(turbo)
+                    continue
+                selected = ai_toolkit_baseline(turbo)
+                self.assertEqual(selected["entry"], expected)
+                self.assertNotIn("edit", selected["model"].get("model_kwargs", {}))
+        edit = deepcopy(run)
+        edit["backend"]["config"] = {"model_arch": "krea2:o_edit", "model_edit": True}
+        edit["model"]["base"] = "krea/Krea-2-Raw"
+        selected = ai_toolkit_baseline(edit)
+        self.assertEqual(selected["entry"], "krea2:o_edit")
+        self.assertNotIn("edit", selected["model"].get("model_kwargs", {}))
+
+    def test_ai_toolkit_architecture_without_a_baseline_requires_authored_scheduler_and_precision(self) -> None:
+        from kura.backends.ai_toolkit import ai_toolkit_baseline
+
+        run = {
+            "id": "sd3", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd3"}},
+            "model": {"base": "stabilityai/stable-diffusion-3-medium"}, "datasets": [{"id": "tiny"}],
+            "recipe": {"steps": 1, "seed": 1},
+        }
+        with self.assertRaisesRegex(ValueError, "noise_scheduler.*mixed_precision"):
+            ai_toolkit_baseline(run)
+        run["backend"]["config"].update({"mixed_precision": "bf16", "native_config": {"train": {"noise_scheduler": "flowmatch"}}})
+        self.assertEqual(ai_toolkit_baseline(run)["entry"], None)
+
+    def test_ai_toolkit_baseline_is_extracted_from_the_pinned_image(self) -> None:
+        from kura.backends.ai_toolkit import AI_TOOLKIT_PINNED_COMMIT, AI_TOOLKIT_PINNED_IMAGE, AI_TOOLKIT_PINNED_MODEL_ARCHS
+        from kura.backends.ai_toolkit_baseline import load_baseline
+        from kura.init_templates import __file__ as templates_file
+
+        upstream = load_baseline()["upstream"]
+        self.assertEqual(upstream["commit"], AI_TOOLKIT_PINNED_COMMIT)
+        self.assertEqual(upstream["image"], AI_TOOLKIT_PINNED_IMAGE)
+        self.assertIn(AI_TOOLKIT_PINNED_IMAGE, Path(templates_file).read_text(encoding="utf-8"))
+        arches = {entry["arch"] for entry in load_baseline()["entries"].values()}
+        self.assertLessEqual(arches, AI_TOOLKIT_PINNED_MODEL_ARCHS)
 
     def test_ai_toolkit_projects_typed_video_dataset_settings(self) -> None:
         run = {
@@ -925,15 +999,21 @@ class BackendSurfaceContractTests(unittest.TestCase):
             ("ltx2.5", "Lightricks/LTX-2.5", "sample.mp4", (), {"num_frames": 9, "fps": 24, "do_audio": False}),
             ("minimax_h3", "MiniMaxAI/MiniMax-H3", "sample.mp4", (), {"num_frames": 5, "fps": 24, "do_audio": False}),
             ("minimax_h3_ref2va", "MiniMaxAI/MiniMax-H3", "sample.mp4", ("portrait.png",), {"num_frames": 5, "fps": 24, "do_audio": False}),
-            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", "sample.png", (), {}),
         )
-        for arch, model, target, controls, dataset_config in cases:
+        # minimax_h3_vsa has no pinned UI entry, so its scheduler and precision
+        # must be authored (docs/adr/upstream-training-baseline.md).
+        cases = tuple((*case, {}) for case in cases) + (
+            ("minimax_h3_vsa", "MiniMaxAI/MiniMax-H3", "sample.png", (), {}, {
+                "mixed_precision": "bf16", "native_config": {"train": {"noise_scheduler": "flowmatch"}},
+            }),
+        )
+        for arch, model, target, controls, dataset_config, authored in cases:
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 run = {
                     "id": f"new-{arch.replace('.', '-')}",
                     "backend": {"name": "ai-toolkit", "config": {
-                        "model_arch": arch, "dataset_config": dataset_config,
+                        "model_arch": arch, "dataset_config": dataset_config, **authored,
                     }},
                     "model": {"base": model}, "datasets": [{"id": "tiny"}],
                     "recipe": {"steps": 1, "seed": 1},

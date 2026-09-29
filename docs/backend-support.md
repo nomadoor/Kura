@@ -120,6 +120,12 @@ below records the execution contract verified at that time.
 
 ## Support matrix
 
+AI-Toolkit now fills unset training settings from the pinned UI baseline
+(`docs/adr/upstream-training-baseline.md`). This changed the native
+configuration Kura generates. AI-Toolkit optimizer evidence recorded before
+that change describes the earlier configuration and needs a re-smoke on the
+current adapter before it supports a current claim.
+
 | Backend | Model family | Adapter | Status | Verified scope |
 | --- | --- | --- | --- | --- |
 | AI-Toolkit | SDXL | Generic native-config projection | ✅ | Local and RunPod one-step paths verified. Evidence: `ai-toolkit-sdxl-docker-2026-07-12`, `ai-toolkit-sdxl-runpod-2026-07-12` |

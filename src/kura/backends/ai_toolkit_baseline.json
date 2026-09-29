@@ -1,0 +1,1659 @@
+{
+ "entries": {
+  "ace_step_15": {
+   "arch": "ace_step_15",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ostris/ace_step_1.5_ComfyUI_files/ace_step_1.5_base_aio.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "ace_step_15_xl": {
+   "arch": "ace_step_15_xl",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ostris/ace_step_1.5_ComfyUI_files/ace_step_1.5_xl_base_aio.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "anima": {
+   "arch": "anima",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "",
+    "qtype_te": "",
+    "quantize": false,
+    "quantize_te": false
+   },
+   "name_or_path": "circlestone-labs/Anima-Base-v1.0-Diffusers",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "boogu_image": {
+   "arch": "boogu_image",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Boogu/Boogu-Image-0.1-Base",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "boogu_image_edit": {
+   "arch": "boogu_image_edit",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "match_target_res": false
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Boogu/Boogu-Image-0.1-Edit",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "chroma": {
+   "arch": "chroma",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "lodestones/Chroma1-Base",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "ernie_image": {
+   "arch": "ernie_image",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "baidu/ERNIE-Image",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "flex1": {
+   "arch": "flux",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ostris/Flex.1-alpha",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "flex2": {
+   "arch": "flex2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {
+     "control_dropout": 0.5,
+     "do_random_inpainting": true,
+     "inpaint_dropout": 0.5,
+     "inpaint_random_chance": 0.2,
+     "invert_inpaint_mask_chance": 0.2,
+     "random_blur_mask": true,
+     "random_dialate_mask": true
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ostris/Flex.2-preview",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "flux": {
+   "arch": "flux",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "black-forest-labs/FLUX.1-dev",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "flux2": {
+   "arch": "flux2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "match_target_res": false
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "black-forest-labs/FLUX.2-dev",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "flux2_klein_4b": {
+   "arch": "flux2_klein_4b",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "match_target_res": false
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "black-forest-labs/FLUX.2-klein-base-4B",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "flux2_klein_9b": {
+   "arch": "flux2_klein_9b",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "match_target_res": false
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "black-forest-labs/FLUX.2-klein-base-9B",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "flux_kontext": {
+   "arch": "flux_kontext",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "black-forest-labs/FLUX.1-Kontext-dev",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "hidream": {
+   "arch": "hidream",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "HiDream-ai/HiDream-I1-Full",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0002,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "shift",
+    "unload_text_encoder": false
+   }
+  },
+  "hidream_e1": {
+   "arch": "hidream_e1",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "HiDream-ai/HiDream-E1-1",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "hidream_o1": {
+   "arch": "hidream_o1",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {
+     "noise_scale": 8,
+     "noise_scale_inference": 8
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": false
+   },
+   "name_or_path": "HiDream-ai/HiDream-O1-Image",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "ideogram4": {
+   "arch": "ideogram4",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ideogram-ai/ideogram-4-fp8",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "krea2": {
+   "arch": "krea2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "krea/Krea-2-Raw",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "krea2:o_edit": {
+   "arch": "krea2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "edit": true,
+     "kv_cache": true,
+     "match_target_res": true
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "krea/Krea-2-Raw",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "krea2:o_edit_turbo": {
+   "arch": "krea2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "edit": true,
+     "kv_cache": true,
+     "match_target_res": true
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "krea/Krea-2-Turbo",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "krea2:turbo": {
+   "arch": "krea2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "krea/Krea-2-Turbo",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "ltx2": {
+   "arch": "ltx2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Lightricks/LTX-2",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "ltx2.3": {
+   "arch": "ltx2.3",
+   "dataset": {
+    "cache_latents_to_disk": true
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Lightricks/LTX-2.3/ltx-2.3-22b-dev.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "ltx2.5": {
+   "arch": "ltx2.5",
+   "dataset": {
+    "cache_latents_to_disk": true
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "convrot8",
+    "qtype_te": "convrot8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Lightricks/LTX-2.5",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "lumina2": {
+   "arch": "lumina2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": false,
+    "quantize_te": true
+   },
+   "name_or_path": "Alpha-VLLM/Lumina-Image-2.0",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "mageflow": {
+   "arch": "mageflow",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "microsoft/Mage-Flow-Base",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "mageflow_edit": {
+   "arch": "mageflow_edit",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "microsoft/Mage-Flow-Edit-Base",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "minimax_h3": {
+   "arch": "minimax_h3",
+   "dataset": {
+    "cache_latents_to_disk": true
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "convrot8",
+    "qtype_te": "nvfp4",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Comfy-Org/MiniMax-H3",
+   "train": {
+    "cache_text_embeddings": true,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "shift",
+    "unload_text_encoder": false
+   }
+  },
+  "minimax_h3_ref2va": {
+   "arch": "minimax_h3_ref2va",
+   "dataset": {
+    "cache_latents_to_disk": true
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "convrot8",
+    "qtype_te": "nvfp4",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Comfy-Org/MiniMax-H3",
+   "train": {
+    "cache_text_embeddings": true,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "shift",
+    "unload_text_encoder": false
+   }
+  },
+  "nucleus_image": {
+   "arch": "nucleus_image",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "NucleusAI/Nucleus-Image",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "omnigen2": {
+   "arch": "omnigen2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": false,
+    "quantize_te": true
+   },
+   "name_or_path": "OmniGen2/OmniGen2",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "prx_pixel": {
+   "arch": "prx_pixel",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Photoroom/prxpixel-t2i",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen25_omni": {
+   "arch": "qwen25_omni",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {
+     "instruction": "Describe this in detail."
+    },
+    "qtype": "convrot8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": false
+   },
+   "name_or_path": "ai-toolkit/Qwen2.5-Omni-7B/qwen2_5_omni_7b_convrot8.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen_image": {
+   "arch": "qwen_image",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Qwen/Qwen-Image",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen_image:2512": {
+   "arch": "qwen_image",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Qwen/Qwen-Image-2512",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen_image_2": {
+   "arch": "qwen_image_2",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "convrot8",
+    "qtype_te": "convrot8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Comfy-Org/Qwen-Image-2.1",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "shift",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen_image_edit": {
+   "arch": "qwen_image_edit",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Qwen/Qwen-Image-Edit",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen_image_edit_plus": {
+   "arch": "qwen_image_edit_plus",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "match_target_res": false
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Qwen/Qwen-Image-Edit-2509",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "qwen_image_edit_plus:2511": {
+   "arch": "qwen_image_edit_plus",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "match_target_res": false
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Qwen/Qwen-Image-Edit-2511",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "sd15": {
+   "arch": "sd1",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": false,
+    "quantize_te": false
+   },
+   "name_or_path": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "ddpm",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "sdxl": {
+   "arch": "sdxl",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": false,
+    "quantize_te": false
+   },
+   "name_or_path": "stabilityai/stable-diffusion-xl-base-1.0",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "ddpm",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "wan21:14b": {
+   "arch": "wan21",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Wan-AI/Wan2.1-T2V-14B-Diffusers",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "wan21:1b": {
+   "arch": "wan21",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": false,
+    "quantize_te": true
+   },
+   "name_or_path": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "wan21_i2v:14b": {
+   "arch": "wan21_i2v",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Wan-AI/Wan2.1-I2V-14B-720P-Diffusers",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "wan21_i2v:14b480p": {
+   "arch": "wan21_i2v",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "wan22_14b:t2v": {
+   "arch": "wan22_14b",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "train_high_noise": true,
+     "train_low_noise": true
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ai-toolkit/Wan2.2-T2V-A14B-Diffusers-bf16",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "wan22_14b_i2v": {
+   "arch": "wan22_14b_i2v",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {
+     "train_high_noise": true,
+     "train_low_noise": true
+    },
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ai-toolkit/Wan2.2-I2V-A14B-Diffusers-bf16",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  },
+  "wan22_5b": {
+   "arch": "wan22_5b",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "yue2": {
+   "arch": "yue2",
+   "dataset": {
+    "cache_latents_to_disk": true
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {
+     "abc_dropout": 0.5,
+     "ar_kl_weight": 0.2,
+     "cot": "full",
+     "sample_ar_repetition_penalty": 1.2
+    },
+    "qtype": "convrot8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": false
+   },
+   "name_or_path": "Comfy-Org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "zeta_chroma": {
+   "arch": "zeta_chroma",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": false,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "lodestones/Zeta-Chroma/zeta-chroma-base-x0-pixel-dino-distance.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "sigmoid",
+    "unload_text_encoder": false
+   }
+  },
+  "zimage": {
+   "arch": "zimage",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Tongyi-MAI/Z-Image",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "zimage:deturbo": {
+   "arch": "zimage",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "ostris/Z-Image-De-Turbo",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "zimage:turbo": {
+   "arch": "zimage",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "Tongyi-MAI/Z-Image-Turbo",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "weighted",
+    "unload_text_encoder": false
+   }
+  },
+  "zimage_l2p": {
+   "arch": "zimage_l2p",
+   "dataset": {
+    "cache_latents_to_disk": false
+   },
+   "model": {
+    "low_vram": true,
+    "model_kwargs": {},
+    "qtype": "qfloat8",
+    "qtype_te": "qfloat8",
+    "quantize": true,
+    "quantize_te": true
+   },
+   "name_or_path": "zhen-nan/L2P/model-1k-merge.safetensors",
+   "train": {
+    "cache_text_embeddings": false,
+    "content_or_style": "balanced",
+    "dtype": "bf16",
+    "loss_type": "mse",
+    "lr": 0.0001,
+    "noise_scheduler": "flowmatch",
+    "optimizer": "adamw8bit",
+    "optimizer_params": {
+     "weight_decay": 0.0001
+    },
+    "timestep_type": "linear",
+    "unload_text_encoder": false
+   }
+  }
+ },
+ "schema_version": 1,
+ "upstream": {
+  "base_arch": "flex1",
+  "commit": "31ddc709c35d3d3b820c636745397561f806b246",
+  "image": "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
+  "sources": {
+   "extensions_built_in/audio_models/ui.tsx": "34bb12d8f876b9f9aca18a2e7f08e39f881ed07df27b9c300154d186250c0608",
+   "extensions_built_in/diffusion_models/ui.tsx": "4c3da72ba6863b5c638a2823172a1e6ce770b3e1e5d2dc57bd52aff1837b43aa",
+   "extensions_built_in/flex2/ui.tsx": "77d3198d85a78db1f22dc76f23326105caa6baa5d5bc9354d4ab37a168a4058e",
+   "extensions_built_in/llm_models/ui.tsx": "78b9311108a1998058df4b6e40208fc2e2986055e992df3de5e934c4d66d37d7",
+   "ui/src/app/jobs/new/jobConfig.ts": "5621c6bb0e45a01327468f8c24e148b9a9c54a0bd809a99222356cb6af731cb8",
+   "ui/src/app/jobs/new/options.tsx": "40223e13adf4f192cb6ec13b3374e75e7b5a5c84aae6d7e186a23bac5727cec6",
+   "ui/src/app/jobs/new/utils.ts": "bac9080b8017a5743317e41c474cb280531411ed928d150c6e23574350471a63",
+   "ui/src/helpers/defaultSamples.ts": "696070498b8de68c54a00b7636c43a79a56b0828ce68fd62bbccb04b07a9d327"
+  }
+ }
+}
