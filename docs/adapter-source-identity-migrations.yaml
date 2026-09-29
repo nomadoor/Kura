@@ -8,6 +8,97 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: dataset-id-matches-directory-sd-scripts-2026-09-30
+    backend: sd-scripts
+    reason: >-
+      The shared manifest reader now refuses a dataset.yaml id that differs
+      from the dataset directory name. The id is not part of input identity,
+      so every accepted input projects and compiles exactly as before. The
+      2026-09-29 real-smoke datasets had recorded their staging directory name
+      as id; their manifests were corrected, and the corrected datasets
+      produce the same projection and command.
+    behavior_changed: false
+    evidence_ids:
+      - sd-scripts-sdxl-2026-09-29
+      - sd-scripts-anima-lora-2026-09-29
+      - sd-scripts-anima-lllite-2026-09-29
+      - sd-scripts-flux1-2026-09-29
+      - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+      - sd-scripts-avif-absent-image-probe-2026-09-29
+      - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2f0984d24a8c44112656f4b72bf049af3bbf118af05051573a8fcecb9c45e77c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e9ff80bbbc94d256554907ea557316eab705ed8a0a728c30258b0228aaf19a09
+  - id: dataset-id-matches-directory-musubi-tuner-2026-09-30
+    backend: musubi-tuner
+    reason: >-
+      The shared manifest reader now refuses a dataset.yaml id that differs
+      from the dataset directory name. The id is not part of input identity,
+      so every accepted input projects and compiles exactly as before. The
+      2026-09-29 real-smoke datasets had recorded their staging directory name
+      as id; their manifests were corrected, and the corrected datasets
+      produce the same projection and command.
+    behavior_changed: false
+    evidence_ids:
+      - musubi-framepack-2026-09-30-0201
+      - musubi-kandinsky5-lite-2026-09-29
+      - musubi-hunyuan-video-2026-09-29
+      - musubi-hunyuan-video-1-5-2026-09-29
+      - musubi-flux-kontext-2026-09-29
+      - musubi-flux2-klein-4b-2026-09-29
+      - musubi-hidream-o1-2026-09-29
+      - musubi-ideogram4-2026-09-29
+      - musubi-krea2-2026-09-29
+      - musubi-qwen-image-2026-09-29
+      - musubi-zimage-2026-09-29
+      - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+      - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7276982864b30738addc3decf29e077923cee0bb03b7d932435a0c752c24ecf5
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f6a96690cd1c419525e8ed58ecdd1c5d4e682e766fec58ae70d22b52fdd94fa9
+  - id: dataset-id-matches-directory-ai-toolkit-2026-09-30
+    backend: ai-toolkit
+    reason: >-
+      The shared manifest reader now refuses a dataset.yaml id that differs
+      from the dataset directory name. The id is not part of input identity,
+      so every accepted input projects and compiles exactly as before. The
+      2026-09-29 real-smoke datasets had recorded their staging directory name
+      as id; their manifests were corrected, and the corrected datasets
+      produce the same projection and command.
+    behavior_changed: false
+    evidence_ids:
+      - ai-toolkit-hidream-2026-09-30-0052
+      - ai-toolkit-qwen-image-2026-09-30-0040
+      - ai-toolkit-qwen-image-edit-2026-09-30-0040
+      - ai-toolkit-sd1-2026-09-29-2323
+      - ai-toolkit-sdxl-2026-09-29-2323
+      - ai-toolkit-anima-2026-09-29-2323
+      - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+      - ai-toolkit-zimage-2026-09-29-2323
+      - ai-toolkit-chroma-2026-09-29-2323
+      - ai-toolkit-flux-kontext-2026-09-29-2323
+      - ai-toolkit-qwen-image-2-2026-09-29-2323
+      - ai-toolkit-krea2-2026-09-29-2323
+      - ai-toolkit-flux-2026-09-29-2323
+      - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: d88692079b3957b78f9ddb1a2990a6c8add55854b209d60834e8a7a774ef04e7
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 92ee169eafb37ef312bf5557577aa620259a5f5533b93fc3532862dbd482f1b8
   - id: runpod-executor-stage-resolves-workspace-2026-09-29
     executor: runpod
     reason: >-

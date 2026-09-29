@@ -57,6 +57,21 @@ class DatasetManifestTests(unittest.TestCase):
 
             self.assertEqual(measured["identity"]["samples"][0]["caption"], caption)
 
+    def test_declared_id_must_match_the_dataset_directory(self) -> None:
+        row = {"id": "a", "files": [{"type": "file", "role": "target", "path": "a.png"}], "caption": {"text": "a"}}
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = self.make_dataset(Path(directory), [row], metadata="id: .tiny.creating\nitems_schema_version: 2\n")
+            (dataset / "a.png").write_bytes(b"png")
+            with self.assertRaisesRegex(ValueError, "does not match the dataset directory 'tiny'"):
+                measure_manifest(dataset)
+            (dataset / "dataset.yaml").write_text("items_schema_version: 2\n", encoding="utf-8")
+            self.assertEqual(validate_manifest(dataset)[0], 1)  # an omitted id is not a mismatch
+            (dataset / "dataset.yaml").write_text("id: tiny\nitems_schema_version: 2\n", encoding="utf-8")
+            link = Path(directory) / "linked"
+            link.symlink_to(dataset, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "does not match the dataset directory 'linked'"):
+                measure_manifest(link)  # judged by the selected name, not the symlink target
+
     def test_legacy_row_is_not_v2(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dataset = self.make_dataset(Path(directory), [
