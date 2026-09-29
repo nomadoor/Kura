@@ -37,24 +37,41 @@ A Windows-side agent can call `wsl.exe -d <distro> --cd <workspace> --
 intact. Shell quoting breaks once PowerShell or cmd sits in the middle, and a
 non-login WSL shell does not have `uv` on `PATH`.
 
-**Hazard observed.** All WSL distributions share one VM and kernel. Starting a
-fresh systemd-enabled Ubuntu 24.04 distribution removed the shared
-`WSLInterop` binfmt registration, so Windows executables stopped running from
-the user's existing distribution. The same session also lost Docker Desktop's
-CLI mount. The likely cause is `systemd-binfmt` resetting `binfmt_misc`; this
-is inferred, not proven. Restoring the registration with `sudo` and restarting
-Docker Desktop repaired it.
+**Hazard observed.** All WSL distributions share one VM, one kernel, and one
+`binfmt_misc`. On 2026-09-29 and 2026-09-30, a disposable systemd-enabled
+Ubuntu 24.04 distribution twice left the user's own distribution without the
+shared `WSLInterop` registration, so Windows executables stopped running there.
+Docker Desktop's CLI mount under `/mnt/wsl` also disappeared both times.
+Restoring the registration with `sudo` and restarting Docker Desktop repaired
+it. The disposable distribution was controlled on 2026-09-30:
+
+| Disposable distribution | WSLInterop afterwards |
+| --- | --- |
+| Docker Engine installed and a GPU container run, then `wsl --unregister` while running | lost |
+| systemd booted, then left idle until WSL stopped it | lost |
+| systemd booted, then `wsl --terminate`, twice | kept |
+| stopped, then `wsl --unregister` | kept |
+| systemd booted and running | kept |
+
+WSL already neutralizes `systemd-binfmt`: its generated
+`/run/systemd/generator/systemd-binfmt.service.d/override.conf` empties
+`ExecStop` and re-registers `WSLInterop` on start. So the stock unit's
+`--unregister` on stop is not the cause, although this ADR first suspected it.
+The root cause is not established. The losses followed an idle stop and an
+unregister of a running distribution; explicit termination did not reproduce
+them.
 
 ## Decision (proposed)
 
 1. On Windows, Kura runs inside a **Kura-owned WSL distribution**. The CLI, the
    workspace, and the Docker Engine with the NVIDIA Container Toolkit all live
    there. Docker Desktop is not required.
-2. The distribution **must not disturb the user's other distributions**. Before
-   the distribution is ever started with systemd, the installer masks
-   `systemd-binfmt` or ships a binfmt configuration that re-registers
-   `WSLInterop`, or it starts `dockerd` without systemd. Whichever guard is
-   chosen must pass a reproduction of the hazard above before it ships.
+2. The distribution **must not disturb the user's other distributions**. The
+   guard is not chosen yet: `systemd-binfmt` hardening alone is already
+   provided by WSL and does not explain the losses. Whatever guard ships must
+   pass a reproduction of the idle-stop and running-unregister cases above,
+   checking the user's distribution for both `WSLInterop` and Docker Desktop's
+   `/mnt/wsl` mount, before any installer ships.
 3. A Windows-side shim, `kura.cmd`, forwards arguments through `wsl.exe` with
    the absolute `uv` path. Agents and users type `kura ...`, and the shim
    removes the quoting and `PATH` traps.
@@ -66,9 +83,12 @@ Docker Desktop repaired it.
 
 ## Open verification before implementation
 
-- Reproduce the interop hazard on a disposable distribution and prove the
-  chosen guard prevents it. The user's own distribution must be able to run a
-  Windows executable before and after the Kura distribution starts.
+- Find the root cause of the idle-stop and running-unregister losses, then
+  prove the guard prevents them. The user's own distribution must run a Windows
+  executable and keep Docker Desktop's CLI before, during, and after the Kura
+  distribution's start, idle stop, termination, and unregister. Each failed
+  attempt needs the user's `sudo` to repair, so a reproduction should run on a
+  machine or VM that is not the user's working environment.
 - Decide how the installer obtains the distribution and whether it needs one
   administrator prompt and a reboot on a machine that has never had WSL.
 - Confirm what happens to a long training run when the Windows-side agent
