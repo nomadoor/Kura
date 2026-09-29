@@ -243,6 +243,16 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
     if not isinstance(metadata, dict) or type(metadata.get("items_schema_version")) is not int or metadata["items_schema_version"] != 2:
         raise ValueError("dataset.yaml requires items_schema_version: 2")
+    # A run selects a dataset by its directory name. A different declared id
+    # would record one name while training another, so the two must agree.
+    # The unresolved name is compared so a symlinked dataset directory is not
+    # judged by its target's name.
+    declared_id = metadata.get("id")
+    if declared_id is not None and declared_id != directory.name:
+        raise ValueError(
+            f"dataset.yaml id {declared_id!r} does not match the dataset directory {directory.name!r}; "
+            "rename the directory or correct the id"
+        )
     excluded_files, excluded_directories = _exclusions(metadata, root)
     ids: set[str] = set()
     portable_paths: dict[str, str] = {}
