@@ -1,0 +1,63 @@
+schema_version: 1
+campaign: real one-step smokes of the manifest-v2 handoff across backend selectors
+observed_at: 2026-09-29
+harness: scripts/real_smoke.py (prepare -> kura run execute -> verify -> evidence)
+common_recipe:
+  optimizer_steps: 1
+  seed: 1
+  purpose: handoff, entrypoint, publication, and lifecycle only; no LoRA quality claim
+runs:
+  sd-scripts-sdxl-2026-09-29:
+    run_id: 20260929-1509_sd-scripts-sdxl_27d0
+    model: stabilityai/stable-diffusion-xl-base-1.0
+    dataset: real-smoke-image
+    image: nomadoor/kura-sd-scripts:dev
+    losses:
+    - 0.00704
+    - 0.00704
+    outputs:
+    - 20260929-1509_sd-scripts-sdxl_27d0.safetensors
+    input_postflight: matched
+    publication: completed
+  sd-scripts-anima-lora-2026-09-29:
+    run_id: 20260929-1509_sd-scripts-anima-lora_2b95
+    model: circlestone-labs/Anima
+    dataset: real-smoke-image
+    image: nomadoor/kura-sd-scripts:dev
+    losses:
+    - 0.00551
+    - 0.00551
+    outputs:
+    - 20260929-1509_sd-scripts-anima-lora_2b95.safetensors
+    input_postflight: matched
+    publication: completed
+  sd-scripts-anima-lllite-2026-09-29:
+    run_id: 20260929-1509_sd-scripts-anima-lllite_99ad
+    model: circlestone-labs/Anima
+    dataset: real-smoke-image-control
+    image: nomadoor/kura-sd-scripts:dev
+    losses:
+    - 0.00639
+    - 0.00639
+    outputs:
+    - 20260929-1509_sd-scripts-anima-lllite_99ad.safetensors
+    input_postflight: matched
+    publication: completed
+  sd-scripts-flux1-2026-09-29:
+    run_id: 20260929-1509_sd-scripts-flux1_5fc3
+    model: Comfy-Org/flux1-dev
+    dataset: real-smoke-image
+    image: nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+    losses:
+    - 0.0642
+    - 0.0642
+    outputs:
+    - 20260929-1509_sd-scripts-flux1_5fc3.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-09-29T15:23:31.166195+09:00'
+    pod_stopped_at: '2026-09-29T15:29:58.702755+09:00'
+scope: Each listed selector completed one optimizer step with a finite loss, published
+  its adapter, and matched its input postflight; RunPod runs also stopped their Pod.
