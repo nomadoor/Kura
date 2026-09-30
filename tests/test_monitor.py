@@ -17,6 +17,7 @@ from rich.console import Console
 
 from kura.monitor import RunSummary, _format_time_cell, _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
 from kura.container_scripts import hf_download
+from kura.tui import KuraMonitorApp
 
 
 class MonitorProjectionTests(unittest.TestCase):
@@ -118,6 +119,22 @@ class MonitorProjectionTests(unittest.TestCase):
         self.assertEqual(summary.key_config["alpha"], 4)
         self.assertEqual(summary.key_config["lr"], 0.0001)
         self.assertEqual(summary.key_config["batch_size"], 2)
+
+    def test_monitor_isolates_a_run_config_the_adapter_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rejected = root / "runs" / "rejected"
+            current = root / "runs" / "current"
+            rejected.mkdir(parents=True)
+            current.mkdir(parents=True)
+            run = {"id": "rejected", "type": "train", "recipe": {"steps": 1, "seed": 1}, "backend": {"name": "musubi-tuner", "config": {"architecture": "hunyuan_video", "extra_args": ["--blocks_to_swap", "36"]}}}
+            (rejected / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            (current / "run.yaml").write_text("id: current\ntype: train\nrecipe: {steps: 1, seed: 1}\n", encoding="utf-8")
+            summaries = {item.id: item for item in KuraMonitorApp(root).collect_summaries_cached()}
+        self.assertEqual(summaries["rejected"].state, "unreadable")
+        self.assertIn("--blocks_to_swap", summaries["rejected"].activity)
+        self.assertNotEqual(summaries["current"].state, "unreadable")
+
     def test_sparkline_tracks_increasing_values(self) -> None:
         line = loss_sparkline([1, 2, 3, 4], width=4)
         self.assertEqual(line, "▁▃▆█")
