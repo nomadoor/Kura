@@ -123,26 +123,29 @@ def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: 
     """Build a typed, read-only summary of all known runs in a workspace."""
 
     workspace = Path(workspace)
-    run_ids = _collect_run_ids(workspace)
-    summaries: list[RunSummary] = []
-    for run_id in run_ids:
-        run_dir = workspace / "runs" / run_id
-        try:
-            summaries.append(_collect_one_run(workspace, run_dir, run_id, loss_tail=loss_tail, stale_after=stale_after))
-        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
-            summaries.append(
-                RunSummary(
-                    id=run_id,
-                    experiment=None,
-                    type=None,
-                    executor=None,
-                    state="unreadable",
-                    run_dir=run_dir,
-                    last_updated=_latest_mtime(run_dir / "run.yaml", run_dir / "resolved" / "manifest.lock.yaml", run_dir / "status.json"),
-                    activity=str(exc),
-                )
-            )
-    return summaries
+    return [
+        collect_run_summary(workspace, run_id, loss_tail=loss_tail, stale_after=stale_after)
+        for run_id in _collect_run_ids(workspace)
+    ]
+
+
+def collect_run_summary(workspace: Path, run_id: str, *, loss_tail: int = 80, stale_after: float = 90.0) -> RunSummary:
+    """Summarize one run, isolating a run Kura can no longer read as ``unreadable``."""
+
+    run_dir = Path(workspace) / "runs" / run_id
+    try:
+        return _collect_one_run(workspace, run_dir, run_id, loss_tail=loss_tail, stale_after=stale_after)
+    except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        return RunSummary(
+            id=run_id,
+            experiment=None,
+            type=None,
+            executor=None,
+            state="unreadable",
+            run_dir=run_dir,
+            last_updated=_latest_mtime(run_dir / "run.yaml", run_dir / "resolved" / "manifest.lock.yaml", run_dir / "status.json"),
+            activity=str(exc),
+        )
 
 
 def loss_sparkline(values: Iterable[float | int], *, width: int = 24) -> str:
@@ -232,7 +235,7 @@ def render_watch(workspace: Path, run_id: str, *, events_tail: int = 8, full_con
 
     workspace = Path(workspace)
     run_dir = workspace / "runs" / run_id
-    summary = _collect_one_run(workspace, run_dir, run_id, loss_tail=10_000, stale_after=90.0)
+    summary = collect_run_summary(workspace, run_id, loss_tail=10_000, stale_after=90.0)
     terminal = shutil.get_terminal_size((120, 32))
     width = terminal.columns
     status = _read_mapping(run_dir / "status.json")

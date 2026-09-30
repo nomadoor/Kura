@@ -26,7 +26,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Static
 
-from kura.monitor import ACTIVE_STATES, DRAFT_STATE, RunDataset, RunSummary, _collect_one_run, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, loss_sparkline
+from kura.monitor import ACTIVE_STATES, DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline
 
 
 FG = "#c5cdf0"
@@ -301,7 +301,7 @@ class KuraMonitorApp(App[None]):
             if cached and cached[0] == fingerprint and (cached[1].state or "").lower() not in ACTIVE_STATES:
                 summaries.append(cached[1])
                 continue
-            summary = _collect_one_run(self.workspace, run_dir, run_id, loss_tail=80, stale_after=self.stale_after)
+            summary = collect_run_summary(self.workspace, run_id, loss_tail=80, stale_after=self.stale_after)
             self._summary_cache[run_id] = (fingerprint, summary)
             summaries.append(summary)
         self.hidden_draft_count = 0
