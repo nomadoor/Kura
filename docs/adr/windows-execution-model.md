@@ -1,18 +1,17 @@
-# ADR: Windows users run Kura in a Kura-owned WSL distribution
+# ADR: Windows users run Kura in their own WSL distribution
 
-Status: accepted owner direction (2026-09-30); the guard and the installer are not yet verified.
-
-Date: 2026-09-30
+Status: accepted owner decision (2026-09-30). Supersedes the 2026-09-30
+direction toward a Kura-owned WSL distribution.
 
 ## Context
 
 Most ComfyUI users run Windows, and most of them are not developers. Kura
 trains in Linux containers, so a Windows install always involves the WSL2
-virtual machine: Docker Desktop runs its engine there too. The open question
-is where the Kura CLI and workspace live.
+virtual machine: Docker Desktop runs its engine there too. The question is
+where the Kura CLI, the workspace, and the Docker engine live.
 
-Measured on 2026-09-29 (RTX 4070 Ti, WSL2, Docker Desktop). Each read was made
-from a container using the same data:
+Measured on 2026-09-29 (RTX 4070 Ti, WSL 2.7.14, Docker Desktop). Each read
+was made from a container using the same data:
 
 | Read | WSL ext4 workspace | Windows NTFS workspace (`/mnt/c`) |
 | --- | --- | --- |
@@ -20,30 +19,25 @@ from a container using the same data:
 | 4 GiB file, cached | 4700 to 14700 MiB/s | about 250 MiB/s (no cache benefit) |
 | `stat` on 3000 small files | 0.03 s | 3.2 s |
 
-A native Windows CLI with an NTFS workspace pays that cost on every model load
-and dataset scan. It also meets every POSIX mismatch: symlinks without Developer
-Mode, `os.getuid`, path separators, CRLF, and 8.3 short names. The Windows CI
-job shows those gaps today. Developer Mode is not an acceptable requirement for
-the target users.
+Native Windows is not viable today. Kura's dataset reader relies on no-follow,
+directory-relative file opening, which Windows Python lacks. It also meets the
+POSIX gaps the Windows CI job records. Developer Mode is not acceptable for the
+target users.
 
-A Docker Engine installed directly in a WSL distribution runs GPU containers
-without Docker Desktop. This was verified with Docker 29.8.1, the NVIDIA
-Container Toolkit, and `nvidia-smi` in a CUDA container. Removing Docker Desktop
-removes its tray process, its "not running" failures, its update breakage, and
-its licensing questions.
+Two layouts were considered:
 
-A Windows-side agent can call `wsl.exe -d <distro> --cd <workspace> --
-<uv> run kura ...`. Output, exit codes, and UTF-8 text cross the boundary
-intact. Shell quoting breaks once PowerShell or cmd sits in the middle, and a
-non-login WSL shell does not have `uv` on `PATH`.
+- **A. A Kura-owned WSL distribution.** An installer adds a separate
+  distribution holding Kura, the workspace, and Docker Engine with the NVIDIA
+  Container Toolkit, without Docker Desktop.
+- **B. The user's own WSL distribution.** Kura lives in the Ubuntu the user
+  already has, or the one `wsl --install` creates, and uses Docker Desktop's
+  WSL integration. This is the documented path today.
 
-**Hazard observed.** All WSL distributions share one VM, one kernel, and one
-`binfmt_misc`. On 2026-09-29 and 2026-09-30, a disposable systemd-enabled
-Ubuntu 24.04 distribution twice left the user's own distribution without the
-shared `WSLInterop` registration, so Windows executables stopped running there.
-Docker Desktop's CLI mount under `/mnt/wsl` also disappeared both times.
-Restoring the registration with `sudo` and restarting Docker Desktop repaired
-it. The disposable distribution was controlled on 2026-09-30:
+**Hazard observed with A.** All WSL distributions share one VM, one kernel,
+and one `binfmt_misc`. On 2026-09-29 and 2026-09-30, a disposable
+systemd-enabled Ubuntu 24.04 distribution twice removed the user's shared
+`WSLInterop` registration and Docker Desktop's `/mnt/wsl` CLI mount.
+Restoring them required the user's `sudo` and a Docker Desktop restart.
 
 | Disposable distribution | WSLInterop afterwards |
 | --- | --- |
@@ -53,45 +47,63 @@ it. The disposable distribution was controlled on 2026-09-30:
 | stopped, then `wsl --unregister` | kept |
 | systemd booted and running | kept |
 
-WSL already neutralizes `systemd-binfmt`: its generated
-`/run/systemd/generator/systemd-binfmt.service.d/override.conf` empties
-`ExecStop` and re-registers `WSLInterop` on start. So the stock unit's
-`--unregister` on stop is not the cause, although this ADR first suspected it.
-The root cause is not established. The losses followed an idle stop and an
-unregister of a running distribution; explicit termination did not reproduce
-them.
+WSL already empties `systemd-binfmt`'s `ExecStop` through its generated
+override, so that unit is not the cause. The root cause is unknown.
 
-## Decision (proposed)
+Losing interop also breaks Kura itself: `src/kura/storage.py` calls
+`powershell.exe` through interop for Windows drive facts, so
+`kura doctor disk` degrades as well.
 
-1. On Windows, Kura runs inside a **Kura-owned WSL distribution**. The CLI, the
-   workspace, and the Docker Engine with the NVIDIA Container Toolkit all live
-   there. Docker Desktop is not required.
-2. The distribution **must not disturb the user's other distributions**. The
-   guard is not chosen yet: `systemd-binfmt` hardening alone is already
-   provided by WSL and does not explain the losses. Whatever guard ships must
-   pass a reproduction of the idle-stop and running-unregister cases above,
-   checking the user's distribution for both `WSLInterop` and Docker Desktop's
-   `/mnt/wsl` mount, before any installer ships.
-3. A Windows-side shim, `kura.cmd`, forwards arguments through `wsl.exe` with
-   the absolute `uv` path. Agents and users type `kura ...`, and the shim
-   removes the quoting and `PATH` traps.
-4. The workspace stays on ext4. Windows reaches datasets and outputs through
-   Explorer at `\\wsl.localhost\<distro>\...`; the installer adds shortcuts.
-   ComfyUI stays on Windows and is reached over HTTP.
-5. Native Windows stays unsupported. The README says so, and the Windows CI job
-   stays non-blocking as a record of the gaps.
+## Decision
 
-## Open verification before implementation
+1. **Windows users run Kura inside their own WSL distribution (B).** The CLI
+   and the workspace live on its ext4 filesystem, under the user's home and
+   never under `/mnt/c`. Docker Desktop's WSL integration provides the engine.
+2. **A is deferred, not rejected.** In A, the idle stop and the unregister
+   that caused the losses are routine operations: the Kura distribution idles
+   after every session, and uninstall is an unregister. Shipping A with an
+   unexplained hazard would break the owner's rule of not disturbing existing
+   environments. For users without WSL, A and B start the same way (`wsl
+   --install` plus one Ubuntu), so A's isolation benefit reaches only users who
+   already run WSL, and they are the ones the hazard would hit.
+3. **Docker Desktop is the default engine.** Its costs (a tray process, "not
+   running" failures, update breakage, licensing terms) are known, and
+   `kura doctor docker` already diagnoses them. Installing Docker Engine into
+   the user's distribution changes their systemd setup. It is not a supported
+   second path. Kura does not own a Docker Engine, which would mean
+   maintaining its base OS, CUDA, and security updates as another product.
+4. **Windows-side agents reach Kura through a shim, when one is built.** A
+   `kura.cmd` calls `wsl.exe -d <distro> --cd <workspace> -- <absolute uv>
+   run kura ...` with the distribution name recorded in a small setting. It
+   removes the quoting and `PATH` traps. The same shim works for A.
+5. **Native Windows stays unsupported.** The README says so, and the Windows
+   CI job stays non-blocking as a record of the gaps.
 
-- Find the root cause of the idle-stop and running-unregister losses, then
-  prove the guard prevents them. The user's own distribution must run a Windows
-  executable and keep Docker Desktop's CLI before, during, and after the Kura
-  distribution's start, idle stop, termination, and unregister. Each failed
-  attempt needs the user's `sudo` to repair, so a reproduction should run on a
-  machine or VM that is not the user's working environment.
-- Decide how the installer obtains the distribution and whether it needs one
-  administrator prompt and a reboot on a machine that has never had WSL.
-- Confirm what happens to a long training run when the Windows-side agent
-  process exits during a `wsl.exe` call.
-- Decide how an existing Docker Desktop user migrates. The two engines must not
-  both claim the `docker` command in one distribution.
+## Conditions that would reopen A
+
+- The root cause of the interop loss is found, and a guard passes
+  reproductions of both the idle-stop case and the running-unregister case.
+  Any A uninstall must still terminate the distribution before unregistering
+  it.
+- Docker Desktop becomes unusable for the target users, for example through a
+  licensing change or a WSL integration regression.
+- Supporting the variety of user distributions (non-Ubuntu, systemd disabled,
+  old libraries) turns out to cost more than owning one distribution.
+- The loss turns out to happen after any systemd distribution stops,
+  including the user's own. That would be a WSL bug affecting A and B equally.
+
+## Open verification
+
+These are needed for B and do not require a GPU, so they can run in a Windows
+virtual machine instead of the owner's working machine:
+
+- The `kura.cmd` shim: arguments with spaces, Japanese text, and quotes; exit
+  codes; UTF-8; and Ctrl-C.
+- What happens to a long `kura run execute` behind `wsl.exe` when the
+  Windows-side agent process exits.
+- The first-run path on a Windows machine that never had WSL: `wsl --install`,
+  Docker Desktop with WSL integration, then `kura doctor`.
+
+Reproducing the interop loss for A needs a spare physical machine, because the
+Docker Engine and GPU case cannot run in a VM without GPU passthrough. It must
+not run on the owner's working machine.
