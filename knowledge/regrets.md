@@ -37,3 +37,7 @@ Entry rules:
   source: agent (2026-07-03, seeded)
 - paired-control retraining uses fewer items, a larger batch, and a lower LR while preserving only the prior epoch count -> "Compare optimizer steps and the rough update budget against the previously effective run; equal epochs do not preserve learning strength after all three changes."
   source: run 20260825-0914_lllite-perspective-final-v1-base-lr5e5-b2-12epoch_4a7b
+- dataset captions or render prompts are tag lists while the target model is
+  prompted in natural language -> "Captions/prompts are tags; <model> expects
+  natural language — re-caption or confirm tags are intended."
+  source: run 20260930-1102_vivi-qwen21-character-test_571d
