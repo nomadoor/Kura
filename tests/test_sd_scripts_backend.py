@@ -26,6 +26,7 @@ from kura.backends.sd_scripts import compile_sd_scripts
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, posix_only
 
 
 def base_run(architecture: str = "sd15", mode: str = "lora") -> dict:
@@ -73,6 +74,7 @@ def write_safetensors(path: Path, keys: list[str], metadata: dict[str, str] | No
     path.write_bytes(struct.pack("<Q", len(encoded)) + encoded + body)
 
 
+@posix_only(DATASET_IO)
 class SdScriptsManifestCompileTests(unittest.TestCase):
     """Every built-in LoRA architecture compiles through the manifest profile/codec path."""
 

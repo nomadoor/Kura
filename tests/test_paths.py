@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from kura.paths import inspect_workspace_symlinks, to_container, to_host
+from tests.platform_support import POSIX_PATHS, posix_only
 
 
 class PathNamespaceTests(unittest.TestCase):
@@ -16,6 +17,7 @@ class PathNamespaceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unsafe workspace-relative path"):
                 to_container("/etc/passwd")
 
+    @posix_only(POSIX_PATHS)
     def test_symlink_inspection_ignores_malformed_mount_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

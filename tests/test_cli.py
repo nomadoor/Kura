@@ -53,6 +53,7 @@ from kura.tui import KuraMonitorApp, RunRow, _compact_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only
 
 
 
@@ -185,6 +186,7 @@ class InitCommandTests(unittest.TestCase):
                 ["notes.md", "plan.md", "run.yaml", "status.json"],
             )
 
+    @posix_only(DATASET_IO)
     def test_run_compile_rejects_musubi_dataset_without_images(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -292,6 +294,7 @@ class InitCommandTests(unittest.TestCase):
         self.assertIn("model_downloads must map model keys to download mappings", stderr.getvalue())
         self.assertFalse(resolved_exists)
 
+    @posix_only(DATASET_IO)
     def test_dataset_validate_checks_referenced_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -307,6 +310,7 @@ class InitCommandTests(unittest.TestCase):
             (dataset / "images" / "001.png").write_bytes(b"\x89PNG\r\n\x1a\n")
             self.assertEqual(cmd_dataset_validate(argparse.Namespace(dataset_dir=str(dataset))), 0)
 
+    @posix_only(DATASET_IO)
     def test_dataset_validate_rejects_paths_outside_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -323,6 +327,7 @@ class InitCommandTests(unittest.TestCase):
 
             self.assertIn("path must stay inside the dataset directory", stderr.getvalue())
 
+    @posix_only(DATASET_IO)
     def test_provider_only_manifest_v2_runpod_compiles_and_plans_the_selected_transfer(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -748,6 +753,7 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertFalse(run.exists())
 
+    @posix_only(POSIX_PATHS)
     def test_fix_permissions_dry_run_reports_root_owned_targets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -769,6 +775,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertTrue(payload["dry_run"])
             self.assertEqual(payload["root_owned"]["count"], 1)
 
+    @posix_only(POSIX_PATHS)
     def test_fix_links_rewrites_repairable_container_private_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -795,6 +802,7 @@ class DoctorDockerTests(unittest.TestCase):
                 "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors",
             )
 
+    @posix_only(POSIX_PATHS)
     def test_fix_links_reports_unmapped_absolute_symlink_without_deleting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -814,6 +822,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["actions"][0]["repairable"], False)
             self.assertEqual(os.readlink(link), "/opt/models/bad.safetensors")
 
+    @posix_only(POSIX_PATHS)
     def test_doctor_disk_reports_workspace_storage_and_warnings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -913,6 +922,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(issue["severity"], "advisory")
             self.assertEqual(issue["size_bytes"], 32 * 1024**3)
 
+    @posix_only(POSIX_PATHS)
     def test_doctor_disk_warns_about_container_private_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3988,6 +3998,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         report = freeze_fixture(run, destination.parent)
         return report["datasets"][0]["native"]["folder_path"]
 
+    @posix_only(DATASET_IO)
     def test_default_compile_writes_runnable_yaml_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "ai-toolkit"
@@ -4057,6 +4068,7 @@ class AiToolkitBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not written by the verified dataset handoff"):
                 compile_ai_toolkit(run, destination)
 
+    @posix_only(DATASET_IO)
     def test_resume_compiles_absolute_target_and_hard_fail_runner(self) -> None:
         run = self._run()
         run["recipe"]["steps"] = 100
@@ -4080,6 +4092,7 @@ class AiToolkitBackendTests(unittest.TestCase):
         self.assertIn("/workspace/runs/ai-toolkit-example/resolved/training-state-source.lock.json", script)
         self.assertIn("state-1", command["argv"][2] + " ".join(command["argv"][3:]))
 
+    @posix_only(DATASET_IO)
     def test_compile_rejects_non_mapping_native_config_override(self) -> None:
         projection_run = self._run()
         run = deepcopy(projection_run)
@@ -4090,6 +4103,7 @@ class AiToolkitBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "backend.config.native_config"):
                 compile_ai_toolkit(run, destination)
 
+    @posix_only(DATASET_IO)
     def test_compile_rejects_native_steps_that_duplicate_recipe(self) -> None:
         projection_run = self._run()
         run = deepcopy(projection_run)
@@ -4248,6 +4262,7 @@ class MusubiBackendTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "save_every_n_steps must be a positive integer"):
                     command_musubi_tuner(run)
 
+    @posix_only(DATASET_IO)
     def test_compile_musubi_writes_dataset_toml_and_command_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "musubi"
@@ -4870,6 +4885,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("--timestep_boundary 0.875", script)
         self.assertNotIn("KURA_MUSUBI_TARGET_FPS", spec["env"])
 
+    @posix_only(DATASET_IO)
     def test_command_musubi_flux2_dev_uses_dev_contract(self) -> None:
         run = self._run()
         run["model"]["base"] = "black-forest-labs/FLUX.2-dev"
@@ -5196,6 +5212,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertLess(script.index("expected_format"), script.index("src/musubi_tuner/flux_2_cache_latents.py"))
         self.assertLess(script.index("src/musubi_tuner/flux_2_train_network.py"), script.rindex("lora_unet_*"))
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_links_workspace_cache_relatively(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -5280,6 +5297,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertIn("split_files/text_encoders/qwen_3_4b.safetensors", script)
         self.assertIn("--vae /workspace/cache/models/musubi/Comfy-Org--vae-text-encorder-for-flux-klein-4b/vae/split_files/vae/flux2-vae.safetensors", script)
 
+    @posix_only(DATASET_IO)
     def test_command_musubi_resolves_known_flux2_klein_base_9b_bundle(self) -> None:
         run = self._run()
         run["model"] = {"base": "black-forest-labs/FLUX.2-klein-base-9B"}
@@ -5305,6 +5323,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_8b_text_encoder")
 
+    @posix_only(DATASET_IO)
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
         run = self._run()
         run["model"] = {"base": "krea/Krea-2-Raw"}
@@ -5344,6 +5363,7 @@ class MusubiBackendTests(unittest.TestCase):
         self.assertEqual(expected["vae"], "safetensors")
         self.assertEqual(expected["text_encoder"], "safetensors")
 
+    @posix_only(DATASET_IO)
     def test_command_musubi_resolves_known_minimax_h3_bundle(self) -> None:
         run = self._run()
         run["model"] = {"base": "Comfy-Org/MiniMax-H3"}
@@ -5664,6 +5684,7 @@ class DockerLifecycleTests(unittest.TestCase):
         records = _model_download_preflight_report(run, estimate, executor="runpod")
         self.assertIn(("model-metadata-connectivity", "error"), {(item["check"], item["severity"]) for item in records})
 
+    @posix_only(POSIX_PATHS)
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -5691,6 +5712,7 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertIn('"/workspace/runs/$KURA_RUN_ID/checkpoints"', command_text)
         self.assertIn('exec "$@" >> "$KURA_LOG_PATH" 2>&1', command_text)
 
+    @posix_only(POSIX_PATHS)
     def test_docker_mount_sources_are_resolved_from_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -5708,10 +5730,20 @@ class DockerLifecycleTests(unittest.TestCase):
         )
 
     def test_docker_preflight_creates_writable_mount_sources(self) -> None:
+        class Usage:
+            total = 500 * 1024**3
+            used = 100 * 1024**3
+            free = 400 * 1024**3
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
-            with patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            # The free-space floor is tested separately; this test must not
+            # depend on how full the machine running it is.
+            with (
+                patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
+            ):
                 docker_preflight(root, mounts)
             self.assertTrue((root / "cache" / "huggingface").is_dir())
 
@@ -5971,6 +6003,7 @@ class DockerLifecycleTests(unittest.TestCase):
             self.assertEqual(status["total_steps"], 100)
             self.assertEqual(status["seconds_per_iter"], 2.49)
 
+    @posix_only(POSIX_PATHS)
     def test_reconcile_materializes_musubi_stdout_progress_and_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
@@ -6349,6 +6382,7 @@ class LaunchPhaseTests(unittest.TestCase):
              patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=subprocess.TimeoutExpired(["ssh"], 10)):
             _start_ssh_master(details)
 
+    @posix_only(POSIX_PATHS)
     def test_ssh_reuse_is_disabled_for_an_unsafe_socket_directory(self) -> None:
         details = {"ip": "203.0.113.5", "port": 22115, "key": "/tmp/key"}
         with tempfile.TemporaryDirectory() as directory:
@@ -6413,6 +6447,7 @@ class RunDiscardTests(unittest.TestCase):
         (run_dir / "notes.md").write_text("# Notes\n", encoding="utf-8")
         return run_dir
 
+    @posix_only(POSIX_PATHS)
     def test_run_discard_defaults_to_dry_run(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -8551,6 +8586,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 1)
 
+    @posix_only(POSIX_PATHS)
     def test_run_download_materializes_outputs_at_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -8582,6 +8618,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["downloaded_run"], "downloads/example")
             self.assertFalse((run_dir / "outputs" / state_dir.name).exists())
 
+    @posix_only(POSIX_PATHS)
     def test_run_download_records_recovery_without_publishing_it_as_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -8615,6 +8652,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(sum(item.get("event") == "run_recovery_artifacts_downloaded" for item in events), 1)
 
+    @posix_only(POSIX_PATHS)
     def test_run_download_normalizes_ai_toolkit_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

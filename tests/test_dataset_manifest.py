@@ -11,8 +11,10 @@ from unittest.mock import patch
 
 from kura.cli import cmd_dataset_draft, cmd_dataset_validate
 from kura.dataset_manifest import draft_manifest, measure_manifest, validate_manifest
+from tests.platform_support import NATIVE_WINDOWS, DATASET_IO, posix_only
 
 
+@posix_only(DATASET_IO)
 class DatasetManifestTests(unittest.TestCase):
     def make_dataset(self, root: Path, rows: list[dict], metadata: str = "id: tiny\nitems_schema_version: 2\n") -> Path:
         dataset = root / "tiny"
@@ -425,3 +427,15 @@ class DatasetManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeWindowsRefusalTests(unittest.TestCase):
+    @unittest.skipUnless(NATIVE_WINDOWS, "checks the explicit native-Windows refusal")
+    def test_native_windows_refuses_dataset_metadata_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "example"
+            root.mkdir()
+            (root / "dataset.yaml").write_text("id: example\nitems_schema_version: 2\n", encoding="utf-8")
+            (root / "items.jsonl").write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "this platform cannot safely open dataset metadata"):
+                measure_manifest(root)

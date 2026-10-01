@@ -33,6 +33,7 @@ from kura.training_artifacts import compile_resume_lock, load_training_state, pu
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only
 
 
 def _safetensors_bytes(content: bytes) -> bytes:
@@ -245,6 +246,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_unsupported_capture_contract_does_not_reject_native_ema_training(self) -> None:
         run = {
             "id": "source",
@@ -267,6 +269,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_supported_capture_contract_still_rejects_ema(self) -> None:
         run = {
             "id": "source",
@@ -295,6 +298,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
         self.assertEqual(command["argv"], ["python", "run.py", "/workspace/runs/source/resolved/ai-toolkit.yaml"])
 
+    @posix_only(POSIX_PATHS)
     def test_ai_toolkit_runner_publishes_weight_optimizer_pair_atomically(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
@@ -338,6 +342,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertEqual(json.loads((state / "state-info.json").read_text())["logical_step"], 10)
             self.assertFalse(any((root / "outputs").glob(".source-step*.partial")))
 
+    @posix_only(POSIX_PATHS)
     def test_ai_toolkit_runner_captures_live_network_as_float32_resume_weight(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
@@ -385,6 +390,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertEqual(json.loads(saved["metadata"]["training_info"])["step"], 10)
             self.assertEqual(json.loads((state / "state-info.json").read_text())["model_dtype"], "float32")
 
+    @posix_only(POSIX_PATHS)
     def test_ai_toolkit_runner_coalesces_semantically_equal_periodic_and_final_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
@@ -457,6 +463,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             with patch.dict(sys.modules, {"torch": torch}):
                 self.assertFalse(namespace["saved_states_equivalent"](existing, staged))
 
+    @posix_only(POSIX_PATHS)
     def test_ai_toolkit_runner_uses_completed_optimizer_updates_instead_of_stale_process_step(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
@@ -689,6 +696,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "training-state failure: Resume RNG state is incomplete"):
                 namespace["restore_rng_state"]("rng.pt", torch)
 
+    @posix_only(POSIX_PATHS)
     def test_sd_scripts_runner_normalizes_saved_application_step_from_persisted_training_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("sd_scripts_state.py"), namespace)
@@ -723,6 +731,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 if output.parent.is_dir():
                     __import__("shutil").rmtree(output.parent)
 
+    @posix_only(POSIX_PATHS)
     def test_sd_scripts_save_wrapper_invalidates_a_stale_completion_marker_first(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("sd_scripts_state.py"), namespace)
@@ -746,6 +755,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             self.assertEqual(observed, [False])
             self.assertFalse((output / "kura-state-info.json").exists())
 
+    @posix_only(POSIX_PATHS)
     def test_completed_output_projection_excludes_training_state_members(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "source"

@@ -20,6 +20,7 @@ from kura.cli import cmd_init, cmd_run_compile, cmd_run_launch, cmd_run_new, cmd
 from kura.model_requirements import model_requirements
 from kura.run_envelope import backend_config, common_recipe
 from kura.backends import BACKENDS
+from tests.platform_support import POSIX_PATHS, posix_only
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
@@ -104,9 +105,11 @@ class AgentIndependentCliTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
+    @posix_only(POSIX_PATHS)
     def test_ai_toolkit_file_only_lifecycle(self) -> None:
         self._exercise("ai-toolkit")
 
+    @posix_only(POSIX_PATHS)
     def test_musubi_file_only_lifecycle(self) -> None:
         self._exercise("musubi-tuner")
 

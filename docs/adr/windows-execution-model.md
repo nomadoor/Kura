@@ -104,6 +104,18 @@ virtual machine instead of the owner's working machine:
 - The first-run path on a Windows machine that never had WSL: `wsl --install`,
   Docker Desktop with WSL integration, then `kura doctor`.
 
+Known native-Windows gaps, recorded so they are not mistaken for regressions:
+
+- Kura refuses to read datasets on native Windows, which lacks the
+  no-follow, directory-relative opens the dataset contract requires. The
+  Windows CI job skips the tests that depend on this (`tests/platform_support.py`)
+  and checks that the refusal stays explicit.
+- About twenty places record run-relative paths with the host separator
+  (`str(path.relative_to(run_dir))`), so a record written on native Windows
+  would read `outputs\\x.safetensors`. Records written in WSL2 are unaffected.
+  Fix this, with `as_posix()`, before any native-Windows process writes run
+  records, for example a Windows-side Web UI.
+
 Reproducing the interop loss for A needs a spare physical machine, because the
 Docker Engine and GPU case cannot run in a VM without GPU passthrough. It must
 not run on the owner's working machine.
