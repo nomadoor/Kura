@@ -31,6 +31,7 @@ from kura.executors.runpod import stage_runpod
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, posix_only
 
 
 class _CompiledRunFixture:
@@ -96,6 +97,7 @@ class _CompiledRunFixture:
         return run_dir, run
 
 
+@posix_only(DATASET_IO)
 class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
     def test_inventory_selects_only_locked_files_in_explicit_namespaces(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -530,6 +532,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 ssh.assert_not_called()
 
 
+@posix_only(DATASET_IO)
 class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
     """The Pod-side receive path, exercised through the generated job script."""
 
@@ -793,6 +796,7 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
             self.assertFalse((remote_dir / record["archive_name"]).exists())
 
 
+@posix_only(DATASET_IO)
 class RunPodDownloadFinalizeTests(_CompiledRunFixture, unittest.TestCase):
     def _downloaded(self, root: Path, remote_status: str) -> tuple[Path, Path]:
         run_dir, _ = self._compiled(root)

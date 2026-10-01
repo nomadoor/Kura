@@ -20,6 +20,7 @@ from kura.executors import docker as docker_executor
 from kura.cli import _run_cleanup_candidates
 from kura.run_commands.runpod_ssh import cmd_run_download
 from kura.run_commands.experiment import format_run_completion
+from tests.platform_support import POSIX_PATHS, posix_only
 
 
 def _safetensors_bytes() -> bytes:
@@ -475,6 +476,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertTrue(status["recovery_required"])
             self.assertIn("frozen backend command", status["publication_error"])
 
+    @posix_only(POSIX_PATHS)
     def test_download_completes_only_after_valid_output_publication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -508,6 +510,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertEqual(status["publication_state"], "completed")
             self.assertEqual(status["publication_manifest"], "realizations/launch.publication.json")
 
+    @posix_only(POSIX_PATHS)
     def test_input_postflight_failure_never_blocks_download_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -552,6 +555,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertIn(projected["record"], [item.get("record") for item in events if item.get("event") == "dataset_input_postflight"])
 
+    @posix_only(POSIX_PATHS)
     def test_download_does_not_complete_when_adapter_is_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

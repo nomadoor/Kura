@@ -18,6 +18,7 @@ import yaml
 
 from kura import cli
 from kura.dataset_manifest import validate_manifest
+from tests.platform_support import DATASET_IO, posix_only
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +55,7 @@ def _fake_video_dataset(root: Path, dataset_id: str) -> None:
 
 
 class RealSmokeHarnessTests(unittest.TestCase):
+    @posix_only(DATASET_IO)
     def test_generated_datasets_are_valid_manifest_v2(self) -> None:
         for dataset_id in (MODULE.IMAGE_DATASET, MODULE.CONTROL_DATASET):
             with self.subTest(dataset=dataset_id), tempfile.TemporaryDirectory() as directory:
@@ -99,6 +101,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
                 MODULE.ensure_dataset(workspace, MODULE.IMAGE_DATASET)
             self.assertFalse((workspace / "datasets" / MODULE.IMAGE_DATASET).exists())
 
+    @posix_only(DATASET_IO)
     def test_every_smoke_compiles_through_the_normal_kura_cli(self) -> None:
         # A backend surface change that invalidates a smoke must fail here,
         # not after a paid Pod has started.

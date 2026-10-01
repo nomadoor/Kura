@@ -22,6 +22,7 @@ from kura.init_templates import SD_SCRIPTS_DOCKERFILE_TEMPLATE, SD_SCRIPTS_SYMLI
 from kura.media_types import frozen_suffixes
 import kura.provenance as provenance
 from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
+from tests.platform_support import POSIX_PATHS, posix_only
 
 
 MUSUBI_MEDIA_ENV = {
@@ -999,6 +1000,7 @@ class ContainerScriptTests(unittest.TestCase):
 
         compile(module.CHILD, "hf_download.CHILD", "exec")
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_preflight_measures_remote_metadata_and_disk(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -1035,6 +1037,7 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertEqual(namespace["progress_bytes"](1400, 1000, 200), 200)
         self.assertEqual(namespace["progress_bytes"](900, 1000, 200), 0)
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_progress_uses_the_hub_cache_layout(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -1102,6 +1105,7 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertEqual(observed["max_workers"], 4)
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_retry_preserves_shared_incomplete_files(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -1140,6 +1144,7 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertEqual(incomplete.read_bytes(), b"partial")
             self.assertTrue(link.is_symlink())
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_notices_a_finished_child_without_a_full_poll_interval(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -1200,6 +1205,7 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertTrue(published.samefile(blob))
             self.assertEqual(published.resolve().suffix, ".safetensors")
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_preflight_rejects_insufficient_disk_before_download(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)

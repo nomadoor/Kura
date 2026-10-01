@@ -59,6 +59,7 @@ from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_ru
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, posix_only
 
 
 def _musubi_native_block(projected: dict, index: int = 0) -> dict:
@@ -102,6 +103,7 @@ def _musubi_video_preflight_env(run: dict, destination: Path) -> dict[str, str]:
 # The pinned AI-Toolkit UI baseline dataset keys (docs/adr/upstream-training-baseline.md).
 BASELINE_DATASET = {"cache_latents_to_disk": False}
 
+@posix_only(DATASET_IO)
 class FrozenDatasetProjectionReaderTests(unittest.TestCase):
     @staticmethod
     def _frozen(directory: str) -> tuple[dict, Path]:
@@ -200,6 +202,7 @@ def _musubi_semantic_block(projected: dict, index: int = 0) -> dict:
     return projected["policy"]["block_settings"][index]
 
 
+@posix_only(DATASET_IO)
 class DatasetHandoffTests(unittest.TestCase):
     def test_musubi_architecture_aliases_are_canonicalized_at_one_boundary(self) -> None:
         for alias, canonical in MUSUBI_ARCHITECTURE_ALIASES.items():

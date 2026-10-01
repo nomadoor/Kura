@@ -26,6 +26,7 @@ from kura.media_types import frozen_suffixes
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, posix_only
 
 
 class BackendSurfaceContractTests(unittest.TestCase):
@@ -585,6 +586,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "cannot be combined"):
                     BACKENDS[name].command(run)
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_raw_override_cannot_shadow_owned_model_architecture(self) -> None:
         run = {
             "id": "ambiguous-ai", "backend": {"name": "ai-toolkit", "config": {
@@ -631,6 +633,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             generated_dockerfile = (root / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
             self.assertEqual(generated_dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={runtime_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_accepts_registered_sd1_without_rewriting_it(self) -> None:
         run = {
             "id": "registered-sd1", "backend": {"name": "ai-toolkit", "config": {"model_arch": "sd1"}},
@@ -644,6 +647,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             process = yaml.safe_load((destination / "ai-toolkit.yaml").read_text(encoding="utf-8"))["config"]["process"][0]
             self.assertEqual(process["model"]["arch"], "sd1")
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_preserves_upstream_arch_tag_and_flex1_alias(self) -> None:
         for arch in ("sd1:portrait", "flex1"):
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
@@ -682,6 +686,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             self.assertRegex(error.getvalue(), "sd15.*sd1")
             self.assertFalse((run_dir / "resolved" / "backend-command.lock.json").exists())
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_native_model_arch_cannot_claim_first_class_manifest_projection(self) -> None:
         run = {
             "id": "custom-arch", "backend": {"name": "ai-toolkit", "config": {
@@ -708,6 +713,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "gradient_checkpointing=false"):
                 BACKENDS["ai-toolkit"].compile(run, Path(directory))
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_flex2_bypass_guidance_is_typed_and_compiled(self) -> None:
         run = {
             "id": "flex2-typed", "backend": {"name": "ai-toolkit", "config": {
@@ -735,6 +741,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be true or false"):
             validate_backend_config(invalid)
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_zimage_l2p_companion_source_is_typed_and_compiled(self) -> None:
         run = {
             "id": "zimage-l2p-typed", "backend": {"name": "ai-toolkit", "config": {
@@ -770,6 +777,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be a nonempty model reference"):
             validate_backend_config(invalid)
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_krea2_edit_mode_is_typed_and_compiled(self) -> None:
         run = {
             "id": "krea2-edit-typed", "backend": {"name": "ai-toolkit", "config": {
@@ -821,6 +829,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "verified only for flex2"):
             validate_backend_config(invalid)
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_sdxl_evidence_settings_survive_and_the_baseline_fills_the_rest(self) -> None:
         """Authored SDXL evidence settings win; the pinned UI baseline fills only unset keys."""
         ordinary = {
@@ -944,6 +953,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         arches = {entry["arch"] for entry in load_baseline()["entries"].values()}
         self.assertLessEqual(arches, AI_TOOLKIT_PINNED_MODEL_ARCHS)
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_typed_video_dataset_settings(self) -> None:
         run = {
             "id": "minimax-video", "backend": {"name": "ai-toolkit", "config": {
@@ -968,6 +978,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertIs(process["datasets"][0]["do_audio"], False)
         self.assertIn("/cache/dataset-view/", process["datasets"][0]["folder_path"])
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_manifest_controls_inside_each_owned_view(self) -> None:
         run = {
             "id": "qwen-edit", "backend": {"name": "ai-toolkit", "config": {
@@ -990,6 +1001,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         self.assertEqual(len(process["datasets"][0]["control_path"]), 1)
         self.assertIn("/cache/dataset-view/", process["datasets"][0]["control_path"][0])
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_projects_every_new_0_13_18_diffusion_architecture(self) -> None:
         cases = (
             ("qwen_image_2", "Qwen/Qwen-Image-2.1", "sample.png", (), {}),
@@ -1028,6 +1040,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 self.assertEqual(process["model"]["arch"], arch)
                 self.assertEqual(process["model"]["name_or_path"], model)
 
+    @posix_only(DATASET_IO)
     def test_ai_toolkit_new_video_architectures_compile_each_declared_dataset_mode(self) -> None:
         cases = (
             ("ltx2.5", "image-only", "sample.png", {}),
@@ -1106,6 +1119,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "adapter-owned flag"):
                 BACKENDS["musubi-tuner"].compile(run, root / "h2d")
 
+    @posix_only(DATASET_IO)
     def test_declared_ordinary_values_reach_each_adapter_artifact(self) -> None:
         runs = {
             "ai-toolkit": {

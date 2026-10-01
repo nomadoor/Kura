@@ -493,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
                     + ", ".join(pending)
                 )
         if isinstance(payload, dict):
-            rendered = render_backend_validation_markdown(payload, str(path.relative_to(ROOT)))
+            rendered = render_backend_validation_markdown(payload, path.relative_to(ROOT).as_posix())
             rendered_path = path.with_suffix(".md")
             if args.write:
                 rendered_path.write_text(rendered, encoding="utf-8")
