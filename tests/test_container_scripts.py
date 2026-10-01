@@ -1140,6 +1140,41 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertEqual(incomplete.read_bytes(), b"partial")
             self.assertTrue(link.is_symlink())
 
+    def test_hf_download_notices_a_finished_child_without_a_full_poll_interval(self) -> None:
+        namespace = {"__name__": "__test__"}
+        exec(script_source("hf_download.py"), namespace)
+
+        class CachedHit:
+            returncode = 0
+
+            def __init__(self, output):
+                self.stdout = io.StringIO(output)
+                self.polls = 0
+
+            def poll(self):
+                self.polls += 1
+                return None if self.polls == 1 else 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "hf"
+            cache = home / "hub"
+            target = cache / "models--owner--model" / "blobs" / "complete"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"complete")
+            item = {"key": "dit", "repo_id": "owner/model", "filename": "weights.safetensors", "link_path": str(root / "models" / "weights.safetensors"), "_size_bytes": 8}
+            mapping = json.dumps([{"container": str(cache), "workspace": "/workspace/cache/huggingface/hub"}])
+            slept: list[float] = []
+            with (
+                patch.dict(os.environ, {"HF_HOME": str(home), "HF_HUB_CACHE": str(cache), "KURA_WORKSPACE_PATH_MAPS": mapping, "KURA_HF_DOWNLOAD_POLL_SEC": "15"}, clear=True),
+                patch.object(namespace["subprocess"], "Popen", return_value=CachedHit(str(target) + "\n")),
+                patch.object(namespace["time"], "sleep", side_effect=slept.append),
+            ):
+                namespace["stable_link_target"] = lambda path, link_path: path
+                namespace["run_one"](item)
+
+        self.assertLess(sum(slept), 1.0)
+
     def test_hf_download_hardlink_mode_preserves_named_safetensors_path(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)

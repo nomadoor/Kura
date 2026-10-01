@@ -14,6 +14,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import stat
 import tarfile
 import time
 import urllib.error
@@ -36,7 +37,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, run_events
+from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, record_launch_phase, run_events
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
@@ -226,8 +227,7 @@ PY
         copied = _run_bounded(
             [
                 "scp",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                *_ssh_transport_options(details),
                 "-P", str(details["port"]),
                 "-i", str(details["key"]),
                 f"root@{details['ip']}:{remote_archive}",
@@ -679,6 +679,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         config = _workspace_config()
         min_download_free = _configured_download_min_free_bytes(config)
         details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
+        _start_ssh_master(details)
         destination.mkdir(exist_ok=True)
         workspace = _runpod_workspace_for_run(run_dir)
         remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
@@ -1041,8 +1042,7 @@ def _pull_remote_training_state_items(
             result = _run_bounded(
                 [
                     "scp", "-r",
-                    "-o", "StrictHostKeyChecking=no",
-                    "-o", "UserKnownHostsFile=/dev/null",
+                    *_ssh_transport_options(details),
                     "-P", str(details["port"]),
                     "-i", str(details["key"]),
                     f"root@{details['ip']}:{remote_path}/.",
@@ -1135,8 +1135,7 @@ def _pull_remote_output_items(
         try:
             result = _run_bounded([
                 "scp",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
+                *_ssh_transport_options(details),
                 "-P", str(details["port"]),
                 "-i", str(details["key"]),
                 f"root@{details['ip']}:{remote_path}",
@@ -1181,11 +1180,14 @@ def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]], *, emit_
 
 
 def _record_pulled_training_states(run_dir: Path, manifests: list[dict[str, Any]]) -> None:
+    changed = False
+
     def mutate(status: dict[str, Any]) -> None:
+        nonlocal changed
         status.pop("training_state_sync_error", None)
         if not manifests:
             return
-        status["recoverable_training_states"] = [
+        recoverable = [
             {
                 "artifact_id": item["id"],
                 "manifest_sha256": item["manifest_sha256"],
@@ -1194,10 +1196,16 @@ def _record_pulled_training_states(run_dir: Path, manifests: list[dict[str, Any]
             }
             for item in sorted(manifests, key=lambda value: int(value["observed_step"]))
         ]
+        # The sync loop re-lists published states every poll; only a new or
+        # retired state is a fact worth a status write and an event.
+        if status.get("recoverable_training_states") == recoverable:
+            return
+        changed = True
+        status["recoverable_training_states"] = recoverable
         status["training_states_synced_at"] = datetime.now().astimezone().isoformat()
 
     _mutate_run_status(run_dir, mutate)
-    if manifests:
+    if changed:
         append_run_event(
             run_dir,
             {
@@ -1341,17 +1349,99 @@ def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 
                 ip, port = ssh.get("ip"), ssh.get("port")
                 key = ssh.get("ssh_key", {}).get("path") if isinstance(ssh.get("ssh_key"), dict) else None
                 if isinstance(ip, str) and isinstance(port, int) and isinstance(key, str):
-                    return {"pod_id": pod_id, "ip": ip, "port": port, "key": key}
+                    # When RunPod reports it, the container start time splits the
+                    # Pod startup wait into allocation plus image pull, and boot to SSH.
+                    started = pod.get("lastStartedAt")
+                    return {"pod_id": pod_id, "ip": ip, "port": port, "key": key, "container_started_at": started if isinstance(started, str) and started else None}
                 last_error = str(ssh.get("error") or "pod SSH is not ready")
         time.sleep(interval_sec)
     raise ValueError(f"pod SSH did not become ready before timeout: {last_error}")
 
 
+# One persistent ssh connection per Pod lets every later ssh/scp skip its own
+# handshake. Reuse is only an optimization: whenever the private socket
+# directory is unusable, commands connect directly exactly as before.
+_SSH_SOCKET_PATH_LIMIT = 100  # sun_path is 104-108 bytes; ssh adds a suffix while binding
+
+
+def _ssh_control_dir(*, create: bool = False) -> Path | None:
+    if os.name != "posix":
+        return None
+    directory = Path.home() / ".ssh" / "kura-mux"
+    try:
+        if create:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = directory.lstat()
+    except OSError:
+        return None
+    # The socket carries secrets on stdin, so only a private, real directory
+    # owned by this user is acceptable.
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        return None
+    return directory
+
+
+def _ssh_control_path(details: dict[str, Any], *, create: bool = False) -> str | None:
+    directory = _ssh_control_dir(create=create)
+    if directory is None:
+        return None
+    path = str(directory / f"{details['ip']}_{details['port']}")
+    return path if len(path) + 8 <= _SSH_SOCKET_PATH_LIMIT else None
+
+
+def _ssh_transport_options(details: dict[str, Any]) -> list[str]:
+    """Options every ssh/scp to a Pod shares; rides a live master when one exists."""
+    options = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+    control_path = _ssh_control_path(details)
+    if control_path is not None:
+        options += ["-o", f"ControlPath={control_path}", "-o", "ControlMaster=no"]
+    return options
+
+
+def _start_ssh_master(details: dict[str, Any]) -> None:
+    """Open one persistent connection for later ssh/scp to reuse; best effort."""
+    control_path = _ssh_control_path(details, create=True)
+    if control_path is None:
+        return
+    target = f"root@{details['ip']}"
+    port = str(details["port"])
+    try:
+        check = subprocess.run(
+            ["ssh", "-o", f"ControlPath={control_path}", "-p", port, "-O", "check", target],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=10,
+        )
+        if check.returncode == 0:
+            return
+        # No live master answered, so a leftover socket (a crash, or an earlier
+        # Pod on the same address) is stale; remove it or the new master
+        # cannot bind and every client keeps hitting the dead socket.
+        Path(control_path).unlink(missing_ok=True)
+        subprocess.run(
+            [
+                "ssh", "-N", "-f",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=20",
+                "-o", f"ControlPath={control_path}",
+                "-o", "ControlMaster=yes",
+                "-o", "ControlPersist=600",
+                "-o", "ServerAliveInterval=30",
+                "-o", "ServerAliveCountMax=2",
+                "-i", str(details["key"]),
+                "-p", port,
+                target,
+            ],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
 def _ssh_base(details: dict[str, Any]) -> list[str]:
     return [
         "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        *_ssh_transport_options(details),
         "-o", "ConnectTimeout=20",
         "-i", str(details["key"]),
         "-p", str(details["port"]),
@@ -1363,8 +1453,7 @@ def _scp_to_runpod(details: dict[str, Any], source: Path, target: str) -> None:
     command = [
         "scp",
         "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        *_ssh_transport_options(details),
         "-o", "ConnectTimeout=20",
         "-P", str(details["port"]),
         "-i", str(details["key"]),
@@ -1916,7 +2005,10 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     pinned_manifest = prepared_upload["pinned_manifest"]
     remote_manifest_sha256 = prepared_upload["remote_manifest_sha256"]
     command_env = prepared_upload["command_env"]
-    details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec)
+    realization_id = str(realization.get("id") or Path(realization_ref).stem)
+    details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
+    record_launch_phase(run_dir, realization_id, "ssh_ready", container_started_at=details.get("container_started_at"))
+    _start_ssh_master(details)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
     remote_archive = f"{remote_dir}/{archive_name}"
     remote_manifest: str | None = None
@@ -1924,14 +2016,18 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     if pinned_manifest is not None:
         remote_manifest = f"{remote_dir}/transfer-manifest.json"
         uploads.append((pinned_manifest, remote_manifest))
+    try:
+        upload_bytes: int | None = sum(local.stat().st_size for local, _ in uploads)
+    except OSError:
+        upload_bytes = None
+    record_launch_phase(run_dir, realization_id, "upload_started", bytes=upload_bytes)
     prepared = _run_bounded([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_dir)}"], context="ssh workspace preparation")
     if prepared.returncode:
         raise ValueError(f"ssh workspace preparation failed with exit code {prepared.returncode}")
     for local, remote in uploads:
         scp = [
             "scp",
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            *_ssh_transport_options(details),
             "-P", str(details["port"]),
             "-i", str(details["key"]),
             str(local),
@@ -1940,6 +2036,7 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
         uploaded = _run_bounded(scp, context="scp upload")
         if uploaded.returncode:
             raise ValueError(f"scp upload failed with exit code {uploaded.returncode}")
+    record_launch_phase(run_dir, realization_id, "upload_finished")
     command = " ".join(shlex.quote(arg) for arg in argv)
     remote_secret_path = f"/tmp/kura-secrets/{run_id}.env"
     secret_payload = _runpod_secret_env_payload(remote_notify=remote_notify)
@@ -1960,7 +2057,7 @@ chmod 600 {shlex.quote(remote_secret_path)}
     remote_job_script = _runpod_remote_job_script(
         workspace=workspace,
         run_id=run_id,
-        realization_id=str(realization.get("id") or Path(realization_ref).stem),
+        realization_id=realization_id,
         remote_secret_path=remote_secret_path,
         archive_name=archive_name,
         remote_archive=remote_archive,
@@ -2003,10 +2100,12 @@ echo $!
         detail = _redact_secret_text(started.stderr.strip() or started.stdout.strip() or "remote job start failed")
         raise ValueError(f"remote job start failed with exit code {started.returncode}: {detail}")
     remote_pid = started.stdout.strip().splitlines()[-1] if started.stdout.strip() else None
+    remote_job_started_at = datetime.now().astimezone().isoformat()
+    record_launch_phase(run_dir, realization_id, "remote_job_started", at=remote_job_started_at)
     try:
         def mutate(status: dict[str, Any]) -> None:
             status["remote_pid"] = remote_pid
-            status["remote_job_started_at"] = datetime.now().astimezone().isoformat()
+            status["remote_job_started_at"] = remote_job_started_at
 
         _mutate_run_status(run_dir, mutate)
     except (OSError, json.JSONDecodeError):
@@ -2023,6 +2122,7 @@ echo $!
             _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
             exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
             if exit_record is not None:
+                record_launch_phase(run_dir, realization_id, "remote_exit_observed", remote_timestamp=exit_record.get("timestamp"))
                 _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
                 _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
                 _record_remote_exit_observation(run_dir, exit_record)

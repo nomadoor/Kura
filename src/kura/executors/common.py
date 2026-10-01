@@ -72,6 +72,83 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
+# Launch timing is diagnostic: each realization gets an append-only
+# `<id>.phases.jsonl`, one line per boundary the controller observes. A lost
+# line costs a measurement, never the run, so writes only warn on failure.
+LAUNCH_PHASE_SEGMENTS: tuple[tuple[str, str, str], ...] = (
+    ("startup", "pod_create_requested", "ssh_ready"),
+    ("startup", "container_start_requested", "container_started"),
+    ("upload", "ssh_ready", "remote_job_started"),
+    ("job", "remote_job_started", "remote_exit_observed"),
+    ("job", "container_started", "container_exited"),
+    ("download", "download_started", "download_finished"),
+    ("stop", "pod_stop_requested", "pod_stopped"),
+)
+
+
+def record_launch_phase(run_dir: Path, realization_id: str, phase: str, *, at: str | None = None, **facts: Any) -> None:
+    record = {"phase": phase, "at": at or _now(), **{key: value for key, value in facts.items() if value is not None}}
+    path = run_dir / "realizations" / f"{realization_id}.phases.jsonl"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        append_line_durably(path, json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"warning: could not record launch timing {phase} for run {run_dir.name}: {_redact_secret_text(str(exc))}", file=sys.stderr)
+
+
+def launch_phases(run_dir: Path, realization_id: str) -> list[dict[str, Any]]:
+    path = run_dir / "realizations" / f"{realization_id}.phases.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+    except OSError:
+        return []
+    phases: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and isinstance(item.get("phase"), str) and isinstance(item.get("at"), str):
+            phases.append(item)
+    return phases
+
+
+def format_seconds(total: float) -> str:
+    total = max(int(total), 0)
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def format_launch_phases(phases: list[dict[str, Any]]) -> str | None:
+    """Summarize recorded boundaries as `segment duration` pairs, first observation wins."""
+    first: dict[str, datetime] = {}
+    for item in phases:
+        try:
+            first.setdefault(item["phase"], datetime.fromisoformat(item["at"]))
+            # RunPod's container start, reported with SSH readiness, separates
+            # allocation plus image pull from container boot.
+            if item["phase"] == "ssh_ready" and isinstance(item.get("container_started_at"), str):
+                first.setdefault("container_booted", datetime.fromisoformat(item["container_started_at"].replace("Z", "+00:00")))
+        except (KeyError, TypeError, ValueError):
+            continue
+    def span(start: str, end: str) -> str:
+        return format_seconds((first[end] - first[start]).total_seconds())
+
+    parts = []
+    for label, start, end in LAUNCH_PHASE_SEGMENTS:
+        if start in first and end in first:
+            part = f"{label} {span(start, end)}"
+            if (start, end) == ("pod_create_requested", "ssh_ready") and "container_booted" in first:
+                part += f" (allocate+pull {span(start, 'container_booted')}, boot {span('container_booted', end)})"
+            parts.append(part)
+    return " · ".join(parts) or None
+
+
 def run_events(run_dir: Path) -> list[dict[str, Any]]:
     """Read events.jsonl by physical LF lines, skipping only a malformed line.
 

@@ -32,10 +32,13 @@ from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SU
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.run_commands.runpod_ssh import _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
+from kura.run_commands.runpod_ssh import _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
-from kura.executors.common import _safe_env
+from kura.executors.common import _safe_env, format_launch_phases, launch_phases, record_launch_phase
+from kura.executors.docker import _docker_timestamp
+from kura.run_commands.experiment import format_run_completion
+import kura.run_commands.runpod_ssh as runpod_ssh_module
 from kura.media_types import frozen_suffixes
 from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error, _runpod_request
 from kura.fsio import FileLockBusy, file_lock
@@ -51,6 +54,21 @@ from kura.tui import KuraMonitorApp, RunRow, _compact_path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
 
+
+
+# SSH connection reuse creates a socket directory under the user's home and
+# probes it with ssh. Tests stay hermetic unless one opts back in with
+# _REAL_SSH_CONTROL_DIR.
+_REAL_SSH_CONTROL_DIR = runpod_ssh_module._ssh_control_dir
+_SSH_REUSE_OFF = patch("kura.run_commands.runpod_ssh._ssh_control_dir", return_value=None)
+
+
+def setUpModule() -> None:
+    _SSH_REUSE_OFF.start()
+
+
+def tearDownModule() -> None:
+    _SSH_REUSE_OFF.stop()
 
 class InitCommandTests(unittest.TestCase):
     def test_cli_version_and_help_text(self) -> None:
@@ -5900,6 +5918,21 @@ class DockerLifecycleTests(unittest.TestCase):
                 self.assertEqual(status["exit_code"], exit_code)
                 self.assertEqual(status["ended"], "confirmed-end")
 
+    def test_reconcile_docker_records_container_times_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            state = {"Running": False, "ExitCode": 0, "StartedAt": "2026-10-01T03:45:40.123456789Z", "FinishedAt": "2026-10-01T03:49:20.987654321Z"}
+            result = subprocess.CompletedProcess([], 0, json.dumps(state))
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
+                for _ in range(2):
+                    try:
+                        reconcile_docker(run_dir)
+                    except ValueError:
+                        pass
+            phases = launch_phases(run_dir, "r1")
+        self.assertEqual([item["phase"] for item in phases], ["container_started", "container_exited"])
+        self.assertEqual(format_launch_phases(phases), "job 3m 40s")
+
     def test_reconcile_docker_merges_observation_into_latest_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
@@ -6238,6 +6271,137 @@ class DockerLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             launch.assert_not_called()
             self.assertIn("docker.workspace_target must be /workspace", stderr.getvalue())
+
+
+class LaunchPhaseTests(unittest.TestCase):
+    def test_launch_phase_records_append_and_summarize(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            for phase, at in [
+                ("pod_create_requested", "2026-10-01T12:43:24+09:00"),
+                ("pod_created", "2026-10-01T12:43:25+09:00"),
+                ("ssh_ready", "2026-10-01T12:47:58+09:00"),
+                ("upload_started", "2026-10-01T12:47:58+09:00"),
+                ("upload_finished", "2026-10-01T12:48:10+09:00"),
+                ("remote_job_started", "2026-10-01T12:48:20+09:00"),
+                ("remote_exit_observed", "2026-10-01T12:50:00+09:00"),
+                ("download_started", "2026-10-01T12:50:00+09:00"),
+                ("download_finished", "2026-10-01T12:50:40+09:00"),
+            ]:
+                record_launch_phase(run_dir, "r1", phase, at=at)
+            summary = format_launch_phases(launch_phases(run_dir, "r1"))
+        self.assertEqual(summary, "startup 4m 34s · upload 22s · job 1m 40s · download 40s")
+
+    def test_launch_phase_write_failure_only_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            with patch("kura.executors.common.append_line_durably", side_effect=OSError("disk full")), \
+                 contextlib.redirect_stderr(io.StringIO()) as stderr:
+                record_launch_phase(run_dir, "r1", "pod_created")
+        self.assertIn("launch timing", stderr.getvalue())
+
+    def test_ssh_commands_reuse_one_master_connection(self) -> None:
+        details = {"ip": "203.0.113.5", "port": 22115, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory:
+            control_dir = Path(directory)
+            socket_path = control_dir / "203.0.113.5_22115"
+            socket_path.write_text("stale", encoding="utf-8")
+            calls: list[tuple[list[str], dict[str, object]]] = []
+
+            def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                calls.append((argv, kwargs))
+                if "-O" in argv:
+                    return subprocess.CompletedProcess(argv, 255, "", "")
+                self.assertFalse(socket_path.exists(), "a stale socket must be removed before the master binds")
+                return subprocess.CompletedProcess(argv, 0, "", "")
+
+            with patch("kura.run_commands.runpod_ssh._ssh_control_dir", return_value=control_dir), \
+                 patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=fake_run):
+                command = _ssh_base(details)
+                _start_ssh_master(details)
+        self.assertIn(f"ControlPath={socket_path}", command)
+        self.assertIn("ControlMaster=no", command)
+        check, master = calls
+        self.assertIn("check", check[0])
+        self.assertIn("ControlMaster=yes", master[0])
+        self.assertNotIn("ControlMaster=no", master[0])
+        self.assertIn("-N", master[0])
+        self.assertIn("-f", master[0])
+        self.assertTrue(any(option.startswith("ControlPersist=") for option in master[0]))
+        # A backgrounded master must not hold the caller's pipes open.
+        self.assertEqual(master[1].get("stdout"), subprocess.DEVNULL)
+        self.assertEqual(master[1].get("stderr"), subprocess.DEVNULL)
+
+    def test_ssh_master_is_skipped_when_already_running(self) -> None:
+        details = {"ip": "203.0.113.5", "port": 22115, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch("kura.run_commands.runpod_ssh._ssh_control_dir", return_value=Path(directory)), \
+             patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            _start_ssh_master(details)
+        self.assertEqual(run.call_count, 1)
+
+    def test_ssh_master_failure_never_stops_the_caller(self) -> None:
+        details = {"ip": "203.0.113.5", "port": 22115, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch("kura.run_commands.runpod_ssh._ssh_control_dir", return_value=Path(directory)), \
+             patch("kura.run_commands.runpod_ssh.subprocess.run", side_effect=subprocess.TimeoutExpired(["ssh"], 10)):
+            _start_ssh_master(details)
+
+    def test_ssh_reuse_is_disabled_for_an_unsafe_socket_directory(self) -> None:
+        details = {"ip": "203.0.113.5", "port": 22115, "key": "/tmp/key"}
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            shared = home / ".ssh" / "kura-mux"
+            shared.mkdir(parents=True)
+            shared.chmod(0o777)
+            with patch("kura.run_commands.runpod_ssh._ssh_control_dir", _REAL_SSH_CONTROL_DIR), \
+                 patch("kura.run_commands.runpod_ssh.Path.home", return_value=home):
+                options = _ssh_base(details)
+                shared.chmod(0o700)
+                private = _ssh_base(details)
+                with patch("kura.run_commands.runpod_ssh.os.name", "nt"):
+                    windows = _ssh_base(details)
+        self.assertFalse(any(option.startswith("ControlPath=") for option in options))
+        self.assertTrue(any(option.startswith("ControlPath=") for option in private))
+        self.assertFalse(any(option.startswith("ControlPath=") for option in windows))
+
+    def test_startup_splits_at_the_reported_container_start(self) -> None:
+        phases = [
+            {"phase": "pod_create_requested", "at": "2026-10-01T12:43:24+09:00"},
+            {"phase": "ssh_ready", "at": "2026-10-01T12:47:58+09:00", "container_started_at": "2026-10-01T03:47:30Z"},
+        ]
+        self.assertEqual(format_launch_phases(phases), "startup 4m 34s (allocate+pull 4m 06s, boot 28s)")
+
+    def test_completion_summary_prints_launch_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            record_launch_phase(run_dir, "r1", "container_start_requested", at="2026-10-01T12:00:00+09:00")
+            record_launch_phase(run_dir, "r1", "container_started", at="2026-10-01T03:00:15+00:00")
+            record_launch_phase(run_dir, "r1", "container_exited", at="2026-10-01T03:01:00+00:00")
+            text = format_run_completion(root, run_dir, {"state": "completed", "exit_code": 0, "last_realization": "realizations/r1.json"})
+        self.assertIn("time       startup 15s · job 45s", text)
+
+    def test_docker_timestamps_normalize_to_parseable_values(self) -> None:
+        self.assertEqual(_docker_timestamp("2026-10-01T03:45:40.123456789Z"), "2026-10-01T03:45:40.123456+00:00")
+        self.assertEqual(_docker_timestamp("2026-10-01T03:45:40Z"), "2026-10-01T03:45:40+00:00")
+        self.assertEqual(_docker_timestamp("2026-10-01T12:45:40.5+09:00"), "2026-10-01T12:45:40.5+09:00")
+        self.assertIsNone(_docker_timestamp("0001-01-01T00:00:00Z"))
+        self.assertIsNone(_docker_timestamp("not a time"))
+
+    def test_unchanged_training_states_are_not_recorded_again(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "status.json").write_text("{}", encoding="utf-8")
+            manifest = {"id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 250, "restoration_contract": {"level": "partial_resume"}}
+            _record_pulled_training_states(run_dir, [manifest])
+            _record_pulled_training_states(run_dir, [manifest])
+            events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([event["event"] for event in events], ["run_training_states_pulled"])
 
 
 class RunDiscardTests(unittest.TestCase):
@@ -7013,6 +7177,20 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn('"upload_code":', record)
             self.assertIn('"pod_id": "pod-1"', (run_dir / "status.json").read_text(encoding="utf-8"))
 
+    def test_launch_runpod_records_pod_creation_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
+                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
+                    realization_id = launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
+            phases = launch_phases(run_dir, realization_id)
+            self.assertEqual([item["phase"] for item in phases], ["pod_create_requested", "pod_created"])
+            self.assertEqual(phases[1]["pod_id"], "pod-1")
+            self.assertLessEqual(phases[0]["at"], phases[1]["at"])
+
     def test_launch_runpod_can_use_template_and_ports(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -7624,6 +7802,46 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn('"cgroup_oom_kill_delta"', input_text)
             self.assertTrue(any(call[1].get("input") and "hf-secret" in str(call[1]["input"]) for call in calls))
 
+    def test_runpod_ssh_run_records_transport_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+
+            def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
+                if "nohup sh" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, "1234\n", "")
+                if "remote-exit-*.json" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, json.dumps({"event": "remote_exit", "exit_code": 0}), "")
+                if "__KURA_LOG_SIZE__" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, b"\n__KURA_LOG_SIZE__:0\n", b"")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            details = {"ip": "127.0.0.1", "port": 22, "key": "/tmp/key", "container_started_at": "2026-10-01T03:47:30Z"}
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
+                 patch("kura.run_commands.runpod_ssh._try_sync_runpod_checkpoints", return_value=True), \
+                 patch("kura.cli.subprocess.run", side_effect=fake_run):
+                self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1), 0)
+
+            phases = launch_phases(run_dir, "r1")
+            self.assertEqual(
+                [item["phase"] for item in phases],
+                ["ssh_ready", "upload_started", "upload_finished", "remote_job_started", "remote_exit_observed"],
+            )
+            self.assertEqual(phases[0]["container_started_at"], "2026-10-01T03:47:30Z")
+
     def test_runpod_remote_job_diagnostics_script_has_valid_shell_syntax(self) -> None:
         script = _runpod_remote_job_script(
             workspace="/workspace",
@@ -7979,6 +8197,27 @@ class RunPodLifecycleTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 0)
             stop.assert_called_once()
+
+    def test_run_remote_records_download_phases(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.launch.stage_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
+                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
+                     patch("kura.run_commands.launch.stop_run"):
+                    code = cmd_run_remote(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="0"))
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            self.assertEqual([item["phase"] for item in launch_phases(run_dir, "r1")], ["download_started", "download_finished"])
 
     def test_run_remote_defaults_to_bounded_review_hold_after_confirmed_download(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9079,6 +9318,15 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(request.call_args.args[:3], ("DELETE", "/pods/pod-1", "api-secret"))
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(events[-1]["event"], "runpod_pod_stopped")
+
+    def test_stop_runpod_records_pod_stopped_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", return_value={}):
+                    stop_runpod(run_dir, self._config())
+            self.assertEqual([item["phase"] for item in launch_phases(run_dir, "r1")], ["pod_stop_requested", "pod_stopped"])
 
     def test_stop_runpod_explains_how_to_cancel_capacity_wait(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

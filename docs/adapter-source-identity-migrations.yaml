@@ -8,6 +8,109 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-launch-phase-timing-and-ssh-reuse-2026-10-01
+    executor: runpod
+    reason: The controller now appends launch boundary timestamps to realizations/<id>.phases.jsonl (best
+      effort, warning only), records unchanged training-state sync results only when the recoverable set
+      changes, polls SSH readiness every 3s instead of 10s, and lets every ssh/scp ride one persistent connection
+      per Pod through a private ControlPath, falling back to a direct connection whenever no live master
+      exists. The uploaded bytes, remote commands, Pod-side verification, trainer execution, download selection,
+      publication, and Pod stop are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - ai-toolkit-anima-2026-09-29
+    - ai-toolkit-flux2-klein-4b-2026-09-29
+    - ai-toolkit-zimage-2026-09-29
+    - ai-toolkit-chroma-2026-09-29
+    - ai-toolkit-flux-kontext-2026-09-29
+    - ai-toolkit-qwen-image-2-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 753e4b6c41ce7edc1784e495e936153c9a944c4bfbd3dbbf434c06e887896555
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 5d48be11f928b6a89358091a4b7d9b32743db83fb4c98b0112e985af40a7b129
+  - id: hf-download-prompt-exit-musubi-tuner-2026-10-01
+    backend: musubi-tuner
+    reason: The shared hf_download.py container script now checks every half second whether the hf_hub_download
+      child has exited instead of sleeping a whole progress interval (15s) first, so a cached or fast file
+      no longer waits 15s. Download requests, retries, stall detection, cache layout, links, and the trained
+      command are unchanged; only the time at which an already-finished child is noticed moves.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: f6a96690cd1c419525e8ed58ecdd1c5d4e682e766fec58ae70d22b52fdd94fa9
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b40e2d68ff60173fad0b70d39068e0584b889e98d31877c0f9be2d8d8f5acd7d
+  - id: hf-download-prompt-exit-sd-scripts-2026-10-01
+    backend: sd-scripts
+    reason: The shared hf_download.py container script now checks every half second whether the hf_hub_download
+      child has exited instead of sleeping a whole progress interval (15s) first, so a cached or fast file
+      no longer waits 15s. Download requests, retries, stall detection, cache layout, links, and the trained
+      command are unchanged; only the time at which an already-finished child is noticed moves.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: e9ff80bbbc94d256554907ea557316eab705ed8a0a728c30258b0228aaf19a09
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 2bc911af1addb27ae40bc33fc1c67fe6f58a47a6cc010d851c372052c1b65063
   - id: dataset-id-matches-directory-sd-scripts-2026-09-30
     backend: sd-scripts
     reason: >-

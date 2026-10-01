@@ -26,7 +26,7 @@ from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, p
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
-from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status
+from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 
 
 class RunPodAPIError(ValueError):
@@ -995,6 +995,7 @@ sleep infinity
     )
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
+    create_requested_at: str | None = None
     launch_errors: list[dict[str, str]] = []
     capacity_wait_started_at: str | None = None
     capacity_wait_started_monotonic = time.monotonic()
@@ -1049,6 +1050,7 @@ sleep infinity
                 attempt_request["cloudType"] = cloud_type
                 attempt_request.update(placement)
                 controller_phase = "create"
+                create_requested_at = _now()
                 try:
                     pod = _runpod_request("POST", "/pods", api_key, attempt_request)
                     used_request = attempt_request
@@ -1181,6 +1183,8 @@ sleep infinity
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, "kura_version": __version__,
     }
     _write_json(realization_path, realization)
+    record_launch_phase(run_dir, realization_id, "pod_create_requested", at=create_requested_at)
+    record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
     status.pop("last_observation", None)
@@ -1401,6 +1405,10 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
     pod_id = status.get("pod_id")
     if not isinstance(pod_id, str):
         raise ValueError("run has no RunPod pod ID")
+    realization = status.get("last_realization")
+    realization_id = Path(realization).stem if isinstance(realization, str) else None
+    if realization_id:
+        record_launch_phase(run_dir, realization_id, "pod_stop_requested", pod_id=pod_id)
     # The Pod's container disk is disposable; terminate compute explicitly.
     try:
         _runpod_request("DELETE", f"/pods/{pod_id}", api_key)
@@ -1418,5 +1426,7 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         latest["pod_stopped_at"] = ended_at
 
     status = _mutate_run_status(run_dir, mutate)
+    if realization_id:
+        record_launch_phase(run_dir, realization_id, "pod_stopped", at=ended_at, pod_id=pod_id)
     append_run_event(run_dir, {"event": "runpod_pod_stopped", "timestamp": ended_at, "executor": "runpod", "pod_id": pod_id})
     return status

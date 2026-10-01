@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker
-from kura.executors.common import append_run_event
+from kura.executors.common import append_run_event, record_launch_phase
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -33,6 +33,14 @@ from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
 from kura.dataset_transfer import TransferRefused
 from kura.run_envelope import run_executor
+
+
+def _latest_realization_id(run_dir: Path) -> str | None:
+    try:
+        reference = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    return Path(reference).stem if isinstance(reference, str) and reference.endswith(".json") else None
 
 
 def run_remote(
@@ -87,9 +95,14 @@ def run_remote(
             remote_notify="ntfy" in _notification_channels(notify_channels),
             max_lease_sec=max_lease_sec,
         )
+        realization_id = _latest_realization_id(run_dir)
+        if realization_id:
+            record_launch_phase(run_dir, realization_id, "download_started")
         download_code = download_with_retries(run_id, download_attempts, download_interval)
         if download_code:
             raise ValueError("download did not complete before timeout")
+        if realization_id:
+            record_launch_phase(run_dir, realization_id, "download_finished")
         safe_to_stop = True
         try:
             completion_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))

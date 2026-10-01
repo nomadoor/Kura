@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from kura.executors.common import format_launch_phases, format_seconds, launch_phases
 from kura.run_envelope import run_executor
 
 
@@ -257,14 +258,7 @@ def _format_duration(started: Any, ended: Any) -> str | None:
     end = _parse_timestamp(ended)
     if start is None or end is None:
         return None
-    total = max(int((end - start).total_seconds()), 0)
-    hours, remainder = divmod(total, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    if hours:
-        return f"{hours}h {minutes:02d}m"
-    if minutes:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
+    return format_seconds((end - start).total_seconds())
 
 
 def _output_lines(outputs: Any) -> list[str]:
@@ -300,6 +294,11 @@ def format_run_completion(workspace: Path, run_dir: Path, status: dict[str, Any]
         headline += f"  {duration}"
     intent = " ".join(str(run.get("intent") or "").split()) or "(not recorded)"
     lines = [headline, f"intent     {intent}", *_output_lines(status.get("outputs"))]
+    realization = status.get("last_realization")
+    if isinstance(realization, str) and realization.endswith(".json"):
+        timing = format_launch_phases(launch_phases(run_dir, Path(realization).stem))
+        if timing:
+            lines.append(f"time       {timing}")
     if status.get("execution_state") == "completed" and state != "completed":
         lines.append("trainer completed; required artifact publication is not complete")
     if status.get("publication_state") == "blocked":
