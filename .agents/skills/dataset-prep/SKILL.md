@@ -69,7 +69,7 @@ particular, Musubi FLUX.2 reference images are authored with `role: "control"`
 because its generated JSONL consumes them as `control_path` /
 `control_path_N`; do not author a separate `reference` role for that path.
 Use `sha256` on an individual file reference only when the author intends to
-assert that exact digest. See `docs/dataset-handoff-implementation-spec.md`
+assert that exact digest. See `docs/archive/dataset-handoff-implementation-spec.md`
 for the complete closed schema.
 
 ## Migrating old AI-Toolkit dataset selectors

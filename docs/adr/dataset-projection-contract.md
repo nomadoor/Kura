@@ -180,7 +180,7 @@ boundary; it does not gain a verified dataset-handoff claim from this ADR.
 
 Each question left open when this ADR was accepted is now settled by the
 implementation; the detail lives in
-[dataset-handoff-implementation-spec.md](../dataset-handoff-implementation-spec.md).
+[dataset-handoff-implementation-spec.md](../archive/dataset-handoff-implementation-spec.md).
 
 | Question | Resolution |
 | --- | --- |

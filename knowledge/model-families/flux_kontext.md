@@ -13,9 +13,7 @@
 ## character / edit-LoRA
 
 - rank: 16
-- lr: 7e-5 provisional Kura default; 1e-4 remains a common stronger upstream
-  option when there is a reason to push faster.
+- lr: 1e-4 is the common upstream reference.
 - batch: 1 micro × accumulation 2–4
-- source: owner (2026-07-02) for 7e-5 default; upstream (Musubi examples) for
-  1e-4 as common reference.
+- source: upstream (Musubi examples) for the 1e-4 reference.
 - notes: paired/control datasets change data needs — see `dataset-prep`.

@@ -5,7 +5,8 @@
 Repository workflow configuration is recorded under `docs/agents/`. Start with
 `docs/agents/workflow.md`, then use `issue-tracker.md`, `labels.md`, and
 `domain.md` when the task touches those concerns. Project-specific operational
-guidance remains canonical under `.agents/skills/`.
+guidance remains canonical under `.agents/skills/`. Kura's canonical terms are
+defined in the root `CONTEXT.md`.
 
 ## First: what kind of session is this?
 
@@ -165,6 +166,7 @@ stop and ask the user to start or identify their local ComfyUI.
 - `comfyui-render-workflow` — render runs, workflows, comparisons
 - `monitor-tui` — reading `kura monitor` / `kura run watch`
 - `training-backends` — trainer adapter, native-config, model-role, image, and output mechanics
+- `publishing-huggingface-modelscope` — publishing trained adapters to Hugging Face or ModelScope
 
 For a trained-LoRA evaluation, use this order:
 `dataset-prep -> training-parameter-planning -> training-backends -> training ->
@@ -205,7 +207,7 @@ git log --oneline -5
 
 Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
 
-If `/ops` exists, treat it as the single source of truth for information architecture, writing rules, design tokens, and contribution rules. New owner decisions that change behavior, IA, naming, writing rules, or design rules must be reflected in `/ops` or an ADR before implementation.
+New owner decisions that change behavior, information architecture, naming, writing rules, or design rules must be reflected in an ADR before implementation.
 Before writing an ADR, apply the criteria in `docs/adr/README.md`.
 
 Keep backend adapters and executors separate. Backends compile native configuration and container-native command specifications; they do not launch runs. Executors launch, reconcile, and stop runs.

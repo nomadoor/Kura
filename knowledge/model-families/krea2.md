@@ -20,16 +20,6 @@ source: owner (2026-08-15)
 
 ## character
 
-- lr: 7e-5 provisional Kura default
-  source: owner (2026-07-02)
-- batch: 2 (effective)
-  source: owner (2026-07-02)
-- resolution: 768 as the owner-preferred practical character-LoRA starting
-  point; raise toward 1024 only when hardware headroom and task goals justify
-  the extra cost.
-  source: owner (2026-07-02)
-- notes: owner-stated baseline; attach a run id when first verified on an
-  evaluated run.
 - evidence: 768/rank16/lr7e-5/effective-batch2 completed locally on 12 GB
   with heavy speed aids, and on RunPod A5000 with gradient checkpointing only.
   source: run 20260702-2343_myakumyaku-krea2-768-12gb-rootdata_1a0e
