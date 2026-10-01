@@ -20,8 +20,6 @@ source: owner (2026-08-15)
   character dataset when no stronger architecture-specific evidence applies.
   source: owner (2026-08-04)
   source: run 20260803-2140_vivi-anima-7e5-2000_d8d3
-- resolution: 768
-  source: owner (2026-07-02)
 - rank / alpha: 16 / 8 as a verified small-character starting point.
   source: run 20260803-2140_vivi-anima-7e5-2000_d8d3
 - checkpoint review: retain checkpoints every 100 steps during exploratory

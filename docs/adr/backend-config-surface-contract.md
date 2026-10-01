@@ -1,6 +1,6 @@
 # ADR: Declared backend configuration surfaces
 
-Status: accepted owner direction; implementation in progress.
+Status: accepted; implemented (`kura run capabilities`, `kura doctor workspace`).
 
 Date: 2026-08-13
 

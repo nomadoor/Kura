@@ -22,7 +22,7 @@ cannot be the admission requirement for all useful Resume operations.
 This decision crosses the run envelope, artifact ownership, backend adapters,
 local and RunPod executors, cleanup, planning, and monitoring. The supporting
 research and backend evidence are recorded in
-[`training-continuation-design.md`](../training-continuation-design.md).
+[`training-continuation-design.md`](../archive/training-continuation-design.md).
 
 ## Decision
 
