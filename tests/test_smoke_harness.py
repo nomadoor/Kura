@@ -101,6 +101,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
                 MODULE.ensure_dataset(workspace, MODULE.IMAGE_DATASET)
             self.assertFalse((workspace / "datasets" / MODULE.IMAGE_DATASET).exists())
 
+    @posix_only(DATASET_IO)
     def test_every_smoke_compiles_through_the_normal_kura_cli(self) -> None:
         # A backend surface change that invalidates a smoke must fail here,
         # not after a paid Pod has started.

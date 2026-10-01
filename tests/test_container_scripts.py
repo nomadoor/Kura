@@ -1000,6 +1000,7 @@ class ContainerScriptTests(unittest.TestCase):
 
         compile(module.CHILD, "hf_download.CHILD", "exec")
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_preflight_measures_remote_metadata_and_disk(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -1104,6 +1105,7 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertEqual(observed["max_workers"], 4)
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_retry_preserves_shared_incomplete_files(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -1142,6 +1144,7 @@ class ContainerScriptTests(unittest.TestCase):
             self.assertEqual(incomplete.read_bytes(), b"partial")
             self.assertTrue(link.is_symlink())
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_notices_a_finished_child_without_a_full_poll_interval(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)

@@ -5228,6 +5228,7 @@ class MusubiBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "cannot map downloaded model path"):
             stable_link_target("/root/.cache/huggingface/weights.safetensors", link_path)
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_rejects_unmapped_cache_before_download(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
@@ -5252,6 +5253,7 @@ class MusubiBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "HF_HUB_CACHE is required"):
                 run_one(item)
 
+    @posix_only(POSIX_PATHS)
     def test_hf_download_uses_workspace_path_maps_for_symlink_targets(self) -> None:
         namespace: dict[str, Any] = {"__name__": "__test__"}
         exec(script_source("hf_download.py"), namespace)
