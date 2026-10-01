@@ -234,6 +234,21 @@ def preflight_downloads(items):
         )
 
 
+def wait_for_exit(process, seconds):
+    """Return True once the child exits, or False after `seconds` of waiting.
+
+    A cache hit or a fast download exits almost at once; checking every half
+    second keeps it from paying a whole progress interval.
+    """
+    deadline = time.monotonic() + seconds
+    while process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.5, remaining))
+    return True
+
+
 def run_one(item):
     link_path = item["link_path"]
     cache_dir = os.environ.get("HF_HUB_CACHE")
@@ -256,8 +271,7 @@ def run_one(item):
         print(f"[kura] hf download start {label} attempt {attempt}/{ATTEMPTS}", flush=True)
         process = subprocess.Popen([sys.executable, "-c", CHILD, json.dumps(item, ensure_ascii=False)], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         last_progress = time.monotonic()
-        while process.poll() is None:
-            time.sleep(POLL_SEC)
+        while not wait_for_exit(process, POLL_SEC):
             snapshots = [tree_snapshot(directory) for directory in progress_dirs]
             total = sum(snapshot[0] for snapshot in snapshots)
             count = sum(snapshot[2] for snapshot in snapshots)

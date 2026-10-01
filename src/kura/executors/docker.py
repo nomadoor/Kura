@@ -30,6 +30,8 @@ from kura.executors.common import (
     MIN_FREE_SPACE_GIB,
     TERMINAL_STATES,
     append_run_event,
+    launch_phases,
+    record_launch_phase,
     _is_secret,
     _load_status,
     _materialize_stdout_progress,
@@ -447,6 +449,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         print(json.dumps({"docker_run_command": safe_command, "container_name": name, "logs_path": f"runs/{run_dir.name}/logs/stdout.log"}, ensure_ascii=False, indent=2))
         return command, None
 
+    start_requested_at = _now()
     try:
         result = subprocess.run(command, text=True, capture_output=True, check=False)
     except FileNotFoundError as exc:
@@ -477,12 +480,37 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "platform": platform.platform(), "host": platform.node(), "kura_version": __version__, "preflight": preflight,
     }
     _write_json(realization_path, realization)
+    record_launch_phase(run_dir, realization_id, "container_start_requested", at=start_requested_at)
     status = _load_status(run_dir)
     status.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": platform.node(), "last_realization": str(realization_path.relative_to(run_dir)), "container_id": container_id, "container_name": name})
     status.pop("last_observation", None)
     _write_status(run_dir, status)
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id})
     return command, realization_id
+
+
+def _docker_timestamp(value: Any) -> str | None:
+    """Docker reports nanoseconds; keep microseconds so the value parses everywhere."""
+    if not isinstance(value, str) or not value or value.startswith("0001-"):
+        return None
+    match = re.fullmatch(r"(.*T\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)", value)
+    if match is None:
+        return None
+    fraction = (match.group(2) or "")[:7]
+    zone = "+00:00" if match.group(3) == "Z" else match.group(3)
+    return f"{match.group(1)}{fraction}{zone}"
+
+
+def _record_container_times(run_dir: Path, realization_id: str, docker_state: dict[str, Any]) -> None:
+    """Record Docker's own start/finish once, on the first terminal observation."""
+    if any(item["phase"] == "container_exited" for item in launch_phases(run_dir, realization_id)):
+        return
+    started = _docker_timestamp(docker_state.get("StartedAt"))
+    finished = _docker_timestamp(docker_state.get("FinishedAt"))
+    if started:
+        record_launch_phase(run_dir, realization_id, "container_started", at=started)
+    if finished:
+        record_launch_phase(run_dir, realization_id, "container_exited", at=finished)
 
 
 def reconcile_docker(
@@ -543,6 +571,7 @@ def reconcile_docker(
                 if isinstance(finished_at, str) and finished_at and not finished_at.startswith("0001-"):
                     ended = finished_at
                     ended_source = "docker_finished_at"
+                    _record_container_times(run_dir, realization["id"], docker_state)
                 else:
                     ended = observed_at
                     ended_source = "observed_at"

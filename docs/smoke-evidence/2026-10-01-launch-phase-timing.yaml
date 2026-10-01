@@ -1,0 +1,74 @@
+schema_version: 1
+campaign: real one-step smokes after launch-phase timing, prompt hf_download exit,
+  and per-Pod SSH connection reuse
+observed_at: '2026-10-01'
+harness: scripts/real_smoke.py (prepare -> kura run execute -> verify -> evidence)
+common_recipe:
+  optimizer_steps: 1
+  seed: 1
+  purpose: lifecycle, transfer, and launch timing only; no LoRA quality claim
+runs:
+  ai-toolkit-qwen-image-2-2026-10-01-1458:
+    run_id: 20261001-1458_ai-toolkit-qwen-image-2_723a
+    model: Comfy-Org/Qwen-Image-2.1
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.04037
+    - 0.04037
+    - 0.04037
+    outputs:
+    - outputs/20261001-1458_ai-toolkit-qwen-image-2_723a.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-10-01T14:58:52.396155+09:00'
+    pod_stopped_at: '2026-10-01T15:03:25.508663+09:00'
+    launch_timing: startup 2m 50s · upload 11s · job 1m 16s · download 11s · stop
+      0s
+  musubi-zimage-2026-10-01-1458:
+    run_id: 20261001-1458_musubi-zimage_78ba
+    model: Comfy-Org/z_image
+    dataset: real-smoke-image
+    image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+    losses:
+    - 0.0742
+    - 0.0742
+    outputs:
+    - outputs/20261001-1458_musubi-zimage_78ba-step00000001.safetensors
+    - outputs/20261001-1458_musubi-zimage_78ba.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-10-01T15:03:34.240337+09:00'
+    pod_stopped_at: '2026-10-01T15:08:22.299727+09:00'
+    launch_timing: startup 1m 57s · upload 11s · job 2m 27s · download 8s · stop 0s
+  ai-toolkit-sdxl-2026-10-01-1458:
+    run_id: 20261001-1458_ai-toolkit-sdxl_58dc
+    model: stabilityai/stable-diffusion-xl-base-1.0
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit:dev
+    losses:
+    - 0.03656
+    - 0.03656
+    - 0.03656
+    outputs:
+    - outputs/20261001-1458_ai-toolkit-sdxl_58dc/20261001-1458_ai-toolkit-sdxl_58dc.safetensors
+    input_postflight: matched
+    publication: completed
+    launch_timing: startup 0s · job 44s
+  sd-scripts-sdxl-2026-10-01-1458:
+    run_id: 20261001-1458_sd-scripts-sdxl_9b7f
+    model: stabilityai/stable-diffusion-xl-base-1.0
+    dataset: real-smoke-image
+    image: nomadoor/kura-sd-scripts:dev
+    losses:
+    - 0.00704
+    - 0.00704
+    outputs:
+    - outputs/20261001-1458_sd-scripts-sdxl_9b7f.safetensors
+    input_postflight: matched
+    publication: completed
+    launch_timing: startup 0s · job 1m 58s
