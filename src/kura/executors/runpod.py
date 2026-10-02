@@ -264,6 +264,7 @@ def _confirm_runpod_launch(
     yes: bool,
     max_lease_sec: int | None,
     wait_for_capacity_sec: int = 0,
+    unattended_wait: str | None = None,
 ) -> dict[str, Any]:
     """Require one authorization before a billable Pod-creation attempt sequence."""
 
@@ -299,6 +300,8 @@ def _confirm_runpod_launch(
         if isinstance(reason, str) and reason:
             print(f"  Price lookup: {_redact_secret_text(reason)}", file=sys.stderr)
     print(f"  Maximum lease: {_format_lease_limit(max_lease_sec)}", file=sys.stderr)
+    if unattended_wait:
+        print(f"  Unattended wait: {unattended_wait}", file=sys.stderr)
     if wait_for_capacity_sec > 0:
         print(
             f"  Capacity wait: up to {_format_lease_limit(wait_for_capacity_sec)}; "
@@ -859,6 +862,7 @@ def launch_runpod(
     capacity_poll_interval_sec: int = 30,
     yes: bool = False,
     max_lease_sec: int | None = None,
+    unattended_wait: str | None = None,
 ) -> str | None:
     """Create a RunPod Pod using a pre-staged workspace."""
     settings = _runpod_settings(config)
@@ -992,6 +996,7 @@ sleep infinity
         yes=yes,
         max_lease_sec=max_lease_sec,
         wait_for_capacity_sec=wait_for_capacity_sec,
+        unattended_wait=unattended_wait,
     )
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None

@@ -680,6 +680,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         min_download_free = _configured_download_min_free_bytes(config)
         details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
         _start_ssh_master(details)
+        _mark_runpod_outputs_collecting(details, run_id)
         destination.mkdir(exist_ok=True)
         workspace = _runpod_workspace_for_run(run_dir)
         remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
@@ -776,6 +777,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             },
         )
         record_recovery_download(recovery_artifacts)
+        _mark_runpod_outputs_collected(details, run_id)
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
@@ -1714,6 +1716,144 @@ def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     return "\n".join([*lines, ""])
 
 
+# An SSH session does not inherit the Pod's create-time environment, where
+# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY. Pod-side guards
+# read them from the init process and call the same GraphQL mutation the
+# controller uses (podTerminate), stopping the Pod if termination is refused.
+# They deliberately avoid the Pod's preinstalled runpodctl, whose command
+# syntax depends on the version RunPod ships and differs from Kura's own.
+POD_SELF_DELETE_FUNCTION = r"""
+kura_pod_self_delete() {
+  kura_log="$1"
+  kura_env_file="${KURA_POD_ENV_FILE:-/proc/1/environ}"
+  if [ -z "${RUNPOD_API_KEY:-}" ] && [ -r "$kura_env_file" ]; then
+    RUNPOD_API_KEY=$(tr '\000' '\n' < "$kura_env_file" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)
+    export RUNPOD_API_KEY
+  fi
+  if [ -z "${RUNPOD_POD_ID:-}" ] && [ -r "$kura_env_file" ]; then
+    RUNPOD_POD_ID=$(tr '\000' '\n' < "$kura_env_file" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)
+    export RUNPOD_POD_ID
+  fi
+  kura_python=$(command -v python3 || command -v python || true)
+  if [ -z "${RUNPOD_API_KEY:-}" ] || [ -z "${RUNPOD_POD_ID:-}" ] || [ -z "$kura_python" ]; then
+    echo "[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing" >> "$kura_log" 2>&1 || true
+    return 1
+  fi
+  "$kura_python" - "$RUNPOD_POD_ID" >> "$kura_log" 2>&1 <<'KURA_POD_SELF_DELETE'
+import json, os, sys, urllib.request
+
+pod_id = sys.argv[1]
+url = os.environ.get("KURA_RUNPOD_GRAPHQL_URL", "https://api.runpod.io/graphql")
+mutations = (
+    ("podTerminate", "mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }"),
+    ("podStop", "mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }"),
+)
+for name, query in mutations:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps({"query": query, "variables": {"podId": pod_id}}).encode("utf-8"),
+        method="POST",
+        # RunPod's edge rejects Python's default User-Agent before checking the key.
+        headers={"Content-Type": "application/json", "User-Agent": "Kura-pod-guard"},
+    )
+    request.add_unredirected_header("Authorization", "Bearer " + os.environ["RUNPOD_API_KEY"])
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode("utf-8") or "{}")
+    except Exception as exc:
+        detail = ""
+        if hasattr(exc, "read"):
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:200]
+            except Exception:
+                detail = ""
+        print(f"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}".rstrip(), flush=True)
+        continue
+    if body.get("errors"):
+        messages = "; ".join(str(error.get("message", "")) for error in body["errors"] if isinstance(error, dict))
+        print(f"[kura] Pod self-delete {name} was refused: {messages[:200]}", flush=True)
+        continue
+    print(f"[kura] Pod self-delete {name} accepted", flush=True)
+    sys.exit(0)
+sys.exit(1)
+KURA_POD_SELF_DELETE
+}
+""".strip()
+
+# Without its controller, a finished Pod waits this long at least for the
+# outputs to be collected (docs/adr/runpod-unattended-completion.md).
+UNATTENDED_MIN_WAIT_SEC = 2 * 3600
+
+
+def _runpod_collected_mark(run_id: str) -> str:
+    return f"/tmp/kura-jobs/{run_id}.collected"
+
+
+def _runpod_collecting_mark(run_id: str) -> str:
+    return f"/tmp/kura-jobs/{run_id}.collecting"
+
+
+def _unattended_completion_shell(*, wait_sec: int | None, collected_mark: str, collecting_mark: str | None = None) -> str:
+    """Shell that starts the post-training timer; ``wait_sec=None`` is the automatic wait."""
+    if wait_sec == 0:
+        return 'echo "[kura] unattended completion is off; only the maximum lease bounds this Pod" >> "$KURA_LOG_PATH" 2>&1 || true'
+    fixed = "" if wait_sec is None else str(int(wait_sec))
+    return f"""
+kura_elapsed=$(( $(date +%s) - KURA_JOB_STARTED_EPOCH ))
+kura_wait={fixed}
+if [ -z "$kura_wait" ]; then
+  if [ "$kura_elapsed" -gt {UNATTENDED_MIN_WAIT_SEC} ]; then kura_wait=$kura_elapsed; else kura_wait={UNATTENDED_MIN_WAIT_SEC}; fi
+fi
+echo "[kura] unattended completion: the Pod deletes itself in ${{kura_wait}}s unless Kura collects the outputs first" >> "$KURA_LOG_PATH" 2>&1 || true
+(
+  sleep "$kura_wait"
+  # A controller that started collecting keeps the Pod; if it dies mid-way,
+  # the maximum lease still deletes the Pod.
+  while [ -e {shlex.quote(collecting_mark or collected_mark + ".collecting")} ] && [ ! -e {shlex.quote(collected_mark)} ]; do sleep 60; done
+  if [ -e {shlex.quote(collected_mark)} ]; then exit 0; fi
+  echo "[kura] unattended wait of ${{kura_wait}}s expired before the outputs were collected; deleting the Pod" >> "$KURA_LOG_PATH" 2>&1 || true
+  kura_pod_self_delete "$KURA_LOG_PATH" || true
+) </dev/null >/dev/null 2>&1 &
+""".strip()
+
+
+def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
+    """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
+    if max_lease_sec <= 0:
+        return ""
+    pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
+    return f"""
+{POD_SELF_DELETE_FUNCTION}
+(
+  {pod_export}
+  sleep {int(max_lease_sec)}
+  mkdir -p "$(dirname {shlex.quote(log_path)})" || true
+  echo "[kura] maximum lease of {int(max_lease_sec)}s expired; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
+  kura_pod_self_delete {shlex.quote(log_path)} || true
+) </dev/null >/dev/null 2>&1 &
+""".strip()
+
+
+def _mark_runpod_outputs_collecting(details: dict[str, Any], run_id: str) -> None:
+    """Tell the Pod-side timer that a download is underway; best effort."""
+    _touch_runpod_mark(details, _runpod_collecting_mark(run_id))
+
+
+def _mark_runpod_outputs_collected(details: dict[str, Any], run_id: str) -> None:
+    """Tell the Pod-side timer that the controller has the outputs; best effort."""
+    _touch_runpod_mark(details, _runpod_collected_mark(run_id))
+
+
+def _touch_runpod_mark(details: dict[str, Any], mark: str) -> None:
+    try:
+        subprocess.run(
+            [*_ssh_base(details), f"mkdir -p /tmp/kura-jobs && touch {shlex.quote(mark)}"],
+            text=True, capture_output=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
 def _runpod_remote_job_script(
     *,
     workspace: str,
@@ -1728,6 +1868,7 @@ def _runpod_remote_job_script(
     transfer_manifest: str | None = None,
     transfer_manifest_sha256: str | None = None,
     command_env: dict[str, str] | None = None,
+    unattended_wait_sec: int | None = None,
 ) -> str:
     declared_roots = write_roots or []
     # An SSH session does not inherit the Pod's create-time environment, so
@@ -1789,6 +1930,8 @@ export KURA_WORKSPACE={shlex.quote(workspace)}
 export KURA_RUN_ID={shlex.quote(run_id)}
 export KURA_REALIZATION_ID={shlex.quote(realization_id)}
 export KURA_LOG_PATH={shlex.quote(workspace + '/runs/' + run_id + '/logs/stdout.log')}
+export KURA_JOB_STARTED_EPOCH=$(date +%s)
+{POD_SELF_DELETE_FUNCTION}
 export HF_HOME="$KURA_WORKSPACE/cache/huggingface"
 export HF_HUB_CACHE="$HF_HOME/hub"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
@@ -1922,6 +2065,7 @@ if os.environ.get("KURA_REMOTE_NOTIFY_NTFY") == "1" and os.environ.get("KURA_NTF
     except Exception:
         pass
 PY
+{_unattended_completion_shell(wait_sec=unattended_wait_sec, collected_mark=_runpod_collected_mark(run_id), collecting_mark=_runpod_collecting_mark(run_id))}
 exit "$exit_code"
 """.strip()
 
@@ -1990,7 +2134,7 @@ def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600) -> int:
+def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600, unattended_wait_sec: int | None = None) -> int:
     prepared_upload = _prepare_remote_upload(run_dir)
     status = prepared_upload["status"]
     realization = prepared_upload["realization"]
@@ -2051,9 +2195,6 @@ chmod 600 {shlex.quote(remote_secret_path)}
         installed = _run_bounded([*_ssh_base(details), install_secret_script], input=secret_payload, text=True, context="ssh secret preparation")
         if installed.returncode:
             raise ValueError(f"ssh secret preparation failed with exit code {installed.returncode}")
-    lease_log_path = f"{workspace}/runs/{run_id}/logs/stdout.log"
-    pod_id = status.get("pod_id")
-    pod_id_value = pod_id if isinstance(pod_id, str) else ""
     remote_job_script = _runpod_remote_job_script(
         workspace=workspace,
         run_id=run_id,
@@ -2067,25 +2208,16 @@ chmod 600 {shlex.quote(remote_secret_path)}
         transfer_manifest=remote_manifest,
         transfer_manifest_sha256=remote_manifest_sha256,
         command_env=command_env,
+        unattended_wait_sec=unattended_wait_sec,
     )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"
-    lease_guard = ""
-    if max_lease_sec > 0:
-        lease_guard = f"""
-(
-  KURA_LEASE_LOG_PATH={shlex.quote(lease_log_path)}
-  RUNPOD_POD_ID={shlex.quote(pod_id_value)}
-  sleep {int(max_lease_sec)}
-  mkdir -p "$(dirname "$KURA_LEASE_LOG_PATH")" || true
-  echo "Kura max lease expired after {int(max_lease_sec)} seconds; attempting to delete RunPod pod" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
-  if command -v runpodctl >/dev/null 2>&1 && [ -n "$RUNPOD_POD_ID" ]; then
-    runpodctl pod delete "$RUNPOD_POD_ID" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
-  else
-    echo "Kura max lease could not delete pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LEASE_LOG_PATH" 2>&1 || true
-  fi
-) </dev/null >/dev/null 2>&1 &
-""".strip()
+    pod_id = status.get("pod_id")
+    lease_guard = _runpod_lease_guard_shell(
+        max_lease_sec=max_lease_sec,
+        pod_id=pod_id if isinstance(pod_id, str) else "",
+        log_path=f"{workspace}/runs/{run_id}/logs/stdout.log",
+    )
     start_script = f"""
 set -euo pipefail
 mkdir -p /tmp/kura-jobs
@@ -2101,7 +2233,11 @@ echo $!
         raise ValueError(f"remote job start failed with exit code {started.returncode}: {detail}")
     remote_pid = started.stdout.strip().splitlines()[-1] if started.stdout.strip() else None
     remote_job_started_at = datetime.now().astimezone().isoformat()
-    record_launch_phase(run_dir, realization_id, "remote_job_started", at=remote_job_started_at)
+    record_launch_phase(
+        run_dir, realization_id, "remote_job_started", at=remote_job_started_at,
+        max_lease_sec=max_lease_sec,
+        unattended_wait="auto" if unattended_wait_sec is None else unattended_wait_sec,
+    )
     try:
         def mutate(status: dict[str, Any]) -> None:
             status["remote_pid"] = remote_pid

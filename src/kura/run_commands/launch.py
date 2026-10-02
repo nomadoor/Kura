@@ -43,6 +43,16 @@ def _latest_realization_id(run_dir: Path) -> str | None:
     return Path(reference).stem if isinstance(reference, str) and reference.endswith(".json") else None
 
 
+def _unattended_wait(value: Any) -> tuple[int | None, str]:
+    """Parse --unattended-wait: ``auto`` is the ADR's automatic wait, 0 turns it off."""
+    if value is None or str(value).strip().lower() == "auto":
+        return None, "longer of 2h and the job time, then the Pod deletes itself if outputs were not collected"
+    seconds = _parse_duration_seconds(value)
+    if seconds <= 0:
+        return 0, "off; only the maximum lease bounds an unattended Pod"
+    return seconds, f"{value} after training, then the Pod deletes itself if outputs were not collected"
+
+
 def run_remote(
     run_id: str,
     *,
@@ -58,6 +68,7 @@ def run_remote(
     wait_for_capacity: Any = "0",
     capacity_poll_interval: Any = "30s",
     yes: bool = False,
+    unattended_wait: Any = "auto",
 ) -> int:
     run_dir = _run_path(run_id)
     launched = False
@@ -66,9 +77,11 @@ def run_remote(
     hold_for_sec = 0
     notify_subject: str | None = None
     notify_body: str | None = None
+    unattended_label = "longer of 2h and the job time"
     try:
         hold_for_sec = _parse_duration_seconds(hold_for)
         max_lease_sec = _parse_duration_seconds(max_lease)
+        unattended_wait_sec, unattended_label = _unattended_wait(unattended_wait)
         repeat_interval = _parse_duration_seconds(notify_repeat_interval)
         wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
         capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval)
@@ -84,6 +97,7 @@ def run_remote(
             capacity_poll_interval=capacity_poll_interval_sec,
             yes=yes,
             max_lease=max_lease_sec,
+            unattended_wait=unattended_label,
         )
         if launch_code:
             return launch_code
@@ -94,6 +108,7 @@ def run_remote(
             job_timeout_sec=job_timeout,
             remote_notify="ntfy" in _notification_channels(notify_channels),
             max_lease_sec=max_lease_sec,
+            unattended_wait_sec=unattended_wait_sec,
         )
         realization_id = _latest_realization_id(run_dir)
         if realization_id:
@@ -133,12 +148,19 @@ def run_remote(
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         message = _safe_error(exc)
         print(f"cannot run remote job: {message}", file=sys.stderr)
+        deadline_note = (
+            "Once its job has ended, the Pod deletes itself (with its outputs) after "
+            f"the unattended wait ({unattended_label}) unless they are collected first, "
+            "and in any case at the maximum lease."
+        )
+        print(deadline_note, file=sys.stderr)
         _notify(
             notify_channels,
             subject=f"Kura run controller failed: {run_id}",
             body=(
                 f"Run {run_id} controller stopped before confirmed download/stop:\n"
                 f"{message}\n\n"
+                f"{deadline_note}\n\n"
                 "The remote Pod may still be running and billing. Recover with:\n"
                 f"uv run kura run reconcile {run_id}\n"
                 f"uv run kura run download {run_id} --force\n"
@@ -171,6 +193,7 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
         download_interval=args.download_interval,
         hold_for=getattr(args, "hold_for", "30m"),
         max_lease=getattr(args, "max_lease", "12h"),
+        unattended_wait=getattr(args, "unattended_wait", "auto"),
         notify_repeat_interval=getattr(args, "notify_repeat_interval", "10m"),
         notify_channels=getattr(args, "notify", None),
         image=getattr(args, "image", None),
@@ -195,6 +218,7 @@ def execute_run(
     wait_for_capacity: Any = None,
     capacity_poll_interval: Any = None,
     yes: bool = False,
+    unattended_wait: Any = "auto",
 ) -> int:
     """Execute using the executor frozen in the compiled manifest."""
 
@@ -223,6 +247,7 @@ def execute_run(
             wait_for_capacity=frozen_wait if wait_for_capacity is None else wait_for_capacity,
             capacity_poll_interval=frozen_poll if capacity_poll_interval is None else capacity_poll_interval,
             yes=yes,
+            unattended_wait=unattended_wait,
         )
     if executor == "docker":
         return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
@@ -239,6 +264,7 @@ def cmd_run_execute(args: argparse.Namespace) -> int:
         download_interval=getattr(args, "download_interval", 20),
         hold_for=getattr(args, "hold_for", "0"),
         max_lease=getattr(args, "max_lease", "12h"),
+        unattended_wait=getattr(args, "unattended_wait", "auto"),
         notify_repeat_interval=getattr(args, "notify_repeat_interval", "10m"),
         notify_channels=getattr(args, "notify", None),
         image=getattr(args, "image", None),
@@ -276,6 +302,7 @@ def launch_run(
     capacity_poll_interval: Any = "30s",
     yes: bool = False,
     max_lease: Any = None,
+    unattended_wait: str | None = None,
 ) -> int:
     run_dir = _run_path(run_id)
     try:
@@ -450,6 +477,7 @@ def launch_run(
                     capacity_poll_interval_sec=_parse_duration_seconds(capacity_poll_interval),
                     yes=yes,
                     max_lease_sec=None if max_lease is None else _parse_duration_seconds(max_lease),
+                    unattended_wait=unattended_wait,
                 )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)

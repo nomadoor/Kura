@@ -1,0 +1,55 @@
+schema_version: 1
+campaign: RunPod unattended completion and Pod-side maximum lease (docs/adr/runpod-unattended-completion.md)
+observed_at: '2026-10-02'
+harness: scripts/real_smoke.py prepare; kura run execute/remote on RunPod A40; the controller was SIGKILLed
+  after remote job start for the unattended checks
+runs:
+  ai-toolkit-flux2-klein-4b-2026-10-02-2027:
+    run_id: 20261002-2027_ai-toolkit-flux2-klein-4b_d351
+    model: black-forest-labs/FLUX.2-klein-base-4B
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.05633
+    - 0.05633
+    - 0.05633
+    outputs:
+    - outputs/20261002-2027_ai-toolkit-flux2-klein-4b_d351.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-10-02T20:27:25.529032+09:00'
+    pod_stopped_at: '2026-10-02T20:30:54.072708+09:00'
+unattended_checks:
+  unattended-wait-2m-final:
+    run_id: 20261002-2027_ai-toolkit-flux2-klein-4b_15ee
+    setting: --unattended-wait 2m, controller killed after remote job start
+    outcome: passed
+    observation: Pod returned 404 (deleted) about 2 minutes after the job ended, via podTerminate with
+      the Pod-scoped key
+  unattended-wait-2m:
+    run_id: 20261002-1932_ai-toolkit-flux2-klein-4b_b1c0
+    setting: --unattended-wait 2m, controller killed after remote job start
+    outcome: passed
+    observation: Pod deleted itself about 2 minutes after the job ended
+  max-lease-10m:
+    run_id: 20261002-2004_ai-toolkit-flux2-klein-4b_18ff
+    setting: --max-lease 10m --unattended-wait 0, controller killed after remote job start
+    outcome: passed
+    observation: Pod deleted itself after the 10 minute lease
+  runpodctl-pod-delete:
+    run_id: 20261002-1147_ai-toolkit-flux2-klein-4b_4796
+    outcome: failed
+    observation: preinstalled runpodctl 1.14.15 does not know `pod delete`; the previous Pod-side lease
+      guard therefore never ran
+  python-default-user-agent:
+    run_id: 20261002-1708_ai-toolkit-flux2-klein-4b_9438
+    outcome: failed
+    observation: GraphQL podTerminate/podStop returned 403 because RunPod's edge rejects Python-urllib's
+      User-Agent (error 1010)
+  terminate-after:
+    run_id: 20261002-1932_ai-toolkit-flux2-klein-4b_ba00
+    outcome: failed
+    observation: terminateAfter in podFindAndDeployOnDemand was accepted but not enforced within 25 minutes
+      of a 10 minute deadline

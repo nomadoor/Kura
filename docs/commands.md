@@ -201,8 +201,13 @@ Useful low-level `run remote` flags:
   `run remote` does not inherit `compute.capacity` from the compiled run.
 - `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
   can inspect results. Use `--hold-for 0` to stop immediately.
-- `--max-lease 12h` is a best-effort Pod-side billing fuse if the local
-  controller dies.
+- `--max-lease 12h` deletes the Pod from inside after that long, whatever the
+  local controller does. It is a billing fuse, not output preservation.
+- `--unattended-wait auto` (on `run remote` and `run execute`) bounds a Pod whose
+  controller is gone when training ends: unless Kura collects the outputs first,
+  the Pod deletes itself after the longer of 2 hours and the job time (from
+  remote job start, including model download). Pass
+  a duration to change the wait or `0` to rely on the maximum lease alone.
 - `--yes` confirms Pod creation in a non-interactive session. Use it only after
   the user explicitly approves the billed RunPod launch. Interactive terminals
   show GPU, current hourly price, and maximum lease and ask once before creation.

@@ -32,7 +32,7 @@ from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SU
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.run_commands.runpod_ssh import _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
+from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env, format_launch_phases, launch_phases, record_launch_phase
@@ -40,7 +40,7 @@ from kura.executors.docker import _docker_timestamp
 from kura.run_commands.experiment import format_run_completion
 import kura.run_commands.runpod_ssh as runpod_ssh_module
 from kura.media_types import frozen_suffixes
-from kura.executors.runpod import RunPodAPIError, _is_runpod_capacity_error, _runpod_request
+from kura.executors.runpod import _confirm_runpod_launch, RunPodAPIError, _is_runpod_capacity_error, _runpod_request
 from kura.fsio import FileLockBusy, file_lock
 from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
@@ -6440,6 +6440,154 @@ class LaunchPhaseTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in events], ["run_training_states_pulled"])
 
 
+@posix_only(POSIX_PATHS)
+class RunPodUnattendedCompletionTests(unittest.TestCase):
+    """The Pod-side guards that bound billing while no controller is attached."""
+
+    def _sandbox(self, root: Path, *, refuse: tuple[str, ...] = ()) -> tuple[dict[str, str], list[dict[str, Any]], Any]:
+        import http.server
+
+        calls: list[dict[str, Any]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - http.server API
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                name = "podTerminate" if "podTerminate" in body["query"] else "podStop"
+                calls.append({"mutation": name, "pod": body["variables"]["podId"], "auth": self.headers.get("Authorization"), "agent": self.headers.get("User-Agent")})
+                payload = {"errors": [{"message": "not allowed"}]} if name in refuse else {"data": {name: None}}
+                encoded = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        environ = root / "environ"
+        environ.write_bytes(b"PATH=/usr/bin\0RUNPOD_API_KEY=pod-scoped-key\0RUNPOD_POD_ID=pod-7\0")
+        env = {
+            "PATH": os.environ["PATH"],
+            "KURA_POD_ENV_FILE": str(environ),
+            "KURA_LOG_PATH": str(root / "stdout.log"),
+            "KURA_RUNPOD_GRAPHQL_URL": f"http://127.0.0.1:{server.server_port}/graphql",
+        }
+        return env, calls, server
+
+    def test_self_delete_terminates_with_the_pod_scoped_key_from_the_init_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env, calls, _server = self._sandbox(root)
+            script = POD_SELF_DELETE_FUNCTION + '\nkura_pod_self_delete "$KURA_LOG_PATH"\n'
+            result = subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+            log = (root / "stdout.log").read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr + log)
+        expected_auth = " ".join(("Bearer", "pod-scoped-key"))
+        self.assertEqual(calls, [{"mutation": "podTerminate", "pod": "pod-7", "auth": expected_auth, "agent": "Kura-pod-guard"}])
+        self.assertNotIn("pod-scoped-key", log)
+
+    def test_self_delete_stops_the_pod_when_termination_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env, calls, _server = self._sandbox(root, refuse=("podTerminate",))
+            script = POD_SELF_DELETE_FUNCTION + '\nkura_pod_self_delete "$KURA_LOG_PATH"\n'
+            result = subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call["mutation"] for call in calls], ["podTerminate", "podStop"])
+
+    def _run_timer(self, root: Path, *, collected: bool) -> list[str]:
+        env, calls, _server = self._sandbox(root)
+        mark = root / "example.collected"
+        if collected:
+            mark.touch()
+        script = "\n".join([
+            POD_SELF_DELETE_FUNCTION,
+            "export KURA_JOB_STARTED_EPOCH=$(date +%s)",
+            _unattended_completion_shell(wait_sec=1, collected_mark=str(mark)),
+            "wait",
+        ])
+        subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+        return [call["mutation"] for call in calls]
+
+    def test_uncollected_outputs_delete_the_pod_after_the_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            calls = self._run_timer(Path(directory), collected=False)
+        self.assertEqual(calls, ["podTerminate"])
+
+    def test_collected_outputs_leave_the_pod_to_the_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            calls = self._run_timer(Path(directory), collected=True)
+        self.assertEqual(calls, [])
+
+    def test_a_download_in_progress_keeps_the_pod_until_it_is_collected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env, calls, _server = self._sandbox(root)
+            collected, collecting = root / "example.collected", root / "example.collecting"
+            collecting.touch()
+            block = _unattended_completion_shell(wait_sec=1, collected_mark=str(collected), collecting_mark=str(collecting))
+            # The timer re-checks every 60s; shorten that so the test observes both phases.
+            block = block.replace("sleep 60", "sleep 1")
+            script = "\n".join([POD_SELF_DELETE_FUNCTION, "export KURA_JOB_STARTED_EPOCH=$(date +%s)", block])
+            process = subprocess.Popen(["sh", "-c", script + "\nwait\n"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(3)
+            self.assertEqual(calls, [], "the timer must wait while a download is in progress")
+            collected.touch()
+            process.wait(timeout=30)
+        self.assertEqual(calls, [])
+
+    def test_automatic_wait_is_the_longer_of_two_hours_and_the_training_time(self) -> None:
+        for elapsed, expected in ((60, 7200), (10_000, 10_000)):
+            with self.subTest(elapsed=elapsed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                env, _calls, _server = self._sandbox(root)
+                block = _unattended_completion_shell(wait_sec=None, collected_mark=str(root / "never"))
+                # Only the announced wait matters here, not the background timer.
+                block = block.split("\n(\n")[0]
+                script = f"export KURA_JOB_STARTED_EPOCH=$(( $(date +%s) - {elapsed} ))\n{block}\n"
+                subprocess.run(["sh", "-c", script], env=env, text=True, capture_output=True, check=False, timeout=30)
+                log = (root / "stdout.log").read_text(encoding="utf-8")
+                announced = int(log.split(" in ")[1].split("s ")[0])
+            self.assertTrue(expected <= announced <= expected + 2, log)
+
+    def test_job_script_starts_the_timer_after_the_exit_record_unless_disabled(self) -> None:
+        common = dict(workspace="/workspace", run_id="example", realization_id="r1", remote_secret_path="/tmp/kura-secrets/example.env", archive_name="bundle.tar.gz", remote_archive="/workspace/bundle.tar.gz", cwd="/opt/tool", command="true")
+        automatic = _runpod_remote_job_script(**common)
+        disabled = _runpod_remote_job_script(**common, unattended_wait_sec=0)
+        for script in (automatic, disabled):
+            result = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("kura_pod_self_delete", automatic)
+        self.assertLess(automatic.index("remote-exit-"), automatic.index("unattended completion"))
+        self.assertIn("/tmp/kura-jobs/example.collected", automatic)
+        self.assertNotIn("sleep \"$kura_wait\"", disabled)
+
+    def test_max_lease_guard_deletes_the_pod_with_the_same_self_delete(self) -> None:
+        guard = _runpod_lease_guard_shell(max_lease_sec=3600, pod_id="pod-7", log_path="/workspace/runs/example/logs/stdout.log")
+        self.assertIn("kura_pod_self_delete", guard)
+        self.assertIn("sleep 3600", guard)
+        self.assertEqual(_runpod_lease_guard_shell(max_lease_sec=0, pod_id="pod-7", log_path="/x"), "")
+        result = subprocess.run(["bash", "-n"], input=guard, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_collection_marks_the_pod(self) -> None:
+        with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+            _mark_runpod_outputs_collected({"ip": "203.0.113.5", "port": 22, "key": "/tmp/key"}, "example")
+        self.assertIn("touch /tmp/kura-jobs/example.collected", run.call_args.args[0][-1])
+
+    def test_billing_confirmation_names_the_unattended_wait(self) -> None:
+        settings = {"gpu_type_ids": ["NVIDIA A40"], "gpu_count": 1, "cloud_types": ["SECURE"]}
+        with patch("kura.executors.runpod.runpod_gpu_availability", return_value={"status": "unavailable"}), \
+             contextlib.redirect_stderr(io.StringIO()) as stderr:
+            _confirm_runpod_launch({}, settings, yes=True, max_lease_sec=12 * 3600, unattended_wait="longer of 2h and the training time")
+        self.assertIn("Unattended wait: longer of 2h and the training time", stderr.getvalue())
+
+
 class RunDiscardTests(unittest.TestCase):
     def _make_run(self, root: Path, run_id: str, *, state: str) -> Path:
         run_dir = root / "runs" / run_id
@@ -7821,9 +7969,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
             self.assertNotIn("hf-secret", argv_text)
             self.assertIn("sleep 43200", argv_text)
-            self.assertIn("KURA_LEASE_LOG_PATH=/workspace/runs/example/logs/stdout.log", argv_text)
             self.assertIn("RUNPOD_POD_ID=pod-1", argv_text)
-            self.assertIn("runpodctl pod delete", argv_text)
+            self.assertIn("kura_pod_self_delete", argv_text)
             input_text = "\n".join(str(call[1].get("input") or "") for call in calls)
             self.assertIn('export HF_HOME="$KURA_WORKSPACE/cache/huggingface"', input_text)
             self.assertIn('export HF_HUB_CACHE="$HF_HOME/hub"', input_text)
@@ -8195,6 +8342,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             notify.assert_called_once()
             self.assertIn("controller failed", notify.call_args.kwargs["subject"])
             self.assertIn("may still be running and billing", notify.call_args.kwargs["body"])
+            self.assertIn("deletes itself (with its outputs) after the unattended wait", notify.call_args.kwargs["body"])
             self.assertIn("kura run stop example", notify.call_args.kwargs["body"])
 
     def test_stop_run_without_realization_reports_clean_error(self) -> None:
@@ -8265,7 +8413,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.run_commands.launch.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch.launch_run", return_value=0), \
+                     patch("kura.run_commands.launch.launch_run", return_value=0) as launch, \
                      patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0) as remote_run, \
                      patch("kura.run_commands.launch.download_with_retries", return_value=0), \
                      patch("kura.run_commands.launch._sleep_with_completion_reminders") as hold, \
