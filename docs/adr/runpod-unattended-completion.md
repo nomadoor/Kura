@@ -22,8 +22,11 @@ loses little, while losing a 24-hour run is severe.
 **After training ends, the Pod waits for collection, then deletes itself.**
 
 - The wait is the longer of 2 hours and the time the training took.
-- The maximum lease still applies.
-- The plan shows the wait, and the user can change it before approval.
+- The maximum lease runs from Pod creation and still ends everything. The
+  wait therefore never outlasts the lease time remaining when training ends,
+  and a run expected to take longer than the lease needs a longer lease.
+- The plan shows the wait and the lease, and the user can change both before
+  approval.
 
 **Optional relay storage, to be added later**
 
@@ -40,7 +43,7 @@ loses little, while losing a 24-hour run is severe.
 - A short run left unattended now costs at most about two hours of idle Pod
   time instead of twelve.
 - A long run keeps its outputs for at least as long as it took to produce
-  them.
+  them, unless the maximum lease expires first.
 - The remote job script gains a post-exit timer. Because it changes RunPod
   lifecycle behavior, it needs a real RunPod smoke and a behavior-changing
   executor identity record.

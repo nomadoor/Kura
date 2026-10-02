@@ -37,8 +37,9 @@ the source tree.
   knowledge.
 - `kura init` also runs the environment checks that `kura doctor` performs
   and reports only what is missing.
-- The setup path is: install uv, then `uv tool install`, then `kura init`.
-  Windows users do all three inside WSL2.
+- The setup path is: install uv, then install Kura with
+  `uv tool install <kura source>` (a Git source until a package is
+  published), then `kura init`. Windows users do all three inside WSL2.
 - A one-line installer may wrap these steps later.
 
 **Agent instructions in the workspace**
