@@ -47,7 +47,13 @@ stop Pod
   (`docs/adr/runpod-unattended-completion.md`). Collecting the outputs marks the
   Pod so the timer leaves it to the controller and any `--hold-for` review;
   a download in progress marks it too, so the timer waits for it.
-- Pod-side deletion uses the Pod-scoped `RUNPOD_API_KEY` from the init process
+- An explicit `kura run reconcile` records a Pod that no longer exists (it
+  deleted itself or was deleted elsewhere) as `interrupted` with
+  `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
+  does. Before relaunching such a run, confirm in the RunPod console that the
+  Pod is really gone.
+- Pod-side deletion (`container_scripts/pod_self_delete.sh`, shared by training
+  and render Pods) uses the Pod-scoped `RUNPOD_API_KEY` from the init process
   and calls `podTerminate`, then `podStop`, with a non-Python User-Agent. Do not
   rely on the Pod's preinstalled `runpodctl`; its syntax follows the version
   RunPod ships.

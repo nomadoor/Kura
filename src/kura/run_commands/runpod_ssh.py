@@ -32,6 +32,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
+from kura.executors.runpod import POD_SELF_DELETE_FUNCTION
 from kura.fsio import atomic_write_json
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
@@ -1505,20 +1506,12 @@ def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str
     pod_id = details.get("pod_id")
     pod_id_value = pod_id if isinstance(pod_id, str) else ""
     log_path = f"{workspace.rstrip('/')}/runs/{run_id}/logs/stdout.log"
-    script = f"""
-set -euo pipefail
-mkdir -p {shlex.quote(str(PurePosixPath(log_path).parent))}
-touch {shlex.quote(log_path)}
-(
-  sleep {int(max_lease_sec)}
-  echo "Kura render max lease expired after {int(max_lease_sec)} seconds; attempting to delete RunPod pod" >> {shlex.quote(log_path)} 2>&1 || true
-  if command -v runpodctl >/dev/null 2>&1 && [ -n {shlex.quote(pod_id_value)} ]; then
-    runpodctl pod delete {shlex.quote(pod_id_value)} >> {shlex.quote(log_path)} 2>&1 || true
-  else
-    echo "Kura render max lease could not delete pod: runpodctl or pod id is unavailable" >> {shlex.quote(log_path)} 2>&1 || true
-  fi
-) </dev/null >/dev/null 2>&1 &
-""".strip()
+    script = "\n".join([
+        "set -euo pipefail",
+        f"mkdir -p {shlex.quote(str(PurePosixPath(log_path).parent))}",
+        f"touch {shlex.quote(log_path)}",
+        _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id=pod_id_value, log_path=log_path),
+    ])
     try:
         result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=60)
     except subprocess.TimeoutExpired as exc:
@@ -1720,70 +1713,6 @@ def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
         return None
     return "\n".join([*lines, ""])
 
-
-# An SSH session does not inherit the Pod's create-time environment, where
-# RunPod injects RUNPOD_POD_ID and a Pod-scoped RUNPOD_API_KEY. Pod-side guards
-# read them from the init process and call the same GraphQL mutation the
-# controller uses (podTerminate), stopping the Pod if termination is refused.
-# They deliberately avoid the Pod's preinstalled runpodctl, whose command
-# syntax depends on the version RunPod ships and differs from Kura's own.
-POD_SELF_DELETE_FUNCTION = r"""
-kura_pod_self_delete() {
-  kura_log="$1"
-  kura_env_file="${KURA_POD_ENV_FILE:-/proc/1/environ}"
-  if [ -z "${RUNPOD_API_KEY:-}" ] && [ -r "$kura_env_file" ]; then
-    RUNPOD_API_KEY=$(tr '\000' '\n' < "$kura_env_file" | sed -n 's/^RUNPOD_API_KEY=//p' | head -n 1)
-    export RUNPOD_API_KEY
-  fi
-  if [ -z "${RUNPOD_POD_ID:-}" ] && [ -r "$kura_env_file" ]; then
-    RUNPOD_POD_ID=$(tr '\000' '\n' < "$kura_env_file" | sed -n 's/^RUNPOD_POD_ID=//p' | head -n 1)
-    export RUNPOD_POD_ID
-  fi
-  kura_python=$(command -v python3 || command -v python || true)
-  if [ -z "${RUNPOD_API_KEY:-}" ] || [ -z "${RUNPOD_POD_ID:-}" ] || [ -z "$kura_python" ]; then
-    echo "[kura] Pod self-delete unavailable: RUNPOD_API_KEY, RUNPOD_POD_ID, or python is missing" >> "$kura_log" 2>&1 || true
-    return 1
-  fi
-  "$kura_python" - "$RUNPOD_POD_ID" >> "$kura_log" 2>&1 <<'KURA_POD_SELF_DELETE'
-import json, os, sys, urllib.request
-
-pod_id = sys.argv[1]
-url = os.environ.get("KURA_RUNPOD_GRAPHQL_URL", "https://api.runpod.io/graphql")
-mutations = (
-    ("podTerminate", "mutation terminatePod($podId: String!) { podTerminate(input: {podId: $podId}) }"),
-    ("podStop", "mutation stopPod($podId: String!) { podStop(input: {podId: $podId}) { id desiredStatus } }"),
-)
-for name, query in mutations:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps({"query": query, "variables": {"podId": pod_id}}).encode("utf-8"),
-        method="POST",
-        # RunPod's edge rejects Python's default User-Agent before checking the key.
-        headers={"Content-Type": "application/json", "User-Agent": "Kura-pod-guard"},
-    )
-    request.add_unredirected_header("Authorization", "Bearer " + os.environ["RUNPOD_API_KEY"])
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body = json.loads(response.read().decode("utf-8") or "{}")
-    except Exception as exc:
-        detail = ""
-        if hasattr(exc, "read"):
-            try:
-                detail = exc.read().decode("utf-8", "replace")[:200]
-            except Exception:
-                detail = ""
-        print(f"[kura] Pod self-delete {name} failed: {getattr(exc, 'code', None) or type(exc).__name__} {detail}".rstrip(), flush=True)
-        continue
-    if body.get("errors"):
-        messages = "; ".join(str(error.get("message", "")) for error in body["errors"] if isinstance(error, dict))
-        print(f"[kura] Pod self-delete {name} was refused: {messages[:200]}", flush=True)
-        continue
-    print(f"[kura] Pod self-delete {name} accepted", flush=True)
-    sys.exit(0)
-sys.exit(1)
-KURA_POD_SELF_DELETE
-}
-""".strip()
 
 # Without its controller, a finished Pod waits this long at least for the
 # outputs to be collected (docs/adr/runpod-unattended-completion.md).

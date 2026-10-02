@@ -80,6 +80,7 @@ def _source_symbol(path: Path, symbol: str) -> bytes:
 # declared behavior-preserving executor migration.
 EXECUTOR_SOURCE_FILES: dict[str, tuple[str, ...]] = {
     "runpod": (
+        "container_scripts/pod_self_delete.sh",
         "container_scripts/runpod_input_verify.py",
         "dataset_handoff.py",
         "dataset_transfer.py",

@@ -7452,7 +7452,11 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(payload["env"]["KURA_MAX_LEASE_SEC"], "43200")
             self.assertEqual(payload["env"]["HF_HOME"], "/workspace/cache/huggingface")
             self.assertEqual(payload["env"]["HF_HUB_CACHE"], "/workspace/cache/huggingface/hub")
-            self.assertIn("runpodctl pod delete", payload["dockerStartCmd"][2])
+            self.assertIn("kura_pod_self_delete", payload["dockerStartCmd"][2])
+            self.assertIn("podTerminate", payload["dockerStartCmd"][2])
+            self.assertNotIn("runpodctl pod delete", payload["dockerStartCmd"][2])
+            syntax = subprocess.run(["sh", "-n"], input=payload["dockerStartCmd"][2], text=True, capture_output=True, check=False)
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
 
     def test_launch_runpod_can_pin_availability_filters(self) -> None:
@@ -8121,7 +8125,8 @@ class RunPodLifecycleTests(unittest.TestCase):
         command = run.call_args.args[0]
         command_text = "\n".join(map(str, command))
         self.assertIn("sleep 60", command_text)
-        self.assertIn("runpodctl pod delete", command_text)
+        self.assertIn("kura_pod_self_delete", command_text)
+        self.assertNotIn("runpodctl pod delete", command_text)
         self.assertIn("pod-1", command_text)
         self.assertIn("/workspace/runs/render-1/logs/stdout.log", command_text)
         self.assertEqual(run.call_args.kwargs["timeout"], 60)
@@ -8216,6 +8221,40 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["state"], "unknown")
             self.assertIsNone(status["exit_code"])
             request.assert_called_once_with("GET", "/pods/pod-1", "api-secret", timeout=30.0)
+
+    def test_reconcile_runpod_records_a_pod_that_no_longer_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
+                    status = reconcile_runpod(run_dir, self._config())
+            observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
+        self.assertEqual(status["state"], "interrupted")
+        self.assertIn("pod_missing_at", status)
+        self.assertTrue(observation["pod_missing"])
+
+    def test_automatic_reconcile_never_marks_a_pod_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)):
+                    with self.assertRaises(RunPodAPIError):
+                        reconcile_runpod(run_dir, self._config(), source="automatic")
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+
+    def test_reconcile_runpod_still_raises_other_api_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (500)", status_code=500)):
+                    with self.assertRaises(RunPodAPIError):
+                        reconcile_runpod(run_dir, self._config())
 
     def test_reconcile_runpod_preserves_confirmed_terminal_outcome(self) -> None:
         for terminal_state, exit_code in (("completed", 0), ("failed", 7), ("stopped", None), ("interrupted", None), ("unknown", None), ("launch_failed", None)):

@@ -27,6 +27,12 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.container_scripts import script_source
+
+
+# Defines kura_pod_self_delete for every Pod-side guard (unattended wait and
+# maximum lease, training and render Pods).
+POD_SELF_DELETE_FUNCTION = script_source("pod_self_delete.sh")
 
 
 class RunPodAPIError(ValueError):
@@ -1235,12 +1241,8 @@ fi
 if [ "${KURA_MAX_LEASE_SEC:-0}" -gt 0 ] 2>/dev/null; then
   (
     sleep "$KURA_MAX_LEASE_SEC"
-    echo "Kura session max lease expired after ${KURA_MAX_LEASE_SEC} seconds; attempting to delete RunPod pod" >> "$KURA_LOG_PATH" 2>&1 || true
-    if command -v runpodctl >/dev/null 2>&1 && [ -n "${RUNPOD_POD_ID:-}" ]; then
-      runpodctl pod delete "$RUNPOD_POD_ID" >> "$KURA_LOG_PATH" 2>&1 || true
-    else
-      echo "Kura session max lease could not delete pod: runpodctl or RUNPOD_POD_ID is unavailable" >> "$KURA_LOG_PATH" 2>&1 || true
-    fi
+    echo "[kura] session maximum lease of ${KURA_MAX_LEASE_SEC}s expired; deleting the Pod" >> "$KURA_LOG_PATH" 2>&1 || true
+    kura_pod_self_delete "$KURA_LOG_PATH" || true
   ) </dev/null >/dev/null 2>&1 &
 fi
 echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
@@ -1253,7 +1255,7 @@ sleep infinity
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"],
         "env": runtime_env,
-        "dockerStartCmd": ["sh", "-lc", ssh_script],
+        "dockerStartCmd": ["sh", "-lc", POD_SELF_DELETE_FUNCTION + "\n" + ssh_script],
         "imageName": image,
     }
     if settings.get("support_public_ip") is not None:
@@ -1356,9 +1358,22 @@ def reconcile_runpod(
         pod_id = realization.get("pod", {}).get("id")
         if not isinstance(pod_id, str):
             raise ValueError("latest realization has no RunPod pod ID")
-        pod = _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
-        state, exit_code = _runpod_state(pod)
+        try:
+            pod: dict[str, Any] | None = _runpod_request("GET", f"/pods/{pod_id}", api_key, timeout=timeout)
+        except RunPodAPIError as exc:
+            # The Pod no longer exists: it deleted itself (unattended wait or
+            # maximum lease) or was deleted elsewhere. Only an explicit
+            # reconcile records that as terminal; an automatic observation
+            # (the monitor) must not turn one flaky "not found" into a run that
+            # looks safe to relaunch while its Pod may still be billing.
+            if exc.status_code != 404 or source != "explicit":
+                raise
+            pod = None
         observed_at = _now()
+        if pod is None:
+            state, exit_code = "interrupted", None
+        else:
+            state, exit_code = _runpod_state(pod)
         ended = None if state == "running" else observed_at
         ended_source = None if state == "running" else "observed_at"
         observation = {
@@ -1370,7 +1385,7 @@ def reconcile_runpod(
             "ended": ended,
             "ended_source": ended_source,
             "pod_id": pod_id,
-            **_runpod_pod_snapshot(pod),
+            **(_runpod_pod_snapshot(pod) if pod is not None else {"pod_missing": True}),
         }
         recorded = False
 
@@ -1385,6 +1400,8 @@ def reconcile_runpod(
                 recorded = True
             if latest.get("state") not in TERMINAL_STATES:
                 latest.update({"state": state, "exit_code": exit_code, "ended": ended})
+            if pod is None:
+                latest["pod_missing_at"] = observed_at
             effective_state = latest.get("state") if isinstance(latest.get("state"), str) else state
             _materialize_stdout_progress(run_dir, latest, state=effective_state)
 
