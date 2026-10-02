@@ -8,6 +8,58 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-faster-exit-detection-2026-10-02
+    executor: runpod
+    reason: The controller reads the remote-exit record every 4 seconds instead of with the 20-second log
+      and checkpoint sync, so a finished job is noticed within seconds. The commands, transfer, verification,
+      training, collection, publication, and Pod stop are unchanged; only how soon the existing exit read
+      runs changes.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - ai-toolkit-anima-2026-09-29
+    - ai-toolkit-flux2-klein-4b-2026-09-29
+    - ai-toolkit-zimage-2026-09-29
+    - ai-toolkit-chroma-2026-09-29
+    - ai-toolkit-flux-kontext-2026-09-29
+    - ai-toolkit-qwen-image-2-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 5cfeb91bbbeb9fac62b683f9cd7ff5636530dba047436a869710cde7bce2fb2c
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 0614b67b28fe16d9ce5102c00ada2a8725569285584fc80a72d07d46455c9a2a
   - id: runpod-executor-pod-gone-and-render-lease-2026-10-02
     executor: runpod
     reason: The Pod self-delete moved verbatim from an inline string to container_scripts/pod_self_delete.sh,

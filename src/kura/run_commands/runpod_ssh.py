@@ -2192,8 +2192,13 @@ echo $!
     except (OSError, json.JSONDecodeError):
         pass
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None
+    # The Pod bills until the controller notices the job ended, so the cheap
+    # remote-exit check runs every few seconds; the heavier log and
+    # checkpoint sync keeps its own slower cadence.
     next_sync = 0.0
     sync_interval_sec = 20.0
+    exit_check_interval_sec = 4.0
+    next_exit_check = 0.0
     while True:
         now = time.monotonic()
         if deadline is not None and now >= deadline:
@@ -2201,6 +2206,8 @@ echo $!
         if now >= next_sync:
             _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
             _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
+            next_sync = now + sync_interval_sec
+        if now >= next_exit_check:
             exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
             if exit_record is not None:
                 record_launch_phase(run_dir, realization_id, "remote_exit_observed", remote_timestamp=exit_record.get("timestamp"))
@@ -2209,7 +2216,7 @@ echo $!
                 _record_remote_exit_observation(run_dir, exit_record)
                 exit_code = exit_record.get("exit_code")
                 return int(exit_code) if isinstance(exit_code, int) else 1
-            next_sync = now + sync_interval_sec
+            next_exit_check = now + exit_check_interval_sec
         time.sleep(2)
 
 

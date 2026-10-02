@@ -21,6 +21,24 @@ runs:
     cost_per_h: 0.49
     launched_at: '2026-10-02T20:27:25.529032+09:00'
     pod_stopped_at: '2026-10-02T20:30:54.072708+09:00'
+  ai-toolkit-flux2-klein-4b-2026-10-02-2236:
+    run_id: 20261002-2236_ai-toolkit-flux2-klein-4b_11d1
+    model: black-forest-labs/FLUX.2-klein-base-4B
+    dataset: real-smoke-image
+    image: nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    losses:
+    - 0.05633
+    - 0.05633
+    - 0.05633
+    outputs:
+    - outputs/20261002-2236_ai-toolkit-flux2-klein-4b_11d1.safetensors
+    input_postflight: matched
+    publication: completed
+    gpu: A40
+    cost_per_h: 0.49
+    launched_at: '2026-10-02T22:36:15.843953+09:00'
+    pod_stopped_at: '2026-10-02T22:40:28.256137+09:00'
+    remote_exit_lag_seconds: 1.6
 unattended_checks:
   unattended-wait-2m-final:
     run_id: 20261002-2027_ai-toolkit-flux2-klein-4b_15ee

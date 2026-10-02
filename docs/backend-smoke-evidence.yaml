@@ -14,6 +14,28 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 92ee169eafb37ef312bf5557577aa620259a5f5533b93fc3532862dbd482f1b8
+    executor_source:
+      kind: source-tree-sha256
+      value: 0614b67b28fe16d9ce5102c00ada2a8725569285584fc80a72d07d46455c9a2a
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a
+    native_path:
+      architecture: flux2_klein_4b
+      model_arch: flux2_klein_4b
+      executor: runpod
+      dataset: real-smoke-image
+      transfer: selected-files
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-02'
+    artifact: smoke-evidence/2026-10-02-runpod-unattended-completion.yaml
   - id: ai-toolkit-flux2-klein-4b-2026-10-02-2027
     backend: ai-toolkit
     adapter_source:

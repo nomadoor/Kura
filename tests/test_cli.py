@@ -8068,6 +8068,50 @@ class RunPodLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(phases[0]["container_started_at"], "2026-10-01T03:47:30Z")
 
+    def test_runpod_ssh_run_notices_remote_exit_within_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            clock = {"now": 1000.0}
+            exit_at = 1006.0
+            syncs: list[float] = []
+
+            def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
+                return subprocess.CompletedProcess(args[0], 0, "1234\n" if "nohup sh" in command_text else "", "")
+
+            def read_exit(*_args: object, **_kwargs: object) -> dict[str, Any] | None:
+                return {"event": "remote_exit", "exit_code": 0} if clock["now"] >= exit_at else None
+
+            def sleep(seconds: float) -> None:
+                clock["now"] += seconds
+
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}), \
+                 patch("kura.run_commands.runpod_ssh._try_sync_runpod_checkpoints", return_value=True), \
+                 patch("kura.run_commands.runpod_ssh._sync_runpod_remote_stdout", side_effect=lambda *a, **k: syncs.append(clock["now"]) or True), \
+                 patch("kura.run_commands.runpod_ssh._read_runpod_remote_exit", side_effect=read_exit), \
+                 patch("kura.run_commands.runpod_ssh.time.monotonic", side_effect=lambda: clock["now"]), \
+                 patch("kura.run_commands.runpod_ssh.time.sleep", side_effect=sleep), \
+                 patch("kura.cli.subprocess.run", side_effect=fake_run):
+                self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=0), 0)
+
+        # The exit is noticed within one short check interval, not the 20s log sync.
+        self.assertLessEqual(clock["now"] - exit_at, 5)
+        # The heavier log sync keeps its own cadence: once at start and once after exit.
+        self.assertEqual(len(syncs), 2)
+
     def test_runpod_remote_job_diagnostics_script_has_valid_shell_syntax(self) -> None:
         script = _runpod_remote_job_script(
             workspace="/workspace",
