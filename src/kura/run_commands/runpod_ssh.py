@@ -463,6 +463,7 @@ def download_run(run_id: str, *, force: bool = False) -> int:
 
 
 def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
+    collecting_on: dict[str, Any] | None = None
     try:
         run_dir = _run_path(run_id)
         destination = run_dir / "downloads"
@@ -681,6 +682,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         details = _runpod_ssh_details(run_dir, timeout_sec=60, interval_sec=2)
         _start_ssh_master(details)
         _mark_runpod_outputs_collecting(details, run_id)
+        collecting_on = details
         destination.mkdir(exist_ok=True)
         workspace = _runpod_workspace_for_run(run_dir)
         remote_run_dir = f"{workspace.rstrip('/')}/runs/{run_id}"
@@ -781,6 +783,9 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
+        if collecting_on is not None:
+            # A failed download is not in progress; keep the unattended timer armed.
+            _clear_runpod_mark(collecting_on, _runpod_collecting_mark(run_id))
         return 1
 
 
@@ -1835,8 +1840,13 @@ def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str)
 
 
 def _mark_runpod_outputs_collecting(details: dict[str, Any], run_id: str) -> None:
-    """Tell the Pod-side timer that a download is underway; best effort."""
-    _touch_runpod_mark(details, _runpod_collecting_mark(run_id))
+    """Tell the Pod-side timer that a download is underway.
+
+    Without the mark the timer could delete the Pod mid-download, so a
+    download that cannot place it does not start; the caller retries.
+    """
+    if not _touch_runpod_mark(details, _runpod_collecting_mark(run_id)):
+        raise ValueError("cannot mark the RunPod outputs as being collected")
 
 
 def _mark_runpod_outputs_collected(details: dict[str, Any], run_id: str) -> None:
@@ -1844,14 +1854,20 @@ def _mark_runpod_outputs_collected(details: dict[str, Any], run_id: str) -> None
     _touch_runpod_mark(details, _runpod_collected_mark(run_id))
 
 
-def _touch_runpod_mark(details: dict[str, Any], mark: str) -> None:
+def _touch_runpod_mark(details: dict[str, Any], mark: str) -> bool:
+    return _run_runpod_mark_command(details, f"mkdir -p /tmp/kura-jobs && touch {shlex.quote(mark)}")
+
+
+def _clear_runpod_mark(details: dict[str, Any], mark: str) -> bool:
+    return _run_runpod_mark_command(details, f"rm -f {shlex.quote(mark)}")
+
+
+def _run_runpod_mark_command(details: dict[str, Any], command: str) -> bool:
     try:
-        subprocess.run(
-            [*_ssh_base(details), f"mkdir -p /tmp/kura-jobs && touch {shlex.quote(mark)}"],
-            text=True, capture_output=True, check=False, timeout=60,
-        )
+        result = subprocess.run([*_ssh_base(details), command], text=True, capture_output=True, check=False, timeout=60)
     except (OSError, subprocess.TimeoutExpired):
-        return
+        return False
+    return result.returncode == 0
 
 
 def _runpod_remote_job_script(

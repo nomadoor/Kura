@@ -32,7 +32,7 @@ from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SU
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
-from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
+from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env, format_launch_phases, launch_phases, record_launch_phase
@@ -62,13 +62,18 @@ from tests.platform_support import DATASET_IO, POSIX_PATHS, posix_only
 # _REAL_SSH_CONTROL_DIR.
 _REAL_SSH_CONTROL_DIR = runpod_ssh_module._ssh_control_dir
 _SSH_REUSE_OFF = patch("kura.run_commands.runpod_ssh._ssh_control_dir", return_value=None)
+# Collection marks are placed on the Pod over ssh; tests never reach a Pod.
+_REAL_RUNPOD_MARK_COMMAND = runpod_ssh_module._run_runpod_mark_command
+_RUNPOD_MARKS_OFF = patch("kura.run_commands.runpod_ssh._run_runpod_mark_command", return_value=True)
 
 
 def setUpModule() -> None:
     _SSH_REUSE_OFF.start()
+    _RUNPOD_MARKS_OFF.start()
 
 
 def tearDownModule() -> None:
+    _RUNPOD_MARKS_OFF.stop()
     _SSH_REUSE_OFF.stop()
 
 class InitCommandTests(unittest.TestCase):
@@ -6575,8 +6580,41 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
         result = subprocess.run(["bash", "-n"], input=guard, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_a_failed_download_clears_the_collecting_mark(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            details = {"pod_id": "pod-1", "ip": "203.0.113.5", "port": 22, "key": "/tmp/key"}
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.runpod_ssh.shutil.which", return_value="/usr/bin/runpodctl"), \
+                     patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value=details), \
+                     patch("kura.run_commands.runpod_ssh._start_ssh_master"), \
+                     patch("kura.run_commands.runpod_ssh._touch_runpod_mark", return_value=True) as touch, \
+                     patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=ValueError("remote manifest unreadable")), \
+                     patch("kura.run_commands.runpod_ssh._clear_runpod_mark", return_value=True) as clear, \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
+            finally:
+                os.chdir(previous)
+        self.assertEqual(code, 1)
+        self.assertEqual(touch.call_args.args[1], "/tmp/kura-jobs/example.collecting")
+        self.assertEqual(clear.call_args.args[1], "/tmp/kura-jobs/example.collecting")
+
+    def test_a_download_does_not_start_without_the_collecting_mark(self) -> None:
+        details = {"pod_id": "pod-1", "ip": "203.0.113.5", "port": 22, "key": "/tmp/key"}
+        with patch("kura.run_commands.runpod_ssh._run_runpod_mark_command", _REAL_RUNPOD_MARK_COMMAND), \
+             patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 255, "", "connection refused")):
+            with self.assertRaisesRegex(ValueError, "cannot mark the RunPod outputs as being collected"):
+                _mark_runpod_outputs_collecting(details, "example")
+
     def test_collection_marks_the_pod(self) -> None:
-        with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
+        with patch("kura.run_commands.runpod_ssh._run_runpod_mark_command", _REAL_RUNPOD_MARK_COMMAND), \
+             patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run:
             _mark_runpod_outputs_collected({"ip": "203.0.113.5", "port": 22, "key": "/tmp/key"}, "example")
         self.assertIn("touch /tmp/kura-jobs/example.collected", run.call_args.args[0][-1])
 
