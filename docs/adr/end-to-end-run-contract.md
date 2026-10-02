@@ -193,7 +193,9 @@ must not create hidden state or remove direct recovery access.
 ## Non-goals
 
 - a universal model downloader or global model registry;
-- a database, queue, daemon, or hidden lifecycle state;
+- a database, queue, daemon, or hidden lifecycle state (superseded by
+  `files-only-state-and-job-runner.md`: a stateless job runner is allowed;
+  hidden lifecycle state and a second store remain non-goals);
 - automatic quality judgment;
 - automatic mutation of a user's ComfyUI installation;
 - silent quality, budget, GPU, or materially slower execution changes after
