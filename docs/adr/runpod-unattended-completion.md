@@ -60,5 +60,7 @@ loses little, while losing a 24-hour run is severe.
   `podStop`) with its own User-Agent; the maximum lease uses the same path.
 - RunPod's `terminateAfter` create field was tried as a RunPod-side deadline;
   it was accepted at creation but not enforced, so Kura does not rely on it.
-- The render session's Pod-side lease guards still use the old command and do
-  not work; they need the same fix.
+- Render session Pods had the same broken lease guards; they now use the same
+  self-delete (`container_scripts/pod_self_delete.sh`).
+- A Pod that deleted itself is a normal outcome, so `kura run reconcile` records
+  a missing Pod as `interrupted` instead of failing.
