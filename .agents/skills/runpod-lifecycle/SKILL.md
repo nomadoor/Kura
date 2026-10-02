@@ -40,7 +40,17 @@ stop Pod
   `--wait-for-capacity` and `--capacity-poll-interval` explicitly or it uses its
   immediate-launch default.
 - `--hold-for 30m`: normal post-download review window.
-- `--max-lease 12h`: Pod-side best-effort billing fuse if the local controller dies.
+- `--max-lease 12h`: the Pod deletes itself after this long, whatever the local controller does.
+- `--unattended-wait auto`: after training, if the outputs were not collected,
+  the Pod deletes itself after the longer of 2 hours and the job time
+  (from remote job start, including model download)
+  (`docs/adr/runpod-unattended-completion.md`). Collecting the outputs marks the
+  Pod so the timer leaves it to the controller and any `--hold-for` review;
+  a download in progress marks it too, so the timer waits for it.
+- Pod-side deletion uses the Pod-scoped `RUNPOD_API_KEY` from the init process
+  and calls `podTerminate`, then `podStop`, with a non-Python User-Agent. Do not
+  rely on the Pod's preinstalled `runpodctl`; its syntax follows the version
+  RunPod ships.
 - `--job-timeout 0`: wait until remote exit.
 - `runpod.storage_mode: upload`: no Network Volume by default. Manifest-v2
   runs require it: their inputs arrive only through the verified

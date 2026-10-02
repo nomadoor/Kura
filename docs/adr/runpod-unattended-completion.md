@@ -22,11 +22,15 @@ loses little, while losing a 24-hour run is severe.
 **After training ends, the Pod waits for collection, then deletes itself.**
 
 - The wait is the longer of 2 hours and the time the training took.
-- The maximum lease runs from Pod creation and still ends everything. The
-  wait therefore never outlasts the lease time remaining when training ends,
-  and a run expected to take longer than the lease needs a longer lease.
-- The plan shows the wait and the lease, and the user can change both before
-  approval.
+- The training time is measured from the remote job start, so it includes
+  input transfer and model download.
+- The maximum lease runs from the remote job start and still ends everything.
+  The wait therefore never outlasts the lease time remaining when training
+  ends, and a run expected to take longer than the lease needs a longer lease.
+- The billing confirmation shows the wait and the lease before launch, and the
+  user can change both (`--unattended-wait`, `--max-lease`).
+- A controller that starts collecting marks the Pod, so the timer waits for an
+  in-progress download instead of deleting the Pod under it.
 
 **Optional relay storage, to be added later**
 
@@ -44,6 +48,17 @@ loses little, while losing a 24-hour run is severe.
   time instead of twelve.
 - A long run keeps its outputs for at least as long as it took to produce
   them, unless the maximum lease expires first.
-- The remote job script gains a post-exit timer. Because it changes RunPod
-  lifecycle behavior, it needs a real RunPod smoke and a behavior-changing
-  executor identity record.
+- The remote job script gains a post-exit timer. With the controller present,
+  transfer, training, collection, and Pod stop are unchanged, so existing RunPod
+  evidence carries over through a behavior-preserving identity migration; the
+  unattended path is proven by its own real smokes.
+- Implementing this showed that the previous Pod-side maximum lease had never
+  worked: it called `runpodctl pod delete`, which the `runpodctl` RunPod
+  preinstalls does not understand, and Python's default User-Agent is rejected
+  by RunPod's edge. Pod-side deletion now reads the Pod-scoped
+  `RUNPOD_API_KEY` from the init process and calls `podTerminate` (then
+  `podStop`) with its own User-Agent; the maximum lease uses the same path.
+- RunPod's `terminateAfter` create field was tried as a RunPod-side deadline;
+  it was accepted at creation but not enforced, so Kura does not rely on it.
+- The render session's Pod-side lease guards still use the old command and do
+  not work; they need the same fix.

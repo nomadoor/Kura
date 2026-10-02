@@ -8,6 +8,112 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-collecting-mark-failures-2026-10-02
+    executor: runpod
+    reason: A download that fails now removes the Pod's collecting mark so the unattended timer stays armed,
+      and a download that cannot place the mark does not start, so the caller retries. Successful downloads,
+      transfer, verification, training, publication, and Pod stop are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - ai-toolkit-anima-2026-09-29
+    - ai-toolkit-flux2-klein-4b-2026-09-29
+    - ai-toolkit-zimage-2026-09-29
+    - ai-toolkit-chroma-2026-09-29
+    - ai-toolkit-flux-kontext-2026-09-29
+    - ai-toolkit-qwen-image-2-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 61b9557a65accfcaf2e88cfb163adfd1f5f105328dbe6c1ac2eb53a0f44db5bd
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 8700670b248b376dabec6b05d2ec57da012ac40f5284634637a6e19826b5e210
+  - id: runpod-executor-unattended-completion-2026-10-02
+    executor: runpod
+    reason: The remote job script now defines a Pod self-delete function, exports KURA_JOB_STARTED_EPOCH,
+      and, after writing the remote-exit record, starts a background timer that deletes the Pod after the
+      unattended wait unless the controller marked the outputs collected; the controller marks collecting
+      and collected around its download. The Pod-side maximum lease now uses the same self-delete; the previous
+      guard called a runpodctl command the Pod's preinstalled runpodctl does not have, so it never ran and
+      no evidence exercised it. With the controller present, the uploaded bytes, Pod-side verification,
+      trainer command, download selection, publication, and controller-side Pod stop are unchanged. The
+      unattended path is proven by its own RunPod smokes (docs/smoke-evidence/2026-10-02-runpod-unattended-completion.yaml).
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - ai-toolkit-anima-2026-09-29
+    - ai-toolkit-flux2-klein-4b-2026-09-29
+    - ai-toolkit-zimage-2026-09-29
+    - ai-toolkit-chroma-2026-09-29
+    - ai-toolkit-flux-kontext-2026-09-29
+    - ai-toolkit-qwen-image-2-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-current-executor-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 5d48be11f928b6a89358091a4b7d9b32743db83fb4c98b0112e985af40a7b129
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 61b9557a65accfcaf2e88cfb163adfd1f5f105328dbe6c1ac2eb53a0f44db5bd
   - id: runpod-executor-launch-phase-timing-and-ssh-reuse-2026-10-01
     executor: runpod
     reason: The controller now appends launch boundary timestamps to realizations/<id>.phases.jsonl (best
