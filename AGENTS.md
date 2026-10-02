@@ -78,7 +78,7 @@ Kura section at the bottom, starting with the `kura-core` skill.
 
 ## Core Model
 
-Kura is an agent-first, file-first workspace for reproducible training and render runs. Files are the source of truth. Do not introduce a hidden UI state store, database, queue, daemon, or second run-record system.
+Kura is an agent-first, file-first workspace for reproducible training and render runs. Files are the only authoritative state. Do not introduce a hidden UI state store, database, or second run-record system. A long-running process such as the UI job runner is allowed only as defined in `docs/adr/files-only-state-and-job-runner.md`.
 
 The decision model (see `docs/adr/kura-decision-model.md`): the CLI measures, the files remember, the skill judges, the user decides. Code measures; code stops only irreversible accidents; the agent judges; the user approves once before launch; Last look is not a gate but a regret reminder.
 
