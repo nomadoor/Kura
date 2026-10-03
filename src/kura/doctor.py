@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import http.client
 import os
 import platform
 import shutil
@@ -42,7 +43,7 @@ def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.Comp
 
 
 def _secret_state() -> dict[str, str]:
-    return {name: "present" if os.environ.get(name) else "absent" for name in ("HF_TOKEN", "RUNPOD_API_KEY", "GHCR_TOKEN", "DOCKERHUB_TOKEN")}
+    return {name: "present" if os.environ.get(name) else "absent" for name in ("HF_TOKEN", "RUNPOD_API_KEY")}
 
 
 def _safe_error(exc: BaseException | str) -> str:
@@ -1016,3 +1017,45 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
         "warnings": warnings,
     }, indent=2))
     return 1 if warnings else 0
+
+
+def readiness_gaps(root: Path) -> list[str]:
+    """What this machine still needs before Kura can train or render; empty when ready.
+
+    A quick subset of the doctor checks for `kura init`. Each line names the
+    command that diagnoses it in full.
+    """
+
+    gaps: list[str] = []
+    if not shutil.which("docker"):
+        gaps.append("Docker CLI was not found: local training needs Docker; RunPod training does not. See `kura doctor docker`.")
+    else:
+        try:
+            # Outside the workspace: a docker helper that outlives the timeout
+            # would otherwise hold the directory open on Windows.
+            reachable = subprocess.run(
+                ["docker", "info"], capture_output=True, text=True, check=False, timeout=5, cwd=Path.home(),
+            ).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            reachable = False
+        if not reachable:
+            gaps.append("The Docker daemon is not reachable: local training needs it; RunPod training does not. See `kura doctor docker`.")
+    config_path = root / "workspace.yaml"
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
+    except (OSError, yaml.YAMLError):
+        config = {}
+    config = config if isinstance(config, dict) else {}
+    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+    api_key_env = runpod.get("api_key_env") if isinstance(runpod.get("api_key_env"), str) and runpod.get("api_key_env") else "RUNPOD_API_KEY"
+    if not os.environ.get(api_key_env):
+        gaps.append(f"{api_key_env} is not set (put it in .env.local): RunPod training and renders need it. See `kura doctor runpod`.")
+    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
+    endpoint = comfyui.get("endpoint")
+    if isinstance(endpoint, str) and endpoint:
+        try:
+            with urllib.request.urlopen(f"{endpoint.rstrip('/')}/system_stats", timeout=2):
+                pass
+        except (OSError, ValueError, http.client.HTTPException):
+            gaps.append(f"ComfyUI is not reachable at {endpoint}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
+    return gaps

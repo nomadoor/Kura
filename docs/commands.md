@@ -11,7 +11,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | Command | Purpose |
 | --- | --- |
 | `uv sync` | Install Kura and its dependencies into `.venv` |
-| `uv run kura init` | Create the workspace folders and default config |
+| `uv run kura init` | Create a workspace in the current directory (folders, `workspace.yaml`, a private `.env.local` template, your `knowledge/`), refusing inside another workspace, and list what this machine still needs |
 | `uv run kura cleanup all` | Preview local cache, run, and Docker cleanup targets |
 | `uv run kura cleanup cache --yes` | Delete Kura-managed local model/cache data after previewing it |
 | `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
