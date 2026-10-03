@@ -19,7 +19,8 @@ Musubi Tuner and Kura's Musubi backend are not the same layer.
   unverified rather than simply "done."
 
 As of 2026-09-21, all adapters listed below passed image smoke on
-`nomadoor/kura-musubi-tuner:dev`: the configured Docker image contains the
+`nomadoor/kura-musubi-tuner:dev`, a development build of the image Kura now
+pins by digest: the image contains the
 39 expected Musubi scripts and each script can start its `--help` path. Earlier
 Docker launch smoke also proved that Kura can compile and start adapter commands
 against the Musubi entrypoints, but dummy-path launch smoke is not a real

@@ -446,7 +446,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
     def test_download_with_missing_frozen_command_needs_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             downloaded = run_dir / "downloads" / "example"
             (downloaded / "outputs").mkdir(parents=True)
@@ -480,7 +480,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
     def test_download_completes_only_after_valid_output_publication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             downloaded = run_dir / "downloads" / "example"
             (downloaded / "outputs").mkdir(parents=True)
@@ -514,7 +514,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
     def test_input_postflight_failure_never_blocks_download_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             downloaded = run_dir / "downloads" / "example"
             (downloaded / "outputs").mkdir(parents=True)
@@ -559,7 +559,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
     def test_download_does_not_complete_when_adapter_is_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             downloaded = run_dir / "downloads" / "example"
             (downloaded / "outputs").mkdir(parents=True)

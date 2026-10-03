@@ -13,8 +13,14 @@ while the file recorded the intended one. Settings an older Kura wrote but no
 longer reads are reported as obsolete and should be deleted rather than
 corrected. Run `kura doctor workspace` to print the accepted settings instead of
 reading the source; its recursive `settings` field lists fixed names and marks
-dynamic names as `<name>`. A dynamic name such as `docker.images.<name>` is your
-vocabulary, but the fields beneath it are still checked because Kura reads them.
+dynamic names as `<name>`. A dynamic name such as `comfyui.model_registry.<name>`
+is your vocabulary, but the fields beneath it are still checked because Kura
+reads them.
+
+The file carries `schema_version: 2`. A workspace written by an older Kura is
+refused with the command that migrates it: `kura workspace migrate` shows the
+change, applies it only when confirmed, and keeps the previous file as
+`workspace.yaml.v1`.
 
 ## Storage
 
@@ -29,26 +35,31 @@ filesystem. Kura auto-detects the current distro's backing drive when Windows
 interop is available; use `storage.host_drive` only when that detection is
 wrong or unavailable.
 
-## Docker
+## Images
 
-Image references are Kura-managed defaults: images are pulled automatically
-when needed, move together with Kura releases, and users normally never build
-or change them. Overriding them (e.g. pointing at your own registry after
-`kura image build` / `kura image publish`) is an escape hatch for developing
-Kura itself, not part of normal use. Trainer freshness works differently per
-backend by design. AI-Toolkit extends a versioned upstream official image,
-while the Musubi Tuner and sd-scripts images are paired with Kura's adapters. All
-defaults move only after compatibility checks; a mutable upstream tag is not a
-reproducible run contract.
+Kura pins one image per backend by digest in its own code: the digest each
+backend's smoke evidence ran with. Local and RunPod runs use the same image,
+and Docker pulls it the first time a run needs it; users never build images.
+The plan names the image a run uses and says whether it is pinned or
+overridden.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `docker.images.ai-toolkit.local` | Local Docker image used for AI-Toolkit runs | `nomadoor/kura-ai-toolkit:dev` |
-| `docker.images.ai-toolkit.remote` | Image name used when publishing your own AI-Toolkit image | `nomadoor/kura-ai-toolkit:dev` |
-| `docker.images.musubi-tuner.local` | Local Docker image used for Musubi Tuner runs | `nomadoor/kura-musubi-tuner:dev` |
-| `docker.images.musubi-tuner.remote` | Image name used for RunPod when not using the default image override | `nomadoor/kura-musubi-tuner:dev` |
-| `docker.images.sd-scripts.local` | Local Docker image used for sd-scripts runs | `nomadoor/kura-sd-scripts:dev` |
-| `docker.images.sd-scripts.remote` | Image name used when publishing your own sd-scripts image | `nomadoor/kura-sd-scripts:dev` |
+| `images.ai-toolkit` | Image for AI-Toolkit runs, locally and on RunPod | the pinned digest |
+| `images.musubi-tuner` | Image for Musubi Tuner runs | the pinned digest |
+| `images.sd-scripts` | Image for sd-scripts runs | the pinned digest |
+| `images.comfyui` | Image for RunPod render sessions | the pinned digest |
+
+An override is for deliberately running another image, such as one built while
+developing Kura. Prefer a digest; the plan and `kura doctor workspace` warn
+about a mutable tag. AI-Toolkit extends a versioned upstream image, while the
+Musubi Tuner and sd-scripts images are paired with Kura's adapters; a pinned
+digest moves only after compatibility checks.
+
+## Docker
+
+| Key | Purpose | Default |
+| --- | --- | --- |
 | `docker.workspace_target` | Container path for the mounted workspace. Kura currently supports only `/workspace`; other values are rejected at launch because backend artifacts compile `/workspace/...` paths. | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
@@ -162,10 +173,6 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `runpod.default_image.ai-toolkit` | Default patched AI-Toolkit remote image/template image | `nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a` |
-| `runpod.default_image.musubi-tuner` | Default Musubi remote image | `nomadoor/kura-musubi-tuner:dev` |
-| `runpod.default_image.sd-scripts` | Default sd-scripts remote image | `nomadoor/kura-sd-scripts:dev` |
-| `runpod.default_image.comfyui` | Default ComfyUI remote render image | `nomadoor/kura-comfyui:dev` |
 | `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
 | `runpod.api_key_env` | Environment variable that holds the RunPod API key | `RUNPOD_API_KEY` |
 | `runpod.storage_mode` | Remote staging mode | `upload` |

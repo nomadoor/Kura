@@ -18,7 +18,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _image_config, _safe_error
+from kura.run_commands.common import _effective_image, _safe_error
 from kura.run_commands.plan import stop_run
 from kura.run_commands.runpod_ssh import _free_local_port, _runpod_secret_env_payload, _runpod_ssh_details, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
 
@@ -254,12 +254,8 @@ def launch_render_runpod(
         if current_status.get("state") != "compiled":
             raise ValueError("render must be compiled before launch")
         config = _workspace_config()
-        image_config = _image_config("comfyui")
         runpod_config = _render_runpod_config(config)
-        default_image = runpod_config.get("default_image")
-        remote_image = image_config["remote"]
-        if isinstance(default_image, dict) and isinstance(default_image.get("comfyui"), str):
-            remote_image = default_image["comfyui"]
+        remote_image = _effective_image("comfyui")["reference"]
         if image:
             remote_image = image
         compute = frozen.get("compute") if isinstance(frozen.get("compute"), dict) else {}

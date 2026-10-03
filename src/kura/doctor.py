@@ -22,6 +22,7 @@ from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
+from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storages
@@ -32,26 +33,8 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import workspace_relative_path as _workspace_relative_path
 
 
-RECOMMENDED_LOCAL_IMAGES = {
-    "ai-toolkit": "nomadoor/kura-ai-toolkit:dev",
-    "musubi-tuner": "nomadoor/kura-musubi-tuner:dev",
-    "sd-scripts": "nomadoor/kura-sd-scripts:dev",
-}
-LEGACY_LOCAL_IMAGES = {
-    "ai-toolkit": "kura/ai-toolkit:dev",
-    "musubi-tuner": "kura/musubi-tuner:dev",
-    "sd-scripts": "kura/sd-scripts:dev",
-}
-
-
-def _image_config(name: str) -> dict[str, Any]:
-    try:
-        image = _workspace_config()["docker"]["images"][name]
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"workspace.yaml has no docker.images.{name} configuration") from exc
-    if not isinstance(image, dict) or not all(isinstance(image.get(key), str) for key in ("local", "remote", "dockerfile", "context")):
-        raise ValueError(f"docker.images.{name} requires local, remote, dockerfile, and context strings")
-    return image
+def _image_reference(name: str) -> str:
+    return effective_image(_workspace_config(), name)["reference"]
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -439,7 +422,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
 def cmd_doctor_docker(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
-        image = _image_config("ai-toolkit")
+        image = _image_reference("ai-toolkit")
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"docker: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -474,13 +457,17 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             if usage.returncode == 0:
                 docker_storage["usage"] = [json.loads(line) for line in usage.stdout.splitlines() if line.strip()]
             docker_storage["kura_managed"] = _docker_managed_resources()
-            checks["local_image"] = _docker_run(["docker", "image", "inspect", image["local"]], capture=True).returncode == 0
-            if not checks["local_image"]:
-                diagnosis = "Docker daemon is reachable but local image is missing. Run: kura image build ai-toolkit"
-            if checks["local_image"]:
-                gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", image["local"], "python", "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True)
+            present = _docker_run(["docker", "image", "inspect", image], capture=True).returncode == 0
+            # A pinned image that is not here yet is pulled by the first run that needs it.
+            checks["local_image"] = "present" if present else "will be pulled"
+            if not present:
+                checks["gpu_available"] = None
+                diagnostics["image"] = image
+                diagnosis = f"Docker is ready. The training image is not pulled yet; the first local run pulls it, or run: docker pull {image}"
+            if present:
+                gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", image, "python", "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True)
                 checks["gpu_available"] = gpu_probe.returncode == 0
-                runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", image["local"], "/opt/kura-runtime.json"], capture=True)
+                runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", image, "/opt/kura-runtime.json"], capture=True)
                 if runtime_result.returncode == 0:
                     try:
                         runtime = json.loads(runtime_result.stdout)
@@ -507,7 +494,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
     if checks["daemon_reachable"] and not diagnosis:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
     print(json.dumps({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
-    return 0 if all(checks.values()) else 1
+    return 0 if all(value is not False for value in checks.values()) else 1
 
 
 def _musubi_probe_items() -> list[tuple[str, str]]:
@@ -521,7 +508,7 @@ def _musubi_probe_items() -> list[tuple[str, str]]:
 def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
-        image = args.image or _image_config("musubi-tuner")["local"]
+        image = args.image or _image_reference("musubi-tuner")
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"musubi: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -549,7 +536,7 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     checks["local_image"] = image_check.returncode == 0
     if not checks["local_image"]:
         diagnostics["image_inspect_stderr"] = _redact_secret_text(image_check.stderr.strip())
-        diagnosis = "Configured Musubi local image is missing. Build it with: kura image build musubi-tuner"
+        diagnosis = f"The Musubi Tuner image is not pulled yet. Pull it with: docker pull {image}"
         print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
         return 1
 
@@ -609,7 +596,7 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
 def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
-        image = args.image or _image_config("sd-scripts")["local"]
+        image = args.image or _image_reference("sd-scripts")
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"sd-scripts: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -628,7 +615,7 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
     checks["local_image"] = inspected.returncode == 0
     if not checks["local_image"]:
         diagnostics["image_inspect_stderr"] = _redact_secret_text(inspected.stderr.strip())
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Configured sd-scripts image is missing. Build it with: kura image build sd-scripts"}, indent=2))
+        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": f"The sd-scripts image is not pulled yet. Pull it with: docker pull {image}"}, indent=2))
         return 1
     command = [docker, "run", "--rm"]
     if not args.no_gpu:
@@ -675,7 +662,8 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
 def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
-        config = _workspace_config().get("runpod", {})
+        workspace_config = _workspace_config()
+        config = workspace_config.get("runpod", {})
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"runpod: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -688,14 +676,14 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         "pods_empty": None,
         "network_volume_list": False,
         "network_volumes_empty": None,
-        "default_images_pinned": True,
+        "images_pinned": True,
     }
     diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "api_key_env": api_key_env, "config": {key: value for key, value in config.items() if "key" not in key.lower() and "secret" not in key.lower()}}
-    default_images = config.get("default_image") if isinstance(config.get("default_image"), dict) else {}
-    mutable_images = {str(key): value for key, value in default_images.items() if isinstance(value, str) and value.strip().lower().endswith(":latest")}
-    checks["default_images_pinned"] = not mutable_images
+    images = [effective_image(workspace_config, name) for name in image_names()]
+    mutable_images = {image["name"]: image["reference"] for image in images if mutable_override_warning(image)}
+    checks["images_pinned"] = not mutable_images
     if mutable_images:
-        diagnostics["mutable_default_images"] = mutable_images
+        diagnostics["mutable_images"] = mutable_images
     if checks["runpodctl_command"]:
         version = subprocess.run(["runpodctl", "version"], text=True, capture_output=True, check=False)
         diagnostics["runpodctl_version"] = _redact_secret_text((version.stdout or version.stderr).strip())
@@ -727,7 +715,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
             diagnostics["network_volumes_error"] = _redact_secret_text(str(exc))
     ok = bool(checks["runpodctl_command"] and checks["api_key"] and checks["pod_list"] and checks["pods_empty"] is not False and checks["network_volume_list"] and checks["network_volumes_empty"] is True)
     if ok and mutable_images:
-        diagnosis = "RunPod CLI/API are ready, but mutable default image tags should be pinned before reproducible runs."
+        diagnosis = "RunPod CLI/API are ready, but images.<name> overrides with mutable tags should be pinned before reproducible runs."
     elif ok:
         diagnosis = "RunPod CLI/API are ready."
     elif checks["pods_empty"] is False:
@@ -982,36 +970,26 @@ def cmd_doctor_secrets(_: argparse.Namespace) -> int:
 
 
 def _workspace_image_diagnostics(workspace: Path) -> tuple[dict[str, Any], list[str]]:
+    """The image each Kura backend runs in this workspace, and warnings for mutable overrides."""
     workspace_yaml = workspace / "workspace.yaml"
-    diagnostics: dict[str, Any] = {}
-    warnings: list[str] = []
     try:
         config = yaml.safe_load(workspace_yaml.read_text(encoding="utf-8")) if workspace_yaml.is_file() else {}
     except (OSError, yaml.YAMLError) as exc:
-        return diagnostics, [f"workspace.yaml could not be read: {_safe_error(exc)}"]
+        return {}, [f"workspace.yaml could not be read: {_safe_error(exc)}"]
     if not isinstance(config, dict):
-        return diagnostics, ["workspace.yaml must contain a YAML mapping"]
-    images = config.get("docker", {}).get("images", {}) if isinstance(config.get("docker"), dict) else {}
-    if not isinstance(images, dict):
-        return diagnostics, []
-    for name, recommended in RECOMMENDED_LOCAL_IMAGES.items():
-        image = images.get(name)
-        if not isinstance(image, dict):
+        return {}, ["workspace.yaml must contain a YAML mapping"]
+    diagnostics: dict[str, Any] = {}
+    warnings: list[str] = []
+    for name in image_names():
+        try:
+            image = effective_image(config, name)
+        except ValueError as exc:
+            warnings.append(_safe_error(exc))
             continue
-        local = image.get("local")
-        if not isinstance(local, str):
-            continue
-        legacy_default = local == LEGACY_LOCAL_IMAGES.get(name)
-        diagnostics[name] = {
-            "local": local,
-            "recommended_local": recommended,
-            "legacy_default": legacy_default,
-        }
-        if legacy_default:
-            warnings.append(
-                f"docker.images.{name}.local uses the old default {local}; "
-                f"use {recommended} or build/tag that image explicitly"
-            )
+        diagnostics[name] = {"image": image["reference"], "origin": image["origin"]}
+        warning = mutable_override_warning(image)
+        if warning:
+            warnings.append(warning)
     return diagnostics, warnings
 
 
@@ -1022,11 +1000,12 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
     workspace_yaml = workspace / "workspace.yaml"
     if workspace_yaml.is_file():
         try:
+            _require_workspace()
             validate_workspace_config(yaml.safe_load(workspace_yaml.read_text(encoding="utf-8")))
         except (OSError, ValueError, yaml.YAMLError) as exc:
             configuration_error = _safe_error(exc)
             warnings.append(configuration_error)
-    subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets", "docker")}
+    subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets")}
     print(json.dumps({
         "workspace_root": str(workspace),
         "workspace_yaml": (workspace / "workspace.yaml").is_file(),

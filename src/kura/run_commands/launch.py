@@ -24,7 +24,8 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _backend_image_name, _image_config, _load_frozen_command, _safe_error
+from kura.images import launch_image
+from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
@@ -397,11 +398,11 @@ def launch_run(
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
         adapter = get_backend(backend_name)
         image_name = _backend_image_name(backend_name)
-        image_config = _image_config(image_name)
         try:
             env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
         except (OSError, ValueError, yaml.YAMLError):
             env_lock = {}
+        selected = launch_image(config, image_name, env_lock)
         if executor == "docker":
             docker = config.get("docker", {})
             workspace_target = str(docker.get("workspace_target", "/workspace"))
@@ -412,7 +413,7 @@ def launch_run(
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
                 _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config, enforce_model_download_safety=False)
-            local_image = image or image_config["local"]
+            local_image = image or selected["reference"]
             if continuation is not None and continuation.get("mode") == "resume":
                 selected_identity = env_lock.get("selected_image_identity") if isinstance(env_lock, dict) else None
                 pinning = selected_identity.get("pinning") if isinstance(selected_identity, dict) else None
@@ -425,7 +426,6 @@ def launch_run(
                 run_dir=run_dir,
                 spec=spec,
                 image=local_image,
-                dockerfile=image_config["dockerfile"],
                 mounts=mounts,
                 gpu=bool(docker.get("gpu", False)),
                 workspace_target=workspace_target,
@@ -439,12 +439,9 @@ def launch_run(
                 raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
             source_runpod_config = config.get("runpod", {})
             runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
-            frozen_image = env_lock.get("selected_image") if isinstance(env_lock, dict) else None
-            if continuation is not None and continuation.get("mode") == "resume" and not (
-                isinstance(frozen_image, str) and frozen_image
-            ):
+            if continuation is not None and continuation.get("mode") == "resume" and not selected["frozen"]:
                 raise ValueError("Resume remote runtime has no compile-time frozen image; recompile the run")
-            remote_image = frozen_image if isinstance(frozen_image, str) and frozen_image else image_config["remote"]
+            remote_image = selected["reference"]
             if not adapter.runpod_template_compatible:
                 runpod_config.pop("template_id", None)
                 backend_ports = runpod_config.get("backend_ports")
@@ -452,10 +449,6 @@ def launch_run(
                     runpod_config["ports"] = backend_ports[image_name]
                 else:
                     runpod_config["ports"] = list(adapter.default_ports)
-            if not isinstance(frozen_image, str) or not frozen_image:
-                default_image = runpod_config.get("default_image")
-                if isinstance(default_image, dict) and isinstance(default_image.get(image_name), str):
-                    remote_image = default_image[image_name]
             if image:
                 remote_image = image
             compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}

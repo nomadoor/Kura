@@ -43,11 +43,10 @@ import kura.run_commands.runpod_ssh as runpod_ssh_module
 from kura.media_types import frozen_suffixes
 from kura.executors.runpod import _confirm_runpod_launch, RunPodAPIError, _is_runpod_capacity_error, _runpod_request
 from kura.fsio import FileLockBusy, file_lock
-from kura.init_templates import RUNPOD_OBJECT_JOB_TEMPLATE
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
-from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _runpod_image_preflight_report
+from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
 from kura.storage import StorageStatus, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
@@ -66,6 +65,10 @@ _SSH_REUSE_OFF = patch("kura.run_commands.runpod_ssh._ssh_control_dir", return_v
 # Collection marks are placed on the Pod over ssh; tests never reach a Pod.
 _REAL_RUNPOD_MARK_COMMAND = runpod_ssh_module._run_runpod_mark_command
 _RUNPOD_MARKS_OFF = patch("kura.run_commands.runpod_ssh._run_runpod_mark_command", return_value=True)
+
+
+REPOSITORY = Path(__file__).resolve().parents[1]
+RUNPOD_OBJECT_JOB_SOURCE = (Path(__file__).resolve().parents[1] / "docker" / "ai-toolkit" / "kura_runpod_object_job.py").read_text(encoding="utf-8")
 
 
 def setUpModule() -> None:
@@ -113,33 +116,18 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 root = Path(directory)
-                for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "docker/ai-toolkit/Dockerfile"):
+                for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models"):
                     self.assertTrue((root / relative).exists(), relative)
-                for relative in ("experiments", "backends", "executors"):
+                for relative in ("experiments", "backends", "executors", "docker"):
                     self.assertFalse((root / relative).exists(), relative)
-                self.assertTrue((root / "docker/musubi-tuner/Dockerfile").exists())
-                self.assertTrue((root / "docker/ai-toolkit/kura_runpod_object_job.py").exists())
-                for dockerfile in (root / "docker/ai-toolkit/Dockerfile", root / "docker/musubi-tuner/Dockerfile"):
-                    for line in dockerfile.read_text(encoding="utf-8").splitlines():
-                        if line.startswith("COPY "):
-                            source = line.split()[1]
-                            self.assertTrue((root / source).exists(), f"{dockerfile}: {source}")
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
                 self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/workspace/cache/huggingface")
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
-                self.assertEqual(
-                    workspace["runpod"]["default_image"]["ai-toolkit"],
-                    "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
-                )
+                self.assertNotIn("images", workspace)
                 self.assertEqual(workspace["comfyui"]["lora_dir"], "")
                 self.assertEqual(workspace["comfyui"]["lora_stage_cleanup"], "remove_after_render")
-                self.assertIn(
-                    "AI_TOOLKIT_IMAGE=nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
-                    (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8"),
-                )
-                self.assertIn("MUSUBI_TUNER_REF=v0.3.5", (root / "docker/musubi-tuner/Dockerfile").read_text(encoding="utf-8"))
             finally:
                 os.chdir(previous)
 
@@ -393,7 +381,7 @@ class InitCommandTests(unittest.TestCase):
             previous = Path.cwd()
             try:
                 os.chdir(directory)
-                Path("workspace.yaml").write_text("schema_version: 1\nname: existing\n", encoding="utf-8")
+                Path("workspace.yaml").write_text("schema_version: 2\nname: existing\n", encoding="utf-8")
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 self.assertTrue((Path(directory) / "cache" / "huggingface").is_dir())
                 self.assertTrue((Path(directory) / "cache" / "models").is_dir())
@@ -402,10 +390,10 @@ class InitCommandTests(unittest.TestCase):
                 os.chdir(previous)
 
     def test_object_job_template_rejects_download_keys_outside_workspace(self) -> None:
-        start = RUNPOD_OBJECT_JOB_TEMPLATE.index("def download_prefix")
-        end = RUNPOD_OBJECT_JOB_TEMPLATE.index("\n\ndef upload_tree")
+        start = RUNPOD_OBJECT_JOB_SOURCE.index("def download_prefix")
+        end = RUNPOD_OBJECT_JOB_SOURCE.index("\n\ndef upload_tree")
         namespace: dict[str, Any] = {"Path": Path}
-        exec(RUNPOD_OBJECT_JOB_TEMPLATE[start:end], namespace)
+        exec(RUNPOD_OBJECT_JOB_SOURCE[start:end], namespace)
 
         class FakePaginator:
             def paginate(self, **_: object) -> list[dict[str, object]]:
@@ -449,18 +437,7 @@ class ImageCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({
-                    "docker": {
-                        "images": {
-                            "musubi-tuner": {
-                                "local": "kura/musubi-tuner:test",
-                                "remote": "registry.example/kura/musubi-tuner:test",
-                                "dockerfile": "docker/musubi-tuner/Dockerfile",
-                                "context": ".",
-                            },
-                        },
-                    },
-                }),
+                yaml.safe_dump({'docker': {}, 'images': {'musubi-tuner': 'kura/musubi-tuner:test'}}),
                 encoding="utf-8",
             )
             commands: list[list[str]] = []
@@ -472,33 +449,19 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="musubi-tuner", ref=None)), 0)
             finally:
                 os.chdir(previous)
 
             self.assertIn("MUSUBI_TUNER_REF=v0.3.5", commands[0])
 
-    def test_image_build_resolves_paths_from_workspace_root(self) -> None:
+    def test_image_build_reads_the_checkout_from_a_nested_workspace_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             nested = root / "datasets" / "tiny"
             nested.mkdir(parents=True)
-            (root / "workspace.yaml").write_text(
-                yaml.safe_dump({
-                    "docker": {
-                        "images": {
-                            "ai-toolkit": {
-                                "local": "kura/ai-toolkit:test",
-                                "remote": "registry.example/kura/ai-toolkit:test",
-                                "dockerfile": "docker/ai-toolkit/Dockerfile",
-                                "context": ".",
-                            },
-                        },
-                    },
-                }),
-                encoding="utf-8",
-            )
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             calls: list[list[str]] = []
 
             def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -508,36 +471,25 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(nested)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None)), 0)
             finally:
                 os.chdir(previous)
 
             self.assertGreaterEqual(len(calls), 1)
             build = calls[0]
-            self.assertEqual(build[build.index("--file") + 1], str(root / "docker/ai-toolkit/Dockerfile"))
+            self.assertEqual(build[build.index("--file") + 1], str(REPOSITORY / "docker/ai-toolkit/Dockerfile"))
             self.assertIn(
-                "AI_TOOLKIT_IMAGE=nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
+                "AI_TOOLKIT_IMAGE=ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc",
                 build,
             )
-            self.assertEqual(build[-1], str(root))
+            self.assertEqual(build[-1], str(REPOSITORY))
 
     def test_ai_toolkit_image_build_ref_overrides_upstream_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({
-                    "docker": {
-                        "images": {
-                            "ai-toolkit": {
-                                "local": "kura/ai-toolkit:test",
-                                "remote": "registry.example/kura/ai-toolkit:test",
-                                "dockerfile": "docker/ai-toolkit/Dockerfile",
-                                "context": ".",
-                            },
-                        },
-                    },
-                }),
+                yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
                 encoding="utf-8",
             )
             commands: list[list[str]] = []
@@ -549,7 +501,7 @@ class ImageCommandTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
+                with patch("kura.cli._docker_run", side_effect=fake_docker_run), patch("kura.cli.development_checkout", return_value=REPOSITORY), patch("kura.cli._docker_storage_summary", return_value={"usage": []}):
                     self.assertEqual(cmd_image_build(argparse.Namespace(name="ai-toolkit", ref="ostris/aitoolkit:custom")), 0)
             finally:
                 os.chdir(previous)
@@ -560,24 +512,14 @@ class ImageCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({
-                    "docker": {
-                        "images": {
-                            "ai-toolkit": {
-                                "local": "kura/ai-toolkit:test",
-                                "remote": "registry.example/kura/ai-toolkit:test",
-                                "dockerfile": "docker/ai-toolkit/Dockerfile",
-                                "context": ".",
-                            },
-                        },
-                    },
-                }),
+                yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
                 encoding="utf-8",
             )
             previous = Path.cwd()
             os.chdir(root)
             try:
                 with (
+                    patch("kura.cli.development_checkout", return_value=REPOSITORY),
                     patch("kura.cli._docker_storage_summary", return_value={"usage": [{"Type": "Build Cache", "size_bytes": 31 * 1024**3}]}),
                     patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
                 ):
@@ -592,7 +534,7 @@ class DoctorDockerTests(unittest.TestCase):
     def test_cleanup_all_is_dry_run_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "cache" / "huggingface").mkdir(parents=True)
             (root / "cache" / "models").mkdir(parents=True, exist_ok=True)
             (root / "runs" / "example").mkdir(parents=True)
@@ -615,31 +557,20 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertIn("cache/huggingface", {item.get("target") for item in payload["actions"]})
             self.assertIn("docker system", {item.get("target") for item in payload["actions"]})
 
-    def test_cleanup_image_uses_available_remote_name_when_local_missing(self) -> None:
+    def test_cleanup_image_uses_the_workspace_image_when_it_is_present(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {
-                        "docker": {
-                            "images": {
-                                "ai-toolkit": {
-                                    "local": "kura/ai-toolkit:test",
-                                    "remote": "registry.example/kura/ai-toolkit:test",
-                                    "dockerfile": "Dockerfile",
-                                    "context": ".",
-                                }
-                            }
-                        }
-                    }
+                    {'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}
                 ),
                 encoding="utf-8",
             )
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.cli._docker_image_exists", side_effect=lambda image: image == "registry.example/kura/ai-toolkit:test"):
-                    self.assertEqual(_docker_cleanup_image(), "registry.example/kura/ai-toolkit:test")
+                with patch("kura.cli._docker_image_exists", side_effect=lambda image: image == "kura/ai-toolkit:test"):
+                    self.assertEqual(_docker_cleanup_image(), "kura/ai-toolkit:test")
             finally:
                 os.chdir(previous)
 
@@ -649,7 +580,7 @@ class DoctorDockerTests(unittest.TestCase):
             run = root / "runs" / "old"
             (run / "cache").mkdir(parents=True)
             (run / "outputs").mkdir()
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
             (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
             previous = Path.cwd()
@@ -672,7 +603,7 @@ class DoctorDockerTests(unittest.TestCase):
     def test_cleanup_runs_offers_only_disposable_dataset_view_remnants(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             dataset_file = root / "datasets" / "tiny" / "a.png"
             dataset_file.parent.mkdir(parents=True)
             dataset_file.write_bytes(b"image")
@@ -745,7 +676,7 @@ class DoctorDockerTests(unittest.TestCase):
             root = Path(directory)
             run = root / "runs" / "old"
             (run / "outputs").mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run / "run.yaml").write_text("id: old\ncreated: '2026-01-01T00:00:00+00:00'\n", encoding="utf-8")
             (run / "status.json").write_text(json.dumps({"state": "completed", "ended": "2026-01-01T00:00:00+00:00"}), encoding="utf-8")
             previous = Path.cwd()
@@ -765,7 +696,7 @@ class DoctorDockerTests(unittest.TestCase):
     def test_fix_permissions_dry_run_reports_root_owned_targets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "cache").mkdir()
             (root / "runs").mkdir()
             previous = Path.cwd()
@@ -1093,19 +1024,7 @@ class DoctorDockerTests(unittest.TestCase):
             root = Path(directory)
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {
-                        "docker": {
-                            "images": {
-                                "ai-toolkit": {
-                                    "local": "kura/ai-toolkit:test",
-                                    "remote": "registry.example/kura/ai-toolkit:test",
-                                    "dockerfile": "docker/ai-toolkit/Dockerfile",
-                                    "context": ".",
-                                }
-                            },
-                            "mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}],
-                        }
-                    }
+                    {'docker': {'mounts': [{'source': './cache/huggingface', 'target': '/root/.cache/huggingface', 'mode': 'rw'}]}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}
                 ),
                 encoding="utf-8",
             )
@@ -1143,23 +1062,49 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(managed["stopped_containers"][0]["ID"], "abc")
             self.assertEqual(managed["volumes"][0]["Name"], "kura-cache")
 
+    def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+
+            def fake_docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+                if command[:3] == ["docker", "image", "inspect"]:
+                    return subprocess.CompletedProcess(command, 1, "", "No such image")
+                if command[:3] == ["docker", "system", "df"] or command[:2] == ["docker", "ps"] or command[:3] == ["docker", "volume", "ls"]:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, "ok\n", "")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["local_image"], "will be pulled")
+            self.assertIsNone(payload["gpu_available"])
+            self.assertIn("docker pull nomadoor/kura-ai-toolkit@sha256:", payload["diagnosis"])
+
+    def test_doctor_workspace_points_an_old_schema_at_migrate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                    self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 1)
+            finally:
+                os.chdir(previous)
+            self.assertIn("kura workspace migrate", json.loads(stdout.getvalue())["configuration_error"])
+
     def test_doctor_musubi_reports_adapter_script_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {
-                        "docker": {
-                            "images": {
-                                "musubi-tuner": {
-                                    "local": "kura/musubi-tuner:test",
-                                    "remote": "registry.example/kura/musubi-tuner:test",
-                                    "dockerfile": "docker/musubi-tuner/Dockerfile",
-                                    "context": ".",
-                                }
-                            }
-                        }
-                    }
+                    {'docker': {}, 'images': {'musubi-tuner': 'kura/musubi-tuner:test'}}
                 ),
                 encoding="utf-8",
             )
@@ -1194,18 +1139,7 @@ class DoctorDockerTests(unittest.TestCase):
             root = Path(directory)
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {
-                        "docker": {
-                            "images": {
-                                "musubi-tuner": {
-                                    "local": "configured/missing:test",
-                                    "remote": "remote",
-                                    "dockerfile": "Dockerfile",
-                                    "context": ".",
-                                }
-                            }
-                        }
-                    }
+                    {'docker': {}, 'images': {'musubi-tuner': 'configured/missing:test'}}
                 ),
                 encoding="utf-8",
             )
@@ -1238,7 +1172,7 @@ class DoctorDockerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"images": {"sd-scripts": {"local": "kura/sd-scripts:test", "remote": "kura/sd-scripts:test", "dockerfile": "docker/sd-scripts/Dockerfile", "context": "."}}}}),
+                yaml.safe_dump({'docker': {}, 'images': {'sd-scripts': 'kura/sd-scripts:test'}}),
                 encoding="utf-8",
             )
             probe_payload = {
@@ -1279,7 +1213,7 @@ class MonitorCommandTests(unittest.TestCase):
     def test_monitor_passes_limit_to_textual_app(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -1471,7 +1405,7 @@ class EnvLocalTests(unittest.TestCase):
             root = Path(directory).resolve()
             nested = root / "datasets" / "tiny"
             nested.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / ".env.local").write_text("KURA_NTFY_TOPIC=root-topic\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(nested)
@@ -1492,7 +1426,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
             nested = root / "datasets" / "tiny"
             run_dir.mkdir(parents=True)
             nested.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
             previous = Path.cwd()
             os.chdir(nested)
@@ -1506,7 +1440,7 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
             root = Path(directory)
             nested = root / "runs"
             nested.mkdir()
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(nested)
             try:
@@ -1514,21 +1448,11 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-    def test_doctor_workspace_warns_on_legacy_local_images(self) -> None:
+    def test_doctor_workspace_reports_each_image_and_warns_only_for_a_mutable_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump(
-                    {
-                        "schema_version": 1,
-                        "docker": {
-                            "images": {
-                                "ai-toolkit": {"local": "kura/ai-toolkit:dev"},
-                                "musubi-tuner": {"local": "kura/musubi-tuner:dev"},
-                            }
-                        },
-                    }
-                ),
+                yaml.safe_dump({"schema_version": 2, "images": {"musubi-tuner": "kura/musubi-tuner:dev"}}),
                 encoding="utf-8",
             )
             previous = Path.cwd()
@@ -1538,42 +1462,12 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                 with contextlib.redirect_stdout(stdout):
                     self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 1)
                 payload = json.loads(stdout.getvalue())
-                self.assertTrue(payload["docker_images"]["ai-toolkit"]["legacy_default"])
-                self.assertTrue(payload["docker_images"]["musubi-tuner"]["legacy_default"])
-                self.assertIn("nomadoor/kura-ai-toolkit:dev", "\n".join(payload["warnings"]))
-                self.assertIn("nomadoor/kura-musubi-tuner:dev", "\n".join(payload["warnings"]))
             finally:
                 os.chdir(previous)
-
-    def test_doctor_workspace_accepts_published_local_images(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text(
-                yaml.safe_dump(
-                    {
-                        "schema_version": 1,
-                        "docker": {
-                            "images": {
-                                "ai-toolkit": {"local": "nomadoor/kura-ai-toolkit:dev"},
-                                "musubi-tuner": {"local": "nomadoor/kura-musubi-tuner:dev"},
-                            }
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                stdout = io.StringIO()
-                with contextlib.redirect_stdout(stdout):
-                    self.assertEqual(cmd_doctor_workspace(argparse.Namespace()), 0)
-                payload = json.loads(stdout.getvalue())
-                self.assertEqual(payload["warnings"], [])
-                self.assertFalse(payload["docker_images"]["ai-toolkit"]["legacy_default"])
-                self.assertFalse(payload["docker_images"]["musubi-tuner"]["legacy_default"])
-            finally:
-                os.chdir(previous)
+        self.assertEqual(payload["docker_images"]["ai-toolkit"]["origin"], "pinned")
+        self.assertEqual(payload["docker_images"]["musubi-tuner"], {"image": "kura/musubi-tuner:dev", "origin": "override"})
+        self.assertEqual(len(payload["warnings"]), 1)
+        self.assertIn("images.musubi-tuner uses mutable tag", payload["warnings"][0])
 
 
 class RunPlanTests(unittest.TestCase):
@@ -1593,7 +1487,7 @@ class RunPlanTests(unittest.TestCase):
             dataset_dir = root / "datasets" / "tiny"
             run_dir.mkdir(parents=True)
             dataset_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (dataset_dir / "items.jsonl").write_text("{}\n{}\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump(
@@ -1730,7 +1624,7 @@ class RunPlanTests(unittest.TestCase):
             cached.parent.mkdir(parents=True)
             cached.write_bytes(b"x" * 1024)
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump(
                     {
@@ -1787,7 +1681,7 @@ class RunPlanTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "compiled-example"
             (run_dir / "resolved").mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: ai-toolkit, config: {config: {train: {lr: 1e-4}}}}\n", encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("id: compiled-example\ntype: train\nbackend: {name: musubi-tuner, config: {learning_rate: 0.00005}}\ndatasets: [{id: tiny}]\n", encoding="utf-8")
             (run_dir / "resolved" / "dataset-observations.lock.yaml").write_text(
@@ -1821,7 +1715,7 @@ class RunPlanTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "preflight-example"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump(
                     {
@@ -1858,7 +1752,7 @@ class RunPlanTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "small-download-plan"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
                 yaml.safe_dump(
                     {
@@ -1897,7 +1791,7 @@ class RunPlanTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "render-example"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text("id: render-example\ntype: render\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
@@ -1931,7 +1825,7 @@ class RunPlanTests(unittest.TestCase):
     def test_runpod_plan_counts_remote_downloads_even_when_local_cache_exists(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "datasets" / "tiny").mkdir(parents=True)
             run_dir = root / "runs" / "remote"
             run_dir.mkdir(parents=True)
@@ -1962,7 +1856,7 @@ class RunPlanTests(unittest.TestCase):
     def test_local_plan_treats_unmapped_absolute_symlink_as_not_cached(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "datasets" / "tiny").mkdir(parents=True)
             run_dir = root / "runs" / "local"
             run_dir.mkdir(parents=True)
@@ -2124,7 +2018,7 @@ class RenderNotificationTests(unittest.TestCase):
     def test_runpod_render_launch_forwards_explicit_yes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
@@ -2143,7 +2037,7 @@ class RenderNotificationTests(unittest.TestCase):
     def test_render_launch_notifies_on_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
@@ -2164,7 +2058,7 @@ class RenderNotificationTests(unittest.TestCase):
     def test_render_dry_run_failure_does_not_notify(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
@@ -2184,13 +2078,8 @@ class RenderNotificationTests(unittest.TestCase):
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (root / "workspace.yaml").write_text(
-                "docker:\n"
-                "  images:\n"
-                "    comfyui:\n"
-                "      local: local/comfy\n"
-                "      remote: remote/comfy\n"
-                "      dockerfile: docker/comfyui/Dockerfile\n"
-                "      context: .\n"
+                "images:\n"
+                "  comfyui: remote/comfy\n"
                 "runpod:\n"
                 "  storage_mode: upload\n",
                 encoding="utf-8",
@@ -2316,7 +2205,7 @@ class RenderNotificationTests(unittest.TestCase):
             prompts = root / "promptsets" / "prompts.jsonl"
             for path in (run_dir, workflow.parent, prompts.parent):
                 path.mkdir(parents=True, exist_ok=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             workflow.write_text(json.dumps({"1": {"inputs": {"seed": 0}}}), encoding="utf-8")
             prompts.write_text(json.dumps({"id": "p1", "prompt": "hello", "seeds": [1]}) + "\n", encoding="utf-8")
             (run_dir / "run.yaml").write_text(
@@ -2972,18 +2861,11 @@ class RenderNotificationTests(unittest.TestCase):
                 (root / "runs" / "render-1" / "resolved").mkdir(parents=True)
                 run_dir = root / "runs" / "render-1"
                 (root / "workspace.yaml").write_text(
-                    "docker:\n"
-                    "  images:\n"
-                    "    comfyui:\n"
-                    "      local: local/comfy\n"
-                    "      remote: remote/comfy\n"
-                    "      dockerfile: docker/comfyui/Dockerfile\n"
-                    "      context: .\n"
+                    "images:\n"
+                    "  comfyui: remote/default-comfy\n"
                     "runpod:\n"
                     "  storage_mode: upload\n"
                     "  gpu_type_ids: [NVIDIA RTX A5000]\n"
-                    "  default_image:\n"
-                    "    comfyui: remote/default-comfy\n"
                     "comfyui:\n"
                     "  runpod:\n"
                     "    ports: [22/tcp]\n",
@@ -3137,13 +3019,8 @@ class RenderNotificationTests(unittest.TestCase):
                 resolved = run_dir / "resolved"
                 resolved.mkdir(parents=True)
                 (root / "workspace.yaml").write_text(
-                    "docker:\n"
-                    "  images:\n"
-                    "    comfyui:\n"
-                    "      local: local/comfy\n"
-                    "      remote: remote/comfy\n"
-                    "      dockerfile: docker/comfyui/Dockerfile\n"
-                    "      context: .\n"
+                    "images:\n"
+                    "  comfyui: remote/comfy\n"
                     "runpod:\n"
                     "  storage_mode: upload\n"
                     "  gpu_type_ids: [NVIDIA RTX A5000]\n"
@@ -3218,13 +3095,8 @@ class RenderNotificationTests(unittest.TestCase):
                 (root / "runs" / "render-1" / "resolved").mkdir(parents=True)
                 run_dir = root / "runs" / "render-1"
                 (root / "workspace.yaml").write_text(
-                    "docker:\n"
-                    "  images:\n"
-                    "    comfyui:\n"
-                    "      local: local/comfy\n"
-                    "      remote: remote/comfy\n"
-                    "      dockerfile: docker/comfyui/Dockerfile\n"
-                    "      context: .\n"
+                    "images:\n"
+                    "  comfyui: remote/comfy\n"
                     "runpod:\n"
                     "  storage_mode: upload\n"
                     "comfyui:\n"
@@ -3491,7 +3363,7 @@ class RunPodLiveSyncTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -3552,21 +3424,16 @@ class RunPodLiveSyncTests(unittest.TestCase):
             self.assertTrue(status["recovery_required"])
             self.assertIn("could not append convenience event log", stderr.getvalue())
 
-    def test_runpod_image_preflight_warns_for_mutable_latest(self) -> None:
-        records = _runpod_image_preflight_report(
-            {"backend": {"name": "ai-toolkit"}},
-            {"default_image": {"ai-toolkit": "ostris/aitoolkit:latest"}},
-        )
-
-        self.assertEqual(records[0]["severity"], "warning")
-        self.assertIn("mutable tag", records[0]["fact"])
-        self.assertEqual(
-            _runpod_image_preflight_report(
-                {"backend": {"name": "ai-toolkit"}},
-                {"default_image": {"ai-toolkit": "ostris/aitoolkit:0.10.22"}},
-            ),
-            [],
-        )
+    def test_image_preflight_names_the_image_and_warns_only_for_a_mutable_override(self) -> None:
+        run = {"backend": {"name": "ai-toolkit"}}
+        pinned = _image_preflight_report(run, {})
+        self.assertEqual([record["severity"] for record in pinned], ["info"])
+        self.assertIn("pinned by Kura", pinned[0]["fact"])
+        mutable = _image_preflight_report(run, {"images": {"ai-toolkit": "ostris/aitoolkit:latest"}})
+        self.assertEqual([record["severity"] for record in mutable], ["info", "warning"])
+        self.assertIn("mutable tag", mutable[1]["fact"])
+        digest = _image_preflight_report(run, {"images": {"ai-toolkit": "example/ai@sha256:" + "0" * 64}})
+        self.assertEqual([record["severity"] for record in digest], ["info"])
 
 
 class RunPodPullSelectionTests(unittest.TestCase):
@@ -5698,7 +5565,7 @@ class DockerLifecycleTests(unittest.TestCase):
     def test_command_is_detached_labeled_and_writes_to_mounted_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
@@ -6062,7 +5929,7 @@ class DockerLifecycleTests(unittest.TestCase):
             )
             (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                yaml.safe_dump({'docker': {'mounts': []}, 'images': {'ai-toolkit': 'local'}}),
                 encoding="utf-8",
             )
 
@@ -6096,7 +5963,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -6123,7 +5990,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -6154,12 +6021,7 @@ class DockerLifecycleTests(unittest.TestCase):
             (run_dir / "resolved" / "env.lock").write_text(yaml.safe_dump({
                 "selected_image": "frozen/image@sha256:1234",
             }), encoding="utf-8")
-            (root / "workspace.yaml").write_text(yaml.safe_dump({
-                "docker": {"images": {"ai-toolkit": {
-                    "local": "local", "remote": "docker-remote", "dockerfile": "Dockerfile", "context": ".",
-                }}},
-                "runpod": {"default_image": {"ai-toolkit": "changed-after-compile"}},
-            }), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'changed-after-compile'}}), encoding="utf-8")
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -6189,12 +6051,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 "backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"},
                 "cwd": "/workspace", "argv": ["true"], "env": {},
             }), encoding="utf-8")
-            (root / "workspace.yaml").write_text(yaml.safe_dump({
-                "docker": {"images": {"ai-toolkit": {
-                    "local": "local", "remote": "current/image:latest", "dockerfile": "Dockerfile", "context": ".",
-                }}},
-                "runpod": {"default_image": {"ai-toolkit": "current/default:latest"}},
-            }), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'current/default:latest'}}), encoding="utf-8")
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -6233,11 +6090,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     "pinning": {"strength": "content-hash", "value": "sha256:compiled-image"},
                 },
             }), encoding="utf-8")
-            (root / "workspace.yaml").write_text(yaml.safe_dump({
-                "docker": {"gpu": False, "mounts": [], "images": {"ai-toolkit": {
-                    "local": "mutable-local:dev", "remote": "remote", "dockerfile": "Dockerfile", "context": ".",
-                }}},
-            }), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({'docker': {'gpu': False, 'mounts': []}, 'images': {'ai-toolkit': 'mutable-local:dev'}}), encoding="utf-8")
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -6269,7 +6122,7 @@ class DockerLifecycleTests(unittest.TestCase):
             )
             (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"min_free_gb": 10, "images": {"ai-toolkit": {"local": "configured-local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                yaml.safe_dump({'docker': {'min_free_gb': 10, 'mounts': []}, 'images': {'ai-toolkit': 'configured-local'}}),
                 encoding="utf-8",
             )
             previous = Path.cwd()
@@ -6302,7 +6155,7 @@ class DockerLifecycleTests(unittest.TestCase):
             )
             (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/workspace", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"workspace_target": "/ws", "images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}, "mounts": []}}),
+                yaml.safe_dump({'docker': {'workspace_target': '/ws', 'mounts': []}, 'images': {'ai-toolkit': 'local'}}),
                 encoding="utf-8",
             )
             previous = Path.cwd()
@@ -6643,7 +6496,7 @@ class RunDiscardTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = self._make_run(root, "draft", state="draft")
             os.chdir(root)
             stdout = io.StringIO()
@@ -6663,7 +6516,7 @@ class RunDiscardTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = self._make_run(root, "compiled", state="compiled")
             (run_dir / "realizations").mkdir()
             (run_dir / "outputs").mkdir()
@@ -6681,7 +6534,7 @@ class RunDiscardTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = self._make_run(root, "running", state="running")
             (run_dir / "realizations").mkdir()
             (run_dir / "realizations" / "r1.json").write_text("{}", encoding="utf-8")
@@ -6701,7 +6554,7 @@ class RunDiscardTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = self._make_run(root, "compiled", state="compiled")
             (run_dir / "outputs").mkdir()
             (run_dir / "outputs" / "artifact.safetensors").write_text("artifact", encoding="utf-8")
@@ -6720,7 +6573,7 @@ class RunDiscardTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             outside = root / "outside"
             outside.mkdir()
             (outside / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
@@ -6752,7 +6605,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
             os.chdir(root)
@@ -6767,7 +6620,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "runs").mkdir()
             old = self._make_run(root, "old", state="completed", created="2026-01-01T00:00:00+00:00")
             os.chdir(root)
@@ -6800,7 +6653,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "runs").mkdir()
             os.chdir(root)
             try:
@@ -6825,7 +6678,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "runs").mkdir()
             calls: list[list[str]] = []
 
@@ -6850,7 +6703,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "runs").mkdir()
 
             def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
@@ -6873,7 +6726,7 @@ class RunPruneTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (root / "runs").mkdir()
 
             def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
@@ -6897,7 +6750,7 @@ class RunPruneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:test"}}}}),
+                yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
                 encoding="utf-8",
             )
             (root / "runs").mkdir()
@@ -6929,7 +6782,7 @@ class RunPruneTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"images": {"ai-toolkit": {"local": "kura/ai-toolkit:test"}}}}),
+                yaml.safe_dump({'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}),
                 encoding="utf-8",
             )
             (root / "runs").mkdir()
@@ -6979,10 +6832,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         )
         (root / "workspace.yaml").write_text(
             yaml.safe_dump(
-                {
-                    "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"], "cloud_type": "COMMUNITY"},
-                    "docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}},
-                }
+                {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA A40'], 'cloud_type': 'COMMUNITY'}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
             ),
             encoding="utf-8",
         )
@@ -7865,10 +7715,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (root / "runs" / "example" / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/app/ai-toolkit", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {
-                        "runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "cloud_type": "COMMUNITY", "template_id": "mutable-template"},
-                        "docker": {"images": {"ai-toolkit": {"local": "local", "remote": "remote", "dockerfile": "Dockerfile", "context": "."}}},
-                    }
+                    {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA RTX A5000', 'NVIDIA A40'], 'cloud_type': 'COMMUNITY', 'template_id': 'mutable-template'}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
                 ),
                 encoding="utf-8",
             )
@@ -8474,7 +8321,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             root = Path(directory)
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
@@ -8601,7 +8448,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_reuses_verified_local_checkpoint_in_terminal_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "outputs").mkdir()
@@ -8689,7 +8536,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_preserves_previous_snapshot_when_remote_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(
@@ -8748,7 +8595,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_rejects_manifest_mismatch_and_preserves_previous_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(
@@ -8801,7 +8648,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_restores_previous_snapshot_when_completion_record_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(
@@ -8864,7 +8711,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_materializes_outputs_at_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             output_dir = run_dir / "downloads" / "example" / "outputs"
             realization_dir = run_dir / "downloads" / "example" / "realizations"
@@ -8896,7 +8743,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_records_recovery_without_publishing_it_as_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             downloaded = run_dir / "downloads" / "example"
             (downloaded / "outputs").mkdir(parents=True)
@@ -8930,7 +8777,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_normalizes_ai_toolkit_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             output_dir = run_dir / "downloads" / "example" / "outputs" / "example"
             realization_dir = run_dir / "downloads" / "example" / "realizations"
@@ -8984,7 +8831,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_rejects_ai_toolkit_output_collision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             output_root = run_dir / "downloads" / "example" / "outputs"
             realization_dir = run_dir / "downloads" / "example" / "realizations"
@@ -9021,7 +8868,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         for scenario in ("extra", "modified"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+                (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
                 run_dir = root / "runs" / "example"
                 output_dir = run_dir / "downloads" / "example" / "outputs" / "example"
                 realization_dir = run_dir / "downloads" / "example" / "realizations"
@@ -9066,7 +8913,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_download_cleans_partial_output_when_publication_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             output_dir = run_dir / "downloads" / "example" / "outputs"
             realization_dir = run_dir / "downloads" / "example" / "realizations"

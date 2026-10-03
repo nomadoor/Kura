@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from kura.run_commands.common import _backend_image_name, _image_config, _load_frozen_command, _run_datasets, _safe_error, _workspace_display_path
+from kura.run_commands.common import _backend_image_name, _effective_image, _load_frozen_command, _run_datasets, _safe_error, _workspace_display_path
 from kura.run_commands.launch import _wait_for_docker_run, cmd_run_execute, cmd_run_launch, cmd_run_remote, execute_run, launch_run, run_remote
 from kura.run_commands.plan import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _download_estimate_workspace, _ensure_free_bytes, _estimate_backend_download_bytes, _hf_file_size_bytes, _local_launch_disk_preflight, _parse_duration_seconds, _runpod_launch_disk_preflight, cmd_run_logs, cmd_run_plan, cmd_run_stage, cmd_run_stop, format_run_plan, plan_run, stage_run, stop_run
 from kura.run_commands.render_runpod import _start_runpod_comfyui, launch_render_runpod

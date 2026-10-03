@@ -1862,7 +1862,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "source"
             downloaded = run_dir / "downloads" / "source"
             (downloaded / "outputs").mkdir(parents=True)
@@ -1892,7 +1892,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "source"
             downloaded = run_dir / "downloads" / "source"
             (downloaded / "outputs").mkdir(parents=True)
@@ -1924,7 +1924,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "source"
             downloaded = run_dir / "downloads" / "source"
             (downloaded / "outputs").mkdir(parents=True)
@@ -1953,7 +1953,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "source"
             downloaded = run_dir / "downloads" / "source"
             (downloaded / "outputs").mkdir(parents=True)
@@ -1994,7 +1994,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "derived"
             downloaded = run_dir / "downloads" / "derived"
             (downloaded / "outputs").mkdir(parents=True)
@@ -2079,7 +2079,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             source = self._source_run(root)
             source_run = yaml.safe_load((source / "run.yaml").read_text(encoding="utf-8"))
             source_run["backend"]["config"]["architecture"] = "anima"
@@ -2139,7 +2139,7 @@ class ResumeRunTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             source = self._source_run(root)
             candidate = root / "state"
             candidate.mkdir()

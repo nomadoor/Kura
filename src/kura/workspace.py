@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from kura.fsio import atomic_write_yaml
+from kura.images import PINNED_IMAGES
 
 
 def dump_yaml(path: Path, value: Any) -> None:
@@ -31,11 +33,30 @@ def workspace(start: Path | None = None) -> Path:
     return current
 
 
-def require_workspace() -> Path:
+def require_workspace(*, check_schema: bool = True) -> Path:
     root = workspace()
-    if not (root / "workspace.yaml").is_file():
+    path = root / "workspace.yaml"
+    if not path.is_file():
         raise ValueError("workspace.yaml was not found; run `kura init` or execute this command from inside a Kura workspace")
+    if check_schema:
+        version = _schema_version(path, path.stat().st_mtime_ns)
+        # An explicit older version is refused here; a file without a version
+        # is validated as current, which refuses the old image settings.
+        if version is not None and version != WORKSPACE_SCHEMA_VERSION:
+            raise ValueError(
+                f"{path} uses workspace schema {version!r}, and this Kura reads schema {WORKSPACE_SCHEMA_VERSION}; "
+                "run `kura workspace migrate` to preview and apply the change"
+            )
     return root
+
+
+@lru_cache(maxsize=8)
+def _schema_version(path: Path, _mtime_ns: int) -> Any:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    return data.get("schema_version") if isinstance(data, dict) else None
 
 
 def _value(value_type: str, *, choices: tuple[Any, ...] = ()) -> dict[str, Any]:
@@ -69,7 +90,6 @@ _INTEGER = _value("integer")
 _NUMBER = _value("number")
 _BOOLEAN = _value("boolean")
 _STRING_LIST = _sequence(_STRING)
-_DOCKER_IMAGE = _mapping({name: _STRING for name in ("local", "remote", "dockerfile", "context")})
 _DOCKER_MOUNT = _mapping({"source": _STRING, "target": _STRING, "mode": _value("string", choices=("ro", "rw"))})
 _MODEL_ENTRY = _mapping({
     name: _STRING
@@ -85,7 +105,6 @@ _OBJECT_STORE = _mapping({
     for name in ("endpoint_url", "bucket", "region", "prefix", "access_key_env", "secret_key_env")
 })
 _RUNPOD_FIELDS: dict[str, Any] = {
-    "default_image": _dynamic(_STRING),
     "template_id": _STRING,
     "api_key_env": _STRING,
     "storage_mode": _value("string", choices=("upload", "container_disk", "object_staging")),
@@ -108,12 +127,16 @@ _RUNPOD_FIELDS: dict[str, Any] = {
     "download_min_free_gb": _INTEGER,
 }
 
+WORKSPACE_SCHEMA_VERSION = 2
+
 WORKSPACE_SCHEMA = _mapping({
-    "schema_version": _INTEGER,
+    "schema_version": _value("integer", choices=(WORKSPACE_SCHEMA_VERSION,)),
     "name": _STRING,
     "storage": _mapping({"host_drive": _STRING, "docker_data_drive": _STRING}),
+    # One override per Kura image, used by local and RunPod runs alike; the
+    # pinned digests in `kura.images` apply when a name is absent.
+    "images": _mapping({name: _STRING for name in PINNED_IMAGES}),
     "docker": _mapping({
-        "images": _dynamic(_DOCKER_IMAGE),
         "workspace_target": _STRING,
         "gpu": _BOOLEAN,
         "mounts": _sequence(_DOCKER_MOUNT),
@@ -139,16 +162,19 @@ WORKSPACE_SCHEMA = _mapping({
 # Keys earlier Kura versions wrote but nothing reads any more. They are reported
 # separately from a typo: the file is not wrong, it is stale, and the fix is to
 # delete the line rather than to look for the right spelling.
+_MIGRATE = "images are pinned by Kura and overridden with images.<name>; run `kura workspace migrate`"
 WORKSPACE_OBSOLETE_KEYS = {
     "runpod.container_cwd": "the container working directory now comes from the selected backend adapter",
+    "docker.images": _MIGRATE,
+    "runpod.default_image": _MIGRATE,
+    "comfyui.runpod.default_image": _MIGRATE,
 }
 
 _WORKSPACE_ALIASES = {
     "comfy": "comfyui",
     "comfyui_endpoint": "comfyui.endpoint",
     "endpont": "comfyui.endpoint",
-    "image": "docker.images",
-    "images": "docker.images",
+    "image": "images",
 }
 
 
@@ -253,6 +279,10 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     if not isinstance(config, dict):
         raise ValueError(f"{source} must contain a YAML mapping")
     _validate_workspace_value(config, WORKSPACE_SCHEMA, source=source, path="")
+    images = config.get("images")
+    for name, reference in (images.items() if isinstance(images, dict) else ()):
+        if not reference.strip():
+            raise ValueError(f"{source} images.{name} must name an image; delete the line to use the pinned image")
 
 
 def workspace_config() -> dict[str, Any]:
@@ -301,3 +331,79 @@ def workspace_relative_path(value: str) -> Path:
     if not path.is_absolute():
         path = require_workspace() / path
     return path.resolve()
+
+
+def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Turn a schema-1 `workspace.yaml` into the current schema.
+
+    Returns the migrated mapping and one note per dropped or moved setting.
+    Image settings collapse into one `images.<name>` override, kept only for a
+    digest that differs from the pinned table; mutable development tags and
+    build settings are dropped because users pull pinned images.
+    """
+
+    from copy import deepcopy
+
+    from kura.images import PINNED_IMAGES, is_mutable
+
+    version = config.get("schema_version")
+    if version == WORKSPACE_SCHEMA_VERSION:
+        return deepcopy(config), []
+    if version == str(WORKSPACE_SCHEMA_VERSION):
+        fixed = deepcopy(config)
+        fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
+        return fixed, ["schema_version was the string '2'; it is now the integer 2"]
+    if version not in (None, 1):
+        raise ValueError(f"cannot migrate workspace schema {version!r}; this Kura migrates schema 1 to {WORKSPACE_SCHEMA_VERSION}")
+    migrated = deepcopy(config)
+    notes: list[str] = []
+    candidates: dict[str, list[tuple[str, str]]] = {}
+
+    docker = migrated.get("docker") if isinstance(migrated.get("docker"), dict) else None
+    old_images = docker.pop("images", None) if docker is not None else None
+    if old_images is not None and not isinstance(old_images, dict):
+        notes.append("dropped docker.images: it was not a mapping")
+        old_images = None
+    for name, entry in (old_images or {}).items():
+        if not isinstance(entry, dict):
+            notes.append(f"dropped docker.images.{name}: it was not a mapping")
+            continue
+        for key in ("dockerfile", "context"):
+            if key in entry:
+                notes.append(f"dropped docker.images.{name}.{key}: images are built only from an editable Kura checkout")
+        for key in ("local", "remote"):
+            if isinstance(entry.get(key), str):
+                candidates.setdefault(name, []).append((f"docker.images.{name}.{key}", entry[key]))
+            elif key in entry:
+                notes.append(f"dropped docker.images.{name}.{key}: it was not an image name")
+    for section_path in ("runpod", "comfyui.runpod"):
+        section: Any = migrated
+        for part in section_path.split("."):
+            section = section.get(part) if isinstance(section, dict) else None
+        defaults = section.pop("default_image", None) if isinstance(section, dict) else None
+        for name, reference in (defaults or {}).items():
+            if isinstance(reference, str):
+                candidates.setdefault(name, []).append((f"{section_path}.default_image.{name}", reference))
+
+    overrides: dict[str, str] = {}
+    for name, found in candidates.items():
+        for origin, reference in found:
+            if name not in PINNED_IMAGES:
+                notes.append(f"dropped {origin} ({reference}): Kura runs no image named {name!r}")
+            elif is_mutable(reference):
+                notes.append(f"dropped {origin} ({reference}): a mutable tag; the pinned {PINNED_IMAGES[name]} applies")
+            elif reference == PINNED_IMAGES[name]:
+                notes.append(f"dropped {origin}: it equals the pinned image")
+            elif name in overrides and overrides[name] != reference:
+                notes.append(f"dropped {origin} ({reference}): images.{name} keeps {overrides[name]}; local and RunPod now share one image")
+            else:
+                overrides.setdefault(name, reference)
+                notes.append(f"moved {origin} to images.{name}")
+    migrated["schema_version"] = WORKSPACE_SCHEMA_VERSION
+    if overrides:
+        migrated["images"] = overrides
+    try:
+        validate_workspace_config(migrated, source="migrated workspace.yaml")
+    except ValueError as exc:
+        raise ValueError(f"{exc} Edit workspace.yaml by hand for these lines, then run `kura workspace migrate` again.") from exc
+    return migrated, notes
