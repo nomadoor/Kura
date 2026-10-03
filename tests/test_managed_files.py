@@ -214,6 +214,30 @@ class ManagedFileTests(unittest.TestCase):
             self.assertIn("dataset-prep", target.read_text(encoding="utf-8"))
             self.assertEqual((root / "elsewhere.md").read_text(encoding="utf-8"), "linked\n")
 
+    @unittest.skipIf(os.name == "nt", "symlinks need extra privileges on Windows")
+    def test_files_behind_a_linked_directory_are_never_touched(self) -> None:
+        with _workspace_with_source() as (root, source), tempfile.TemporaryDirectory() as outside:
+            _init()
+            shutil.rmtree(root / ".claude")
+            (Path(outside) / "skills" / "dataset-prep").mkdir(parents=True)
+            (Path(outside) / "skills" / "dataset-prep" / "SKILL.md").write_text("theirs\n", encoding="utf-8")
+            (root / ".claude").symlink_to(outside, target_is_directory=True)
+            (source / "skills" / "dataset-prep" / "SKILL.md").write_text("---\nname: dataset-prep\ndescription: changed\n---\n", encoding="utf-8")
+            shutil.rmtree(source / "skills" / "runpod-lifecycle")
+            _refresh(root)
+            code, _ = _init(restore=True, yes=True)
+            self.assertEqual(code, 0)
+            self.assertEqual(sorted(p.relative_to(outside).as_posix() for p in Path(outside).rglob("*") if p.is_file()), ["skills/dataset-prep/SKILL.md"])
+            self.assertEqual((Path(outside) / "skills" / "dataset-prep" / "SKILL.md").read_text(encoding="utf-8"), "theirs\n")
+            self.assertIn("changed", (root / ".agents" / "skills" / "dataset-prep" / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_init_reports_a_failure_to_record_what_it_wrote(self) -> None:
+        with _workspace_with_source():
+            with patch("kura.init_templates.record_created_once", side_effect=OSError("disk full")):
+                code, output = _init()
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", output)
+
     def test_a_workspace_without_agent_files_is_told_to_run_init(self) -> None:
         with _workspace_with_source() as (root, _):
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")

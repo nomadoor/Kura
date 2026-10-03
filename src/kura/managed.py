@@ -138,12 +138,27 @@ def _read_manifest(root: Path) -> dict:
     return {"shipped_identity": identity if isinstance(identity, str) else None, "files": files, "created_once": created}
 
 
+def _behind_link(root: Path, path: str) -> bool:
+    """Whether a directory on the way to `path` is a symlink.
+
+    Such a file lives wherever the link points, possibly outside the
+    workspace, so Kura never reads, writes, or removes it; it is the user's.
+    """
+    current = root
+    for part in PurePosixPath(path).parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
 def plan_restore(root: Path, source: Traversable | None = None) -> list[str]:
     """Managed files a restore would replace or recreate."""
     files = shipped_files(source)
     return sorted(
         path for path, content in files.items()
-        if (root / path).is_symlink() or not (root / path).is_file() or _sha((root / path).read_bytes()) != _sha(content)
+        if not _behind_link(root, path)
+        and ((root / path).is_symlink() or not (root / path).is_file() or _sha((root / path).read_bytes()) != _sha(content))
     )
 
 
@@ -176,6 +191,10 @@ def sync(root: Path, *, restore: bool = False, source: Traversable | None = None
             target = root / path
             entry = recorded.get(path) or {}
             state = entry.get("state")
+            if _behind_link(root, path):
+                report.preexisting.append(path)
+                entries[path] = {"state": "user"}
+                continue
             wanted = _sha(content)
             current = None if target.is_symlink() or not target.is_file() else _sha(target.read_bytes())
             if current == wanted:
@@ -211,6 +230,8 @@ def sync(root: Path, *, restore: bool = False, source: Traversable | None = None
             if path in files or entry.get("state") not in {"written", "edited"}:
                 continue
             target = root / path
+            if _behind_link(root, path):
+                continue
             if target.is_file() and not target.is_symlink() and _sha(target.read_bytes()) == entry.get("sha256"):
                 target.unlink()
                 report.removed.append(path)

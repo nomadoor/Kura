@@ -82,7 +82,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     for relative in once:
         if relative not in already:
             _write_once(root / relative, USER_KNOWLEDGE.get(relative) or env_local_template(_runpod_api_key_env(workspace)), private=relative == ".env.local")
-    record_created_once(root, once)
+    try:
+        record_created_once(root, once)
+    except (OSError, ValueError) as exc:
+        print(f"cannot record the files kura init wrote: {exc}", file=sys.stderr)
+        return 1
     (root / "index.jsonl").touch(exist_ok=True)
     if is_kura_checkout(root):
         print("this is a Kura source checkout: its agent files are maintained by hand, so Kura does not manage them here")
