@@ -80,6 +80,17 @@ the source tree.
   sessions that run inside the source tree. They become unnecessary once
   usage happens in a separate workspace.
 
+**Run provenance**
+
+- With Kura installed from changing commits, its version alone no longer
+  identifies the code that ran. Every compiled run and every realization
+  records `kura_version` and `kura_source`: the Git URL and commit for a Git
+  install, the checkout path, commit, and whether it had uncommitted changes
+  for an editable install, and `unknown` otherwise. Credentials are never
+  recorded.
+- Resume compares the source run's Kura with the one compiling it and warns,
+  without refusing, when they differ.
+
 **Migration**
 
 - The maintainer's current runs, datasets, and cache move into a new

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import yaml
 
+from kura import __version__
 from kura.backends.ai_toolkit import (
     AI_TOOLKIT_FOLDER_CODECS,
     AI_TOOLKIT_PROJECTION_PROFILES,
@@ -6518,6 +6519,8 @@ class DatasetHandoffTests(unittest.TestCase):
                 realization["dataset_view"],
                 {"verification": "matched", "link_count": len(lock["views"][0]["links"])},
             )
+            self.assertEqual(realization["kura_version"], __version__)
+            self.assertIn(realization["kura_source"]["kind"], {"git", "editable", "unknown"})
             import kura.run_commands.launch as launch_module
             self.assertFalse(hasattr(launch_module, "materialize_dataset_view"))
 

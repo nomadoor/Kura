@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from kura import __version__
+from kura.install_source import kura_provenance
 from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
 from kura.workspace import dump_yaml
@@ -1268,7 +1268,7 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
                     if name in matching["values"]:
                         item[name] = matching["values"][name]
         (resolved / "promptset_used.jsonl").write_text("".join(json.dumps(item, ensure_ascii=False) + "\n" for item in used_items), encoding="utf-8")
-    dump_yaml(resolved / "env.lock", {"kura_version": __version__, "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
+    dump_yaml(resolved / "env.lock", {**kura_provenance(), "generator": "comfyui", "endpoint": run.get("generator", {}).get("endpoint"), "generated_at": now()})
     status(run_dir, state="compiled", last_step=0, total_steps=len(indexed_cases), current_case_id=None)
 
 

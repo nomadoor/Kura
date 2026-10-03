@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from kura.fsio import atomic_write_json, file_lock
+from kura.install_source import kura_continuity
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
 
 
@@ -550,11 +551,20 @@ def compile_resume_lock(
         "runtime_identity": manifest.get("runtime_identity") or {},
         "compatibility": compatibility,
         "dataset_input": dataset_input,
+        "kura": _kura_continuity(workspace / "runs" / str(run["parent_run"]) / "resolved" / "env.lock"),
         "files": manifest["files"],
     }
     resolved.mkdir(parents=True, exist_ok=True)
     atomic_write_json(resolved / "training-state-source.lock.json", lock)
     return lock
+
+
+def _kura_continuity(source_env_lock: Path) -> dict[str, Any]:
+    try:
+        loaded = yaml.safe_load(source_env_lock.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        loaded = None
+    return kura_continuity(loaded if isinstance(loaded, dict) else {})
 
 
 def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:

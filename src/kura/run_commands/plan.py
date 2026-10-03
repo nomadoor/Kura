@@ -25,6 +25,7 @@ from kura.dataset_handoff import (
     load_frozen_dataset_projection,
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
+from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
 from kura.storage import probe_storages
@@ -1153,6 +1154,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "state_bytes": sum(item.get("size", 0) for item in files if isinstance(item, dict) and isinstance(item.get("size"), int)),
             "capture_policy": training_state_policy(run),
             "dataset_input": lock.get("dataset_input") if lock_path.is_file() and isinstance(lock.get("dataset_input"), dict) else None,
+            "kura": lock.get("kura") if lock_path.is_file() and isinstance(lock.get("kura"), dict) else None,
         }
     return {
         "id": run_id,
@@ -1287,6 +1289,9 @@ def format_run_plan(payload: dict[str, Any]) -> str:
             _append_kv(lines, "input_identity", resume_input.get("status"))
             if resume_input.get("detail"):
                 _append_kv(lines, "input_warning", resume_input["detail"])
+        warning = kura_continuity_warning(resume.get("kura"))
+        if warning:
+            _append_kv(lines, "kura_warning", warning)
 
     training_state = payload.get("training_state") if isinstance(payload.get("training_state"), dict) else None
     if training_state is not None:

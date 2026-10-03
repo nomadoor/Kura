@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from kura import __version__
+from kura.install_source import kura_provenance
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure
 from kura.dataset_handoff import (
     inspect_dataset_sources,
@@ -477,7 +477,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         **({"dataset_view": dataset_view} if dataset_view is not None else {}),
         "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
-        "platform": platform.platform(), "host": platform.node(), "kura_version": __version__, "preflight": preflight,
+        "platform": platform.platform(), "host": platform.node(), **kura_provenance(), "preflight": preflight,
     }
     _write_json(realization_path, realization)
     record_launch_phase(run_dir, realization_id, "container_start_requested", at=start_requested_at)
