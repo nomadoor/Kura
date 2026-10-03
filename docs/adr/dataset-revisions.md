@@ -63,8 +63,9 @@ Kura needs only these ideas, at the scale of one person's datasets.
   `derived/index.jsonl`, is accounted for: dataset validation does not report
   it as unlisted media, and it never becomes training input unless the current
   manifest selects it.
-- `kura cleanup` may remove only derived files that no revision references,
-  and shows a dry run first. It never removes source media.
+- `kura cleanup` may remove only derived files that no revision and no kept
+  run's input lock references, and shows a dry run first. It never removes
+  source media.
 
 **Runs pin a revision.** A run's input lock records the dataset revision it
 compiled, in addition to the file hashes it already records.

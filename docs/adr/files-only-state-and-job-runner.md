@@ -53,7 +53,11 @@ long-running process is allowed only if all of these hold:
   runner-controlled run is unfinished. It makes this check while still
   holding the lock, so a request written before the check is never lost.
 - Anything that writes a launch request writes it first, then starts the
-  runner if none holds the lock. `kura runner start` starts it by hand.
+  runner if none holds the lock. If a runner holds the lock, the writer
+  watches until the request is claimed; when the lock is released with the
+  request still pending, because that runner made its final check just
+  before the request was written, the writer starts a new runner.
+  `kura runner start` starts it by hand.
 - A runner launches only requests written by its own Kura version. A request
   from another version stays pending, and the runner and `kura runner status`
   report it. A later writer replaces that request after saying so.
