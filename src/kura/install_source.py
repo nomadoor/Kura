@@ -104,7 +104,11 @@ def kura_continuity(source_env: dict[str, Any]) -> dict[str, Any]:
         status = "differs"
     elif not isinstance(source_install, dict) or source_install.get("kind") in (None, "unknown"):
         status = "source-unrecorded"
-    elif target["kura_source"].get("kind") == "unknown":
+    elif target["kura_source"].get("kind") == "unknown" or any(
+        install.get("kind") == "editable" and install.get("dirty") is None
+        for install in (source_install, target["kura_source"])
+    ):
+        # An editable tree whose state could not be read may differ from its commit.
         status = "unverified"
     else:
         same = all(source_install.get(field) == target["kura_source"].get(field) for field in ("kind", "url", "commit", "dirty"))

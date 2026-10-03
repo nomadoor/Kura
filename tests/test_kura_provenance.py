@@ -8,7 +8,9 @@ import unittest
 from pathlib import Path
 
 from kura import __version__
-from kura.install_source import describe_install, kura_provenance
+from unittest.mock import patch
+
+from kura.install_source import describe_install, kura_continuity, kura_provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,6 +66,18 @@ class InstallSourceTests(unittest.TestCase):
         provenance = kura_provenance()
         self.assertEqual(provenance["kura_version"], __version__)
         self.assertIn(provenance["kura_source"]["kind"], {"git", "editable", "unknown"})
+
+
+class ContinuityTests(unittest.TestCase):
+    def test_an_editable_tree_that_could_not_be_checked_is_unverified(self) -> None:
+        unchecked = {"kura_version": "0.5.0", "kura_source": {"kind": "editable", "path": "/k", "commit": "a" * 40, "dirty": None}}
+        clean = {"kura_version": "0.5.0", "kura_source": {"kind": "editable", "path": "/k", "commit": "a" * 40, "dirty": False}}
+        with patch("kura.install_source.kura_provenance", return_value=unchecked):
+            self.assertEqual(kura_continuity(unchecked)["status"], "unverified")
+            self.assertEqual(kura_continuity(clean)["status"], "unverified")
+        with patch("kura.install_source.kura_provenance", return_value=clean):
+            self.assertEqual(kura_continuity(unchecked)["status"], "unverified")
+            self.assertEqual(kura_continuity(clean)["status"], "same")
 
 
 class PackageMetadataTests(unittest.TestCase):
