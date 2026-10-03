@@ -381,6 +381,9 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
         for part in section_path.split("."):
             section = section.get(part) if isinstance(section, dict) else None
         defaults = section.pop("default_image", None) if isinstance(section, dict) else None
+        if defaults is not None and not isinstance(defaults, dict):
+            notes.append(f"dropped {section_path}.default_image: it was not a mapping of image names")
+            defaults = None
         for name, reference in (defaults or {}).items():
             if isinstance(reference, str):
                 candidates.setdefault(name, []).append((f"{section_path}.default_image.{name}", reference))

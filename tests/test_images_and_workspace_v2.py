@@ -157,6 +157,10 @@ class WorkspaceSchemaTests(unittest.TestCase):
         self.assertIn("local and RunPod now share one image", "\n".join(notes))
         broken, notes = migrate_workspace_config({"schema_version": 1, "docker": {"images": "nonsense"}})
         self.assertIn("not a mapping", "\n".join(notes))
+        for section in ({"runpod": {"default_image": "x@sha256:" + "6" * 64}}, {"comfyui": {"runpod": {"default_image": ["x"]}}}):
+            scalar, notes = migrate_workspace_config({"schema_version": 1, **section})
+            self.assertNotIn("images", scalar)
+            self.assertIn("default_image: it was not a mapping", "\n".join(notes))
         string_version, notes = migrate_workspace_config({"schema_version": "2"})
         self.assertEqual(string_version["schema_version"], WORKSPACE_SCHEMA_VERSION)
         with self.assertRaisesRegex(ValueError, "Edit workspace.yaml by hand"):

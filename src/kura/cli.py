@@ -1214,7 +1214,7 @@ def cmd_workspace_migrate(args: argparse.Namespace) -> int:
         if input("apply this migration? [y/N] ").strip().lower() not in {"y", "yes"}:
             print("workspace.yaml was not changed")
             return 1
-    backup.write_text(before, encoding="utf-8")
+    atomic_write_text(backup, before)
     _dump_yaml(path, migrated)
     print(f"migrated workspace.yaml; the previous file is kept as {backup.name}")
     return 0
