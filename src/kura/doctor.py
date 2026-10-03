@@ -446,7 +446,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         diagnostics["docker_version_stderr"] = version.stderr.strip()
         if not checks["daemon_reachable"]:
             if _looks_like_process_permission_denial(info.stderr):
-                diagnosis = "This process could not access the Docker daemon because the OS denied permission. The same Kura command may work outside this process's permission context. See docs/external-access.md."
+                diagnosis = "This process could not access the Docker daemon because the OS denied permission. The same Kura command may work outside this process's permission context. See external-access.md, shipped with Kura as .kura/reference/external-access.md."
             else:
                 diagnosis = "Docker CLI is available but the daemon is unreachable. If Docker Desktop settings look correct, restart Docker Desktop and this WSL distro; confirm the active Docker context points at the Desktop Linux engine."
         if checks["daemon_reachable"]:
@@ -723,7 +723,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     elif checks["network_volumes_empty"] is False:
         diagnosis = "RunPod has Network Volumes remaining; delete volumes that should not persist."
     elif _looks_like_process_permission_denial(diagnostics.get("pods_error")) or _looks_like_process_permission_denial(diagnostics.get("pod_list_stderr")):
-        diagnosis = "This process could not reach the RunPod API because the OS denied the connection before RunPod responded. The same Kura command may work outside this process's permission context. See docs/external-access.md."
+        diagnosis = "This process could not reach the RunPod API because the OS denied the connection before RunPod responded. The same Kura command may work outside this process's permission context. See external-access.md, shipped with Kura as .kura/reference/external-access.md."
     else:
         diagnosis = "RunPod is not fully ready; inspect checks and diagnostics."
     print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
@@ -923,7 +923,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         elif _looks_like_process_permission_denial(stage_error) or (
             checks["stage_dir_exists"] and not checks["stage_dir_writable"]
         ) or diagnostics.get("stage_parent_writable") is False:
-            diagnosis = "ComfyUI is reachable, but this process could not write to the configured LoRA staging directory. The same Kura command may work outside this process's permission context. See docs/external-access.md."
+            diagnosis = "ComfyUI is reachable, but this process could not write to the configured LoRA staging directory. The same Kura command may work outside this process's permission context. See external-access.md, shipped with Kura as .kura/reference/external-access.md."
         else:
             diagnosis = "ComfyUI endpoint is reachable, but configured comfyui.lora_dir is not visible to that endpoint."
     else:

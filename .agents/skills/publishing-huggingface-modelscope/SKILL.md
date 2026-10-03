@@ -19,6 +19,6 @@ Use this skill for public/private model artifact publication.
 ## Preflight
 
 ```sh
-uv run python scripts/check_secrets.py
-uv run python scripts/check_model_artifacts.py
+kura check secrets <upload-dir>
+kura check artifacts <upload-dir>
 ```

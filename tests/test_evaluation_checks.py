@@ -96,7 +96,9 @@ class EvaluationCheckTests(unittest.TestCase):
         errors, _ = evaluation_errors(self._card_evaluation(".kura/knowledge/model-families/anima.md"), label="run.yaml")
         self.assertFalse([item for item in errors if "does not exist" in item])
         errors, _ = evaluation_errors(self._card_evaluation(".kura/knowledge/../../../../../../../../etc/passwd"), label="run.yaml")
-        self.assertTrue(any("inside the repository" in item for item in errors))
+        self.assertTrue(any("inside the shipped knowledge" in item for item in errors))
+        errors, _ = evaluation_errors(self._card_evaluation(".kura/knowledge/../../../../README.md"), label="run.yaml")
+        self.assertTrue(any("inside the shipped knowledge" in item for item in errors))
 
     def test_editable_run_does_not_follow_the_card_move(self) -> None:
         evaluation = self._card_evaluation(".claude/skills/lora-evaluation/knowledge/anima.md")

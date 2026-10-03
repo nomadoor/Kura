@@ -29,8 +29,9 @@ Before writing prompts, inspect only the material relevant to the run:
 3. trainer backend and training settings;
 4. target workflow, its default positive/negative prompts, model references,
    sidecar, pinned model revision, and LoRA insertion/strength;
-5. `knowledge/model-families/<family>.md` at the repository root and its
-   cited upstream primary sources;
+5. the family card in `.kura/knowledge/model-families/<family>.md` (shipped)
+   and `knowledge/model-families/<family>.md` (the user's, which wins on
+   conflict), and their cited upstream primary sources;
 6. prior evaluated runs and their `notes.md`.
 
 If no family card exists, inspect upstream primary documentation and record
@@ -115,4 +116,4 @@ gated access details, or dataset payloads.
 
 ## Skill order
 
-`dataset-prep -> training-parameter-planning -> training-backends -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes`
+`dataset-prep -> training-parameter-planning -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes`

@@ -23,16 +23,17 @@ a time. Record answers in dataset or run intent so they are not asked again.
 
 Before proposing parameters, inspect:
 
-1. `uv run kura run capabilities <backend> --json` for the accepted authored
+1. `kura run capabilities <backend> --json` for the accepted authored
    vocabulary and selector conditions;
-2. `uv run kura dataset inspect <dataset>` and dataset validation for item
+2. `kura dataset inspect <dataset>` and dataset validation for item
    count, resolutions, captions, roles, and pair integrity;
-3. `uv run kura run plan <run-id>` for model artifacts, executor, detected or
+3. `kura run plan <run-id>` for model artifacts, executor, detected or
    selected GPU resources, cache state, and download estimates;
-4. the matching `knowledge/model-families/<family>.md`, when present;
+4. the matching family card, when present: `.kura/knowledge/model-families/<family>.md`
+   (shipped) and `knowledge/model-families/<family>.md` (the user's, which wins);
 5. `knowledge/user-preferences.md` and prior evaluated runs under comparable
    conditions;
-6. the selected reference in `training-backends` for backend mechanics.
+6. `kura run capabilities <backend>` and the compiled plan for backend mechanics.
 
 Do not guess field names from adapter source. A capability refusal is the
 public contract speaking.
@@ -80,8 +81,8 @@ multiple dimensions and retry.
 
 ## Last look
 
-Immediately before presenting the approval plan, read
-`knowledge/regrets.md`. Return only relevant `trigger -> reminder` notes. This
+Immediately before presenting the approval plan, read the shipped
+`.kura/knowledge/regrets.md` and the user's `knowledge/regrets.md`. Return only relevant `trigger -> reminder` notes. This
 does not modify the run, issue a verdict, or create another approval gate.
 
 ## Resume
@@ -119,8 +120,8 @@ never authorizes relaunch.
 ## Knowledge feedback
 
 Record settings, hardware, observed behavior, and the user's judgment in the
-run's `notes.md` first. Promote only generalizable findings to the matching
-family card, citing the run. Record an actual regret confirmed by a run or
-named by the owner as one concise entry in `knowledge/regrets.md`, citing
-`source: run <id>` or `source: owner (<date>)` respectively. Do not seed
+run's `notes.md` first. Promote only generalizable findings to the user's family card in
+`knowledge/model-families/`, citing the run. Record an actual regret confirmed by a run or
+named by the user as one concise entry in the user's `knowledge/regrets.md`,
+citing `source: run <id>` or `source: user (<date>)` respectively. Do not seed
 hypothetical regrets.
