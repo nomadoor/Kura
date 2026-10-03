@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kura Release Check"
+  short_description: "Run Kura pre-release quality and safety gates"
+  default_prompt: "Use $release-check to validate this branch before handoff."

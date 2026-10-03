@@ -17,7 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 LEGACY_CARD_DIRS = {
     ".claude/skills/lora-evaluation/knowledge",
     ".claude/skills/training-parameter-planning/knowledge",
+    "knowledge/model-families",
 }
+SHIPPED_CARDS = ROOT / "src" / "kura" / "shipped" / "knowledge" / "model-families"
+# A workspace reads shipped knowledge under .kura/knowledge; in this checkout
+# that path is the shipped source itself.
+WORKSPACE_SHIPPED_KNOWLEDGE = ".kura/knowledge/"
 CANONICAL_CATEGORIES = {
     "reconstruction", "identity_retention", "outfit_transfer",
     "pose_composition_transfer", "background_transfer", "style_transfer",
@@ -74,6 +79,8 @@ def evaluation_errors(
         else:
             card_path = Path(card)
             resolved = card_path if card_path.is_absolute() else ROOT / card_path
+            if card_path.as_posix().startswith(WORKSPACE_SHIPPED_KNOWLEDGE):
+                resolved = ROOT / "src" / "kura" / "shipped" / "knowledge" / card_path.as_posix()[len(WORKSPACE_SHIPPED_KNOWLEDGE):]
             try:
                 resolved.resolve().relative_to(ROOT.resolve())
             except ValueError:
@@ -81,13 +88,14 @@ def evaluation_errors(
             else:
                 # A completed run's manifest is immutable, so a citation keeps
                 # the path the card had at the time. Model-family cards later
-                # moved to knowledge/model-families/. Follow that one move, and
+                # moved to knowledge/model-families/ and then into the package
+                # (src/kura/shipped/knowledge). Follow those moves, and
                 # only from the exact directories they moved out of, so a typo
                 # in a new path is still an error.
                 moved = None
                 parent = card_path.parent.as_posix()
                 if allow_legacy_card_move and parent in LEGACY_CARD_DIRS:
-                    moved = ROOT / "knowledge" / "model-families" / card_path.name
+                    moved = SHIPPED_CARDS / card_path.name
                 if not resolved.is_file() and not (moved and moved.is_file()):
                     errors.append(f"{label}.evaluation.knowledge.card does not exist: {card}")
             for key in ("card_verified_at", "source_url", "source_revision", "applies_to_model_revision", "revision_match"):

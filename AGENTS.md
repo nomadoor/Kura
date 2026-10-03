@@ -5,7 +5,8 @@
 Repository workflow configuration is recorded under `docs/agents/`. Start with
 `docs/agents/workflow.md`, then use `issue-tracker.md`, `labels.md`, and
 `domain.md` when the task touches those concerns. Project-specific operational
-guidance remains canonical under `.agents/skills/`. Kura's canonical terms are
+guidance is authored in `dev/skills/` (development) and `src/kura/shipped/skills/`
+(usage, shipped with Kura). Kura's canonical terms are
 defined in the root `CONTEXT.md`.
 
 ## First: what kind of session is this?
@@ -176,8 +177,8 @@ semantics; `lora-evaluation` judges the plan. Do not bypass Kura to execute a
 video evaluation: Kura currently defines video evaluation categories but has
 no video render result path.
 
-Model-family knowledge lives in `knowledge/model-families/<family>.md` at the
-repository root. It is shared by the training and evaluation skills and is not
+Model-family knowledge ships with Kura as `.kura/knowledge/model-families/<family>.md`
+in a workspace (`src/kura/shipped/knowledge/model-families/` in this checkout). It is shared by the training and evaluation skills and is not
 specific to any one agent.
 
 A model family often trains on one variant and generates with another, and the
@@ -219,14 +220,17 @@ Layout:
 - Docker skeletons: `docker/`
 - Authored examples: `examples/`
 - Authored docs: `docs/`
-- Model-family knowledge: `knowledge/model-families/`
-- Project skills (canonical): `.agents/skills/`
-- Claude compatibility mirror: `.claude/skills/` (generated; do not edit directly)
+- Shipped usage content (skills, model-family knowledge, regrets, workflow
+  samples): `src/kura/shipped/`
+- Development skills (canonical): `dev/skills/`
+- Skill mirrors for agents in this checkout: `.agents/skills/` and
+  `.claude/skills/` (generated from both; do not edit directly)
 - Mechanical checks: `scripts/check_*.py`
 
-Edit project skills only under `.agents/skills/`, then run
+Edit development skills under `dev/skills/` and usage skills under
+`src/kura/shipped/skills/`, then run
 `uv run python scripts/sync_agent_skills.py --write`. The release check rejects
-missing skill metadata or any drift in the Claude compatibility mirror.
+missing skill metadata or any drift in either skill mirror.
 
 For local workspace configuration keys, see `docs/workspace-config.md`.
 

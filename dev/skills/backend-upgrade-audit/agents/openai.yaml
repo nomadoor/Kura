@@ -1,0 +1,4 @@
+interface:
+  display_name: "Backend Upgrade Audit"
+  short_description: "Inventory and prove trainer support changes"
+  default_prompt: "Use $backend-upgrade-audit to inventory every changed trainer contract, keep all evidence gaps visible, and validate claims end to end."

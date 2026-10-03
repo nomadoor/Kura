@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Validate the repository's authored ComfyUI workflow JSON and promptset files."""
+"""Validate the workflow samples Kura ships.
+
+Only tracked, shipped samples are checked; a maintainer's own untracked
+workflows/ and promptsets/ are workspace data, checked with `kura workflow check`.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +17,8 @@ sys.path.insert(0, str(ROOT / "src"))
 from kura.checks import default_workflow_files, workflow_findings  # noqa: E402
 
 
-WORKFLOWS = ROOT / "workflows"
-PROMPTSETS = ROOT / "promptsets"
+WORKFLOWS = ROOT / "src" / "kura" / "shipped" / "workflow-samples"
+PROMPTSETS = WORKFLOWS
 
 
 def main() -> int:

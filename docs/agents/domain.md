@@ -11,8 +11,9 @@ Kura uses one repository-wide domain context.
 - `docs/adr/` owns durable, cross-domain architectural decisions that satisfy
   the criteria in `docs/adr/README.md`.
 - Focused documents under `docs/` own user-facing or subsystem-specific facts.
-- `.agents/skills/` owns operational guidance for a single development or
-  usage domain. `.claude/skills/` is generated and must not be edited directly.
+- `dev/skills/` (development) and `src/kura/shipped/skills/` (usage, shipped
+  with Kura) own operational guidance for a single domain. `.agents/skills/`
+  and `.claude/skills/` are generated from both and must not be edited directly.
 
 Do not add parallel context maps or duplicate repository rules without clear
 evidence that the single root context has become insufficient. Before domain

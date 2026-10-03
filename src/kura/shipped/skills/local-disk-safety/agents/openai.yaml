@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local Disk Safety"
+  short_description: "Check disk, Docker, cache, and checkpoint safety"
+  default_prompt: "Use $local-disk-safety to assess this local storage operation before proceeding."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Training Parameter Planning"
+  short_description: "Choose Kura training quality and resource tradeoffs"
+  default_prompt: "Use $training-parameter-planning to propose parameters for this training run."

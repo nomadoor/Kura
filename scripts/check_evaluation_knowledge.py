@@ -9,10 +9,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL_DIR = ROOT / ".agents" / "skills" / "lora-evaluation"
+SKILL_DIR = ROOT / "src" / "kura" / "shipped" / "skills" / "lora-evaluation"
 # Model-family knowledge is shared by the training and evaluation skills and is
-# not specific to one agent, so it lives at the repository root.
-KNOWLEDGE_DIR = ROOT / "knowledge" / "model-families"
+# not specific to one agent; it ships with Kura and is written into workspaces.
+KNOWLEDGE_DIR = ROOT / "src" / "kura" / "shipped" / "knowledge" / "model-families"
 ORDER = "dataset-prep -> training-parameter-planning -> training-backends -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
 REQUIRED_FIELDS = (
     "source_url",

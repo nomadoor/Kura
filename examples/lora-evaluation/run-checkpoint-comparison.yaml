@@ -17,7 +17,7 @@ evaluation:
   model_family: anima
   model_variant: aesthetic
   knowledge:
-    card: knowledge/model-families/anima.md
+    card: .kura/knowledge/model-families/anima.md
     card_verified_at: '2026-08-03'
     source_url: https://huggingface.co/circlestone-labs/Anima
     source_revision: main
