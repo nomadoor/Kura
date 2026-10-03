@@ -77,3 +77,10 @@ uv run python -m unittest discover -s tests
 uv run kura --help
 uv run python scripts/check_readme_cli_sync.py
 ```
+
+## RunPod lifecycle changes
+
+Pod-side deletion, shared by training and render Pods, lives in
+`src/kura/container_scripts/pod_self_delete.sh`. After lifecycle changes run
+`uv run python -m unittest tests.test_cli` and check `uv run kura run remote --help`;
+usage guidance stays in the shipped `runpod-lifecycle` skill.

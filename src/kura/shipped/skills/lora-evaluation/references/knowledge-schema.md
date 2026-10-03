@@ -2,8 +2,10 @@
 
 ## Family cards
 
-Store prompt/inference knowledge in `knowledge/model-families/<family>.md` at
-the repository root, in the same card as that family's training knowledge. Use the backend architecture identifier when it is a
+Kura ships family cards in `.kura/knowledge/model-families/<family>.md`.
+Record new prompt/inference knowledge in the user's card,
+`knowledge/model-families/<family>.md`, in the same card as that family's
+training knowledge; never edit the shipped card. Use the backend architecture identifier when it is a
 stable family name. Put materially different prompt cultures under variant
 headings; do not duplicate a family merely because several trainers support it.
 
@@ -37,7 +39,7 @@ evaluation:
   model_family: family-id
   model_variant: variant-id
   knowledge:
-    card: knowledge/model-families/family-id.md
+    card: .kura/knowledge/model-families/family-id.md
     card_verified_at: 'YYYY-MM-DD'
     source_url: https://upstream.example/model-card
     source_revision: <immutable revision>
@@ -55,7 +57,7 @@ For a checkpoint comparison, the run references an explicit case queue:
 ```yaml
 inputs:
   train_run: example-train-run
-  cases: {path: examples/lora-evaluation/cases-checkpoint-comparison.jsonl, digest: null}
+  cases: {path: cases/checkpoint-comparison.jsonl, digest: null}
 evaluation:
   category: checkpoint_comparison
   fixed: [seed, workflow, lora_strength, prompt_policy]
@@ -63,7 +65,7 @@ evaluation:
   model_family: family-id
   model_variant: variant-id
   knowledge:
-    card: knowledge/model-families/family-id.md
+    card: .kura/knowledge/model-families/family-id.md
     card_verified_at: 'YYYY-MM-DD'
     source_url: https://upstream.example/model-card
     source_revision: <immutable revision>

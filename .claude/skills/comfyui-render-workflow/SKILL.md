@@ -99,8 +99,8 @@ Do not show hashes unless requested.
 ## Validation
 
 ```sh
-uv run kura doctor comfyui --endpoint <url> --workflow <api-workflow.json>
-uv run kura render compile <run-id>
-uv run kura render launch <run-id> --dry-run
-uv run python scripts/check_workflows.py
+kura doctor comfyui --endpoint <url> --workflow <api-workflow.json>
+kura render compile <run-id>
+kura render launch <run-id> --dry-run
+kura workflow check
 ```

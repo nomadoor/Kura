@@ -15,9 +15,9 @@ Kura workflows may need access outside the workspace:
 Use the relevant existing diagnostic:
 
 ```sh
-uv run kura doctor runpod
-uv run kura doctor docker
-uv run kura doctor comfyui --probe-stage
+kura doctor runpod
+kura doctor docker
+kura doctor comfyui --probe-stage
 ```
 
 When a diagnostic says "this process", it reports only the permissions of the

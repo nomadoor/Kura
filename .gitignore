@@ -39,5 +39,5 @@ transfer/
 *.tar.gz
 *.zip
 
-# Personal training preferences; kept out of the shipped knowledge.
-knowledge/user-preferences.md
+# The user's knowledge layer when this checkout is used as a workspace.
+/knowledge/

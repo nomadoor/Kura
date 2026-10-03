@@ -19,6 +19,7 @@ CHECKS = [
     [sys.executable, "scripts/check_model_artifacts.py"],
     [sys.executable, "scripts/check_secrets.py"],
     [sys.executable, "scripts/check_workflows.py"],
+    [sys.executable, "scripts/check_shipped_text.py"],
     [sys.executable, "scripts/check_evaluation_knowledge.py"],
     [sys.executable, "scripts/check_evaluation_blocks.py", "--repository-only"],
     [sys.executable, "scripts/sync_agent_skills.py"],

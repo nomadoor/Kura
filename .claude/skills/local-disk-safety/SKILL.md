@@ -39,13 +39,13 @@ Run a disk check when any of these are true:
 1. Run:
 
    ```sh
-   uv run kura doctor disk
+   kura doctor disk
    ```
 
 2. If warnings appear, run a dry-run inventory:
 
    ```sh
-   uv run kura cleanup all
+   kura cleanup all
    ```
 
 3. Explain the situation in plain language. Avoid leading with Docker/HF/Kura
@@ -55,7 +55,7 @@ Run a disk check when any of these are true:
 6. Show:
 
    ```sh
-   uv run kura run plan <run-id>
+   kura run plan <run-id>
    ```
 
 7. Do not ignore disk/checkpoint warnings. Add a prune/keep policy, reduce save
@@ -68,20 +68,20 @@ Run a disk check when any of these are true:
 Safe to inspect without asking:
 
 ```sh
-uv run kura cleanup all
-uv run kura cleanup cache
-uv run kura cleanup runs
-uv run kura cleanup docker-cache
-uv run kura fix-permissions
+kura cleanup all
+kura cleanup cache
+kura cleanup runs
+kura cleanup docker-cache
+kura fix-permissions
 ```
 
 Usually safe after a simple confirmation:
 
 ```sh
-uv run kura fix-permissions --yes
-uv run kura cleanup docker-cache --yes
-uv run kura cleanup cache --yes
-uv run kura cleanup runs --yes
+kura fix-permissions --yes
+kura cleanup docker-cache --yes
+kura cleanup cache --yes
+kura cleanup runs --yes
 ```
 
 Before applying, say what those commands mean:
@@ -104,7 +104,7 @@ Before applying, say what those commands mean:
 Require explicit, high-confidence approval:
 
 ```sh
-uv run kura cleanup runs --delete-final-artifacts --yes
+kura cleanup runs --delete-final-artifacts --yes
 ```
 
 Also require explicit approval for dataset deletion, final LoRA/output deletion,
@@ -118,7 +118,8 @@ or WSL/VHDX/Windows-side operations.
   variables. Warnings are blocking-risk findings; advisories are cleanup
   hygiene that does not by itself make the operation unsafe.
 - Local Docker launch, Docker build cache, and RunPod download/pull checks use
-  configurable disk gates. See `docs/workspace-config.md` for current defaults.
+  configurable disk gates. `kura doctor workspace` lists the settings and their
+  accepted values.
 - Local Docker launch adds known write estimates to the configured free-space
   floor. Musubi Hugging Face downloads use HEAD metadata when available, and
   explicitly allowed many-checkpoint runs add a conservative checkpoint budget.
@@ -161,12 +162,12 @@ free space reported by `kura doctor disk`.
 1. Check for active Kura containers or Pods before continuing work.
 2. Stop only in-scope Kura-managed work that is clearly part of the current
    failed task.
-3. Run `uv run kura doctor disk`.
-4. Run `uv run kura fix-permissions`.
-5. Run `uv run kura cleanup all`.
+3. Run `kura doctor disk`.
+4. Run `kura fix-permissions`.
+5. Run `kura cleanup all`.
 6. Explain cleanup candidates in plain language and wait for approval before
    deleting anything.
-7. Run `uv run kura doctor disk` again after cleanup/permission repair.
+7. Run `kura doctor disk` again after cleanup/permission repair.
 
 ## Human-facing wording
 

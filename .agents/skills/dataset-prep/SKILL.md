@@ -20,7 +20,8 @@ Use this skill for dataset operations.
 
 - Make caption transformations deterministic and reviewable.
 - Before creating captions, inspect the target model-family's caption culture
-  through `knowledge/model-families/<family>.md` or upstream primary sources.
+  through the family card (`.kura/knowledge/model-families/<family>.md`, or the
+  user's `knowledge/model-families/<family>.md`) or upstream primary sources.
   Record whether captions are tags, natural language, structured data, or a
   mixture. Do not infer that a documented inference-time tag order is a proven
   training requirement.
@@ -30,9 +31,9 @@ Use this skill for dataset operations.
 ## Validation
 
 ```sh
-uv run kura dataset inspect datasets/<id>
-uv run kura dataset validate datasets/<id>
-uv run kura run compile <run-id>
+kura dataset inspect datasets/<id>
+kura dataset validate datasets/<id>
+kura run compile <run-id>
 ```
 
 During preparation, read the inspect output for declared-count, missing-caption,
@@ -69,8 +70,8 @@ particular, Musubi FLUX.2 reference images are authored with `role: "control"`
 because its generated JSONL consumes them as `control_path` /
 `control_path_N`; do not author a separate `reference` role for that path.
 Use `sha256` on an individual file reference only when the author intends to
-assert that exact digest. See `docs/archive/dataset-handoff-implementation-spec.md`
-for the complete closed schema.
+assert that exact digest. `kura dataset validate` refuses rows outside the
+closed schema.
 
 ## Migrating old AI-Toolkit dataset selectors
 

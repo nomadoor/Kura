@@ -13,7 +13,7 @@ SKILL_DIR = ROOT / "src" / "kura" / "shipped" / "skills" / "lora-evaluation"
 # Model-family knowledge is shared by the training and evaluation skills and is
 # not specific to one agent; it ships with Kura and is written into workspaces.
 KNOWLEDGE_DIR = ROOT / "src" / "kura" / "shipped" / "knowledge" / "model-families"
-ORDER = "dataset-prep -> training-parameter-planning -> training-backends -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
+ORDER = "dataset-prep -> training-parameter-planning -> training -> lora-evaluation -> model-family knowledge -> render execution -> notes"
 REQUIRED_FIELDS = (
     "source_url",
     "source_revision",
@@ -70,13 +70,13 @@ def main() -> int:
     for card in cards:
         errors.extend(card_errors(card))
 
-    agents_text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    agents_text = (ROOT / "src" / "kura" / "shipped" / "AGENTS.md").read_text(encoding="utf-8")
     normalized_skill = " ".join(skill_text.split())
     normalized_agents = " ".join(agents_text.split())
     if ORDER not in normalized_skill:
         errors.append("lora-evaluation/SKILL.md is missing the canonical skill order")
     if ORDER not in normalized_agents:
-        errors.append("AGENTS.md is missing the canonical skill order")
+        errors.append("the shipped AGENTS.md is missing the canonical skill order")
     if "Kura currently has no video render execution path" not in normalized_skill:
         errors.append("lora-evaluation/SKILL.md must state that video render execution is unavailable")
     if "do not invoke ComfyUI or another generator outside Kura" not in normalized_skill:
