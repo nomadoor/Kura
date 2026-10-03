@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate canonical project skills and sync the Claude compatibility mirror."""
+"""Validate the project skills and generate the repository's skill mirrors.
+
+Development skills are authored in dev/skills; usage skills ship in the
+package (src/kura/shipped/skills). Both `.agents/skills` and `.claude/skills`
+are generated from the two, so a session in this checkout sees every skill.
+"""
 
 from __future__ import annotations
 
@@ -16,8 +21,8 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CANONICAL = ROOT / ".agents" / "skills"
-CLAUDE_MIRROR = ROOT / ".claude" / "skills"
+SOURCES = [ROOT / "dev" / "skills", ROOT / "src" / "kura" / "shipped" / "skills"]
+MIRRORS = [ROOT / ".agents" / "skills", ROOT / ".claude" / "skills"]
 SKILL_NAME = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # These constraints come from the skill-creator packaging contract. Keep them
 # aligned with its references/openai_yaml.md when that contract changes.
@@ -123,33 +128,54 @@ def validate_skills(root: Path) -> list[str]:
     return errors
 
 
-def compare_trees(canonical: Path, mirror: Path) -> list[str]:
-    expected = _files(canonical)
+def _sources(canonical: Path | list[Path]) -> list[Path]:
+    return [canonical] if isinstance(canonical, Path) else list(canonical)
+
+
+def _expected(canonical: Path | list[Path]) -> dict[Path, tuple[Path, bytes]]:
+    """Every file the mirror should hold, with the source file it comes from."""
+
+    expected: dict[Path, tuple[Path, bytes]] = {}
+    owner: dict[str, Path] = {}
+    for source in _sources(canonical):
+        for relative, content in _files(source).items():
+            if len(relative.parts) == 1:
+                raise ValueError(f"{source / relative}: only skill directories belong at a skill source root")
+            skill = relative.parts[0]
+            if owner.setdefault(skill, source) != source:
+                raise ValueError(f"skill {skill!r} exists in both {owner[skill]} and {source}")
+            expected[relative] = (source / relative, content)
+    return expected
+
+
+def compare_trees(canonical: Path | list[Path], mirror: Path) -> list[str]:
+    expected = {relative: content for relative, (_, content) in _expected(canonical).items()}
     actual = _files(mirror)
-    errors = [f"canonical skill tree contains symlink {path}" for path in _symlinks(canonical)]
+    errors = [f"canonical skill tree contains symlink {path}" for source in _sources(canonical) for path in _symlinks(source)]
     errors.extend(f"Claude skill mirror contains symlink {path}" for path in _symlinks(mirror))
     for path in sorted(expected.keys() - actual.keys()):
-        errors.append(f"Claude skill mirror is missing {path}")
+        errors.append(f"skill mirror {mirror} is missing {path}")
     for path in sorted(actual.keys() - expected.keys()):
-        errors.append(f"Claude skill mirror has extra file {path}")
+        errors.append(f"skill mirror {mirror} has extra file {path}")
     for path in sorted(expected.keys() & actual.keys()):
         if expected[path] != actual[path]:
-            errors.append(f"Claude skill mirror differs at {path}")
+            errors.append(f"skill mirror {mirror} differs at {path}")
     return errors
 
 
-def sync_mirror(canonical: Path, mirror: Path) -> None:
+def sync_mirror(canonical: Path | list[Path], mirror: Path) -> None:
     """Update the physical mirror without ever deleting the live tree first."""
-    if canonical.is_symlink():
-        raise ValueError(f"canonical skill directory must not be a symlink: {canonical}")
+    for source in _sources(canonical):
+        if source.is_symlink():
+            raise ValueError(f"canonical skill directory must not be a symlink: {source}")
     if mirror.is_symlink():
         raise ValueError(f"Claude skill mirror must not be a symlink: {mirror}")
     mirror.mkdir(parents=True, exist_ok=True)
     for path in sorted(_symlinks(mirror), key=lambda item: len(item.parts), reverse=True):
         path.unlink()
-    expected = _files(canonical)
+    expected = _expected(canonical)
     for relative in sorted(expected):
-        source = canonical / relative
+        source = expected[relative][0]
         target = mirror / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
@@ -181,24 +207,29 @@ def sync_mirror(canonical: Path, mirror: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--write", action="store_true", help="replace the Claude compatibility mirror from canonical .agents/skills")
+    parser.add_argument("--write", action="store_true", help="regenerate .agents/skills and .claude/skills from dev/skills and the shipped skills")
     args = parser.parse_args()
 
-    errors = validate_skills(CANONICAL)
+    errors = [error for source in SOURCES for error in validate_skills(source)]
     if errors:
         print("Skill validation failed:", file=sys.stderr)
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         return 1
-    if args.write:
-        sync_mirror(CANONICAL, CLAUDE_MIRROR)
-    errors = compare_trees(CANONICAL, CLAUDE_MIRROR)
+    try:
+        if args.write:
+            for mirror in MIRRORS:
+                sync_mirror(SOURCES, mirror)
+        errors = [error for mirror in MIRRORS for error in compare_trees(SOURCES, mirror)]
+    except ValueError as exc:
+        errors = [str(exc)]
     if errors:
         print("Skill mirror check failed; run `uv run python scripts/sync_agent_skills.py --write`:", file=sys.stderr)
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         return 1
-    print(f"skills valid and synchronized: {len([path for path in CANONICAL.iterdir() if path.is_dir()])}")
+    count = sum(1 for source in SOURCES for path in source.iterdir() if path.is_dir())
+    print(f"skills valid and synchronized: {count}")
     return 0
 
 

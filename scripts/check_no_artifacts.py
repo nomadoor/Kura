@@ -37,7 +37,6 @@ ALLOWED_PREFIXES = {
     "examples/",
     "tests/",
     "docs/",
-    "workflows/samples/",
 }
 
 

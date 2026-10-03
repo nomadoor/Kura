@@ -19,7 +19,6 @@ datasets/
 runs/
 artifacts/
 workflows/*
-!workflows/samples/
 promptsets/
 cases/
 

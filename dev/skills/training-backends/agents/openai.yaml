@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kura Training Backends"
+  short_description: "Develop trainer contracts with explicit evidence"
+  default_prompt: "Use $training-backends to change or diagnose this trainer contract and preserve its compile, image, optimizer, and lifecycle evidence boundary."

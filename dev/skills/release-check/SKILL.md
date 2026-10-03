@@ -1,0 +1,57 @@
+---
+name: release-check
+description: Pre-release or pre-commit quality gate for Kura. Use when preparing a commit, release, PR, or larger handoff; verifying tests, CLI help, docs, secrets, generated artifacts, workflows, and RunPod safety.
+---
+
+# Release Check
+
+Use this skill before committing broad changes or preparing a release.
+
+## Checklist
+
+```sh
+git status --short --branch
+uv run python -m unittest discover -s tests
+uv run kura --help
+uv run kura run --help
+uv run python scripts/check_no_artifacts.py
+uv run python scripts/check_secrets.py
+uv run python scripts/check_workflows.py
+uv run python scripts/check_evaluation_blocks.py --repository-only
+uv run python scripts/check_readme_cli_sync.py
+uv run python scripts/check_runpod_safety.py
+```
+
+Also run targeted smoke commands when the change touches Docker, RunPod, render, or TUI behavior.
+
+An execution path (local Docker, RunPod SSH, RunPod session, ComfyUI render)
+is not "done" until a real smoke has run through it end-to-end. Unit tests
+mock the executor↔container seams where environment-contract bugs live; do
+not declare a new or changed path complete on green tests alone.
+Before publishing, inspect ignored files with `git status --ignored --short`
+and confirm datasets, runs, downloads, caches, checkpoints, and prompt/workflow
+experiments are not about to be committed.
+
+The release gate validates authored evaluation examples with
+`--repository-only`, so ignored, immutable workspace runs cannot make the same
+commit pass or fail differently on two machines. Run
+`uv run python scripts/check_evaluation_blocks.py` without that flag when
+auditing the local workspace itself.
+
+## Before final handoff
+
+- Report tests run.
+- Report known skipped external checks.
+- Confirm whether RunPod has live Pods/Network Volumes when relevant.
+- Do not hide dirty worktree state.
+
+## Pull requests
+
+- Keep PR titles and bodies about the product change, risk, validation, and
+  reviewer context.
+- Do not include tool/agent attribution such as "Codex", "Claude", or
+  "AI-generated" unless the user explicitly asks for it or it is technically
+  relevant to the change.
+- Do not paste local paths, secrets, dataset details, or generated experiment
+  artifacts into the PR body.
+- Prefer a short structure: summary, validation, notes/risks.

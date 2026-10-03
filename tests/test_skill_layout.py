@@ -67,6 +67,28 @@ class SkillLayoutTests(unittest.TestCase):
             self.assertEqual(compare_trees(canonical, mirror), [])
             self.assertFalse(extra.exists())
 
+    def test_mirror_combines_development_and_shipped_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            development = self._tree(root / "development")
+            shipped = root / "shipped" / "skills"
+            other = shipped / "other-skill"
+            (other / "agents").mkdir(parents=True)
+            (other / "SKILL.md").write_text(SKILL.replace("example-skill", "other-skill"), encoding="utf-8")
+            (other / "agents" / "openai.yaml").write_text(OPENAI.replace("example-skill", "other-skill"), encoding="utf-8")
+            mirror = root / "mirror"
+            sync_mirror([development, shipped], mirror)
+            self.assertEqual(sorted(path.name for path in mirror.iterdir()), ["example-skill", "other-skill"])
+            self.assertEqual(compare_trees([development, shipped], mirror), [])
+
+    def test_a_skill_in_both_sources_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = self._tree(root / "first")
+            second = self._tree(root / "second")
+            with self.assertRaisesRegex(ValueError, "example-skill"):
+                sync_mirror([first, second], root / "mirror")
+
     def test_interrupted_sync_keeps_existing_mirror_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

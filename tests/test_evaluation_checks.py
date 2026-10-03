@@ -84,6 +84,20 @@ class EvaluationCheckTests(unittest.TestCase):
                 )
                 self.assertFalse([item for item in errors if "does not exist" in item])
 
+    def test_frozen_citation_follows_the_move_into_the_package(self) -> None:
+        card = "knowledge/model-families/anima.md"
+        self.assertFalse((Path(__file__).resolve().parents[1] / card).is_file())
+        errors, _ = evaluation_errors(self._card_evaluation(card), label="immutable manifest", allow_legacy_card_move=True)
+        self.assertFalse([item for item in errors if "does not exist" in item])
+        errors, _ = evaluation_errors(self._card_evaluation(card), label="editable run.yaml")
+        self.assertTrue(any("does not exist" in item for item in errors))
+
+    def test_workspace_shipped_knowledge_path_resolves_to_the_shipped_source(self) -> None:
+        errors, _ = evaluation_errors(self._card_evaluation(".kura/knowledge/model-families/anima.md"), label="run.yaml")
+        self.assertFalse([item for item in errors if "does not exist" in item])
+        errors, _ = evaluation_errors(self._card_evaluation(".kura/knowledge/../../../../../../../../etc/passwd"), label="run.yaml")
+        self.assertTrue(any("inside the repository" in item for item in errors))
+
     def test_editable_run_does_not_follow_the_card_move(self) -> None:
         evaluation = self._card_evaluation(".claude/skills/lora-evaluation/knowledge/anima.md")
         errors, _ = evaluation_errors(evaluation, label="editable run.yaml")

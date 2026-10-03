@@ -1,0 +1,4 @@
+interface:
+  display_name: "LoRA Evaluation"
+  short_description: "Design and judge reproducible LoRA evaluations"
+  default_prompt: "Use $lora-evaluation to design a reproducible comparison for this LoRA."
