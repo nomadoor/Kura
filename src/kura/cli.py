@@ -1399,7 +1399,6 @@ def cmd_run_watch(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    _load_env_local()
     parser = argparse.ArgumentParser(
         prog="kura",
         description="Agent-first, file-first workspace for reproducible training and render runs.",
@@ -1649,4 +1648,7 @@ def main() -> None:
     rebuild = index_sub.add_parser("rebuild", help="Rebuild index.jsonl from run directories")
     rebuild.set_defaults(func=cmd_index_rebuild)
     args = parser.parse_args()
+    # File checks name the files they look at; they never open `.env.local`.
+    if args.func not in {cmd_check_secrets, cmd_check_artifacts, cmd_workflow_check}:
+        _load_env_local()
     raise SystemExit(args.func(args))

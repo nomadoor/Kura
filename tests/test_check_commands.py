@@ -148,6 +148,31 @@ class SecretAndArtifactCommandTests(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertNotIn(".env.local", output)
 
+    @unittest.skipIf(os.name == "nt", "symlinks need extra privileges on Windows")
+    def test_a_linked_directory_is_checked_once_even_in_a_cycle(self) -> None:
+        with _workspace() as root:
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "notes.txt").write_text(FAKE_TOKEN_LINE + "\n", encoding="utf-8")
+            (elsewhere / "loop").symlink_to(elsewhere, target_is_directory=True)
+            upload = root / "upload"
+            upload.mkdir()
+            (upload / "linked").symlink_to(elsewhere, target_is_directory=True)
+            code, output = _run(cmd_check_secrets, paths=["upload"])
+        self.assertEqual(code, 1)
+        self.assertEqual(output.count("looks like a secret value"), 1, output)
+
+    def test_file_checks_never_load_env_local(self) -> None:
+        from kura import cli
+
+        for argv in (["kura", "check", "secrets", "x"], ["kura", "check", "artifacts", "x"], ["kura", "workflow", "check"], ["kura", "doctor", "workspace"]):
+            with self.subTest(argv=argv), patch("sys.argv", argv), patch.object(cli, "_load_env_local") as load, \
+                    patch.object(cli, "cmd_check_secrets", return_value=0), patch.object(cli, "cmd_check_artifacts", return_value=0), \
+                    patch.object(cli, "cmd_workflow_check", return_value=0), patch.object(cli, "cmd_doctor_workspace", return_value=0):
+                with self.assertRaises(SystemExit):
+                    cli.main()
+                self.assertEqual(load.called, argv[1] == "doctor")
+
     def test_secret_values_are_never_printed_and_binary_or_weight_files_are_skipped(self) -> None:
         with _workspace() as root:
             share = root / "share"

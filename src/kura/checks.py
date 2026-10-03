@@ -8,6 +8,7 @@ scripts pass the repository's tracked files.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Iterable
 from pathlib import Path
@@ -45,12 +46,32 @@ def expand(paths: Iterable[Path]) -> list[Path]:
 
     files: list[Path] = []
     for path in paths:
-        candidates = [path] if path.is_file() else sorted(item for item in path.rglob("*") if item.is_file())
+        candidates = [path] if path.is_file() else _walk(path)
         for candidate in candidates:
             if _never_read(candidate) or ".git" in candidate.parts:
                 continue
             files.append(candidate)
     return files
+
+
+def _walk(directory: Path) -> list[Path]:
+    """Files below a directory, following directory symlinks once each.
+
+    A linked directory holds files a user shares as much as a real one does,
+    so skipping it would let a check pass on files it never saw.
+    """
+
+    found: list[Path] = []
+    seen: set[str] = set()
+    for current, directories, names in os.walk(directory, followlinks=True):
+        real = os.path.realpath(current)
+        if real in seen:
+            directories[:] = []
+            continue
+        seen.add(real)
+        directories[:] = sorted(name for name in directories if name != ".git")
+        found.extend(Path(current) / name for name in names if (Path(current) / name).is_file())
+    return sorted(found)
 
 
 def _never_read(path: Path) -> bool:
