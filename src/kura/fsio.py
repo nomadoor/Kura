@@ -83,7 +83,8 @@ def append_line_durably(path: Path, line: str) -> None:
         _fsync_directory(path.parent)
 
 
-def atomic_write_bytes(path: Path, data: bytes) -> None:
+def atomic_write_bytes(path: Path, data: bytes, *, durable: bool = True) -> None:
+    """Replace `path` atomically; `durable=False` skips fsync for reproducible files."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
     try:
@@ -97,10 +98,12 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             temporary_name = handle.name
             handle.write(data)
             handle.flush()
-            os.fsync(handle.fileno())
+            if durable:
+                os.fsync(handle.fileno())
         os.replace(temporary_name, path)
         temporary_name = None
-        _fsync_directory(path.parent)
+        if durable:
+            _fsync_directory(path.parent)
     finally:
         if temporary_name is not None:
             try:

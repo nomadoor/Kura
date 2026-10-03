@@ -12,6 +12,7 @@ import yaml
 
 from kura.doctor import readiness_gaps
 from kura.environment import env_local_template
+from kura.managed import created_once, is_kura_checkout, plan_restore, record_created_once, sync
 from kura.workspace import WORKSPACE_SCHEMA_VERSION, dump_yaml, require_workspace
 
 DIRECTORIES = (
@@ -54,7 +55,7 @@ def _runpod_api_key_env(workspace: Path) -> str:
     return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else "RUNPOD_API_KEY"
 
 
-def cmd_init(_: argparse.Namespace) -> int:
+def cmd_init(args: argparse.Namespace) -> int:
     root = Path.cwd()
     enclosing = _enclosing_workspace(root)
     if enclosing is not None:
@@ -75,10 +76,40 @@ def cmd_init(_: argparse.Namespace) -> int:
     workspace = root / "workspace.yaml"
     if not workspace.exists():
         dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_patches_dir": "", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "symlink", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
-    for relative, text in USER_KNOWLEDGE.items():
-        _write_once(root / relative, text)
-    _write_once(root / ".env.local", env_local_template(_runpod_api_key_env(workspace)), private=True)
+    # Written once each; a file the user deleted after that stays deleted.
+    already = created_once(root)
+    once = [*USER_KNOWLEDGE, ".env.local"]
+    for relative in once:
+        if relative not in already:
+            _write_once(root / relative, USER_KNOWLEDGE.get(relative) or env_local_template(_runpod_api_key_env(workspace)), private=relative == ".env.local")
+    record_created_once(root, once)
     (root / "index.jsonl").touch(exist_ok=True)
+    if is_kura_checkout(root):
+        print("this is a Kura source checkout: its agent files are maintained by hand, so Kura does not manage them here")
+    else:
+        restore = bool(getattr(args, "restore", False))
+        if restore:
+            targets = plan_restore(root)
+            if targets:
+                print("kura init --restore will replace or recreate these managed files:")
+                for path in targets:
+                    print(f"  {path}")
+                if not getattr(args, "yes", False):
+                    if not sys.stdin.isatty():
+                        print("re-run with --yes to restore them")
+                        return 1
+                    if input("restore them? [y/N] ").strip().lower() not in {"y", "yes"}:
+                        print("nothing was changed")
+                        return 1
+            else:
+                print("every managed file already matches the shipped version")
+        try:
+            report = sync(root, restore=restore)
+        except (OSError, ValueError) as exc:
+            print(f"cannot write Kura's agent files: {exc}", file=sys.stderr)
+            return 1
+        for line in report.lines():
+            print(line)
     print(f"initialized workspace: {root}")
     gaps = readiness_gaps(root)
     if gaps:

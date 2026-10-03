@@ -190,12 +190,14 @@ without generating new ones.
 ## Knowledge
 
 **Family card**:
-Shared knowledge about one model family in `knowledge/model-families/`, each
-fact carrying its source.
+Knowledge about one model family, each fact carrying its source. Kura ships
+cards under a workspace's `.kura/knowledge/model-families/`; the user's own live
+in `knowledge/model-families/` and win where they disagree.
 _Avoid_: knowledge card, baseline card, model card
 
 **Regret**:
-A `trigger -> reminder` entry in `knowledge/regrets.md`, recorded after a real
+A `trigger -> reminder` entry, shipped in `.kura/knowledge/regrets.md` or the
+user's own in `knowledge/regrets.md`, recorded after a real
 regret and shown at Last look.
 
 **Last look**:
