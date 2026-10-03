@@ -65,7 +65,8 @@ Kura needs only these ideas, at the scale of one person's datasets.
   manifest selects it.
 - `kura cleanup` may remove only derived files that no revision and no kept
   run's input lock references, and shows a dry run first. It never removes
-  source media.
+  source media. The index keeps a removed file's entry as provenance and
+  marks it removed, so it never describes a missing file as present.
 
 **Runs pin a revision.** A run's input lock records the dataset revision it
 compiled, in addition to the file hashes it already records.
