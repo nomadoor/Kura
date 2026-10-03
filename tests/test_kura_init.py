@@ -56,6 +56,15 @@ class InitTests(unittest.TestCase):
             self.assertRegex(template, rf"(?m)^{variable.name}=$")
         self.assertEqual(template, env_local_template())
 
+    def test_env_local_names_the_configured_runpod_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
+            Path("workspace.yaml").write_text("schema_version: 2\nrunpod:\n  api_key_env: MY_RUNPOD_KEY\n", encoding="utf-8")
+            code, output = _init()
+            template = Path(".env.local").read_text(encoding="utf-8")
+        self.assertEqual(code, 0, output)
+        self.assertRegex(template, r"(?m)^MY_RUNPOD_KEY=$")
+        self.assertNotRegex(template, r"(?m)^RUNPOD_API_KEY=")
+
     def test_rerunning_init_changes_no_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             _init()
@@ -106,7 +115,8 @@ class InitTests(unittest.TestCase):
         self.assertIn("Docker is not reachable", output)
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             _, output = _init([])
-        self.assertIn("ready", output)
+        self.assertIn("basic checks passed", output)
+        self.assertIn("kura doctor runpod", output)
         self.assertNotIn("still needed", output)
 
 

@@ -43,12 +43,14 @@ INTERNAL_VARIABLES = frozenset({
 })
 
 
-def env_local_template() -> str:
+def env_local_template(runpod_api_key_env: str = "RUNPOD_API_KEY") -> str:
+    """The template, naming the RunPod key as `runpod.api_key_env` configures it."""
     lines = [
         "# Secrets and local settings for this workspace. Fill in only what you need.",
         "# Every `kura` command loads this file; it must never be shared or committed.",
         "",
     ]
     for variable in USER_VARIABLES:
-        lines.extend([f"# {variable.purpose}", f"{variable.name}=", ""])
+        name = runpod_api_key_env if variable.name == "RUNPOD_API_KEY" else variable.name
+        lines.extend([f"# {variable.purpose}", f"{name}=", ""])
     return "\n".join(lines)

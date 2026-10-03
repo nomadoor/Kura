@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
+
+import yaml
 
 from kura.doctor import readiness_gaps
 from kura.environment import env_local_template
@@ -40,6 +43,17 @@ def _write_once(path: Path, text: str, *, private: bool = False) -> None:
         handle.write(text)
 
 
+def _runpod_api_key_env(workspace: Path) -> str:
+    """The variable an existing workspace.yaml names for the RunPod key."""
+    try:
+        config = yaml.safe_load(workspace.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return "RUNPOD_API_KEY"
+    runpod = config.get("runpod") if isinstance(config, dict) else None
+    name = runpod.get("api_key_env") if isinstance(runpod, dict) else None
+    return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else "RUNPOD_API_KEY"
+
+
 def cmd_init(_: argparse.Namespace) -> int:
     root = Path.cwd()
     enclosing = _enclosing_workspace(root)
@@ -63,7 +77,7 @@ def cmd_init(_: argparse.Namespace) -> int:
         dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_patches_dir": "", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "symlink", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
     for relative, text in USER_KNOWLEDGE.items():
         _write_once(root / relative, text)
-    _write_once(root / ".env.local", env_local_template(), private=True)
+    _write_once(root / ".env.local", env_local_template(_runpod_api_key_env(workspace)), private=True)
     (root / "index.jsonl").touch(exist_ok=True)
     print(f"initialized workspace: {root}")
     gaps = readiness_gaps(root)
@@ -72,7 +86,7 @@ def cmd_init(_: argparse.Namespace) -> int:
         for gap in gaps:
             print(f"  - {gap}")
     else:
-        print("this machine is ready for local and RunPod runs")
+        print("basic checks passed; `kura doctor docker` and `kura doctor runpod` check everything a run needs")
     print("next:")
     print("  1. Put a dataset under datasets/<id>/ with dataset.yaml and items.jsonl.")
     print("  2. Check it with: kura dataset validate datasets/<id>")
