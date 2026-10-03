@@ -9,7 +9,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_SUFFIXES = {".safetensors", ".ckpt", ".pt", ".pth", ".gguf", ".onnx", ".bin"}
+sys.path.insert(0, str(ROOT / "src"))
+
+from kura.checks import model_artifact_findings  # noqa: E402
 
 
 def main() -> int:
@@ -17,7 +19,7 @@ def main() -> int:
     if result.returncode:
         sys.stderr.write(result.stderr)
         return result.returncode
-    bad = [line for line in result.stdout.splitlines() if Path(line).suffix in MODEL_SUFFIXES]
+    bad = model_artifact_findings((ROOT / line for line in result.stdout.splitlines() if line), ROOT)
     if bad:
         print("Tracked model artifacts are not allowed:", file=sys.stderr)
         for item in bad:

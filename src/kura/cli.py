@@ -21,6 +21,7 @@ from copy import deepcopy
 import yaml
 
 from kura import __version__
+from kura import checks
 from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image
 from kura.install_source import kura_continuity_warning, kura_provenance
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
@@ -1183,6 +1184,78 @@ def _development_image(name: str, action: str) -> tuple[Path, str] | None:
     return checkout, DEVELOPMENT_TAG.format(name=name)
 
 
+def _named_paths(values: list[str], action: str) -> list[Path] | None:
+    paths = [Path(value).expanduser() for value in values]
+    missing = [str(path) for path in paths if not path.exists()]
+    if missing:
+        print(f"cannot {action}: no such file or directory: {', '.join(missing)}", file=sys.stderr)
+        return None
+    refused = [str(path) for path in paths if path.name in checks.NEVER_READ or path.resolve().name in checks.NEVER_READ]
+    if refused:
+        print(f"cannot {action}: Kura never reads {', '.join(refused)}; name the files you will share instead", file=sys.stderr)
+        return None
+    return paths
+
+
+def _report_findings(findings: list[str], heading: str) -> int:
+    if not findings:
+        return 0
+    print(heading, file=sys.stderr)
+    for finding in findings:
+        print(f"  {finding}", file=sys.stderr)
+    return 1
+
+
+def cmd_workflow_check(args: argparse.Namespace) -> int:
+    if args.paths:
+        paths = _named_paths(args.paths, "check workflows")
+        if paths is None:
+            return 1
+        unsupported = [str(path) for path in paths if path.is_file() and path.suffix not in {".json", ".jsonl"}]
+        if unsupported:
+            print(f"cannot check workflows: not workflow JSON or promptset JSONL: {', '.join(unsupported)}", file=sys.stderr)
+            return 1
+        files = [path for path in checks.expand(paths) if path.suffix in {".json", ".jsonl"} or path.name.endswith(":Zone.Identifier")]
+        workflows_root = None
+    else:
+        try:
+            root = _require_workspace()
+        except ValueError as exc:
+            print(f"cannot check workflows: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        workflows_root = root / "workflows"
+        files = checks.default_workflow_files(workflows_root, root / "promptsets")
+    if not files:
+        print("cannot check workflows: no workflow JSON or promptset JSONL was found", file=sys.stderr)
+        return 1
+    findings = checks.workflow_findings(files, Path.cwd(), workflows_root)
+    if not findings:
+        print(f"checked {len(files)} file(s): no findings")
+    return _report_findings(findings, "Workflow validation failed:")
+
+
+def cmd_check_secrets(args: argparse.Namespace) -> int:
+    paths = _named_paths(args.paths, "check secrets")
+    if paths is None:
+        return 1
+    files = checks.expand(paths)
+    findings = checks.secret_findings(files, Path.cwd())
+    if not findings:
+        print(f"checked {len(files)} file(s): no secret-like values")
+    return _report_findings(findings, "Possible secrets (values not shown):")
+
+
+def cmd_check_artifacts(args: argparse.Namespace) -> int:
+    paths = _named_paths(args.paths, "check artifacts")
+    if paths is None:
+        return 1
+    files = checks.expand(paths)
+    findings = checks.model_artifact_findings(files, Path.cwd())
+    if not findings:
+        print(f"checked {len(files)} file(s): no model weight files")
+    return _report_findings(findings, "Model weight files found:")
+
+
 def cmd_workspace_migrate(args: argparse.Namespace) -> int:
     try:
         root = _require_workspace(check_schema=False)
@@ -1519,6 +1592,21 @@ def main() -> None:
     publish.add_argument("--tag", required=True, help="Registry reference to push the local development build to")
     publish.add_argument("--dry-run", action="store_true")
     publish.set_defaults(func=cmd_image_publish)
+
+    workflow_parser = sub.add_parser("workflow", help="Check ComfyUI workflow and promptset files")
+    workflow_sub = workflow_parser.add_subparsers(dest="workflow_command", required=True)
+    workflow_check = workflow_sub.add_parser("check", help="Validate workflow JSON and promptset JSONL files")
+    workflow_check.add_argument("paths", nargs="*", help="Files or directories; defaults to the workspace's workflows/ and promptsets/")
+    workflow_check.set_defaults(func=cmd_workflow_check)
+
+    check_parser = sub.add_parser("check", help="Check files before sharing or publishing them")
+    check_sub = check_parser.add_subparsers(dest="check_command", required=True)
+    check_secrets = check_sub.add_parser("secrets", help="Scan the named files and directories for secret-like values; .env.local is never scanned and values are never printed")
+    check_secrets.add_argument("paths", nargs="+")
+    check_secrets.set_defaults(func=cmd_check_secrets)
+    check_artifacts = check_sub.add_parser("artifacts", help="List model weight files in the named files and directories")
+    check_artifacts.add_argument("paths", nargs="+")
+    check_artifacts.set_defaults(func=cmd_check_artifacts)
 
     workspace_parser = sub.add_parser("workspace", help="Maintain this workspace's configuration")
     workspace_sub = workspace_parser.add_subparsers(dest="workspace_command", required=True)

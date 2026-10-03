@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Validate authored ComfyUI workflow JSON files."""
+"""Validate the repository's authored ComfyUI workflow JSON and promptset files."""
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -11,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from kura.render import is_safe_component  # noqa: E402
+from kura.checks import default_workflow_files, workflow_findings  # noqa: E402
 
 
 WORKFLOWS = ROOT / "workflows"
@@ -19,78 +18,7 @@ PROMPTSETS = ROOT / "promptsets"
 
 
 def main() -> int:
-    errors: list[str] = []
-    if not WORKFLOWS.exists():
-        pass
-    else:
-        for path in sorted(WORKFLOWS.rglob("*")):
-            if not path.is_file():
-                continue
-            if path.name.endswith(":Zone.Identifier"):
-                errors.append(f"{path.relative_to(ROOT)} is a Windows Zone.Identifier sidecar")
-                continue
-            if path.suffix != ".json":
-                continue
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                errors.append(f"{path.relative_to(ROOT)} invalid JSON: {exc}")
-                continue
-            if not isinstance(data, dict):
-                errors.append(f"{path.relative_to(ROOT)} must be an API-format object")
-                continue
-            api_required = path.parent == WORKFLOWS or path.stem.endswith("_api")
-            if api_required and "nodes" in data and "links" in data:
-                # A UI export kept beside its `_api.json` twin is deliberate: the API
-                # format drops Note nodes, so the UI file is where model links and
-                # authoring notes survive. Kura renders from the `_api.json`.
-                if path.with_name(f"{path.stem}_api.json").is_file():
-                    continue
-                errors.append(
-                    f"{path.relative_to(ROOT)} looks like a UI workflow export; Kura needs API-format workflow JSON. "
-                    f"To keep this file for its Note nodes, save the API export beside it as {path.stem}_api.json"
-                )
-                continue
-            if not data:
-                errors.append(f"{path.relative_to(ROOT)} is empty")
-    if PROMPTSETS.exists():
-        for path in sorted(PROMPTSETS.rglob("*")):
-            if not path.is_file():
-                continue
-            if path.name.endswith(":Zone.Identifier"):
-                errors.append(f"{path.relative_to(ROOT)} is a Windows Zone.Identifier sidecar")
-                continue
-            if path.suffix != ".jsonl":
-                continue
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except OSError as exc:
-                errors.append(f"{path.relative_to(ROOT)} cannot be read: {exc}")
-                continue
-            if not lines:
-                errors.append(f"{path.relative_to(ROOT)} is empty")
-            seen_ids: dict[str, int] = {}
-            for index, line in enumerate(lines, 1):
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    errors.append(f"{path.relative_to(ROOT)}:{index} invalid JSONL: {exc}")
-                    continue
-                # Whether prompt is required depends on the consuming render run:
-                # a workflow-fixed prompt is deliberately absent. Compile owns that
-                # agreement; this repository-wide check only validates standalone
-                # promptset structure that can be judged without guessing a run.
-                if not isinstance(item, dict) or "id" not in item:
-                    errors.append(f"{path.relative_to(ROOT)}:{index} must contain at least id")
-                elif not is_safe_component(item["id"]):
-                    errors.append(f"{path.relative_to(ROOT)}:{index} id must be a single safe file name, not a path")
-                elif item["id"] in seen_ids:
-                    errors.append(
-                        f"{path.relative_to(ROOT)}:{index} duplicate id {item['id']!r} "
-                        f"(already used on line {seen_ids[item['id']]})"
-                    )
-                else:
-                    seen_ids[item["id"]] = index
+    errors = workflow_findings(default_workflow_files(WORKFLOWS, PROMPTSETS), ROOT, WORKFLOWS)
     if errors:
         print("Workflow validation failed:", file=sys.stderr)
         for error in errors:

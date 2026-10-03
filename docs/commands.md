@@ -367,6 +367,14 @@ When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
 placeholder that is never rendered would make the file claim an input Kura does
 not own.
 
+## Checks
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura workflow check [<path>...]` | Validate ComfyUI workflow JSON and promptset JSONL; a named `.json` must be API format unless an `_api.json` twin sits beside it. With no path, the workspace's `workflows/*.json` and `promptsets/*.jsonl` |
+| `uv run kura check secrets <path>...` | Scan exactly the named files and directories for secret-like values before sharing them; reports `path:line` without the value, skips binary and model files, refuses `.env.local`, and reports an unreadable file as a finding |
+| `uv run kura check artifacts <path>...` | List model weight files in the named files and directories |
+
 ## Workspace
 
 | Command | Purpose |
