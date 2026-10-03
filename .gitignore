@@ -39,5 +39,7 @@ transfer/
 *.tar.gz
 *.zip
 
-# The user's knowledge layer when this checkout is used as a workspace.
+# The user's knowledge layer and Kura's workspace files when this checkout is
+# used as a workspace.
 /knowledge/
+/.kura/

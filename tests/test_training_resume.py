@@ -59,10 +59,12 @@ def _f32_safetensors_bytes(tensors: dict[str, list[float]]) -> bytes:
 
 def _torch_archive_bytes(content: bytes) -> bytes:
     output = io.BytesIO()
+    # Fixed entry times: a name alone stamps the current time, so two calls
+    # either side of a two-second boundary would differ.
+    entries = (("archive/data.pkl", pickle.dumps({"state": content}, protocol=4)), ("archive/version", "3\n"), ("archive/.data/serialization_id", "0"))
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
-        archive.writestr("archive/data.pkl", pickle.dumps({"state": content}, protocol=4))
-        archive.writestr("archive/version", "3\n")
-        archive.writestr("archive/.data/serialization_id", "0")
+        for name, data in entries:
+            archive.writestr(zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0)), data)
     return output.getvalue()
 
 

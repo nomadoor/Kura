@@ -23,6 +23,7 @@ import yaml
 from kura import __version__
 from kura import checks
 from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image
+from kura.managed import ensure_current
 from kura.install_source import kura_continuity_warning, kura_provenance
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
@@ -1407,6 +1408,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init", help="Create a workspace here: folders, workspace.yaml, .env.local, and your knowledge/")
+    init.add_argument("--restore", action="store_true", help="Replace Kura's agent files you edited or deleted with the shipped version, after showing them; your knowledge/ and .env.local are never touched")
+    init.add_argument("--yes", action="store_true", help="Restore without asking")
     init.set_defaults(func=cmd_init)
 
     cleanup = sub.add_parser("cleanup", help="Preview local cache, run, and Docker cleanup targets")
@@ -1651,4 +1654,18 @@ def main() -> None:
     # File checks name the files they look at; they never open `.env.local`.
     if args.func not in {cmd_check_secrets, cmd_check_artifacts, cmd_workflow_check}:
         _load_env_local()
+    if args.func is not cmd_init:
+        _refresh_managed_files()
     raise SystemExit(args.func(args))
+
+
+def _refresh_managed_files() -> None:
+    """Keep the workspace's Kura-written files current before any command runs."""
+    root = _workspace()
+    if not (root / "workspace.yaml").is_file():
+        return
+    try:
+        _require_workspace()
+    except ValueError:
+        return
+    ensure_current(root)
