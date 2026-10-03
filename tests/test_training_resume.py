@@ -1396,6 +1396,82 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 compile_resume_lock(root, changed_legacy_digest, root / "runs" / "changed-legacy" / "resolved",
                                     target_input_lock=same_content_new_stat)
 
+    def test_resume_records_a_kura_difference_without_refusing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            recipe = {
+                "backend": {"name": "sd-scripts", "config": {"architecture": "sd15"}},
+                "model": {"base": "example/model"},
+                "datasets": [{"id": "tiny", "digest": "sha256:data"}],
+                "recipe": {"steps": 100, "seed": 1},
+            }
+            source_resolved = root / "runs" / "source" / "resolved"
+            source_resolved.mkdir(parents=True)
+            candidate = root / "candidate"
+            candidate.mkdir()
+            (candidate / "optimizer.bin").write_bytes(_torch_archive_bytes(b"optimizer"))
+            manifest = publish_training_state(
+                root, source_run="source", source_realization=None, backend="sd-scripts",
+                observed_step=100, candidate=candidate, native_format="accelerate-state-directory",
+                restoration_contract={"level": "best_effort_resume", "restored": ["optimizer"], "not_restored": []},
+                compatibility={"recipe_sha256": recipe_fingerprint(recipe)},
+            )
+            run = {**recipe, "id": "derived", "parent_run": "source", "continuation": {
+                "mode": "resume", "source": {
+                    "artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"],
+                    "observed_step": 100, "recipe_sha256": recipe_fingerprint(recipe),
+                }, "additional_steps": 10, "target_step": 110,
+                "restoration_contract": manifest["restoration_contract"],
+            }}
+            current = {"kura_version": "0.6.0", "kura_source": {"kind": "git", "url": "https://example.com/kura", "commit": "b" * 40}}
+
+            def compile_with_source(env: dict | None, name: str) -> dict:
+                env_lock = source_resolved / "env.lock"
+                env_lock.unlink(missing_ok=True)
+                if env is not None:
+                    env_lock.write_text(yaml.safe_dump(env), encoding="utf-8")
+                with patch("kura.install_source.kura_provenance", return_value=current):
+                    return compile_resume_lock(root, run, root / "runs" / name / "resolved")
+
+            same = compile_with_source(current, "same")
+            older = compile_with_source({"kura_version": "0.5.0", "kura_source": {"kind": "git", "url": "https://example.com/kura", "commit": "a" * 40}}, "older")
+            other_commit = compile_with_source({**current, "kura_source": {**current["kura_source"], "commit": "a" * 40}}, "other-commit")
+            version_only = compile_with_source({"kura_version": "0.6.0"}, "version-only")
+            missing = compile_with_source(None, "missing")
+
+        self.assertEqual(same["kura"]["status"], "same")
+        self.assertEqual(older["kura"]["status"], "differs")
+        self.assertEqual(older["kura"]["source"]["kura_version"], "0.5.0")
+        self.assertEqual(older["kura"]["target"], current)
+        self.assertEqual(other_commit["kura"]["status"], "differs")
+        self.assertEqual(version_only["kura"]["status"], "source-unrecorded")
+        self.assertEqual(missing["kura"]["status"], "source-unrecorded")
+
+    def test_plan_warns_when_resume_runs_on_another_kura(self) -> None:
+        payload = {
+            "id": "derived", "type": "train", "compiled": True,
+            "backend": {"name": "sd-scripts", "config": {}}, "model": {}, "compute": {},
+            "resume": {
+                "source_run": "source", "artifact_id": "state-1", "source_step": 100, "target_step": 110,
+                "additional_steps": 10, "restoration_level": "exact_resume", "native_start": 100, "native_target": 110,
+                "state_bytes": 1,
+                "kura": {
+                    "status": "differs",
+                    "source": {"kura_version": "0.5.0", "kura_source": {"kind": "git", "commit": "a" * 40}},
+                    "target": {"kura_version": "0.6.0", "kura_source": {"kind": "git", "commit": "b" * 40}},
+                },
+            },
+            "datasets": [], "recipe": {}, "sampling": {}, "resources": {}, "preflight": [],
+        }
+        output = format_run_plan(payload)
+        self.assertIn("kura_warning", output)
+        self.assertIn("0.5.0 (aaaaaaaaaaaa) -> 0.6.0 (bbbbbbbbbbbb)", output)
+        payload["resume"]["kura"]["target"]["kura_source"] = {"kind": "editable", "commit": "a" * 40}
+        payload["resume"]["kura"]["target"]["kura_version"] = "0.5.0"
+        self.assertIn("0.5.0 (git aaaaaaaaaaaa) -> 0.5.0 (editable aaaaaaaaaaaa)", format_run_plan(payload))
+        payload["resume"]["kura"] = {"status": "same"}
+        self.assertNotIn("kura_warning", format_run_plan(payload))
+
     def test_compile_lock_rejects_changed_runtime_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

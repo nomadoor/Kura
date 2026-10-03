@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
+from kura.install_source import kura_provenance
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
 from kura.provenance import image_reference_identity
@@ -1159,7 +1160,7 @@ sleep infinity
             "workspace_contract": workspace_contract,
             "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors),
             "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
-            "kura_version": __version__,
+            **kura_provenance(),
         }
         _write_json(realization_path, realization)
         status = _load_status(run_dir)
@@ -1191,7 +1192,7 @@ sleep infinity
         "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": _runpod_pod_snapshot(pod),
         "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
         "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer_codes,
-        "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, "kura_version": __version__,
+        "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, **kura_provenance(),
     }
     _write_json(realization_path, realization)
     record_launch_phase(run_dir, realization_id, "pod_create_requested", at=create_requested_at)
@@ -1304,7 +1305,7 @@ sleep infinity
         realization_path.parent.mkdir(exist_ok=True)
         failed_request = dict(safe_request)
         failed_request["launch_attempts"] = launch_errors
-        realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), "kura_version": __version__}
+        realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), **kura_provenance()}
         _write_json(realization_path, realization)
         status = _load_status(run_dir)
         status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir))})
@@ -1327,7 +1328,7 @@ sleep infinity
     state, _ = _runpod_state(pod)
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)
-    realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "kura_version": __version__}
+    realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", **kura_provenance()}
     _write_json(realization_path, realization)
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})

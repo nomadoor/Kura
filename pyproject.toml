@@ -4,26 +4,29 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kura"
-version = "0.5.0"
+dynamic = ["version"]
 description = "Agent-first training workspace for reproducible model runs"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
-    "plotext>=5.3.2",
-    "PyYAML>=6.0",
-    "pyperclip>=1.9.0",
-    "rich>=13.7",
-    "textual>=6.6.0",
-    "textual-plotext>=1.0.1",
+    "plotext>=5.3.2,<6",
+    "PyYAML>=6.0,<7",
+    "pyperclip>=1.9.0,<2",
+    "rich>=13.7,<16",
+    "textual>=6.6.0,<9",
+    "textual-plotext>=1.0.1,<2",
 ]
 
 [project.optional-dependencies]
 object-staging = [
-    "boto3>=1.43.34",
+    "boto3>=1.43.34,<2",
 ]
 
 [project.scripts]
 kura = "kura.cli:main"
+
+[tool.hatch.version]
+path = "src/kura/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kura"]

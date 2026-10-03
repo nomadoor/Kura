@@ -179,6 +179,8 @@ class RenderImageBindingTest(unittest.TestCase):
             self.assertEqual(used[0]["control_image"], "resolved/images/control_image/a.png")
             manifest = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
             self.assertEqual(manifest["promptset_images"][0]["prompt_id"], "a")
+            env_lock = yaml.safe_load((run_dir / "resolved" / "env.lock").read_text(encoding="utf-8"))
+            self.assertIn(env_lock["kura_source"]["kind"], {"git", "editable", "unknown"})
             self.assertEqual(manifest["promptset_images"][0]["source"], str(source.resolve()))
             source.write_bytes(b"changed-after-compile")
             self.assertEqual(frozen_image.read_bytes(), b"control-a")

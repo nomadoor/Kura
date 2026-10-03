@@ -20,6 +20,7 @@ from copy import deepcopy
 import yaml
 
 from kura import __version__
+from kura.install_source import kura_continuity_warning, kura_provenance
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
 from kura.dataset_handoff import freeze_dataset_handoff
@@ -561,17 +562,20 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             }
             atomic_write_json(resolved / "dataset-input.lock.json", input_lock)
         command_spec = adapter.compile(locked, resolved)
-        compile_resume_lock(
+        resume_lock = compile_resume_lock(
             _workspace(),
             locked,
             resolved,
             target_runtime_identity=target_runtime_identity,
             target_input_lock=input_lock,
         )
+        kura_warning = kura_continuity_warning(resume_lock.get("kura")) if resume_lock else None
+        if kura_warning:
+            print(f"warning: Resume runs on another Kura: {kura_warning}", file=sys.stderr)
         atomic_write_json(resolved / "backend-display.lock.json", adapter.display(locked))
         atomic_write_json(resolved / "backend-command.lock.json", {**command_spec, "backend": backend.get("name"), "adapter_source": source_identity})
         env = {
-            "kura_version": __version__, "python_version": platform.python_version(),
+            **kura_provenance(), "python_version": platform.python_version(),
             "platform": platform.platform(), "backend_name": backend.get("name"),
             "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
             "declared_executor": declared_executor,

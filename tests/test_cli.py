@@ -26,6 +26,7 @@ from unittest.mock import Mock, patch
 
 import yaml
 
+from kura import __version__
 from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validator_code, command_ai_toolkit, command_musubi_tuner, compile_ai_toolkit, compile_musubi_tuner
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolkit_dataset
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
@@ -81,7 +82,7 @@ class InitCommandTests(unittest.TestCase):
         command = [sys.executable, "-c", "from kura.cli import main; main()"]
         version = subprocess.run([*command, "--version"], text=True, capture_output=True, check=False)
         self.assertEqual(version.returncode, 0)
-        self.assertIn("kura 0.5.0", version.stdout)
+        self.assertIn(f"kura {__version__}", version.stdout)
 
         help_result = subprocess.run([*command, "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(help_result.returncode, 0)
@@ -367,6 +368,8 @@ class InitCommandTests(unittest.TestCase):
                 with patch("sys.stderr", stderr), patch("sys.stdout", io.StringIO()):
                     code = cmd_run_compile(argparse.Namespace(run_id=run_id))
                 self.assertEqual(code, 0, stderr.getvalue())
+                env_lock = yaml.safe_load((root / "runs" / run_id / "resolved" / "env.lock").read_text(encoding="utf-8"))
+                self.assertIn(env_lock["kura_source"]["kind"], {"git", "editable", "unknown"})
                 with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"size": None, "error": "offline"}):
                     payload = plan_run(run_id)
                     locked = yaml.safe_load((root / "runs" / run_id / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
