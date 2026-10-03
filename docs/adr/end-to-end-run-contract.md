@@ -124,7 +124,10 @@ billing Pod after the controller exits.
 ## File roles
 
 - `dataset.yaml` and `items.jsonl`: the author's versioned dataset inventory,
-  independent of a particular trainer or run.
+  independent of a particular trainer or run. Its earlier states are kept as
+  revisions (`dataset-revisions.md`).
+- launch request: an approved launch waiting for, or claimed by, the job runner
+  (`files-only-state-and-job-runner.md`).
 - `run.yaml`: human and agent intent, recipe, and approved contingency envelope.
 - `resolved/`: immutable run-selected manifest content, effective input lock
   and backend projection, requirements, workflow input, and environment intent.
@@ -194,7 +197,8 @@ must not create hidden state or remove direct recovery access.
 
 - a universal model downloader or global model registry;
 - a database, queue, daemon, or hidden lifecycle state (superseded by
-  `files-only-state-and-job-runner.md`: a stateless job runner is allowed;
+  `files-only-state-and-job-runner.md`: an independent, stateless job runner
+  is allowed;
   hidden lifecycle state and a second store remain non-goals);
 - automatic quality judgment;
 - automatic mutation of a user's ComfyUI installation;

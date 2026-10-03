@@ -4,6 +4,9 @@ Status: accepted owner decision.
 
 Date: 2026-09-24.
 
+Updated: 2026-10-03 — `dataset-revisions.md` adds the dataset revision to the
+input lock and keeps files that earlier revisions reference.
+
 ## Context
 
 Kura previously inferred both what an informal dataset directory meant and

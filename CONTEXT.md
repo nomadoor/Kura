@@ -59,6 +59,15 @@ realizations and observations; never the only record of a fact.
 Re-observe a run's external state (container, Pod) and update its status from
 what was observed.
 
+**Launch request**:
+The file in a run that asks the job runner to launch it, written only after the
+launch was approved.
+
+**Job runner**:
+The one long-running Kura process (`kura runner`) that claims launch requests
+and controls launched runs until they finish, keeping no state of its own.
+_Avoid_: daemon, controller (for the process)
+
 ## Training
 
 **Trainer**:
@@ -139,6 +148,18 @@ native dataset layout.
 **Selected-file transfer**:
 Uploading only the frozen selected files, with their digests, to a RunPod Pod.
 
+**Source media**:
+The files the author put in a dataset; Kura and agents never rewrite them.
+
+**Derived file**:
+A file Kura or an agent made from source media, kept under `derived/` with a
+record of how it was made.
+
+**Dataset revision**:
+A kept snapshot of a dataset manifest, recorded each time the manifest
+changes; a run pins the revision it trained on.
+_Avoid_: dataset version (for a copied folder)
+
 ## Rendering and evaluation
 
 **Render case**:
@@ -196,3 +217,23 @@ produced with.
 **Identity migration**:
 A record declaring that a source identity changed without changing behavior,
 so existing smoke evidence still applies.
+
+## UI
+
+**Thread**:
+One conversation with the hosted agent in the Kura UI; it may span several
+runs.
+_Avoid_: chat, session (for the Kura record)
+
+**Widget**:
+A Kura-owned UI part shown in a thread, drawn from run files or requested by
+the agent.
+_Avoid_: component, card (for the concept)
+
+**Milestone**:
+One stop on a run's progress map from start to goal.
+_Avoid_: checkpoint, step
+
+**Library**:
+The place in the UI where datasets, trained adapters, and generated media are
+browsed with their links to the runs that made or used them.
