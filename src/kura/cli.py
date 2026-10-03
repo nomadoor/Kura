@@ -1406,7 +1406,7 @@ def main() -> None:
     parser.add_argument("--version", action="version", version=f"kura {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="Create the workspace folders and default config")
+    init = sub.add_parser("init", help="Create a workspace here: folders, workspace.yaml, .env.local, and your knowledge/")
     init.set_defaults(func=cmd_init)
 
     cleanup = sub.add_parser("cleanup", help="Preview local cache, run, and Docker cleanup targets")

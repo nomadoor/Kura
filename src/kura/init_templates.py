@@ -3,26 +3,79 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
-from kura.workspace import WORKSPACE_SCHEMA_VERSION, dump_yaml
+from kura.doctor import readiness_gaps
+from kura.environment import env_local_template
+from kura.workspace import WORKSPACE_SCHEMA_VERSION, dump_yaml, require_workspace
+
+DIRECTORIES = (
+    "datasets", "runs", "artifacts/training-state", "workflows", "promptsets",
+    "cache/huggingface", "cache/models", "knowledge/model-families",
+)
+
+# The user's own knowledge layer. Kura writes these once and never again.
+USER_KNOWLEDGE = {
+    "knowledge/regrets.md": "# Regrets\n\nOne `trigger -> reminder` entry per real regret, with a `source:` line.\n",
+    "knowledge/user-preferences.md": "# Preferences\n\nYour standing choices for training and rendering, which agents apply before Kura's defaults.\n",
+}
+
+
+def _enclosing_workspace(root: Path) -> Path | None:
+    for parent in root.resolve().parents:
+        if (parent / "workspace.yaml").is_file():
+            return parent
+    return None
+
+
+def _write_once(path: Path, text: str, *, private: bool = False) -> None:
+    """Create `path` with `text` unless it exists; a private file is readable only by its owner."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if private else 0o666)
+    except FileExistsError:
+        return
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
 
 
 def cmd_init(_: argparse.Namespace) -> int:
     root = Path.cwd()
-    for relative in ("datasets", "runs", "artifacts/training-state", "workflows", "promptsets", "cache/huggingface", "cache/models"):
+    enclosing = _enclosing_workspace(root)
+    if enclosing is not None:
+        print(
+            f"cannot initialize a workspace inside another workspace: {enclosing} "
+            "(move or delete its workspace.yaml if that is not a Kura workspace)",
+            file=sys.stderr,
+        )
+        return 1
+    if (root / "workspace.yaml").is_file():
+        try:
+            require_workspace()
+        except ValueError as exc:
+            print(f"cannot initialize workspace: {exc}", file=sys.stderr)
+            return 1
+    for relative in DIRECTORIES:
         (root / relative).mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace.yaml"
     if not workspace.exists():
         dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_patches_dir": "", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "symlink", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
-    agents = root / "AGENTS.md"
-    if not agents.exists():
-        agents.write_text("# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n", encoding="utf-8")
+    for relative, text in USER_KNOWLEDGE.items():
+        _write_once(root / relative, text)
+    _write_once(root / ".env.local", env_local_template(), private=True)
     (root / "index.jsonl").touch(exist_ok=True)
     print(f"initialized workspace: {root}")
+    gaps = readiness_gaps(root)
+    if gaps:
+        print("still needed:")
+        for gap in gaps:
+            print(f"  - {gap}")
+    else:
+        print("this machine is ready for local and RunPod runs")
     print("next:")
     print("  1. Put a dataset under datasets/<id>/ with dataset.yaml and items.jsonl.")
-    print("  2. Check it with: uv run kura dataset validate datasets/<id>")
-    print("  3. Tell your AI agent what LoRA/render run you want and which model to use.")
-    print("  4. Watch progress with: uv run kura monitor")
+    print("  2. Check it with: kura dataset validate datasets/<id>")
+    print("  3. Tell your AI agent what LoRA or render run you want and which model to use.")
+    print("  4. Watch progress with: kura monitor")
     return 0

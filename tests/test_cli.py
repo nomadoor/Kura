@@ -71,12 +71,19 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 RUNPOD_OBJECT_JOB_SOURCE = (Path(__file__).resolve().parents[1] / "docker" / "ai-toolkit" / "kura_runpod_object_job.py").read_text(encoding="utf-8")
 
 
+# `kura init` probes Docker and ComfyUI for its readiness summary; unit tests
+# must not depend on what this machine has running.
+_READINESS_OFF = patch("kura.init_templates.readiness_gaps", return_value=[])
+
+
 def setUpModule() -> None:
     _SSH_REUSE_OFF.start()
     _RUNPOD_MARKS_OFF.start()
+    _READINESS_OFF.start()
 
 
 def tearDownModule() -> None:
+    _READINESS_OFF.stop()
     _RUNPOD_MARKS_OFF.stop()
     _SSH_REUSE_OFF.stop()
 
@@ -90,7 +97,7 @@ class InitCommandTests(unittest.TestCase):
         help_result = subprocess.run([*command, "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(help_result.returncode, 0)
         self.assertIn("Agent-first, file-first workspace", help_result.stdout)
-        self.assertIn("Create the workspace folders and default config", help_result.stdout)
+        self.assertIn("Create a workspace here", help_result.stdout)
 
         run_help = subprocess.run([*command, "run", "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(run_help.returncode, 0)
@@ -116,7 +123,7 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 root = Path(directory)
-                for relative in ("workspace.yaml", "AGENTS.md", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models"):
+                for relative in ("workspace.yaml", "index.jsonl", ".env.local", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "knowledge/regrets.md"):
                     self.assertTrue((root / relative).exists(), relative)
                 for relative in ("experiments", "backends", "executors", "docker"):
                     self.assertFalse((root / relative).exists(), relative)
