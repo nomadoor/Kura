@@ -1,80 +1,139 @@
-# The UI hosts the user's own agent; UI parts are a fixed catalog delivered as MCP Apps
+# The UI is a shared workspace for the user and their own agent
 
 Status: accepted owner decision.
 
 Date: 2026-10-02
 
+Updated: 2026-10-03 — Kura draws its UI itself instead of delivering parts as
+MCP Apps, ships no MCP server, and keeps the UI to threads and a Library.
+
 ## Context
 
-Kura's Web UI is chat-centered. The user and an agent work through a training
-cycle, and the UI places interactive parts where direct manipulation beats
-typing:
+Kura is an experiment harness for the cycle of dataset, training, evaluation,
+and the next experiment, not a settings GUI for a trainer. A UI that grows one
+screen per feature turns into the trainer GUIs Kura is meant to replace, and
+the set of tasks keeps growing: image, video, audio, and music; generation and
+editing; single files and pairs.
 
-- parameter forms;
-- image grids and comparisons;
-- loss charts;
-- choice cards;
-- approval.
+Users already pay for and trust coding agents such as Claude Code and Codex.
+Without an agent, Kura is tedious: the agent explains, proposes, fixes errors,
+and connects one experiment to the next. The UI is therefore built for the
+user and the agent together.
 
-Kura could embed its own model and its own UI framework. Two things argue
-against that:
+The first version of this decision delivered the parts as MCP Apps through a
+Kura MCP server, so they could also appear inside other agent hosts. That is
+withdrawn. A probe observed on 2026-10-03 that it does not reach where users
+work:
 
-- Users already pay for and trust coding agents such as Claude Code and
-  Codex.
-- Kura's interactions are predictable enough that free-form generated UI adds
-  nothing.
+- The Claude Desktop Code tab (Claude Code 2.1.286) did not offer MCP Apps to
+  servers, and the terminal Claude Code does not render them.
+- The Claude Desktop chat rendered MCP Apps only after the user registered an
+  MCP server by hand, and Desktop rewrote its configuration file while it ran,
+  which lost such edits.
+- The Codex desktop app renders MCP Apps, with open rendering bugs reported.
 
 ## Decision
 
 **Agent**
 
 - The Kura UI hosts the user's own coding agent over the Agent Client
-  Protocol (ACP), starting with Claude Code and Codex.
-- The same agent talks in front and does the work behind it.
-- Billing and authentication stay with the user's agent subscription. Kura
-  embeds no model and holds no model API key.
+  Protocol (ACP), starting with Claude Code and Codex. Billing and
+  authentication stay with the user's agent subscription; Kura embeds no model
+  and holds no model API key.
+- Agents operate Kura through the `kura` CLI, inside the UI and outside it.
+  Kura ships no MCP server, and does not build its own UI inside Claude Code,
+  Codex, or Claude Desktop chats.
+- Launching follows `files-only-state-and-job-runner.md`: closing the UI or
+  its agent never stops a run. A plan waiting in a thread shows its approval
+  control; the agent waits for the click, or launches through the CLI when the
+  user approves in the conversation.
 
-**Kura operations for agents**
+**Two places: threads and the Library**
 
-- Kura exposes its operations as an MCP server.
-- These are the same operations the CLI performs, so there is still one
-  execution path. The UI adds no capability that the CLI and an agent lack.
+- **Threads.** A thread is a conversation with the agent, and most features
+  live in it as widgets. A thread is not bound to one task: a user may stop a
+  training midway, move on to comparing results, or start another training in
+  the same thread.
+- **Library.** Datasets, trained adapters, and generated images and videos,
+  linked by the facts in their run files: an adapter leads to its dataset
+  revision, recipe, checkpoints, and evaluations, and a generated image leads
+  back to the adapter and settings that made it.
+- A sidebar holds a compact widget of active runs at the top and the list of
+  threads below it. Each active run shows its state there and opens the thread
+  that launched it. There is no separate dashboard screen.
+- Kura stores no transcript; the agent host keeps the conversation. A thread
+  is a session of the hosted agent plus a small record in the workspace: its
+  title, agent, and the widget requests made in it. The UI gives the hosted
+  agent's session its thread identity, and a launch request records the thread
+  it came from, whether written by a click or by the agent's `kura` command.
+  The sidebar finds a run's thread from run files.
+  A run launched outside the UI has no thread, and opening it starts a new
+  thread about that run.
 
-**UI parts**
+**Widgets**
 
-- UI parts form a fixed catalog that Kura owns, delivered as **MCP Apps**.
-  Parts appear in two ways:
-  - **From run state.** For example, a compiled run that waits for launch
-    shows its plan form, and a finished render shows its image grid.
-  - **On an agent's request.** An agent may request a catalog part, for
-    example comparison candidates. Agents never author UI.
-- Because MCP Apps is a host-neutral standard, the same parts can render in
-  the Kura UI and inside other MCP Apps hosts, such as Claude Desktop.
-- Parameter forms are not written per backend. They are generated from each
-  backend adapter's declared configuration surface. Each field carries
-  presentation metadata: a user-facing label, and whether it is always shown
-  or kept under details.
-- Fields that decide what is learned are shown by default. Execution
-  accommodations stay under details.
+- Widgets form a fixed catalog that Kura owns and draws. Agents never author
+  UI.
+- What a thread shows follows its state. A widget appears from run state (a
+  compiled plan shows its form; a running training shows loss, progress, and
+  cost; a finished render shows its image grid) or on the agent's request,
+  made through a `kura` command that appends the request to the thread's
+  record. A request names the runs or datasets it shows and changes only what
+  the UI displays.
+- Widgets read run files, so they show the current state without waiting for
+  the agent, and an old widget in a long thread shows its run as it is now.
+- For the run a thread is currently on, a progress map shows every milestone
+  of that kind of run, from start to goal, and where the run stands. It is
+  derived from run files, and it changes or disappears when the thread moves
+  on.
+- A widget can expand to fill the screen for work that needs room, such as
+  curating hundreds of images. The Library uses the same widgets.
+
+**Suggestions**
+
+- A new thread opens with an input box and a few suggestions taken from the
+  workspace: recommended starting points for a new user, and continuations of
+  past work for others ("retrain No.0003 with other parameters", "compare the
+  last two").
+- Typing narrows them as a search over supported models, what can be done
+  with them, and the workspace's own assets (`kre…` offers training and
+  generating with Krea 2). What can be done with each model comes from shipped
+  knowledge, not from a task taxonomy in core.
+- Suggestions are found locally and immediately, never by waiting for a
+  generating model. Phrasings are prepared ahead of time, Helpfeel style, and
+  matched as the user types. A small local ranking or decision model may order
+  them; no hosted model or model API key is involved.
+- During a thread, the next steps that follow from run state are offered the
+  same way, and the agent adds suggestions that need judgment.
+
+**One catalog for every task kind**
+
+- Widgets are not written per task or per backend. Forms come from each
+  backend adapter's declared configuration surface, with presentation
+  metadata: a user-facing label, and whether a field is always shown or kept
+  under details. Fields that decide what is learned are shown by default;
+  execution accommodations stay under details.
+- Dataset and result widgets come from the roles of an item's files and their
+  media types: an image is shown as an image, video and audio as players, text
+  as text, and a pair side by side. Each backend adapter declares the roles it
+  consumes and their media types, so a new task kind adds a declaration, not a
+  screen. Core still has no common task taxonomy.
+- The UI reviews and selects. Its dataset edits go through the same
+  `kura dataset` commands an agent uses, with the user as author.
+  Transformations such as trimming video, resampling audio, or cropping faces
+  are done by the agent with tools, and their results follow
+  `dataset-revisions.md`.
 
 ## Consequences
 
-**Open verification before building**
-
-- Whether MCP Apps UI returned by a tool reaches a UI that hosts the agent
-  over ACP.
-- Whether a Windows MCP Apps host, such as Claude Desktop, can reach a Kura
-  MCP server running inside WSL2.
-- Whether charts and image grids are practical inside MCP Apps.
-
-If the first check fails, the Kura UI renders the same catalog from run state
-and agent requests directly. The catalog and the file-driven trigger do not
-change.
-
-**Other consequences**
-
 - Backend adapters gain presentation metadata for their configuration
-  surface (`kura run capabilities`).
-- The Web UI still owns what does not fit in one conversation: the dashboard
-  of parallel work, the library of artifacts and their links, and the current
-  position of each experiment.
+  surface (`kura run capabilities`) and declare the file roles they consume
+  with their media types.
+- CLI commands the UI reads gain machine-readable output.
+- The workspace gains thread records, and the launch request gains the thread
+  that wrote it. `kura` gains a command an agent uses to request a widget.
+- Shipped knowledge gains the recommended starting points for new users.
+- Whether an ACP-hosted agent's session can be shown next to the widgets in
+  one page is verified when the agent hosting is built.
+- If MCP Apps reaches the Code tab later, an MCP view of the same catalog can
+  be reconsidered as an addition.

@@ -9,7 +9,7 @@ Date: 2026-10-02
 Today only the local Kura controller collects a RunPod run's outputs and then
 deletes the Pod. If the controller is gone when training ends, the Pod keeps
 billing until its maximum lease, 12 hours by default. The controller can be
-gone because of a closed session, a sleeping PC, or a stopped `kura ui`. This
+gone because of a closed session, a sleeping PC, or a stopped job runner. This
 has happened.
 
 The Pod cannot simply delete itself when training ends. Its disk is
