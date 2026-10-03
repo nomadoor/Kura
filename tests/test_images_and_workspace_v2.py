@@ -114,7 +114,8 @@ class LaunchImageTests(unittest.TestCase):
 class WorkspaceSchemaTests(unittest.TestCase):
     def test_init_writes_the_current_schema_without_image_definitions(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
-            self.assertEqual(cmd_init(argparse.Namespace()), 0)
+            with patch("kura.init_templates.readiness_gaps", return_value=[]), patch("sys.stdout", io.StringIO()):
+                self.assertEqual(cmd_init(argparse.Namespace()), 0)
             config = yaml.safe_load(Path("workspace.yaml").read_text(encoding="utf-8"))
             self.assertEqual(config["schema_version"], WORKSPACE_SCHEMA_VERSION)
             self.assertNotIn("images", config.get("docker", {}))
