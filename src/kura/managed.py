@@ -35,12 +35,10 @@ DESTINATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 # Content an earlier Kura wrote before files were managed; it is Kura's to replace.
+# It was written in text mode, so on Windows its line endings are CRLF.
+_PREVIOUS_AGENTS = b"# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n"
 PREVIOUSLY_WRITTEN = {
-    "AGENTS.md": {
-        hashlib.sha256(
-            b"# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n"
-        ).hexdigest(),
-    },
+    "AGENTS.md": {hashlib.sha256(text).hexdigest() for text in (_PREVIOUS_AGENTS, _PREVIOUS_AGENTS.replace(b"\n", b"\r\n"))},
 }
 
 

@@ -138,14 +138,13 @@ class ManagedFileTests(unittest.TestCase):
             self.assertIn("external-access.md", output)
             self.assertIn("external-access.md", _refresh(root))
 
-    def test_a_previous_agents_stub_is_replaced(self) -> None:
-        with _workspace_with_source() as (root, _):
-            (root / "AGENTS.md").write_text(
-                "# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n",
-                encoding="utf-8",
-            )
-            _init()
-            self.assertIn("Kura workspace", (root / "AGENTS.md").read_text(encoding="utf-8"))
+    def test_a_previous_agents_stub_is_replaced_with_either_line_ending(self) -> None:
+        stub = b"# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n"
+        for written in (stub, stub.replace(b"\n", b"\r\n")):
+            with self.subTest(crlf=b"\r" in written), _workspace_with_source() as (root, _):
+                (root / "AGENTS.md").write_bytes(written)
+                _init()
+                self.assertIn("Kura workspace", (root / "AGENTS.md").read_text(encoding="utf-8"))
 
     def test_a_file_the_user_had_before_kura_is_never_overwritten(self) -> None:
         with _workspace_with_source() as (root, _):
@@ -180,11 +179,11 @@ class ManagedFileTests(unittest.TestCase):
     def test_undoing_an_edit_returns_the_file_to_kura(self) -> None:
         with _workspace_with_source() as (root, source):
             _init()
-            original = (root / "AGENTS.md").read_text(encoding="utf-8")
+            original = (root / "AGENTS.md").read_bytes()
             (root / "AGENTS.md").write_text("mine\n", encoding="utf-8")
             (source / "AGENTS.md").write_text("# Kura workspace\n\nnewer\n", encoding="utf-8")
             _refresh(root)
-            (root / "AGENTS.md").write_text(original, encoding="utf-8")
+            (root / "AGENTS.md").write_bytes(original)
             (source / "AGENTS.md").write_text("# Kura workspace\n\nnewest\n", encoding="utf-8")
             output = _refresh(root)
             self.assertIn("newest", (root / "AGENTS.md").read_text(encoding="utf-8"))
