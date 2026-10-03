@@ -1,7 +1,7 @@
 ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
 FROM ${PYTORCH_BASE}
 
-ARG SD_SCRIPTS_REF=6721028c79ee85a78b3a06dfd8954dae310a1cce
+ARG SD_SCRIPTS_REF=37a1cbbc5725ed2a3575506e7bd2001c9908ac92
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_DEFAULT_TIMEOUT=180
 ENV PIP_RETRIES=5
@@ -24,7 +24,7 @@ RUN cd "$SD_SCRIPTS_ROOT" \
     && git apply /tmp/kura-sd-scripts-patches/0001-preserve-safetensors-symlink-name.patch
 
 LABEL org.opencontainers.image.source="https://github.com/kohya-ss/sd-scripts" \
-      org.opencontainers.image.revision="6721028c79ee85a78b3a06dfd8954dae310a1cce" \
+      org.opencontainers.image.revision="37a1cbbc5725ed2a3575506e7bd2001c9908ac92" \
       io.kura.patch.symlink-safetensors="preserve-input-filename-v2" \
       io.kura.backend="sd-scripts"
 

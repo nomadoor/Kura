@@ -367,16 +367,24 @@ When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
 placeholder that is never rendered would make the file claim an input Kura does
 not own.
 
-## Images
-
-Image names are set in `workspace.yaml`. Build only when needed.
+## Workspace
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura image build ai-toolkit [--ref <upstream-image>]` | Build the AI-Toolkit image; `--ref` overrides the pinned upstream image reference |
-| `uv run kura image build musubi-tuner [--ref <git-ref>]` | Build the Musubi Tuner image; `--ref` overrides the pinned upstream release |
-| `uv run kura image build sd-scripts [--ref <git-ref>]` | Build the sd-scripts image; `--ref` overrides the pinned upstream commit |
-| `uv run kura image build comfyui --ref <ref>` | Build the ComfyUI render image |
+| `uv run kura workspace migrate [--yes]` | Show and apply the `workspace.yaml` schema migration; the previous file is kept as `workspace.yaml.v1`, and comments are not carried into the new file |
+
+## Images
+
+Runs pull the images Kura pins by digest; users never build them. Building is a
+development task: these commands work only when Kura runs from an editable
+install, and they read the image definitions from that checkout, so they work
+from any workspace. A build is tagged `kura-<name>:dev` on the local Docker host.
+
+| Command | Purpose |
+| --- | --- |
+| `uv run kura image build <name> [--ref <ref>]` | Build an image from the checkout; `--ref` overrides the upstream image (AI-Toolkit) or Git ref (Musubi Tuner, sd-scripts, ComfyUI) |
+| `uv run kura image inspect <name>` | Show the local development build and the pinned image |
+| `uv run kura image publish <name> --tag <registry-ref> [--dry-run]` | Push the local development build to a registry reference |
 
 ## Upgrading to 0.3.0
 

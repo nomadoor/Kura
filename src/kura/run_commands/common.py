@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from kura.images import effective_image
 from kura.executors.common import append_run_event, _redact_secret_text
 from kura.backends import get_backend
 from kura.workspace import require_workspace as _require_workspace
@@ -16,14 +17,8 @@ def _safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
 
 
-def _image_config(name: str) -> dict[str, Any]:
-    try:
-        image = _workspace_config()["docker"]["images"][name]
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"workspace.yaml has no docker.images.{name} configuration") from exc
-    if not isinstance(image, dict) or not all(isinstance(image.get(key), str) for key in ("local", "remote", "dockerfile", "context")):
-        raise ValueError(f"docker.images.{name} requires local, remote, dockerfile, and context strings")
-    return image
+def _effective_image(name: str) -> dict[str, str]:
+    return effective_image(_workspace_config(), name)
 
 
 def _backend_image_name(backend_name: Any) -> str:

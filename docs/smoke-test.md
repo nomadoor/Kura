@@ -3,7 +3,6 @@
 Kura's local Docker training runtime and ComfyUI render runtime have both been exercised end to end.
 
 ```bash
-uv run kura image build ai-toolkit
 uv run kura doctor docker
 uv run kura run launch <docker-smoke-run> --executor docker
 uv run kura render launch <comfyui-render-run>

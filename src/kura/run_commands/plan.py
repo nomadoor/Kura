@@ -25,6 +25,7 @@ from kura.dataset_handoff import (
     load_frozen_dataset_projection,
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
+from kura.images import launch_image, launch_image_warnings
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -691,21 +692,25 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
     ]
 
 
-def _runpod_image_preflight_report(run: dict[str, Any], runpod_config: dict[str, Any]) -> list[dict[str, Any]]:
+def _image_preflight_report(run: dict[str, Any], workspace_config: dict[str, Any], run_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Name the image a launch will use, the same way launch chooses it."""
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    backend_name = backend.get("name")
-    default_images = runpod_config.get("default_image") if isinstance(runpod_config.get("default_image"), dict) else {}
-    image = default_images.get(backend_name) if isinstance(backend_name, str) else None
-    if isinstance(image, str) and image.strip().lower().endswith(":latest"):
-        return [
-            _preflight_record(
-                "runpod-image",
-                "warning",
-                f"runpod.default_image.{backend_name} uses mutable tag {image}; pin the audited version before relying on reproducible behavior",
-                "workspace.yaml",
-            )
-        ]
-    return []
+    env_lock: Any = {}
+    if run_dir is not None and (run_dir / "resolved" / "env.lock").is_file():
+        try:
+            env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
+        except (OSError, ValueError, yaml.YAMLError):
+            env_lock = {}
+    try:
+        image = launch_image(workspace_config, get_backend(backend.get("name")).image_name, env_lock)
+    except ValueError as exc:
+        return [_preflight_record("image", "error", str(exc), "workspace.yaml")]
+    origin = {"pinned": "pinned by Kura", "override": "workspace.yaml override"}.get(image["origin"], "frozen at compile")
+    if image["frozen"] and image["origin"] in ("pinned", "override"):
+        origin += ", frozen at compile"
+    records = [_preflight_record("image", "info", f"{image['reference']} ({origin})", "workspace.yaml")]
+    records.extend(_preflight_record("image", "warning", warning, "workspace.yaml") for warning in launch_image_warnings(image))
+    return records
 
 
 def collect_run_preflight(
@@ -727,9 +732,10 @@ def collect_run_preflight(
     important = (_adapter_display(run).get("checkpoint") or {})
     for warning in _disk_warnings(run, important):
         records.append(_preflight_record("disk", "warning", warning, "run.yaml"))
+    run_id = run.get("id")
+    records.extend(_image_preflight_report(run, workspace_config, workspace / "runs" / run_id if isinstance(run_id, str) and run_id else None))
     if resolved_executor == "runpod":
         runpod_config = workspace_config.get("runpod") if isinstance(workspace_config.get("runpod"), dict) else {}
-        records.extend(_runpod_image_preflight_report(run, runpod_config))
         records.extend(_runpod_disk_preflight_report(run, runpod_config, estimate))
     return records
 

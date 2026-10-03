@@ -54,7 +54,7 @@ class SurfaceContractTests(unittest.TestCase):
         self.assertIn("unsupported section", str(caught.exception))
 
     def test_non_string_mapping_keys_are_rejected_without_a_traceback(self) -> None:
-        for config in ({7: {}}, {"docker": {}, 7: {}}, {"runpod": {7: True}}, {"runpod": {"default_image": {7: "image"}}}):
+        for config in ({7: {}}, {"docker": {}, 7: {}}, {"runpod": {7: True}}, {"runpod": {"backend_ports": {7: ["22/tcp"]}}}):
             with self.subTest(config=config):
                 with self.assertRaises(ValueError) as caught:
                     validate_workspace_config(config)
@@ -81,12 +81,11 @@ class SurfaceContractTests(unittest.TestCase):
 
     def test_dynamic_names_are_allowed_but_their_values_stay_closed(self) -> None:
         validate_workspace_config({
-            "docker": {"images": {"my-backend": {"local": "example/image:tag"}}},
-            "runpod": {"default_image": {"my-backend": "example/image@sha256:abc"}},
+            "runpod": {"backend_ports": {"my-backend": ["22/tcp"]}},
             "comfyui": {"model_registry": {"checkpoints": {"my-model.safetensors": {"repo": "owner/model"}}}},
         })
         malformed = (
-            ({"docker": {"images": {"my-backend": {"dockerfil": "Dockerfile"}}}}, "dockerfile"),
+            ({"images": {"sd-script": "example/image@sha256:abc"}}, "sd-scripts"),
             ({"comfyui": {"model_registry": {"checkpoints": {"model.safetensors": {"reop": "owner/model"}}}}}, "repo"),
             ({"runpod": {"backend_ports": {"my-backend": {"port": "22/tcp"}}}}, "must be a list"),
         )
@@ -139,7 +138,7 @@ class SurfaceContractTests(unittest.TestCase):
 
     def test_workspace_schema_description_exposes_nested_contract(self) -> None:
         settings = workspace_schema_description()
-        self.assertEqual(settings["docker"]["images"]["<name>"]["dockerfile"], "string")
+        self.assertEqual(settings["images"]["sd-scripts"], "string")
         self.assertEqual(settings["runpod"]["object_store"]["bucket"], "string")
         self.assertEqual(settings["comfyui"]["runpod"]["container_disk_gb"], "integer")
         self.assertEqual(settings["docker"]["mounts"]["list_of"]["mode"]["choices"], ["ro", "rw"])

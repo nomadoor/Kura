@@ -80,6 +80,19 @@ the source tree.
   sessions that run inside the source tree. They become unnecessary once
   usage happens in a separate workspace.
 
+**Images and the workspace schema**
+
+- Kura's code pins one image per backend by digest; users pull and never
+  build. A workspace overrides an image with one `images.<name>` setting,
+  shared by local and RunPod runs, and a compiled run keeps the image it was
+  compiled with.
+- Building images is a development task, done from an editable install's
+  checkout.
+- `workspace.yaml` carries a schema version. A file with an older version is
+  refused with `kura workspace migrate`, which shows the change, applies it
+  only when confirmed, and keeps the previous file. Run records are never
+  migrated.
+
 **Run provenance**
 
 - With Kura installed from changing commits, its version alone no longer

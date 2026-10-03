@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import difflib
 import json
 import os
 import platform
@@ -20,6 +21,7 @@ from copy import deepcopy
 import yaml
 
 from kura import __version__
+from kura.images import BUILD_SOURCES, DEVELOPMENT_TAG, PINNED_IMAGES, development_checkout, effective_image
 from kura.install_source import kura_continuity_warning, kura_provenance
 from kura.backends import backend_capabilities, backend_names, get_backend, validate_backend_config
 from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolve_dataset_path
@@ -63,17 +65,8 @@ from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
+from kura.workspace import migrate_workspace_config
 from kura.workspace import workspace_relative_path as _workspace_relative_path
-
-
-def _image_config(name: str) -> dict[str, Any]:
-    try:
-        image = _workspace_config()["docker"]["images"][name]
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"workspace.yaml has no docker.images.{name} configuration") from exc
-    if not isinstance(image, dict) or not all(isinstance(image.get(key), str) for key in ("local", "remote", "dockerfile", "context")):
-        raise ValueError(f"docker.images.{name} requires local, remote, dockerfile, and context strings")
-    return image
 
 
 def _backend_image_name(backend_name: Any) -> str:
@@ -478,7 +471,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             locked_item = deepcopy(dataset)
             locked_item["digest"] = actual_digest
             locked_datasets.append(locked_item)
-        image = _image_config(_backend_image_name(backend.get("name")))
+        image = effective_image(_workspace_config(), _backend_image_name(backend.get("name")))
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -498,20 +491,15 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         resolved.mkdir(exist_ok=True)
         source_identity = adapter_source_identity(backend.get("name"))
         declared_executor = run_executor(run)
-        config = _workspace_config()
-        runpod_config = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
-        default_images = runpod_config.get("default_image") if isinstance(runpod_config.get("default_image"), dict) else {}
-        image_name = _backend_image_name(backend.get("name"))
-        effective_remote_image = default_images.get(image_name)
-        if not isinstance(effective_remote_image, str) or not effective_remote_image:
-            effective_remote_image = image["remote"]
-        local_image_identity = image_reference_identity(image["local"])
-        remote_image_identity = image_reference_identity(effective_remote_image)
+        # Local and RunPod runs use the same image: the workspace override or the pinned digest.
+        reference = image["reference"]
+        local_image_identity = image_reference_identity(reference)
+        remote_image_identity = image_reference_identity(reference)
         selected_image_identity = remote_image_identity
         if declared_executor != "runpod":
             from kura.executors.docker import _docker_image_id
 
-            selected_image_identity = image_reference_identity(image["local"], _docker_image_id(image["local"]))
+            selected_image_identity = image_reference_identity(reference, _docker_image_id(reference))
         runtime_contract = training_runtime_contract(source_identity, local_image_identity, remote_image_identity)
         target_runtime_identity = {
             "adapter_source": source_identity,
@@ -579,8 +567,9 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
             "platform": platform.platform(), "backend_name": backend.get("name"),
             "backend_adapter_version": backend.get("adapter_version"), "generated_at": _now().isoformat(),
             "declared_executor": declared_executor,
-            "local_image": image["local"], "dockerfile": image["dockerfile"],
-            "selected_image": image["local"] if declared_executor != "runpod" else effective_remote_image,
+            # local_image stays for readers of runs compiled before images were pinned.
+            "local_image": reference, "image_origin": image["origin"],
+            "selected_image": reference,
             "selected_image_identity": selected_image_identity,
             "adapter_source": source_identity,
             "local_image_identity": local_image_identity,
@@ -689,21 +678,12 @@ def _docker_image_exists(name: str) -> bool:
 
 
 def _docker_cleanup_image() -> str:
-    images = _workspace_config().get("docker", {}).get("images", {})
-    candidates: list[str] = []
-    if isinstance(images, dict):
-        for name in backend_names():
-            image = images.get(name)
-            if isinstance(image, dict):
-                for key in ("local", "remote"):
-                    if isinstance(image.get(key), str) and image[key]:
-                        candidates.append(image[key])
+    config = _workspace_config()
+    candidates = [effective_image(config, get_backend(name).image_name)["reference"] for name in backend_names()]
     for candidate in candidates:
         if _docker_image_exists(candidate):
             return candidate
-    if candidates:
-        raise ValueError("no configured Docker image is available locally for cleanup/fix-permissions")
-    raise ValueError("workspace.yaml has no docker image available for cleanup")
+    raise ValueError("no Kura training image is available locally for cleanup/fix-permissions; run a training once so its image is pulled")
 
 
 def _workspace_relative_target(workspace: Path, target: Path) -> str:
@@ -1186,30 +1166,74 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_image_build(args: argparse.Namespace) -> int:
+def _development_image(name: str, action: str) -> tuple[Path, str] | None:
+    """The checkout and local tag for building `name`, or None after explaining why not."""
+
+    if name not in PINNED_IMAGES:
+        print(f"cannot {action} image: unknown Kura image {name!r}", file=sys.stderr)
+        return None
+    checkout = development_checkout()
+    if checkout is None:
+        print(
+            f"cannot {action} image: building images is a development task for an editable Kura install. "
+            f"Runs pull the pinned image {PINNED_IMAGES[name]} automatically.",
+            file=sys.stderr,
+        )
+        return None
+    return checkout, DEVELOPMENT_TAG.format(name=name)
+
+
+def cmd_workspace_migrate(args: argparse.Namespace) -> int:
     try:
-        image = _image_config(args.name)
+        root = _require_workspace(check_schema=False)
+        path = root / "workspace.yaml"
+        before = path.read_text(encoding="utf-8")
+        config = yaml.safe_load(before)
+        if not isinstance(config, dict):
+            raise ValueError("workspace.yaml must contain a YAML mapping")
+        migrated, notes = migrate_workspace_config(config)
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
+        print(f"cannot migrate workspace: {_safe_error(exc)}", file=sys.stderr)
         return 1
+    if migrated == config:
+        print("workspace.yaml already uses the current schema")
+        return 0
+    backup = path.with_name("workspace.yaml.v1")
+    if backup.exists():
+        print(f"cannot migrate workspace: {backup} already exists; move it aside first", file=sys.stderr)
+        return 1
+    after = yaml.safe_dump(migrated, sort_keys=False, allow_unicode=True)
+    diff = difflib.unified_diff(before.splitlines(), after.splitlines(), "workspace.yaml", "workspace.yaml (migrated)", lineterm="")
+    print("\n".join(diff))
+    for note in notes:
+        print(f"note: {note}")
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("re-run with --yes to apply this migration")
+            return 1
+        if input("apply this migration? [y/N] ").strip().lower() not in {"y", "yes"}:
+            print("workspace.yaml was not changed")
+            return 1
+    atomic_write_text(backup, before)
+    _dump_yaml(path, migrated)
+    print(f"migrated workspace.yaml; the previous file is kept as {backup.name}")
+    return 0
+
+
+def cmd_image_build(args: argparse.Namespace) -> int:
+    development = _development_image(args.name, "build")
+    if development is None:
+        return 1
+    checkout, tag = development
     if not getattr(args, "allow_large_build_cache", False):
         storage = _docker_storage_summary()
         for item in storage.get("usage", []):
             if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
                 print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
                 return 1
-    ref_args = {"ai-toolkit": "AI_TOOLKIT_IMAGE", "musubi-tuner": "MUSUBI_TUNER_REF", "sd-scripts": "SD_SCRIPTS_REF", "comfyui": "COMFYUI_REF"}
-    default_refs = {
-        "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
-        "musubi-tuner": "v0.3.5",
-        "sd-scripts": "6721028c79ee85a78b3a06dfd8954dae310a1cce",
-        "comfyui": "0f42ba51463174fb255f2c4605ae0e0b441fe6d7",
-    }
-    ref_arg = ref_args[args.name]
-    default_ref = default_refs[args.name]
-    dockerfile = _workspace_relative_path(image["dockerfile"])
-    context = _workspace_relative_path(image["context"])
-    command = ["docker", "build", "--tag", image["local"], "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(context)]
+    ref_arg, default_ref = BUILD_SOURCES[args.name]
+    dockerfile = checkout / "docker" / args.name / "Dockerfile"
+    command = ["docker", "build", "--tag", tag, "--file", str(dockerfile), "--build-arg", f"{ref_arg}={args.ref or default_ref}", str(checkout)]
     try:
         result = _docker_run(command)
     except FileNotFoundError:
@@ -1217,33 +1241,35 @@ def cmd_image_build(args: argparse.Namespace) -> int:
         return 1
     if result.returncode:
         return result.returncode
-    inspect = _docker_run(["docker", "image", "inspect", "--format", "{{.Id}}", image["local"]], capture=True)
-    print(inspect.stdout.strip() or image["local"])
+    inspect = _docker_run(["docker", "image", "inspect", "--format", "{{.Id}}", tag], capture=True)
+    print(inspect.stdout.strip() or tag)
     return 0
 
 
 def cmd_image_inspect(args: argparse.Namespace) -> int:
+    development = _development_image(args.name, "inspect")
+    if development is None:
+        return 1
+    checkout, tag = development
     try:
-        image = _image_config(args.name)
-        result = _docker_run(["docker", "image", "inspect", image["local"]], capture=True)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
+        result = _docker_run(["docker", "image", "inspect", tag], capture=True)
+    except OSError as exc:
         print(f"cannot inspect image: {_safe_error(exc)}", file=sys.stderr)
         return 1
     if result.returncode:
-        print(f"local image does not exist: {image['local']}")
+        print(f"local image does not exist: {tag}")
         return 1
     metadata = json.loads(result.stdout)[0]
-    print(json.dumps({"local_image": image["local"], "remote_image": image["remote"], "dockerfile": image["dockerfile"], "image_id": metadata.get("Id"), "created": metadata.get("Created"), "labels": metadata.get("Config", {}).get("Labels") or {}}, indent=2))
+    print(json.dumps({"local_image": tag, "pinned_image": PINNED_IMAGES[args.name], "dockerfile": str(checkout / "docker" / args.name / "Dockerfile"), "image_id": metadata.get("Id"), "created": metadata.get("Created"), "labels": metadata.get("Config", {}).get("Labels") or {}}, indent=2))
     return 0
 
 
 def cmd_image_publish(args: argparse.Namespace) -> int:
-    try:
-        image = _image_config(args.name)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"cannot publish image: {_safe_error(exc)}", file=sys.stderr)
+    development = _development_image(args.name, "publish")
+    if development is None:
         return 1
-    commands = [["docker", "tag", image["local"], image["remote"]], ["docker", "push", image["remote"]]]
+    _, tag = development
+    commands = [["docker", "tag", tag, args.tag], ["docker", "push", args.tag]]
     if args.dry_run:
         print(json.dumps({"tag": commands[0], "push": commands[1]}, indent=2))
         return 0
@@ -1255,13 +1281,18 @@ def cmd_image_publish(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         print("docker command was not found", file=sys.stderr)
         return 1
-    print(f"published {image['remote']}")
+    print(f"published {args.tag}")
     return 0
 
 
 def cmd_index_rebuild(_: argparse.Namespace) -> int:
+    try:
+        root = _require_workspace()
+    except (OSError, ValueError) as exc:
+        print(f"cannot rebuild index: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     entries = []
-    for run_file in sorted((_workspace() / "runs").glob("*/run.yaml")):
+    for run_file in sorted((root / "runs").glob("*/run.yaml")):
         try:
             run = _load_yaml(run_file)
             status = observe_run(run_file.parent, config=_workspace_config().get("runpod", {}))
@@ -1473,20 +1504,27 @@ def main() -> None:
     render_status.add_argument("run_id")
     render_status.set_defaults(func=cmd_run_status)
 
-    image = sub.add_parser("image", help="Build, inspect, and publish runtime images")
+    image = sub.add_parser("image", help="Build, inspect, and publish runtime images (editable Kura installs only)")
     image_sub = image.add_subparsers(dest="image_command", required=True)
-    build = image_sub.add_parser("build", help="Build a runtime image")
-    build.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "sd-scripts", "comfyui"))
+    build = image_sub.add_parser("build", help="Build a runtime image from the Kura checkout")
+    build.add_argument("name", choices=tuple(PINNED_IMAGES))
     build.add_argument("--ref")
     build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds the safety threshold")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
-    inspect.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "sd-scripts", "comfyui"))
+    inspect.add_argument("name", choices=tuple(PINNED_IMAGES))
     inspect.set_defaults(func=cmd_image_inspect)
     publish = image_sub.add_parser("publish", help="Publish a runtime image")
-    publish.add_argument("name", choices=("ai-toolkit", "musubi-tuner", "sd-scripts", "comfyui"))
+    publish.add_argument("name", choices=tuple(PINNED_IMAGES))
+    publish.add_argument("--tag", required=True, help="Registry reference to push the local development build to")
     publish.add_argument("--dry-run", action="store_true")
     publish.set_defaults(func=cmd_image_publish)
+
+    workspace_parser = sub.add_parser("workspace", help="Maintain this workspace's configuration")
+    workspace_sub = workspace_parser.add_subparsers(dest="workspace_command", required=True)
+    migrate = workspace_sub.add_parser("migrate", help="Preview and apply the workspace.yaml schema migration")
+    migrate.add_argument("--yes", action="store_true", help="Apply without asking")
+    migrate.set_defaults(func=cmd_workspace_migrate)
 
     doctor = sub.add_parser("doctor", help="Check workspace, Docker, RunPod, ComfyUI, and secrets readiness")
     doctor_sub = doctor.add_subparsers(dest="doctor_command", required=True)

@@ -6088,13 +6088,8 @@ class DatasetHandoffTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
             (workspace / "workspace.yaml").write_text(yaml.safe_dump({
-                "schema_version": 1,
-                "docker": {"images": {"ai-toolkit": {
-                    "local": "example:image",
-                    "remote": "example:image@sha256:" + "1" * 64,
-                    "dockerfile": "docker/ai-toolkit/Dockerfile",
-                    "context": ".",
-                }}},
+                "schema_version": 2,
+                "images": {"ai-toolkit": "example:image@sha256:" + "1" * 64},
             }), encoding="utf-8")
             previous = Path.cwd()
             os.chdir(workspace)
@@ -6198,13 +6193,8 @@ class DatasetHandoffTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
             (workspace / "workspace.yaml").write_text(yaml.safe_dump({
-                "schema_version": 1,
-                "docker": {"images": {"ai-toolkit": {
-                    "local": "example:image",
-                    "remote": "example:image@sha256:" + "1" * 64,
-                    "dockerfile": "docker/ai-toolkit/Dockerfile",
-                    "context": ".",
-                }}},
+                "schema_version": 2,
+                "images": {"ai-toolkit": "example:image@sha256:" + "1" * 64},
             }), encoding="utf-8")
             previous = Path.cwd()
             os.chdir(workspace)
@@ -6463,7 +6453,6 @@ class DatasetHandoffTests(unittest.TestCase):
                     run_dir=resolved.parent,
                     spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                     image="example:image",
-                    dockerfile="docker/ai-toolkit/Dockerfile",
                     mounts=[],
                     gpu=False,
                     dry_run=True,
@@ -6504,7 +6493,6 @@ class DatasetHandoffTests(unittest.TestCase):
                     run_dir=resolved.parent,
                     spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                     image="example:image",
-                    dockerfile="docker/ai-toolkit/Dockerfile",
                     mounts=[],
                     gpu=False,
                     dry_run=False,
@@ -6560,7 +6548,6 @@ class DatasetHandoffTests(unittest.TestCase):
                     run_dir=resolved.parent,
                     spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                     image="example:image",
-                    dockerfile="docker/ai-toolkit/Dockerfile",
                     mounts=[],
                     gpu=False,
                     dry_run=True,
@@ -6596,7 +6583,6 @@ class DatasetHandoffTests(unittest.TestCase):
                         run_dir=resolved.parent,
                         spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                         image="example:image",
-                        dockerfile="docker/ai-toolkit/Dockerfile",
                         mounts=[],
                         gpu=False,
                         dry_run=False,

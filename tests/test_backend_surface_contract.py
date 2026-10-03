@@ -150,7 +150,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             os.chdir(root)
             try:
                 for name in BACKENDS:
@@ -177,7 +177,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "invalid-plan"
             run_dir.mkdir(parents=True)
             run = {
@@ -619,19 +619,10 @@ class BackendSurfaceContractTests(unittest.TestCase):
         dockerfile = (repository / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
         self.assertEqual(dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={base_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
 
-        previous = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            os.chdir(root)
-            try:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(cmd_init(argparse.Namespace()), 0)
-            finally:
-                os.chdir(previous)
-            workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
-            self.assertEqual(workspace["runpod"]["default_image"]["ai-toolkit"], runtime_pin)
-            generated_dockerfile = (root / "docker" / "ai-toolkit" / "Dockerfile").read_text(encoding="utf-8")
-            self.assertEqual(generated_dockerfile.splitlines()[:2], [f"ARG AI_TOOLKIT_IMAGE={runtime_pin}", "FROM ${AI_TOOLKIT_IMAGE}"])
+        from kura.images import BUILD_SOURCES, PINNED_IMAGES
+
+        self.assertEqual(PINNED_IMAGES["ai-toolkit"], runtime_pin)
+        self.assertEqual(BUILD_SOURCES["ai-toolkit"], ("AI_TOOLKIT_IMAGE", base_pin))
 
     @posix_only(DATASET_IO)
     def test_ai_toolkit_accepts_registered_sd1_without_rewriting_it(self) -> None:
@@ -666,7 +657,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "invalid-sd15"
             run_dir.mkdir(parents=True)
             (run_dir / "run.yaml").write_text(yaml.safe_dump({
@@ -944,12 +935,13 @@ class BackendSurfaceContractTests(unittest.TestCase):
     def test_ai_toolkit_baseline_is_extracted_from_the_pinned_image(self) -> None:
         from kura.backends.ai_toolkit import AI_TOOLKIT_PINNED_COMMIT, AI_TOOLKIT_PINNED_IMAGE, AI_TOOLKIT_PINNED_MODEL_ARCHS
         from kura.backends.ai_toolkit_baseline import load_baseline
-        from kura.init_templates import __file__ as templates_file
 
         upstream = load_baseline()["upstream"]
         self.assertEqual(upstream["commit"], AI_TOOLKIT_PINNED_COMMIT)
         self.assertEqual(upstream["image"], AI_TOOLKIT_PINNED_IMAGE)
-        self.assertIn(AI_TOOLKIT_PINNED_IMAGE, Path(templates_file).read_text(encoding="utf-8"))
+        from kura.images import PINNED_IMAGES
+
+        self.assertEqual(PINNED_IMAGES["ai-toolkit"], AI_TOOLKIT_PINNED_IMAGE)
         arches = {entry["arch"] for entry in load_baseline()["entries"].values()}
         self.assertLessEqual(arches, AI_TOOLKIT_PINNED_MODEL_ARCHS)
 

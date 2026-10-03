@@ -18,7 +18,6 @@ from kura.container_scripts import script_source
 from kura.backends import BACKENDS, BackendSurface
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES
-from kura.init_templates import SD_SCRIPTS_DOCKERFILE_TEMPLATE, SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE
 from kura.media_types import frozen_suffixes
 import kura.provenance as provenance
 from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
@@ -33,12 +32,12 @@ MUSUBI_MEDIA_ENV = {
 
 
 class ContainerScriptTests(unittest.TestCase):
-    def test_sd_scripts_init_template_carries_the_managed_symlink_patch(self) -> None:
+    def test_sd_scripts_image_applies_the_managed_symlink_patch(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        patch_text = (root / "docker/sd-scripts/patches/0001-preserve-safetensors-symlink-name.patch").read_text(encoding="utf-8")
-        self.assertEqual(SD_SCRIPTS_SYMLINK_PATCH_TEMPLATE, patch_text)
-        self.assertIn("git apply --check", SD_SCRIPTS_DOCKERFILE_TEMPLATE)
-        self.assertIn('io.kura.patch.symlink-safetensors="preserve-input-filename-v2"', SD_SCRIPTS_DOCKERFILE_TEMPLATE)
+        self.assertTrue((root / "docker/sd-scripts/patches/0001-preserve-safetensors-symlink-name.patch").is_file())
+        dockerfile = (root / "docker/sd-scripts/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("git apply --check", dockerfile)
+        self.assertIn('io.kura.patch.symlink-safetensors="preserve-input-filename-v2"', dockerfile)
 
     def test_sd_scripts_probe_fails_closed_for_each_checkpoint_loader(self) -> None:
         namespace = {"__name__": "__test__"}
