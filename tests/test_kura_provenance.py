@@ -32,9 +32,9 @@ class InstallSourceTests(unittest.TestCase):
 
     def test_ssh_user_name_is_kept_and_only_secrets_are_dropped(self) -> None:
         ssh = describe_install({"url": "ssh://git@github.com/nomadoor/Kura", "vcs_info": {"vcs": "git", "commit_id": "c"}})
-        token = describe_install({"url": "https://ghp_token@github.com/nomadoor/Kura", "vcs_info": {"vcs": "git", "commit_id": "c"}})
+        with_user_credential = describe_install({"url": "https://deploy-credential@github.com/nomadoor/Kura", "vcs_info": {"vcs": "git", "commit_id": "c"}})
         self.assertEqual(ssh["url"], "ssh://git@github.com/nomadoor/Kura")
-        self.assertEqual(token["url"], "https://github.com/nomadoor/Kura")
+        self.assertEqual(with_user_credential["url"], "https://github.com/nomadoor/Kura")
 
     def test_editable_install_records_checkout_and_its_commit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
