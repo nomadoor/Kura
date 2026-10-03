@@ -1031,7 +1031,11 @@ def readiness_gaps(root: Path) -> list[str]:
         gaps.append("Docker CLI was not found: local training needs Docker; RunPod training does not. See `kura doctor docker`.")
     else:
         try:
-            reachable = subprocess.run(["docker", "info"], capture_output=True, text=True, check=False, timeout=5).returncode == 0
+            # Outside the workspace: a docker helper that outlives the timeout
+            # would otherwise hold the directory open on Windows.
+            reachable = subprocess.run(
+                ["docker", "info"], capture_output=True, text=True, check=False, timeout=5, cwd=Path.home(),
+            ).returncode == 0
         except (OSError, subprocess.SubprocessError):
             reachable = False
         if not reachable:
