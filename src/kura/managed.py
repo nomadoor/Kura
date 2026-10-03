@@ -56,9 +56,11 @@ class Report:
     def lines(self) -> list[str]:
         """What the user should know; empty when nothing changed or needs attention."""
         lines = []
-        changed = len(self.written) + len(self.refreshed) + len(self.removed)
+        if self.written:
+            lines.append(f"kura: wrote {len(self.written)} agent file(s) Kura manages in this workspace")
+        changed = len(self.refreshed) + len(self.removed)
         if changed:
-            lines.append(f"kura: refreshed {changed} managed file(s) in this workspace")
+            lines.append(f"kura: refreshed {changed} agent file(s) Kura manages in this workspace")
         if self.edited:
             lines.append(
                 f"kura: kept {len(self.edited)} file(s) you changed instead of the shipped version: {_summary(self.edited)}; "
