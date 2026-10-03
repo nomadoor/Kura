@@ -1,9 +1,9 @@
 # Sample ComfyUI workflows
 
 Kura-maintained **starter** ComfyUI workflows, one per `<model-family>/<task>`.
-Pick or copy one instead of hunting for / hand-building a workflow. Your own
-workflows elsewhere under `workflows/` stay untracked; only `workflows/samples/`
-is committed.
+Pick or copy one instead of hunting for / hand-building a workflow. Kura
+writes and refreshes `workflows/samples/`; copy a sample elsewhere under
+`workflows/` before changing it.
 
 ## Conventions
 

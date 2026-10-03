@@ -79,12 +79,15 @@ def evaluation_errors(
         else:
             card_path = Path(card)
             resolved = card_path if card_path.is_absolute() else ROOT / card_path
+            container = ROOT
             if card_path.as_posix().startswith(WORKSPACE_SHIPPED_KNOWLEDGE):
-                resolved = ROOT / "src" / "kura" / "shipped" / "knowledge" / card_path.as_posix()[len(WORKSPACE_SHIPPED_KNOWLEDGE):]
+                container = ROOT / "src" / "kura" / "shipped" / "knowledge"
+                resolved = container / card_path.as_posix()[len(WORKSPACE_SHIPPED_KNOWLEDGE):]
             try:
-                resolved.resolve().relative_to(ROOT.resolve())
+                resolved.resolve().relative_to(container.resolve())
             except ValueError:
-                errors.append(f"{label}.evaluation.knowledge.card must stay inside the repository")
+                where = "the shipped knowledge" if container != ROOT else "the repository"
+                errors.append(f"{label}.evaluation.knowledge.card must stay inside {where}")
             else:
                 # A completed run's manifest is immutable, so a citation keeps
                 # the path the card had at the time. Model-family cards later
