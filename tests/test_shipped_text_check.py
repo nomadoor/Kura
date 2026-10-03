@@ -17,7 +17,8 @@ class ShippedTextCheckTests(unittest.TestCase):
             (root / "SKILL.md").write_text(
                 "Run `uv run kura doctor`.\nSee docs/commands.md.\nCall scripts/check.py and examples/x.yaml.\n"
                 "See `../../../docs/smoke-evidence/x.yaml` and ./scripts/y.py.\n"
-                "Read .kura/reference/external-access.md, runs/<id>/scripts/z.py, and https://example.com/docs/a.\n",
+                "Read .kura/reference/external-access.md, runs/<id>/scripts/z.py, and https://example.com/docs/a.\n"
+                "Read **docs/commands.md** first.\n| step | scripts/check.py |\n",
                 encoding="utf-8",
             )
             import scripts.check_shipped_text as module
@@ -28,7 +29,7 @@ class ShippedTextCheckTests(unittest.TestCase):
                 found = findings(root)
             finally:
                 module.ROOT = previous
-        self.assertEqual(len(found), 6)
+        self.assertEqual(len(found), 8, found)
         self.assertTrue(all("only exists in the repository" in item for item in found))
 
 

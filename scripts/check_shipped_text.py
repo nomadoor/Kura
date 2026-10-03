@@ -26,7 +26,7 @@ def _repository_references(line: str) -> list[str]:
     found = [match.group(0) for match in UV_RUN.finditer(line)]
     for match in REPOSITORY_DIRECTORY.finditer(line):
         before = line[: match.start()]
-        token = re.split(r"[\s`'\"(\[<{:,;=]", before)[-1]
+        token = re.split(r"[\s`'\"(\[<{:,;=*|>]", before)[-1]
         if RELATIVE_STEPS.fullmatch(token):
             found.append(token + match.group(0))
     return found

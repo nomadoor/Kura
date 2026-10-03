@@ -29,6 +29,11 @@ not automatically a gate.
 
 ## Render intent
 
+`knowledge.card` names the card whose guidance the run applies: the shipped
+`.kura/knowledge/model-families/<family>.md`, or the user's
+`knowledge/model-families/<family>.md` when guidance from the user's card is
+applied. The examples below cite the shipped card.
+
 Recommended minimal block:
 
 ```yaml
