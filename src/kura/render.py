@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import time
 import urllib.error
@@ -13,6 +12,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -559,22 +559,38 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
     return f"{prefix}{stem[:max_stem]}{tail}"
 
 
-def _stage_mode(value: Any, name: str, target_dir: Path) -> str:
+@lru_cache(maxsize=8)
+def _endpoint_os(endpoint: str | None) -> str | None:
+    """The OS a ComfyUI endpoint runs on (`posix` or `nt`), or None when it does not say."""
+    if not isinstance(endpoint, str) or not endpoint:
+        return None
+    try:
+        with urllib.request.urlopen(f"{endpoint.rstrip('/')}/system_stats", timeout=5) as response:
+            stats = json.loads(response.read())
+    except Exception:
+        return None
+    system = stats.get("system") if isinstance(stats, dict) else None
+    value = system.get("os") if isinstance(system, dict) else None
+    return value if value in ("posix", "nt") else None
+
+
+def _stage_mode(value: Any, name: str, frozen: dict[str, Any]) -> str:
     """How to expose a staged file to ComfyUI: as configured, or decided here.
 
-    `auto` (the default) copies when a link may not be followed: on a Windows
-    drive mounted into WSL (`/mnt/<drive>/`), where a WSL-made symlink is
-    unreadable to a Windows ComfyUI, and on native Windows, where creating
-    symlinks needs privileges. Elsewhere it links, which costs no disk.
+    `auto` (the default) links when ComfyUI runs on Linux or in WSL, which can
+    follow a link Kura makes, and copies when ComfyUI runs on Windows, which
+    cannot follow a link made in WSL, when it does not report its OS, or when
+    Kura itself runs on Windows, where making a link needs privileges.
     """
     mode = str(value or "auto").strip().lower()
     if mode not in ("auto", "symlink", "copy"):
         raise ValueError(f"comfyui.{name} must be auto, symlink, or copy")
     if mode != "auto":
         return mode
-    if os.name == "nt" or re.match(r"^/mnt/[a-z]/", target_dir.as_posix()):
-        return "copy"
-    return "symlink"
+    generator = frozen.get("generator") if isinstance(frozen.get("generator"), dict) else {}
+    if os.name != "nt" and _endpoint_os(generator.get("endpoint")) == "posix":
+        return "symlink"
+    return "copy"
 
 
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
@@ -598,7 +614,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     if lora_dir is None:
         return None
     stage_dir = (lora_dir / stage_subdir).resolve()
-    mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", stage_dir)
+    mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", frozen)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {
         "kind": "LoRA",
@@ -630,7 +646,7 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
     stage_dir = (directory / stage_subdir).resolve()
-    mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", stage_dir)
+    mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", frozen)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {"kind": "model patch", "source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
 
@@ -1157,7 +1173,7 @@ class ComfyUIClient:
 # Facts compile writes into the run lock. In run.yaml they would be copied and
 # then overwritten, so a value there would be silently ignored.
 COMPILED_RENDER_KEYS = ("lora_insert", "comfyui", "comfyui_models", "comfyui_model_registry", "comfyui_endpoint_identity", "comfyui_required_models", "promptset_images", "_kura")
-RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength")
+RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength", "lora_stage")
 
 
 def _render_lora_strength(value: Any) -> float | None:
@@ -1173,9 +1189,9 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
     compiled_only = [key for key in COMPILED_RENDER_KEYS if key in run]
     if compiled_only:
+        hint = "; to change the inserted LoRA's strength, set render.lora_strength" if "lora_insert" in compiled_only else ""
         raise ValueError(
-            f"render run.yaml cannot set {', '.join(compiled_only)}: compile writes these from the workflow sidecar and workspace.yaml; "
-            "to change the inserted LoRA's strength, set render.lora_strength"
+            f"render run.yaml cannot set {', '.join(compiled_only)}: compile writes these from the workflow, its sidecar, and workspace.yaml{hint}"
         )
     if run.get("render") is not None and not isinstance(run.get("render"), dict):
         raise ValueError("render must be a mapping")

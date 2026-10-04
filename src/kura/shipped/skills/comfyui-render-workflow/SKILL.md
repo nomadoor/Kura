@@ -86,10 +86,11 @@ installation, external acquisition, or any run-state change.
 - Separate runs are valid only for separately intended evaluations.
 - Use the LoRA strength the workflow or its sidecar sets; it is the strength the
   workflow was tuned for. Change it only when the user asks or the evaluation
-  compares strengths, then set `render.lora_strength` for the inserted LoRA or
+  compares strengths, then set `render.lora_strength` for the inserted LoRA
+  (it sets both model and clip strength) or
   bind the workflow's own LoRA node in `workflow_patches` to vary it per case.
-- Kura decides how to place a LoRA where ComfyUI can read it
-  (`comfyui.lora_stage_mode: auto`); do not ask the user about links, copies,
+- Kura decides how to place a LoRA where ComfyUI can read it, from the OS the
+  endpoint reports (`comfyui.lora_stage_mode: auto`); do not ask the user about links, copies,
   or where ComfyUI runs.
 
 ## Stop and report

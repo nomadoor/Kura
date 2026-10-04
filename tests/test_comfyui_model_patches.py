@@ -241,18 +241,34 @@ class ComfyUIModelPatchTests(unittest.TestCase):
 
 
 class StageModeTests(unittest.TestCase):
-    def test_auto_copies_onto_a_windows_drive_and_links_elsewhere(self) -> None:
+    def test_auto_links_for_a_linux_comfyui_and_copies_otherwise(self) -> None:
         from kura.render import _stage_mode
 
+        frozen = {"generator": {"endpoint": "http://127.0.0.1:8189"}}
         with patch("kura.render.os.name", "posix"):
-            self.assertEqual(_stage_mode(None, "lora_stage_mode", Path("/mnt/e/ai/models/loras/Kura_tmp")), "copy")
-            self.assertEqual(_stage_mode("auto", "lora_stage_mode", Path("/home/user/ComfyUI/models/loras/Kura_tmp")), "symlink")
-            self.assertEqual(_stage_mode("symlink", "lora_stage_mode", Path("/mnt/e/x")), "symlink")
-            self.assertEqual(_stage_mode("copy", "lora_stage_mode", Path("/home/x")), "copy")
-        with patch("kura.render.os.name", "nt"):
-            self.assertEqual(_stage_mode(None, "lora_stage_mode", Path("/home/x")), "copy")
+            for reported, expected in (("posix", "symlink"), ("nt", "copy"), (None, "copy")):
+                with self.subTest(reported=reported), patch("kura.render._endpoint_os", return_value=reported):
+                    self.assertEqual(_stage_mode("auto", "lora_stage_mode", frozen), expected)
+                    self.assertEqual(_stage_mode(None, "lora_stage_mode", frozen), expected)
+            with patch("kura.render._endpoint_os", return_value="nt"):
+                self.assertEqual(_stage_mode("symlink", "lora_stage_mode", frozen), "symlink")
+        with patch("kura.render.os.name", "nt"), patch("kura.render._endpoint_os", return_value="posix"):
+            self.assertEqual(_stage_mode(None, "lora_stage_mode", frozen), "copy")
         with self.assertRaisesRegex(ValueError, "auto, symlink, or copy"):
-            _stage_mode("hardlink", "lora_stage_mode", Path("/home/x"))
+            _stage_mode("hardlink", "lora_stage_mode", frozen)
+
+    def test_the_endpoint_os_comes_from_system_stats(self) -> None:
+        from kura import render
+
+        render._endpoint_os.cache_clear()
+        response = io.BytesIO(json.dumps({"system": {"os": "posix"}}).encode())
+        with patch("kura.render.urllib.request.urlopen", return_value=response):
+            self.assertEqual(render._endpoint_os("http://127.0.0.1:9999"), "posix")
+        render._endpoint_os.cache_clear()
+        with patch("kura.render.urllib.request.urlopen", side_effect=OSError("down")):
+            self.assertIsNone(render._endpoint_os("http://127.0.0.1:9999"))
+        render._endpoint_os.cache_clear()
+
 
 if __name__ == "__main__":
     unittest.main()

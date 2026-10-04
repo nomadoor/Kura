@@ -133,7 +133,7 @@ workspace mount table.
 | `comfyui.endpoint` | Local ComfyUI API endpoint | `http://127.0.0.1:8188` |
 | `comfyui.lora_dir` | Host path to ComfyUI `models/loras`; empty means no automatic LoRA staging | `""` |
 | `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
-| `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI: `auto` copies onto a Windows drive mounted in WSL (`/mnt/<drive>/`) or on native Windows, where a link may not be followed, and links elsewhere; `symlink` or `copy` forces one | `auto` |
+| `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI: `auto` links when the endpoint's `/system_stats` reports Linux or WSL, and copies when it reports Windows, does not answer, or Kura itself runs on Windows; `symlink` or `copy` forces one | `auto` |
 | `comfyui.lora_stage_cleanup` | Whether temporary staged LoRAs are removed after render | `remove_after_render` |
 | `comfyui.model_patches_dir` | Host path to ComfyUI `models/model_patches`; required and non-empty when a render workflow declares a `model_patch` patch | `""` |
 | `comfyui.model_patch_stage_subdir` | Temporary subdirectory under `model_patches_dir` | `Kura_tmp` |

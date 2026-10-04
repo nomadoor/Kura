@@ -369,6 +369,15 @@ When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
 placeholder that is never rendered would make the file claim an input Kura does
 not own.
 
+`render.lora_strength` sets the strength of the LoRA Kura inserts from the
+workflow sidecar's `lora_insert` (both model and clip strength, for a
+`LoraLoader`); without it the sidecar's strength applies. A workflow whose own
+LoRA node carries the LoRA sets its strength there, or binds it in
+`workflow_patches` to vary it per case. The `render:` mapping accepts only
+`output_dir`, `timeout_sec`, `default_seed`, `workflow_fixed`, `lora_strength`,
+and `lora_stage`, and run.yaml may not set facts compile writes itself, such as
+`lora_insert`.
+
 ## Checks
 
 | Command | Purpose |
