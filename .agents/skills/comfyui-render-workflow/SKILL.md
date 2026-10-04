@@ -84,6 +84,13 @@ installation, external acquisition, or any run-state change.
 - Do not call ComfyUI directly, derive per-case workflows, download models, or
   edit Kura to route around a refusal.
 - Separate runs are valid only for separately intended evaluations.
+- Use the LoRA strength the workflow or its sidecar sets; it is the strength the
+  workflow was tuned for. Change it only when the user asks or the evaluation
+  compares strengths, then set `render.lora_strength` for the inserted LoRA or
+  bind the workflow's own LoRA node in `workflow_patches` to vary it per case.
+- Kura decides how to place a LoRA where ComfyUI can read it
+  (`comfyui.lora_stage_mode: auto`); do not ask the user about links, copies,
+  or where ComfyUI runs.
 
 ## Stop and report
 
@@ -98,6 +105,10 @@ Stop when:
 Name the exact missing consumer or environmental fact. Distinguish a run.yaml
 binding correction from a workflow limitation and from a Kura implementation
 change. Do not silently omit the requested variation.
+
+Report what changes the user's result or needs their decision. Do not report
+Kura internals, a setting you tried and reverted, or a limitation that does not
+affect what the user asked for; record those in the run's `notes.md` instead.
 
 ## Handoff
 

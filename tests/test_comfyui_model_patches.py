@@ -239,5 +239,20 @@ class ComfyUIModelPatchTests(unittest.TestCase):
         self.assertEqual(patched["7"]["inputs"]["model"], ["10", 0])
 
 
+
+class StageModeTests(unittest.TestCase):
+    def test_auto_copies_onto_a_windows_drive_and_links_elsewhere(self) -> None:
+        from kura.render import _stage_mode
+
+        with patch("kura.render.os.name", "posix"):
+            self.assertEqual(_stage_mode(None, "lora_stage_mode", Path("/mnt/e/ai/models/loras/Kura_tmp")), "copy")
+            self.assertEqual(_stage_mode("auto", "lora_stage_mode", Path("/home/user/ComfyUI/models/loras/Kura_tmp")), "symlink")
+            self.assertEqual(_stage_mode("symlink", "lora_stage_mode", Path("/mnt/e/x")), "symlink")
+            self.assertEqual(_stage_mode("copy", "lora_stage_mode", Path("/home/x")), "copy")
+        with patch("kura.render.os.name", "nt"):
+            self.assertEqual(_stage_mode(None, "lora_stage_mode", Path("/home/x")), "copy")
+        with self.assertRaisesRegex(ValueError, "auto, symlink, or copy"):
+            _stage_mode("hardlink", "lora_stage_mode", Path("/home/x"))
+
 if __name__ == "__main__":
     unittest.main()

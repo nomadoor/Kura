@@ -270,6 +270,56 @@ class RenderCasesCompileTests(unittest.TestCase):
             self.assertNotIn("checkpoint", resolved[0])
             self.assertEqual(resolved[1]["checkpoint"]["hash"], _digest(b"lora"))
 
+    def _lora_strength_workspace(self, root: Path, *, sidecar: bool = True) -> Path:
+        lora = _case("lora", step=1800, prompt="same", seed=42, strength=1.0, cfg=4.0)
+        patches = {key: value for key, value in PATCHES.items() if key != "lora"}
+        run_dir = _workspace(root, cases=[lora], patches=patches)
+        if sidecar:
+            (root / "workflows" / "wf.kura.yaml").write_text("lora_insert:\n  kind: model_only\n  model_node: '12'\n", encoding="utf-8")
+        _write_checkpoint(root, lora["checkpoint"], b"lora")
+        return run_dir
+
+    @staticmethod
+    def _edit_run(run_dir: Path, change) -> None:
+        run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
+        change(run)
+        (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+
+    def test_render_lora_strength_sets_the_inserted_loras_strength(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._lora_strength_workspace(root)
+            self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"lora_strength": 1.0}))
+            compile_render(root, run_dir)
+            frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(frozen["lora_insert"]["strength_model"], 1.0)
+            patched = render_module.insert_lora_loader({"12": {"class_type": "UNETLoader", "inputs": {}}}, frozen["lora_insert"], "x.safetensors")
+            inserted = [node for node in patched.values() if node.get("class_type") == "LoraLoaderModelOnly"]
+            self.assertEqual(inserted[0]["inputs"]["strength_model"], 1.0)
+
+    def test_a_compiled_fact_in_run_yaml_is_refused_not_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._lora_strength_workspace(root)
+            self._edit_run(run_dir, lambda run: run.update({"lora_insert": {"kind": "model_only", "model_node": "12", "strength_model": 1.0}}))
+            with self.assertRaisesRegex(ValueError, "render.lora_strength"):
+                compile_render(root, run_dir)
+            self.assertFalse((run_dir / "resolved" / "manifest.lock.yaml").exists())
+
+    def test_unknown_render_settings_and_a_strength_without_an_inserted_lora_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._lora_strength_workspace(root)
+            self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"strength": 1.0}))
+            with self.assertRaisesRegex(ValueError, "unsupported keys: strength"):
+                compile_render(root, run_dir)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._lora_strength_workspace(root, sidecar=False)
+            self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"lora_strength": 1.0}))
+            with self.assertRaisesRegex(ValueError, "no sidecar lora_insert"):
+                compile_render(root, run_dir)
+
     def test_cases_and_promptset_are_mutually_exclusive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

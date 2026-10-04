@@ -133,11 +133,11 @@ workspace mount table.
 | `comfyui.endpoint` | Local ComfyUI API endpoint | `http://127.0.0.1:8188` |
 | `comfyui.lora_dir` | Host path to ComfyUI `models/loras`; empty means no automatic LoRA staging | `""` |
 | `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
-| `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI | `symlink` |
+| `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI: `auto` copies onto a Windows drive mounted in WSL (`/mnt/<drive>/`) or on native Windows, where a link may not be followed, and links elsewhere; `symlink` or `copy` forces one | `auto` |
 | `comfyui.lora_stage_cleanup` | Whether temporary staged LoRAs are removed after render | `remove_after_render` |
 | `comfyui.model_patches_dir` | Host path to ComfyUI `models/model_patches`; required and non-empty when a render workflow declares a `model_patch` patch | `""` |
 | `comfyui.model_patch_stage_subdir` | Temporary subdirectory under `model_patches_dir` | `Kura_tmp` |
-| `comfyui.model_patch_stage_mode` | How render runs expose a local model patch to ComfyUI | `symlink` |
+| `comfyui.model_patch_stage_mode` | How render runs expose a local model patch to ComfyUI; same choices as `lora_stage_mode` | `auto` |
 | `comfyui.model_patch_stage_cleanup` | Whether temporary staged model patches are removed after render | `remove_after_render` |
 | `comfyui.input_dir` | Host path to ComfyUI `input`; required and non-empty for local renders with a `type: image` patch binding. RunPod uses its managed Pod input directory instead | `""` |
 | `comfyui.input_stage_subdir` | Temporary subdirectory under `input_dir` | `Kura_tmp` |

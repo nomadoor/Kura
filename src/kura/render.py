@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 import urllib.error
@@ -558,6 +559,24 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
     return f"{prefix}{stem[:max_stem]}{tail}"
 
 
+def _stage_mode(value: Any, name: str, target_dir: Path) -> str:
+    """How to expose a staged file to ComfyUI: as configured, or decided here.
+
+    `auto` (the default) copies when a link may not be followed: on a Windows
+    drive mounted into WSL (`/mnt/<drive>/`), where a WSL-made symlink is
+    unreadable to a Windows ComfyUI, and on native Windows, where creating
+    symlinks needs privileges. Elsewhere it links, which costs no disk.
+    """
+    mode = str(value or "auto").strip().lower()
+    if mode not in ("auto", "symlink", "copy"):
+        raise ValueError(f"comfyui.{name} must be auto, symlink, or copy")
+    if mode != "auto":
+        return mode
+    if os.name == "nt" or re.match(r"^/mnt/[a-z]/", target_dir.as_posix()):
+        return "copy"
+    return "symlink"
+
+
 def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
     if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
         return None
@@ -572,9 +591,6 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
     if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.lora_stage_subdir must be a safe relative directory name")
-    mode = str(comfyui.get("lora_stage_mode") or "symlink").strip().lower()
-    if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.lora_stage_mode must be symlink or copy")
     cleanup = str(comfyui.get("lora_stage_cleanup") or "remove_after_render").strip().lower()
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.lora_stage_cleanup must be remove_after_render or keep")
@@ -582,6 +598,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     if lora_dir is None:
         return None
     stage_dir = (lora_dir / stage_subdir).resolve()
+    mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", stage_dir)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {
         "kind": "LoRA",
@@ -609,13 +626,12 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     stage_subdir = str(comfyui.get("model_patch_stage_subdir") or "Kura_tmp").strip("/\\")
     if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.model_patch_stage_subdir must be a safe relative directory name")
-    mode = str(comfyui.get("model_patch_stage_mode") or "symlink").strip().lower()
-    if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.model_patch_stage_mode must be symlink or copy")
     cleanup = str(comfyui.get("model_patch_stage_cleanup") or "remove_after_render").strip().lower()
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
-    target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
+    stage_dir = (directory / stage_subdir).resolve()
+    mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", stage_dir)
+    target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {"kind": "model patch", "source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
 
 
@@ -684,8 +700,10 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     # leaves its input directory, so a symlinked input fails validation at queue
     # time even though a symlinked model loads fine.
     mode = str(comfyui.get("input_stage_mode") or "copy").strip().lower()
+    if mode == "auto":
+        mode = "copy"  # ComfyUI rejects symlinked LoadImage inputs
     if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.input_stage_mode must be symlink or copy")
+        raise ValueError("comfyui.input_stage_mode must be auto, symlink, or copy")
     if mode == "symlink":
         print(
             "warning: comfyui.input_stage_mode=symlink is set, but ComfyUI rejects symlinked LoadImage inputs "
@@ -1136,9 +1154,34 @@ class ComfyUIClient:
             return response.read()
 
 
+# Facts compile writes into the run lock. In run.yaml they would be copied and
+# then overwritten, so a value there would be silently ignored.
+COMPILED_RENDER_KEYS = ("lora_insert", "comfyui", "comfyui_models", "comfyui_model_registry", "comfyui_endpoint_identity", "comfyui_required_models", "promptset_images", "_kura")
+RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength")
+
+
+def _render_lora_strength(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not -10 <= float(value) <= 10:
+        raise ValueError("render.lora_strength must be a number, for example 0.8 or 1.0")
+    return float(value)
+
+
 def compile_render(workspace: Path, run_dir: Path) -> None:
     run = load_yaml(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
+    compiled_only = [key for key in COMPILED_RENDER_KEYS if key in run]
+    if compiled_only:
+        raise ValueError(
+            f"render run.yaml cannot set {', '.join(compiled_only)}: compile writes these from the workflow sidecar and workspace.yaml; "
+            "to change the inserted LoRA's strength, set render.lora_strength"
+        )
+    if run.get("render") is not None and not isinstance(run.get("render"), dict):
+        raise ValueError("render must be a mapping")
+    unknown_settings = sorted(str(key) for key in (run.get("render") or {}) if key not in RENDER_SETTINGS)
+    if unknown_settings:
+        raise ValueError(f"render has unsupported keys: {', '.join(unknown_settings)}; supported: {', '.join(RENDER_SETTINGS)}")
     inputs = run.get("inputs", {})
     if not isinstance(inputs, dict):
         raise ValueError("render inputs must be a mapping")
@@ -1173,6 +1216,16 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     sidecar = _workflow_sidecar(workflow_path)
     lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
+    lora_strength = _render_lora_strength(render_settings.get("lora_strength"))
+    if lora_strength is not None:
+        if lora_insert is None:
+            raise ValueError(
+                "render.lora_strength sets the strength of the LoRA Kura inserts from the workflow sidecar, and this workflow has no "
+                "sidecar lora_insert; set the strength on the workflow's own LoRA node, or bind it in workflow_patches to vary it per case"
+            )
+        lora_insert["strength_model"] = lora_strength
+        if "strength_clip" in lora_insert:
+            lora_insert["strength_clip"] = lora_strength
     workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
     fixed = set(workflow_fixed)
     patches = run.get("workflow_patches")
