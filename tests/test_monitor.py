@@ -21,6 +21,22 @@ from kura.tui import KuraMonitorApp
 
 
 class MonitorProjectionTests(unittest.TestCase):
+    def test_the_fallback_realization_is_never_an_observation_or_publication(self) -> None:
+        from kura.monitor import _latest_realization
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            realizations = run_dir / "realizations"
+            realizations.mkdir()
+            rid = "20261004-010203-000001"
+            (realizations / f"{rid}.json").write_text(json.dumps({"id": rid, "executor": "docker"}), encoding="utf-8")
+            for suffix in ("observed-20261004-020000-000000", "publication", "remote-exit-observed-x"):
+                (realizations / f"{rid}.{suffix}.json").write_text(json.dumps({"kind": suffix}), encoding="utf-8")
+            (realizations / "stage-20261004-030000-000000.json").write_text(json.dumps({"stage": True}), encoding="utf-8")
+            (realizations / "remote-exit-20261004-040000.json").write_text(json.dumps({"event": "remote_exit"}), encoding="utf-8")
+            (realizations / "stage.json").write_text(json.dumps({"stage": True}), encoding="utf-8")
+            self.assertEqual(_latest_realization(run_dir, {})["id"], rid)
+
     def test_resume_progress_and_comparison_use_the_logical_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

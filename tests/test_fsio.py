@@ -23,6 +23,18 @@ class FsioTests(unittest.TestCase):
             self.assertEqual(fsync.call_count, 2)
             fsync_directory.assert_called_once_with(path.parent)
 
+    def test_a_torn_final_line_does_not_swallow_the_next_event(self) -> None:
+        from kura.executors.common import append_run_event, run_events
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / "logs").mkdir()
+            path = run_dir / "logs" / "events.jsonl"
+            path.write_text('{"type": "first"}\n{"type": "tor', encoding="utf-8")
+            append_run_event(run_dir, {"type": "after_crash"})
+            self.assertEqual([event["type"] for event in run_events(run_dir)], ["first", "after_crash"])
+            self.assertTrue(path.read_text(encoding="utf-8").endswith('\n'))
+
     def test_atomic_write_text_replaces_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "status.json"

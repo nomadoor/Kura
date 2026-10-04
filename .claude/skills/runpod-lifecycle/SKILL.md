@@ -1,11 +1,11 @@
 ---
 name: runpod-lifecycle
-description: RunPod remote training lifecycle and billing safety for Kura. Use when working on kura run remote, runpod staging/upload/download/pull/stop/reconcile, Pod cleanup, max lease, notifications, GPU selection, or Network Volumes.
+description: RunPod remote training lifecycle and billing safety for Kura. Use when the user trains or renders on RunPod, or when a RunPod run needs staging, download, stop, reconcile, Pod cleanup, max lease, notifications, GPU selection, or Network Volumes.
 ---
 
 # RunPod Lifecycle
 
-Use this skill for any RunPod remote execution or cleanup change.
+Use this skill whenever a run executes on RunPod or a RunPod Pod needs recovery or cleanup.
 
 ## Standard remote flow
 

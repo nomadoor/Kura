@@ -126,19 +126,20 @@ Before any local run or real smoke that may download multi-GB models, run `kura 
 
 Cleanup is intentionally guarded. Show `kura cleanup ...` dry-runs before deletion. Never delete datasets, outputs, downloads, or final artifacts unless the user explicitly asks; use `kura fix-permissions` before cleanup when root-owned Kura files block removal.
 
-Skills for usage sessions:
-
 A request to render, train, or use a workflow is not permission to download
 models outside the declared Kura plan. Disk doctor measures capacity; passing it
 does not grant download authority. Local ComfyUI render never downloads models
 and never starts a Docker ComfyUI. If the configured endpoint is unavailable,
 stop and ask the user to start or identify their local ComfyUI.
 
+Skills for usage sessions:
+
 - `training-parameter-planning` — proposing parameters, VRAM fit, trade-offs
 - `dataset-prep` — datasets, captions, trigger words, validation
 - `local-disk-safety` — disk, WSL2, Docker storage, cleanup, checkpoints
 - `runpod-lifecycle` — remote training, billing safety, Pod recovery
 - `comfyui-render-workflow` — render runs, workflows, comparisons
+- `lora-evaluation` — evaluation prompts, checkpoint and strength comparisons, judging results
 - `publishing-huggingface-modelscope` — publishing trained adapters to Hugging Face or ModelScope
 
 For a trained-LoRA evaluation, use this order:

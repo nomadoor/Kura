@@ -18,6 +18,7 @@ import yaml
 
 from kura.backends import get_backend
 from kura.executors import ACTIVE_STATES, observe_run
+from kura.executors.common import is_realization_record
 from kura.run_envelope import common_recipe, run_executor
 
 
@@ -454,7 +455,9 @@ def _latest_realization(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]
         data = _read_mapping(run_dir / ref)
         if data:
             return data
-    realizations = sorted((run_dir / "realizations").glob("*.json"))
+    # Only `<id>.json` is a realization; observations, publications, stages,
+    # and remote-exit records share the directory and sort after it.
+    realizations = sorted(path for path in (run_dir / "realizations").glob("*.json") if is_realization_record(path))
     for path in reversed(realizations):
         data = _read_mapping(path)
         if data:
