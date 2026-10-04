@@ -19,7 +19,7 @@ Use this skill before changing production code in `src/kura/`, tests, executor/b
 The durable path rules are in
 [Path namespace policy](../../../docs/adr/path-namespace-policy.md).
 
-- Kura is file-first: the run files are the only authoritative state. Do not introduce a hidden database, queue, or second truth store. The job runner (`kura runner`) is the one long-running process, allowed only as defined in `docs/adr/files-only-state-and-job-runner.md`. Record intent before any external create, keep `status.json` a projection of the records, and keep viewers read-only, as `docs/adr/run-records-and-external-effects.md` defines.
+- Kura is file-first: the run files are the only authoritative state. Do not introduce a hidden database, queue, or second truth store. The job runner (`kura runner`) is the one long-running process, allowed only as defined in `docs/adr/files-only-state-and-job-runner.md`. Record intent before any external effect (creating a Pod or container, or starting a remote job), keep `status.json` a projection of the records, and keep viewers read-only, as `docs/adr/run-records-and-external-effects.md` defines.
 - Every surface a user or agent authors is closed. A value with no declared
   consumer is refused where the file is loaded; it is never accepted and ignored.
   Dynamic names are declared explicitly and the values below them remain closed

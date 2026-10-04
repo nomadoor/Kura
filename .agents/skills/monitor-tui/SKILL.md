@@ -15,7 +15,7 @@ Use this skill for the monitoring TUI.
   remain owned by that state layer.
 - Monitor/TUI must not directly call Docker or provider APIs, and must not call
   launch, compile, or stop paths.
-- The monitor never launches or controls runs and starts no background service. Only the job runner (`kura runner`, `docs/adr/files-only-state-and-job-runner.md`) controls launched runs. Once the runner ships, the monitor only reads and shows when each run was last observed (`docs/adr/run-records-and-external-effects.md`).
+- The monitor never launches or controls runs and starts no background service. Only the job runner (`kura runner`, `docs/adr/files-only-state-and-job-runner.md`) controls launched runs. Today the monitor observes a running run through `observe_run()`, which can reconcile and write `status.json`; once the runner ships, the monitor only reads materialized status and shows when each run was last observed, never observing or persisting anything (`docs/adr/run-records-and-external-effects.md`).
 - UI-owned side effects are limited to opening file manager/browser links and
   copying to the clipboard. Run-state side effects belong only to
   `observe_run()`.

@@ -43,18 +43,22 @@ job on a Pod. A local render run calls an existing ComfyUI endpoint and
 creates nothing, so only decisions 3 to 7 apply to it.
 
 - Intent found without an outcome is resolved by **discovery, never by acting
-  again**. For a Pod, discovery lists Pods by the deterministic name. RunPod
-  names are not unique and Kura has no list call today, so this needs a new
-  list operation, proven by its own real smoke. For a container it lists by
-  the realization label, and for a remote job it checks the job's marker on
-  the Pod.
-- Nothing found means the effect never happened, and the realization says so.
-- One match is adopted.
-- More than one Pod means a duplicate: the one whose remote job has started
-  is adopted, otherwise the oldest, and the rest are terminated. Under this
-  decision a second Pod never reaches its job; if more than one has, Kura
-  records `interrupted` and hands the run to the user instead of stopping
-  either.
+  again**. For a Pod, discovery lists the account's Pods by the deterministic
+  name. That name contains the run id and the realization id, which is unique
+  to the intent, so only a Pod Kura created for this intent carries it; any
+  other Pod is never a candidate and is never touched. RunPod names are not
+  unique in general, and Kura had no list call, so this needs a list operation
+  proven by its own real smoke. For a container discovery lists by the
+  realization label, and for a remote job it checks the job's marker on the
+  Pod.
+- Nothing found means the effect never happened only when the listing covered
+  every Pod of the account; a listing that fails or may be partial leaves the
+  intent unresolved, and the user is told so.
+- One match found by a live launch is adopted and the launch continues.
+- Recovery after a crash, and any case with more than one match, never adopts a
+  Pod into a running job and never deletes one: it records the run as
+  `interrupted` with every matching Pod's id, and `kura run stop` deletes them
+  all. The user decides whether to stop or keep a Pod that is still billing.
 - A create that fails with a timeout or a transient error ends the attempt
   loop and goes to discovery. Only an explicit refusal, such as no capacity,
   may try the next GPU candidate.
@@ -74,7 +78,10 @@ launched again whether or not any lock is still held; the realization cites
 the claim. This replaces "records the claim in the realization" in
 `files-only-state-and-job-runner.md`. Stopping a run is likewise a stop
 request file that the runner, or the CLI when no runner is running, carries
-out and records. Claims rely on exclusive create on a local file system,
+out and records. A claim with no realization and no create intent after it means
+the runner died before acting; nothing external exists, so the next runner, or
+`kura run reconcile` when none is running, records the request as not
+launched, and the request can be written again. Claims rely on exclusive create on a local file system,
 which is where the runner ADR and `windows-execution-model.md` place the
 workspace; network shares are not supported.
 
