@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
-from kura.executors.runpod import unresolved_create_intents
+from kura.executors.runpod import unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
 from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases
@@ -295,6 +295,8 @@ def launch_render_runpod(
             return 0
         if unresolved_create_intents(run_dir):
             raise ValueError(f"an earlier launch stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` first")
+        if (recovered := unstopped_recovered_pod(run_dir)) is not None:
+            raise ValueError(f"Pod {recovered} from an earlier launch may still be billing; run `kura run stop {run_id}` before launching again")
         with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
             launch_runpod_session(
                 run_dir=run_dir,

@@ -55,7 +55,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 212fb8cb026a9f7a6888aefe41f7dd8667d2b01d5dc66bc5cc7df692481575e3
+      value: 02ee2d40da07c451c7eafd9265525ee87b78e146a592353c635317c6110e1fa6
   - id: runpod-executor-torn-event-tail-2026-10-04
     executor: runpod
     reason: Appending to an event or phase log first closes a final line that a crash left without its

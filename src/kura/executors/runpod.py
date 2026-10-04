@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import platform
@@ -65,9 +66,9 @@ def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, time
         raise RunPodAPIError(f"RunPod GraphQL failed ({exc.code}): {detail}", status_code=exc.code) from exc
     except URLError as exc:
         raise ValueError(f"RunPod API is unreachable: {exc.reason}") from exc
-    except OSError as exc:
-        # A read that times out after the request was sent raises a bare
-        # TimeoutError; the request may still have taken effect.
+    except (OSError, http.client.HTTPException) as exc:
+        # A read that times out or breaks after the request was sent; the
+        # request may still have taken effect.
         raise ValueError(f"RunPod API is unreachable: {exc}") from exc
     try:
         value = json.loads(raw)
@@ -479,7 +480,9 @@ def _create_outcome_uncertain(exc: ValueError) -> bool:
     """
     if isinstance(exc, RunPodAPIError):
         return exc.status_code >= 500
-    return "runpod api is unreachable" in str(exc).lower()
+    text = str(exc).lower()
+    # A reply that arrived but cannot be read says nothing about the create either.
+    return any(marker in text for marker in ("runpod api is unreachable", "invalid json", "unexpected response", "did not contain"))
 
 
 def unresolved_create_intents(run_dir: Path) -> list[Path]:
@@ -491,6 +494,24 @@ def unresolved_create_intents(run_dir: Path) -> list[Path]:
         path for path in directory.glob(f"*{CREATE_INTENT_SUFFIX}")
         if not (directory / f"{path.name[: -len(CREATE_INTENT_SUFFIX)]}.json").exists()
     )
+
+
+def unstopped_recovered_pod(run_dir: Path) -> str | None:
+    """The id of a Pod a recovery recorded and nothing has stopped yet.
+
+    Such a Pod still bills, and a new launch would drop its id from status, so
+    launching waits until `kura run stop` has deleted it.
+    """
+    status = _load_status(run_dir)
+    pod_id = status.get("pod_id")
+    reference = status.get("last_realization")
+    if not isinstance(pod_id, str) or not isinstance(reference, str) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
+        return None
+    try:
+        realization = json.loads((run_dir / reference).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return pod_id if isinstance(realization, dict) and realization.get("recovered_from_intent") else None
 
 
 def _runpod_pods_named(api_key: str, name: str, *, timeout: float = 30.0) -> list[dict[str, Any]]:
@@ -535,10 +556,10 @@ def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, r
     record_launch_phase(run_dir, realization_id, "pod_create_requested", at=requested_at)
 
     def mutate(latest: dict[str, Any]) -> None:
-        latest.update({"state": "launching", "host": "runpod"})
+        latest.update({"state": "launching", "host": "runpod", "started": None, "ended": None, "exit_code": None})
         # A previous realization's Pod must never be mistaken for this one.
-        latest.pop("pod_id", None)
-        latest.pop("last_observation", None)
+        for key in ("pod_id", "last_observation", "pod_stopped_at", "pod_missing_at"):
+            latest.pop(key, None)
 
     _mutate_run_status(run_dir, mutate)
 
@@ -557,6 +578,18 @@ def _hand_over_unconfirmed_create(run_dir: Path, realization_id: str, pod_name: 
         f"confirm, because a retry could start a second billed Pod. Run `kura run reconcile {run_dir.name}`: it looks "
         "for the Pod by name, records what it finds, and tells you whether to stop it before relaunching."
     )
+
+
+def _discover_after_unconfirmed_create(run_dir: Path, realization_id: str, api_key: str, pod_name: str, exc: ValueError) -> list[dict[str, Any]]:
+    """The one Pod an unconfirmed create made, or hand the run over to the user."""
+    error = _redact_secret_text(str(exc))
+    try:
+        found = _discover_pods(api_key, pod_name)
+    except ValueError as lookup:
+        raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, f"{error}; looking it up also failed: {_redact_secret_text(str(lookup))}") from exc
+    if len(found) != 1:
+        raise _hand_over_unconfirmed_create(run_dir, realization_id, pod_name, error) from exc
+    return found
 
 
 def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list[str]:
@@ -590,9 +623,9 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
             realization = {**base, "state": "launch_failed", "attempted_at": intent.get("requested_at"), "pod": None,
                            "error": f"RunPod has no Pod named {pod_name}: it was never created, or it was already deleted"}
             pod_id = None
-            lines.append(f"no Pod named {pod_name} exists; the launch is recorded as failed and the run can be launched again")
+            lines.append(f"no Pod named {pod_name} exists, so nothing is billing; the launch is recorded as failed (a render run needs compiling again before its next launch)")
         else:
-            pods = sorted(pods, key=lambda pod: -(pod.get("runtime") or {}).get("uptimeInSeconds", 0) if isinstance(pod.get("runtime"), dict) else 0)
+            pods = sorted(pods, key=lambda pod: -((pod.get("runtime") or {}).get("uptimeInSeconds") or 0))
             realization = {**base, "state": "interrupted", "launched_at": intent.get("requested_at"), "pod": _runpod_pod_snapshot(pods[0]),
                            "error": "the launch stopped before Kura recorded this Pod; its job was not started by Kura"}
             if len(pods) > 1:
@@ -1227,9 +1260,7 @@ sleep infinity
                     break
                 except ValueError as exc:
                     if _create_outcome_uncertain(exc):
-                        found = _discover_pods(api_key, request_body["name"])
-                        if len(found) != 1:
-                            raise _hand_over_unconfirmed_create(run_dir, realization_id, request_body["name"], _redact_secret_text(str(exc))) from exc
+                        found = _discover_after_unconfirmed_create(run_dir, realization_id, api_key, request_body["name"], exc)
                         pod, used_request = found[0], attempt_request
                         controller_phase = "probe"
                         break
@@ -1312,6 +1343,15 @@ sleep infinity
                 "RunPod capacity wait was interrupted during Pod creation; creation is unconfirmed. "
                 f"Run `kura run reconcile {run_dir.name}` before retrying: it looks for the Pod by name"
             ) from exc
+        if intent_written:
+            # Every create so far was refused, so no Pod exists; settle the intent here.
+            realization_path = run_dir / "realizations" / f"{realization_id}.json"
+            _write_json(realization_path, {
+                "id": realization_id, "executor": "runpod", "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
+                "request": safe_request, "logs_path": log_path, "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
+                "error": "the capacity wait was cancelled; every create attempt had been refused, so no Pod exists", **kura_provenance(),
+            })
+            _mutate_run_status(run_dir, lambda latest: latest.update({"state": "launch_failed", "last_realization": str(realization_path.relative_to(run_dir))}))
         raise ValueError("RunPod capacity wait cancelled; no Pod was created") from exc
     if pod is None or used_request is None:
         failed_at = _now()
@@ -1464,11 +1504,11 @@ sleep infinity
                     pod = _runpod_request("POST", "/pods", api_key, attempt_request)
                     used_request = attempt_request
                     break
+                except KeyboardInterrupt as exc:
+                    raise _hand_over_unconfirmed_create(run_dir, realization_id, request_body["name"], "interrupted during the create request") from exc
                 except ValueError as exc:
                     if _create_outcome_uncertain(exc):
-                        found = _discover_pods(api_key, request_body["name"])
-                        if len(found) != 1:
-                            raise _hand_over_unconfirmed_create(run_dir, realization_id, request_body["name"], _redact_secret_text(str(exc))) from exc
+                        found = _discover_after_unconfirmed_create(run_dir, realization_id, api_key, request_body["name"], exc)
                         pod, used_request = found[0], attempt_request
                         break
                     launch_errors.append({"gpu_type_ids": ", ".join(gpu_type_ids), "cloud_type": cloud_type, "error": _redact_secret_text(str(exc))})

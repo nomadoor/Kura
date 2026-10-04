@@ -15,7 +15,7 @@ import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker
 from kura.executors.common import append_run_event, record_launch_phase
-from kura.executors.runpod import unresolved_create_intents
+from kura.executors.runpod import unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -358,6 +358,8 @@ def launch_run(
             raise ValueError(
                 f"an earlier launch stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` first"
             )
+        if (recovered := unstopped_recovered_pod(run_dir)) is not None:
+            raise ValueError(f"Pod {recovered} from an earlier launch may still be billing; run `kura run stop {run_id}` before launching again")
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run already has a running realization; reconcile or stop it first")

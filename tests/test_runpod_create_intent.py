@@ -104,6 +104,47 @@ class CreateIntentRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "kura run reconcile"):
                 stop_runpod(run_dir, CONFIG)
 
+    def test_a_recovered_live_pod_blocks_relaunch_until_stopped(self) -> None:
+        from kura.executors.runpod import unstopped_recovered_pod
+
+        with _crashed_launch() as run_dir:
+            with patch("kura.executors.runpod._runpod_pods_named", return_value=[{"id": "pod-a", "name": NAME, "runtime": None}]):
+                resolve_runpod_create_intents(run_dir, CONFIG)
+            self.assertEqual(unstopped_recovered_pod(run_dir), "pod-a")
+            with patch("kura.executors.runpod._runpod_request"):
+                stop_runpod(run_dir, CONFIG)
+            self.assertIsNone(unstopped_recovered_pod(run_dir))
+
+    def test_a_null_uptime_does_not_break_recovery(self) -> None:
+        with _crashed_launch() as run_dir:
+            pods = [{"id": "pod-a", "name": NAME, "runtime": {"uptimeInSeconds": None}}, {"id": "pod-b", "name": NAME, "runtime": {"uptimeInSeconds": 7}}]
+            with patch("kura.executors.runpod._runpod_pods_named", return_value=pods):
+                resolve_runpod_create_intents(run_dir, CONFIG)
+            self.assertEqual(_status(run_dir)["pod_id"], "pod-b")
+
+
+class UnconfirmedCreateTests(unittest.TestCase):
+    def test_a_failed_lookup_still_hands_the_run_over(self) -> None:
+        from kura.executors.runpod import RunPodAPIError, launch_runpod_session
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "render"
+            run_dir.mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"state": "compiled"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), \
+                    patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (503): down", status_code=503)), \
+                    patch("kura.executors.runpod._runpod_pods_named", side_effect=ValueError("RunPod API is unreachable: down")), patch("kura.executors.runpod.time.sleep"):
+                with self.assertRaisesRegex(ValueError, "kura run reconcile"):
+                    launch_runpod_session(run_dir=run_dir, image="registry/comfy:tag", config=CONFIG, purpose="comfyui-render", dry_run=False, yes=True, max_lease_sec=3600)
+            self.assertEqual(_status(run_dir)["state"], "interrupted")
+
+    def test_an_unreadable_create_reply_counts_as_unconfirmed(self) -> None:
+        from kura.executors.runpod import _create_outcome_uncertain
+
+        self.assertTrue(_create_outcome_uncertain(ValueError("RunPod API returned invalid JSON")))
+        self.assertTrue(_create_outcome_uncertain(ValueError("RunPod GraphQL create response did not contain a Pod")))
+        self.assertFalse(_create_outcome_uncertain(ValueError("RunPod GraphQL failed: no capacity")))
+
 
 class SessionCreateTests(unittest.TestCase):
     def test_a_render_session_hands_over_an_unconfirmed_create(self) -> None:
