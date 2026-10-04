@@ -155,7 +155,9 @@ the user's own in `knowledge/model-families/`. Read both; where they disagree,
 the user's fact wins.
 
 Cards are knowledge, not a list of what Kura can train. Which models a backend
-accepts comes from `kura run capabilities <backend>` (its `model_arch` values).
+accepts comes from `kura run capabilities <backend>`: its model selector
+(`backend.config.model_arch` for ai-toolkit, `backend.config.architecture` for
+musubi-tuner and sd-scripts) and the values that selector takes.
 A family without a card can still be trained: say once that there is no card
 for it, then work from upstream primary sources and the user's own card, and
 record what you learn in the run's `notes.md`.

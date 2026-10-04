@@ -180,6 +180,20 @@ class SetTests(unittest.TestCase):
             self.assertTrue(user_file.is_symlink())
             self.assertEqual(synced.read_text(encoding="utf-8"), "HF_TOKEN=new\n")
 
+    def test_concurrent_writes_keep_every_name(self) -> None:
+        import threading
+
+        with _setup() as (_, user_file):
+            names = [variable.name for variable in secrets.USER_VARIABLES]
+            threads = [threading.Thread(target=secrets.write_secret, args=(user_file, name, f"value-{index}")) for index, name in enumerate(names)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            text = user_file.read_text(encoding="utf-8")
+            for index, name in enumerate(names):
+                self.assertIn(f"{name}=value-{index}", text)
+
     def test_a_shell_value_is_named_as_taking_precedence(self) -> None:
         with _setup():
             os.environ["HF_TOKEN"] = "from-shell"

@@ -21,7 +21,7 @@ import platformdirs
 import yaml
 
 from kura.environment import USER_VARIABLES
-from kura.fsio import atomic_write_bytes
+from kura.fsio import atomic_write_bytes, file_lock
 from kura.workspace import parse_env_file_line, workspace
 
 ENVIRONMENT = "environment"
@@ -144,6 +144,12 @@ def write_secret(path: Path, name: str, value: str) -> None:
     A symlinked file is updated where it points, so a synced copy stays the one read.
     """
     path = path.resolve() if path.is_symlink() else path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(path.with_name(f".{path.name}.lock")):
+        _write_locked(path, name, value)
+
+
+def _write_locked(path: Path, name: str, value: str) -> None:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -161,7 +167,6 @@ def write_secret(path: Path, name: str, value: str) -> None:
         kept.append(line)
     if not replaced:
         kept.append(entry)
-    path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(path, ("\n".join(kept) + "\n").encode("utf-8"))
     if os.name != "nt":
         os.chmod(path, 0o600)
