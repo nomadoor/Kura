@@ -1,6 +1,6 @@
 ---
 name: dataset-prep
-description: Dataset preparation and validation for Kura training runs. Use when creating or editing datasets/, dataset.yaml, items.jsonl, captions, trigger words, paired/control datasets, dataset roles, or dataset validation behavior.
+description: Dataset preparation and validation for Kura training runs. Use when creating or editing datasets/, dataset.yaml, items.jsonl, captions, trigger words, paired/control datasets, or dataset roles, or when dataset validation reports a problem.
 ---
 
 # Dataset Prep
@@ -9,9 +9,8 @@ Use this skill for dataset operations.
 
 ## Rules
 
-- Never commit dataset payloads.
-- Commit only small manifests or synthetic metadata fixtures that contain no
-  dataset payloads.
+- If the workspace is under version control, never commit dataset payloads;
+  only `dataset.yaml` and `items.jsonl` may be committed.
 - Preserve `datasets` as an array in run intent and locks.
 - Keep role/digest visible for paired/control datasets.
 - Do not add repeats/weights unless explicitly intended.

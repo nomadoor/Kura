@@ -1668,15 +1668,13 @@ def cmd_run_logs(args: argparse.Namespace) -> int:
     if not path.exists():
         print(f"no run log exists yet: {path}", file=sys.stderr)
         return 1
-    command = ["tail", "-n", "200"]
-    if args.follow:
-        command.append("-f")
-    command.append(str(path))
+    from kura.log_tail import show
+
     try:
-        return subprocess.run(command, check=False).returncode
-    except FileNotFoundError:
-        print(path.read_text(encoding="utf-8"), end="")
-        return 0
+        return show(path, follow=bool(args.follow))
+    except OSError as exc:
+        print(f"cannot read run log: {_safe_error(exc)}", file=sys.stderr)
+        return 1
 
 
 def stage_run(run_id: str, *, executor: str = "runpod") -> int:

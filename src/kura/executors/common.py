@@ -72,6 +72,16 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
+def is_realization_record(path: Path) -> bool:
+    """Whether a file in `realizations/` is a realization itself.
+
+    Observations, publications, and phases are named `<id>.<kind>...`,
+    staging records `stage-<id>.json`, and the exit records a Pod writes
+    `remote-exit-<time>.json`; only `<id>.json` describes a launch.
+    """
+    return path.suffix == ".json" and "." not in path.stem and not path.stem.startswith(("stage-", "remote-exit-"))
+
+
 # Launch timing is diagnostic: each realization gets an append-only
 # `<id>.phases.jsonl`, one line per boundary the controller observes. A lost
 # line costs a measurement, never the run, so writes only warn on failure.

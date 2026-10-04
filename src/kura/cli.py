@@ -1491,7 +1491,7 @@ def main() -> None:
     stage.add_argument("run_id")
     stage.add_argument("--executor", default="runpod", choices=("runpod",))
     stage.set_defaults(func=cmd_run_stage)
-    logs = run_sub.add_parser("logs", help="Print or follow run logs")
+    logs = run_sub.add_parser("logs", help="Print the last 200 lines (at most 50 KB) of a run log, naming the full log, or follow it")
     logs.add_argument("run_id")
     logs.add_argument("--follow", action="store_true")
     logs.set_defaults(func=cmd_run_logs)

@@ -73,10 +73,20 @@ def append_line_durably(path: Path, line: str) -> None:
 
     Callers that project status after appending rely on the line being
     durable first; a later status write must never outlive its event.
+
+    A crash can leave a final line without its newline. Appending straight
+    after it would fuse the new line into that fragment and readers would drop
+    both, so the fragment is closed off first and stays the only lost line.
     """
     created = not path.exists()
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(line)
+    with path.open("ab+") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() > 0:
+            handle.seek(-1, os.SEEK_END)
+            if handle.read(1) != b"\n":
+                handle.seek(0, os.SEEK_END)
+                handle.write(b"\n")
+        handle.write(line.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
     if created:
