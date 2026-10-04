@@ -79,7 +79,7 @@ def is_realization_record(path: Path) -> bool:
     staging records `stage-<id>.json`, and the exit records a Pod writes
     `remote-exit-<time>.json`; only `<id>.json` describes a launch.
     """
-    return path.suffix == ".json" and "." not in path.stem and not path.stem.startswith(("stage-", "remote-exit-"))
+    return path.suffix == ".json" and "." not in path.stem and not path.stem.startswith(("stage", "remote-exit-"))
 
 
 # Launch timing is diagnostic: each realization gets an append-only

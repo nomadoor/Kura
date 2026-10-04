@@ -54,7 +54,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 990f098e56f597b5df3422367d7b5ce7b8c59d1c88ac558f0479564e6e545bac
+      value: 92c2c9d0dee5fb1cfb60afc92aad74123cd83da97b7fba475a96fdc7fd04aa71
   - id: runpod-executor-missing-secret-message-2026-10-04
     executor: runpod
     reason: A missing RunPod API key now raises a typed error whose message tells the user to run

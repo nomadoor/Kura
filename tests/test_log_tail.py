@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +71,40 @@ class LogTailTests(unittest.TestCase):
             with patch("sys.stdout", stdout), patch("kura.log_tail.time.sleep", fake_sleep):
                 self.assertEqual(show(path, follow=True), 0)
         self.assertEqual(stdout.getvalue().splitlines()[2:], ["step 1/9", "step 3/9", "done"])
+
+    def test_follow_completes_an_unfinished_last_line_and_notices_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stdout.log"
+            path.write_bytes("first\nhalf of a ".encode())
+            steps = iter(["append", "replace", "stop"])
+
+            def fake_sleep(_: float) -> None:
+                step = next(steps)
+                if step == "append":
+                    with path.open("ab") as handle:
+                        handle.write("line ✓\n".encode())
+                elif step == "replace":
+                    replacement = path.with_name("new.log")
+                    replacement.write_bytes(b"fresh\n")
+                    os.replace(replacement, path)
+                else:
+                    raise KeyboardInterrupt
+
+            stdout = io.StringIO()
+            with patch("sys.stdout", stdout), patch("kura.log_tail.time.sleep", fake_sleep):
+                show(path, follow=True)
+        lines = stdout.getvalue().splitlines()
+        self.assertEqual(lines[1], "half of a ")
+        self.assertEqual(lines[3], "half of a line ✓")
+        self.assertIn("replaced", lines[4])
+        self.assertEqual(lines[5], "fresh")
+
+    def test_the_byte_cap_counts_utf8_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stdout.log"
+            path.write_text("あ" * 100 + "\n" + "い" * 10 + "\n", encoding="utf-8")
+            lines, _, _, _ = tail(path, max_bytes=100)
+        self.assertEqual(lines, ["い" * 10])
 
     def test_a_closed_pipe_is_not_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

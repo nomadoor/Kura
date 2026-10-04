@@ -34,6 +34,7 @@ class MonitorProjectionTests(unittest.TestCase):
                 (realizations / f"{rid}.{suffix}.json").write_text(json.dumps({"kind": suffix}), encoding="utf-8")
             (realizations / "stage-20261004-030000-000000.json").write_text(json.dumps({"stage": True}), encoding="utf-8")
             (realizations / "remote-exit-20261004-040000.json").write_text(json.dumps({"event": "remote_exit"}), encoding="utf-8")
+            (realizations / "stage.json").write_text(json.dumps({"stage": True}), encoding="utf-8")
             self.assertEqual(_latest_realization(run_dir, {})["id"], rid)
 
     def test_resume_progress_and_comparison_use_the_logical_target(self) -> None:
