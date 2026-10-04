@@ -80,8 +80,8 @@ When it does not fit, stop at the first sufficient rung:
 
 Changing GPU class or cost, applying a recipe-changing adjustment, or accepting
 an expected slowdown beyond roughly twofold requires a new plan decision.
-After an OOM, diagnose the actual log and move one rung; never silently change
-multiple dimensions and retry.
+After an OOM, diagnose the actual log and move one rung; never silently retry
+with changed settings.
 
 ## Last look
 

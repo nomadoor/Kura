@@ -52,7 +52,7 @@ Git hygiene in a shared checkout:
 
 Never run these unless the user asks for that run: real smokes, model
 downloads, Docker image builds or publishes, anything that creates a RunPod
-Pod, and `kura cleanup` without `--dry-run`. Read a script before running it,
+Pod, and `kura cleanup`, `kura fix-permissions`, or `kura fix-links` with `--yes`. Read a script before running it,
 even in a dry or preview mode.
 
 New owner decisions that change behavior, information architecture, naming, writing rules, or design rules must be reflected in an ADR before implementation.

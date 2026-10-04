@@ -30,7 +30,8 @@ read the skill named at the end of this file before that task.
 is missing and what you would need. Then wait. Do not build the missing
 capability outside Kura — a second execution path, generated execution files
 that bypass the run contract, or a direct API call — and do not silently fan
-one approved run into ad-hoc runs to get past a compile error. Separate runs
+one approved run into ad-hoc runs to get past a compile error or to avoid
+declaring its cases. Separate runs
 remain valid when the user intends separate runs and each records its own
 intent. Do not silently produce a result that is missing the thing you could
 not do. A refusal from `kura ... compile` is the contract speaking; the fix is
@@ -51,8 +52,10 @@ user approves once before launch.
 - Apart from `notes.md`, treat run artifacts as append-only or immutable unless
   a Kura CLI command explicitly owns the mutation.
 
-Runs the user will watch belong in this workspace. If a separate workspace is
-unavoidable, say so up front, give the exact `kura monitor` command for it, and
+Smoke and training runs the user will watch belong in this workspace; do not
+create a second workspace for them. A throwaway workspace is only for CI or
+isolated developer checks. If a separate workspace is unavoidable, say so up
+front, give the exact `kura monitor` / `kura run watch` command for it, and
 state where its `runs/` and `cache/` live.
 
 ## Running training and renders
@@ -69,18 +72,23 @@ Before launching, run `kura run plan <run-id>` and show the output to the user.
 Do not reconstruct launch settings from memory. Launch only after explicit
 approval; if anything changes afterward, record it in `run.yaml`, recompile,
 and show the plan again. Do not silently change batch, resolution, precision,
-or other quality, memory, or cost trade-offs.
+or other quality, memory, or cost trade-offs. When a run does not fit its
+hardware, diagnose from evidence (OOM logs, stalled startup, doctor output),
+record the accepted change in `run.yaml` before recompiling and launching a new
+realization, and never silently retry with changed settings.
 
 Starting a run is not finishing the request. Unless the user asks to start and
 detach, run `kura run execute <run-id>` through the agent host's tracked
 long-running mechanism, never an untracked `nohup ... &`, keep the task active
 until it returns, then verify and report the result from Kura's status, exit
-code, realization, logs, and output artifacts. Run several approved runs one
-after another, stopping on failure, uncertain state, or a new decision; never
-treat a note or cursor as approval for the next run. If the tracked session is
-lost, observe or reconcile the run; never assume completion or relaunch. For a
-RunPod run, session loss is billing exposure: follow the `runpod-lifecycle`
-recovery flow at once.
+code, realization, logs, and output artifacts. Start the next approved run only
+after the previous one is mechanically complete, and stop on failure, uncertain
+state, or a new decision; a note or cursor is never approval, so if a later
+run's approval cannot be found in the conversation, ask again. If the tracked
+session is lost, observe or reconcile the run; never assume completion,
+relaunch it, or advance to another run. For a RunPod run, session loss is
+billing exposure: follow the `runpod-lifecycle` recovery flow at once, and do
+not stop the Pod before remote exit and local download are confirmed.
 
 An approval covers that run only. Do not attach a render, evaluation, or sample
 generation to a training approval. After the run finishes you may offer a
@@ -93,7 +101,9 @@ models outside the declared Kura plan; passing `kura doctor disk` measures
 capacity and grants nothing. Local ComfyUI render never downloads models and
 never starts a Docker ComfyUI; if the endpoint is unavailable, ask the user to
 start it. Before a run that may download multi-GB models, run
-`kura doctor disk`.
+`kura doctor disk`. If it warns about disk, Docker storage, or root-owned files,
+or the plan warns about checkpoints, address that before launching
+(`local-disk-safety`).
 
 Cleanup is guarded. Show `kura cleanup ...` dry-runs before deleting, and never
 delete datasets, outputs, downloads, or final artifacts unless the user asks.
@@ -110,9 +120,11 @@ once that there is no card, then work from upstream primary sources and the
 user's card, and record what you learn in the run's `notes.md`.
 
 A family often trains on one variant and generates with another, and names do
-not show the relationship. Never infer compatibility from names; when a card is
-silent about a pair, name both and ask in one line. Only the user or a verified
-run promotes a fact into the user's card, always with a `source:` line.
+not show the relationship. Never infer compatibility from names. A card silent
+about a pair means no information, not incompatibility: name both and ask in
+one line, and record the answer in the run's `notes.md`. Only the user or a
+verified run promotes a fact into the user's card, always with a `source:`
+line; shipped cards change only with Kura.
 
 ## Secrets and artifacts
 
@@ -136,8 +148,9 @@ repeat it; suggest they revoke it and set a new one with `kura secrets set`.
   words, or when dataset validation reports a problem.
 - `training-parameter-planning` — before proposing training parameters, and
   when a run does not fit its hardware or runs out of memory.
-- `local-disk-safety` — before local runs that download models, and before
-  cleanup or permission repair.
+- `local-disk-safety` — before local runs that download models, when a plan or
+  doctor warns about disk or checkpoints, before cleanup or permission repair,
+  and after a crash or reconnect.
 - `runpod-lifecycle` — before anything that runs on RunPod, and whenever a Pod
   needs recovery or cleanup.
 - `comfyui-render-workflow` — before a render run, a workflow change, or any
