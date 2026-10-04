@@ -14,7 +14,7 @@ records:
       a successful create makes the same API requests and writes the same realization, which also
       cites the intent. Only a create whose outcome is unknown (a server error or a lost connection)
       behaves differently, by looking the Pod up by name instead of creating again, and that recovery
-      path is covered by tests and needs its own real smoke before evidence is claimed for it. Transfer, verification, training, collection,
+      path is covered by tests and by a real smoke on 2026-10-04 (create, recover by name, stop, confirm gone). Transfer, verification, training, collection,
       publication, and Pod stop are unchanged; stop also deletes duplicates a recovery recorded.
     behavior_changed: false
     evidence_ids:
