@@ -5,7 +5,8 @@ Status: accepted owner decision.
 Date: 2026-10-02
 
 Updated: 2026-10-03 — the job runner is its own process, and every launch goes
-through it.
+through it. How records stay true across crashes, and who may write them, is
+refined in `run-records-and-external-effects.md` (2026-10-04).
 
 ## Context
 
@@ -82,8 +83,9 @@ render runs alike.
   shown by the writer: `kura run execute` at the terminal or through
   `--yes`, and the UI in its approval control. The request records that the
   confirmation was given. The runner never prompts.
-- The runner claims a request under a per-run launch lock, and records the
-  claim in the realization it starts. A claimed request is never launched
+- The runner claims a request under a per-run launch lock by creating its
+  claim file exclusively, and the realization it starts cites the claim
+  (`run-records-and-external-effects.md`). A claimed request is never launched
   again, and a run has at most one pending request.
 - `kura run execute` and the other launching commands, such as
   `kura render launch`, write a launch request, make sure a runner is running,
