@@ -35,7 +35,10 @@ declaring its cases. Separate runs
 remain valid when the user intends separate runs and each records its own
 intent. Do not silently produce a result that is missing the thing you could
 not do. A refusal from `kura ... compile` is the contract speaking; the fix is
-a corrected input file or a conversation with the user.
+a corrected input file or a conversation with the user. This covers missing
+execution capabilities; a presentation task a skill explicitly allows, such as
+arranging existing images into a comparison sheet, is not one, and follows that
+skill's limits.
 
 ## Core model
 

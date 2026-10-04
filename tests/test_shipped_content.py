@@ -21,7 +21,7 @@ class ShippedContentTests(unittest.TestCase):
         self.assertTrue((root / "workflow-samples" / "README.md").is_file())
 
     def test_agents_md_routes_every_skill_and_the_moved_rules_live_in_skills(self) -> None:
-        root = Path(str(shipped_root()))
+        root = shipped_root()
         agents = (root / "AGENTS.md").read_text(encoding="utf-8")
         routing = agents.split("## Which skill to read first", 1)[1]
         for skill in SHIPPED_SKILLS:
