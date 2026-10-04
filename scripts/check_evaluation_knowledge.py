@@ -75,8 +75,8 @@ def main() -> int:
     normalized_agents = " ".join(agents_text.split())
     if ORDER not in normalized_skill:
         errors.append("lora-evaluation/SKILL.md is missing the canonical skill order")
-    if ORDER not in normalized_agents:
-        errors.append("the shipped AGENTS.md is missing the canonical skill order")
+    if "`lora-evaluation` — before evaluating a trained adapter" not in normalized_agents:
+        errors.append("the shipped AGENTS.md must route evaluations to lora-evaluation")
     if "Kura currently has no video render execution path" not in normalized_skill:
         errors.append("lora-evaluation/SKILL.md must state that video render execution is unavailable")
     if "do not invoke ComfyUI or another generator outside Kura" not in normalized_skill:

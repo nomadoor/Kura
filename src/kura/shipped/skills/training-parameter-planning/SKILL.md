@@ -7,7 +7,10 @@ description: Plan Kura training quality, memory, runtime, and cost trade-offs. U
 
 Choose a useful training recipe, not merely one that starts. Preserve the
 user's intent and make every quality, speed, memory, and cost trade-off visible
-in `run.yaml` and the compiled plan.
+in `run.yaml` and the compiled plan. Training configuration and compute
+selection are one plan: dataset size, resolution, batch, accumulation,
+precision, rank, optimizer, and low-memory options all affect quality, runtime,
+memory, and cost.
 
 ## Approval model
 
@@ -77,8 +80,8 @@ When it does not fit, stop at the first sufficient rung:
 
 Changing GPU class or cost, applying a recipe-changing adjustment, or accepting
 an expected slowdown beyond roughly twofold requires a new plan decision.
-After an OOM, diagnose the actual log and move one rung; never silently change
-multiple dimensions and retry.
+After an OOM, diagnose the actual log and move one rung; never silently retry
+with changed settings.
 
 ## Last look
 

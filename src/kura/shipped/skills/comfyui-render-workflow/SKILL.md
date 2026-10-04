@@ -30,10 +30,25 @@ Treat requests such as "compare every checkpoint", "step review", "XY plot",
 "same prompt with several CFG values", or "put the images side by side" as a
 render-matrix request. Do not refuse merely because it contains many cases.
 
-When Kura can express the requested values, author one explicit finite case
-queue. Kura generates raw images and metadata; after generation, the agent may
-assemble existing images into contact sheets or XY plots under `AGENTS.md`.
-Do not create one run per value merely to bypass the case contract.
+A render comparison is not a missing capability when its combinations can be
+listed as Kura render cases. Author one explicit `inputs.cases` JSONL queue;
+each row records its complete workflow values, optional checkpoint, and
+provenance metadata. Kura generates the raw case images and records their
+metadata. It does not choose a comparison layout. Do not create one run per
+value merely to bypass the case contract.
+
+## Presentation artifacts
+
+Arranging existing local result images into a comparison sheet, contact sheet,
+reordered sequence, or joined image is an intentional agent-owned presentation
+task, not a missing Kura execution path. It may be done without stopping, but
+only from existing local images, using already-installed tools and without
+downloading assets or models. Save a new artifact under a related run, never
+overwrite an existing image, and record the input image paths in that run's
+`notes.md`. When all compared checkpoints belong to one training run, save
+under that training run; otherwise save under the lexicographically latest
+compared render run. This does not authorize new image generation, dependency
+installation, external acquisition, or any run-state change.
 
 ## Execution workflow
 
