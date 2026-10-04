@@ -297,6 +297,19 @@ class RenderCasesCompileTests(unittest.TestCase):
             inserted = [node for node in patched.values() if node.get("class_type") == "LoraLoaderModelOnly"]
             self.assertEqual(inserted[0]["inputs"]["strength_model"], 1.0)
 
+    def test_a_bound_lora_renders_at_0_8_unless_the_run_sets_a_strength(self) -> None:
+        for authored, expected in ((None, 0.8), (1.0, 1.0)):
+            with self.subTest(authored=authored), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                case = _case("lora", step=1800, prompt="same", seed=42, strength=1.0, cfg=4.0)
+                run_dir = _workspace(root, cases=[case])
+                _write_checkpoint(root, case["checkpoint"], b"lora")
+                if authored is not None:
+                    self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"lora_strength": authored}))
+                compile_render(root, run_dir)
+                frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+                self.assertEqual(frozen["render"]["lora_strength"], expected)
+
     def test_a_compiled_fact_in_run_yaml_is_refused_not_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -317,7 +330,7 @@ class RenderCasesCompileTests(unittest.TestCase):
             root = Path(directory)
             run_dir = self._lora_strength_workspace(root, sidecar=False)
             self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"lora_strength": 1.0}))
-            with self.assertRaisesRegex(ValueError, "no sidecar lora_insert"):
+            with self.assertRaisesRegex(ValueError, "neither inserts"):
                 compile_render(root, run_dir)
 
     def test_cases_and_promptset_are_mutually_exclusive(self) -> None:

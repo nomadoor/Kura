@@ -384,6 +384,31 @@ def patch_workflow(
     return patched
 
 
+# The strength a trained LoRA is rendered at unless the run says otherwise.
+# LoRAs are conventionally trained to look right at this strength, and a
+# workflow's own LoRA node holds whatever value was last left in it.
+DEFAULT_LORA_STRENGTH = 0.8
+
+
+def apply_bound_lora_strength(workflow: dict[str, Any], patches: dict[str, Any], strength: float) -> dict[str, Any]:
+    """Set the strength of the workflow LoRA node bound by `workflow_patches.lora`.
+
+    A strength input another binding sets per case is left to that binding.
+    """
+    binding = patches.get("lora") if isinstance(patches, dict) else None
+    if not isinstance(binding, dict) or not isinstance(binding.get("node"), str):
+        return workflow
+    node = workflow.get(binding["node"])
+    inputs = node.get("inputs") if isinstance(node, dict) and isinstance(node.get("inputs"), dict) else None
+    if inputs is None:
+        return workflow
+    bound = {(patch.get("node"), patch.get("field")) for name, patch in patches.items() if name != "lora" and isinstance(patch, dict)}
+    for key in ("strength_model", "strength_clip"):
+        if isinstance(inputs.get(key), (int, float)) and not isinstance(inputs.get(key), bool) and (binding["node"], f"inputs.{key}") not in bound:
+            inputs[key] = strength
+    return workflow
+
+
 def _link(node: str, output: int) -> list[Any]:
     return [node, output]
 
@@ -423,12 +448,12 @@ def _lora_insert_from_sidecar(sidecar: dict[str, Any]) -> dict[str, Any] | None:
         "class_type": class_type,
         "model_node": model_node,
         "model_output": _as_output_index(raw.get("model_output", model.get("output")), 0, context="lora_insert.model"),
-        "strength_model": float(raw.get("strength_model", 0.8)),
+        "strength_model": float(raw.get("strength_model", DEFAULT_LORA_STRENGTH)),
     }
     if class_type == "LoraLoader":
         spec["clip_node"] = _as_node_id(raw.get("clip_node", clip.get("node", model_node)), context="lora_insert.clip")
         spec["clip_output"] = _as_output_index(raw.get("clip_output", clip.get("output")), 1, context="lora_insert.clip")
-        spec["strength_clip"] = float(raw.get("strength_clip", 0.8))
+        spec["strength_clip"] = float(raw.get("strength_clip", DEFAULT_LORA_STRENGTH))
     return spec
 
 
@@ -1233,12 +1258,13 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
     lora_strength = _render_lora_strength(render_settings.get("lora_strength"))
-    if lora_strength is not None:
-        if lora_insert is None:
-            raise ValueError(
-                "render.lora_strength sets the strength of the LoRA Kura inserts from the workflow sidecar, and this workflow has no "
-                "sidecar lora_insert; set the strength on the workflow's own LoRA node, or bind it in workflow_patches to vary it per case"
-            )
+    bound_lora = isinstance((run.get("workflow_patches") or {}).get("lora"), dict) if isinstance(run.get("workflow_patches"), dict) else False
+    if lora_strength is not None and lora_insert is None and not bound_lora:
+        raise ValueError(
+            "render.lora_strength sets the strength of the trained LoRA, and this workflow neither inserts it from a sidecar "
+            "lora_insert nor binds a LoRA node in workflow_patches.lora"
+        )
+    if lora_strength is not None and lora_insert is not None:
         lora_insert["strength_model"] = lora_strength
         if "strength_clip" in lora_insert:
             lora_insert["strength_clip"] = lora_strength
@@ -1275,6 +1301,10 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         )
     frozen = deepcopy(run)
     frozen["workflow_patches"] = deepcopy(patches)
+    if bound_lora:
+        if not isinstance(frozen.get("render"), dict):
+            frozen["render"] = {}
+        frozen["render"]["lora_strength"] = DEFAULT_LORA_STRENGTH if lora_strength is None else lora_strength
     frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
@@ -1550,6 +1580,9 @@ def launch_render(
             image_values = _image_values_for_item({"id": case["id"], **values}, patches, image_stages)
             patched = patch_workflow(workflow, patches, prompt=values.get("prompt", ""), negative_prompt=values.get("negative_prompt", ""), seed=values.get("seed"), checkpoint=lora_name, model_patch=model_patch_name, item={"id": case["id"], **values}, image_values=image_values)
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
+            if lora_name:
+                render_settings = frozen.get("render") if isinstance(frozen.get("render"), dict) else {}
+                patched = apply_bound_lora_strength(patched, patches, float(render_settings.get("lora_strength", DEFAULT_LORA_STRENGTH)))
             case_application = checkpoint_application(frozen, patched, lora_name=lora_name, checkpoint_record=checkpoint)
             applied_values = {name: image_values.get(name, values.get(name)) for name in patches if name not in ASSET_PATCH_NAMES}
             for name in patches:

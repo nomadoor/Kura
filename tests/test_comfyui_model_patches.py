@@ -240,6 +240,20 @@ class ComfyUIModelPatchTests(unittest.TestCase):
 
 
 
+class BoundLoraStrengthTests(unittest.TestCase):
+    def test_the_bound_lora_node_renders_at_the_run_strength_unless_a_binding_sets_it(self) -> None:
+        from kura.render import DEFAULT_LORA_STRENGTH, apply_bound_lora_strength
+
+        workflow = {"7": {"class_type": "LoraLoader", "inputs": {"lora_name": "x", "strength_model": 1.3, "strength_clip": 0.4, "model": ["1", 0]}}}
+        patches = {"lora": {"node": "7", "field": "inputs.lora_name"}}
+        applied = apply_bound_lora_strength(json.loads(json.dumps(workflow)), patches, DEFAULT_LORA_STRENGTH)
+        self.assertEqual((applied["7"]["inputs"]["strength_model"], applied["7"]["inputs"]["strength_clip"]), (0.8, 0.8))
+        per_case = {**patches, "strength": {"node": "7", "field": "inputs.strength_model"}}
+        applied = apply_bound_lora_strength(json.loads(json.dumps(workflow)), per_case, 1.0)
+        self.assertEqual((applied["7"]["inputs"]["strength_model"], applied["7"]["inputs"]["strength_clip"]), (1.3, 1.0))
+        self.assertEqual(apply_bound_lora_strength(workflow, {}, 1.0), workflow)
+
+
 class StageModeTests(unittest.TestCase):
     def test_auto_links_for_a_linux_comfyui_and_copies_otherwise(self) -> None:
         from kura.render import _stage_mode

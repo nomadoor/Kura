@@ -84,14 +84,16 @@ installation, external acquisition, or any run-state change.
 - Do not call ComfyUI directly, derive per-case workflows, download models, or
   edit Kura to route around a refusal.
 - Separate runs are valid only for separately intended evaluations.
-- Use the LoRA strength the workflow or its sidecar sets; it is the strength the
-  workflow was tuned for. Change it only when the user asks or the evaluation
-  compares strengths, then set `render.lora_strength` for the inserted LoRA
-  (it sets both model and clip strength) or
-  bind the workflow's own LoRA node in `workflow_patches` to vary it per case.
+- A trained LoRA renders at 0.8 by default, whatever value the workflow's own
+  LoRA node holds (a strength written in the workflow's Kura sidecar is kept). Change it only when the user asks or the evaluation compares
+  strengths: `render.lora_strength` for the whole run, or a `workflow_patches`
+  binding on the strength input to vary it per case.
 - Kura decides how to place a LoRA where ComfyUI can read it, from the OS the
-  endpoint reports (`comfyui.lora_stage_mode: auto`); do not ask the user about links, copies,
-  or where ComfyUI runs.
+  endpoint reports (`comfyui.lora_stage_mode: auto`); do not ask about links or
+  copies. Find the endpoint yourself: the user may run several ComfyUI
+  instances on different ports, so check the configured one and the likely
+  ports with `kura doctor comfyui --endpoint <url>`, and ask only when more
+  than one fits or none answers.
 
 ## Stop and report
 
