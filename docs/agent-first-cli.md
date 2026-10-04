@@ -139,8 +139,9 @@ intent and prior observations provide the migration context.
 - Runtime attempts and external identities are append-only realization facts.
 - Backend display and model-requirement projections are adapter-owned and
   frozen under `resolved/`; monitor and plan do not reinterpret native keys.
-- Secrets come only from `.env.local` or environment variables and are never
-  frozen into run artifacts.
+- Secrets come only from the environment, a workspace `.env.local`, or the
+  user secrets file (`docs/adr/user-secrets.md`), and are never frozen into run
+  artifacts.
 - Model and image provenance records the strongest identity actually observed;
   Kura does not invent a content hash it could not observe.
 

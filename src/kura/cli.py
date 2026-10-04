@@ -61,7 +61,7 @@ from kura.run_commands import cmd_run_upload
 from kura.tui import run_textual_monitor
 from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import dump_yaml as _dump_yaml
-from kura.workspace import load_env_local as _load_env_local
+from kura.secrets import MissingSecret, cmd_secrets_set, load_secrets as _load_secrets
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import run_path as _run_path
@@ -393,7 +393,7 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
                     constraints.append(f"max={contract['maximum']}")
                 print(f"    {field} (" + ", ".join(constraints) + ")")
     if payload["config_value_choices"]:
-        print("backend.config recognized upstream values (not Kura support claims):")
+        print("backend.config accepted values (from the pinned upstream; Kura accepts any of them, though not every one has been run end to end):")
         for field, choices in payload["config_value_choices"].items():
             print(f"  {field}: " + ", ".join(choices))
     if payload["selector_aliases"]:
@@ -623,8 +623,8 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
         if realization.get("executor") == "runpod":
             try:
                 reconcile_runpod(run_dir, _workspace_config().get("runpod", {}))
-            except ValueError as exc:
-                if "must be exported to reconcile a RunPod run" not in str(exc) or not _try_sync_runpod_remote_stdout(run_dir):
+            except MissingSecret as exc:
+                if not _try_sync_runpod_remote_stdout(run_dir):
                     raise
                 print(f"warning: skipped RunPod API reconcile because {_safe_error(exc)}; synced remote log over SSH only", file=sys.stderr)
             else:
@@ -1191,7 +1191,7 @@ def _named_paths(values: list[str], action: str) -> list[Path] | None:
     if missing:
         print(f"cannot {action}: no such file or directory: {', '.join(missing)}", file=sys.stderr)
         return None
-    refused = [str(path) for path in paths if path.name in checks.NEVER_READ or path.resolve().name in checks.NEVER_READ]
+    refused = [str(path) for path in paths if checks.never_read(path)]
     if refused:
         print(f"cannot {action}: Kura never reads {', '.join(refused)}; name the files you will share instead", file=sys.stderr)
         return None
@@ -1407,7 +1407,7 @@ def main() -> None:
     parser.add_argument("--version", action="version", version=f"kura {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="Create a workspace here: folders, workspace.yaml, .env.local, and your knowledge/")
+    init = sub.add_parser("init", help="Create a workspace here: folders, workspace.yaml, and your knowledge/")
     init.add_argument("--restore", action="store_true", help="Replace Kura's agent files you edited or deleted with the shipped version, after showing them; your knowledge/ and .env.local are never touched")
     init.add_argument("--yes", action="store_true", help="Restore without asking")
     init.set_defaults(func=cmd_init)
@@ -1603,12 +1603,20 @@ def main() -> None:
 
     check_parser = sub.add_parser("check", help="Check files before sharing or publishing them")
     check_sub = check_parser.add_subparsers(dest="check_command", required=True)
-    check_secrets = check_sub.add_parser("secrets", help="Scan the named files and directories for secret-like values; .env.local is never scanned and values are never printed")
+    check_secrets = check_sub.add_parser("secrets", help="Scan the named files and directories for secret-like values; secrets files are never scanned and values are never printed")
     check_secrets.add_argument("paths", nargs="+")
     check_secrets.set_defaults(func=cmd_check_secrets)
     check_artifacts = check_sub.add_parser("artifacts", help="List model weight files in the named files and directories")
     check_artifacts.add_argument("paths", nargs="+")
     check_artifacts.set_defaults(func=cmd_check_artifacts)
+
+    secrets_parser = sub.add_parser("secrets", help="Store the API keys Kura uses, outside every workspace")
+    secrets_sub = secrets_parser.add_subparsers(dest="secrets_command", required=True)
+    secrets_set = secrets_sub.add_parser("set", help="Store one secret with hidden input in your own terminal; `kura doctor secrets` shows which are set")
+    secrets_set.add_argument("name", help="For example RUNPOD_API_KEY or HF_TOKEN")
+    secrets_set.add_argument("--workspace", action="store_true", help="Store it in this workspace's .env.local, which overrides the user-level file here")
+    secrets_set.add_argument("--stdin", action="store_true", help="Read the value from standard input, for a password manager pipe")
+    secrets_set.set_defaults(func=cmd_secrets_set)
 
     workspace_parser = sub.add_parser("workspace", help="Maintain this workspace's configuration")
     workspace_sub = workspace_parser.add_subparsers(dest="workspace_command", required=True)
@@ -1641,7 +1649,7 @@ def main() -> None:
     doctor_comfyui.add_argument("--probe-stage", action="store_true", help="Temporarily stage a probe LoRA file and verify the endpoint can see it")
     doctor_comfyui.add_argument("--workflow", help="Compare an API-format workflow's required models with the configured endpoint")
     doctor_comfyui.set_defaults(func=cmd_doctor_comfyui)
-    doctor_secrets = doctor_sub.add_parser("secrets", help="Check for obvious secret handling problems")
+    doctor_secrets = doctor_sub.add_parser("secrets", help="Show which secrets are set and where, never their values")
     doctor_secrets.set_defaults(func=cmd_doctor_secrets)
     doctor_workspace = doctor_sub.add_parser("workspace", help="Show which Kura workspace this command sees")
     doctor_workspace.set_defaults(func=cmd_doctor_workspace)
@@ -1651,9 +1659,10 @@ def main() -> None:
     rebuild = index_sub.add_parser("rebuild", help="Rebuild index.jsonl from run directories")
     rebuild.set_defaults(func=cmd_index_rebuild)
     args = parser.parse_args()
-    # File checks name the files they look at; they never open `.env.local`.
-    if args.func not in {cmd_check_secrets, cmd_check_artifacts, cmd_workflow_check}:
-        _load_env_local()
+    # File checks name the files they look at and never open a secrets file;
+    # `kura secrets set` must see only the real environment.
+    if args.func not in {cmd_check_secrets, cmd_check_artifacts, cmd_workflow_check, cmd_secrets_set}:
+        _load_secrets()
     if args.func is not cmd_init:
         _refresh_managed_files()
     raise SystemExit(args.func(args))

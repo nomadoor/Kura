@@ -11,7 +11,9 @@ for the complete, authoritative, up-to-date list of commands and options.
 | Command | Purpose |
 | --- | --- |
 | `uv sync` | Install Kura and its dependencies into `.venv` |
-| `uv run kura init` | Create a workspace in the current directory (folders, `workspace.yaml`, a private `.env.local` template, your `knowledge/`), refusing inside another workspace, and list what this machine still needs |
+| `uv run kura init` | Create a workspace in the current directory (folders, `workspace.yaml`, your `knowledge/`), refusing inside another workspace, and list what this machine still needs |
+| `uv run kura secrets set <NAME>` | Store one secret (such as `RUNPOD_API_KEY` or `HF_TOKEN`) in the user-level secrets file, reading it with hidden input in your own terminal; `--workspace` stores it in this workspace's `.env.local` instead, which overrides the user file here; `--stdin` reads it from a pipe |
+| `uv run kura doctor secrets` | Show which secrets are set and where (environment, `.env.local`, or the user file), never their values |
 | `uv run kura cleanup all` | Preview local cache, run, and Docker cleanup targets |
 | `uv run kura cleanup cache --yes` | Delete Kura-managed local model/cache data after previewing it |
 | `uv run kura fix-permissions` | Preview root-owned Kura cache/run files that can block cleanup |
@@ -372,7 +374,7 @@ not own.
 | Command | Purpose |
 | --- | --- |
 | `uv run kura workflow check [<path>...]` | Validate ComfyUI workflow JSON and promptset JSONL; a named `.json` must be API format unless an `_api.json` twin sits beside it. With no path, the workspace's `workflows/*.json` and `promptsets/*.jsonl` |
-| `uv run kura check secrets <path>...` | Scan exactly the named files and directories for secret-like values before sharing them; reports `path:line` without the value, skips binary and model files, refuses `.env.local`, and reports an unreadable file as a finding |
+| `uv run kura check secrets <path>...` | Scan exactly the named files and directories for secret-like values before sharing them; reports `path:line` without the value, skips binary and model files, refuses `.env.local` and the user secrets file, and reports an unreadable file as a finding |
 | `uv run kura check artifacts <path>...` | List model weight files in the named files and directories |
 
 ## Workspace

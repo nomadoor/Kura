@@ -13,7 +13,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.cli import cmd_init
-from kura.environment import INTERNAL_VARIABLES, USER_VARIABLES, env_local_template
+from kura.environment import INTERNAL_VARIABLES, USER_VARIABLES
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "kura"
 
@@ -48,22 +48,10 @@ class InitTests(unittest.TestCase):
             self.assertIn("kura dataset validate", output)
             self.assertNotIn("uv run", output)
 
-    def test_env_local_template_names_every_user_variable_without_values(self) -> None:
+    def test_init_writes_no_secrets_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             _init()
-            template = Path(".env.local").read_text(encoding="utf-8")
-        for variable in USER_VARIABLES:
-            self.assertRegex(template, rf"(?m)^{variable.name}=$")
-        self.assertEqual(template, env_local_template())
-
-    def test_env_local_names_the_configured_runpod_key(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
-            Path("workspace.yaml").write_text("schema_version: 2\nrunpod:\n  api_key_env: MY_RUNPOD_KEY\n", encoding="utf-8")
-            code, output = _init()
-            template = Path(".env.local").read_text(encoding="utf-8")
-        self.assertEqual(code, 0, output)
-        self.assertRegex(template, r"(?m)^MY_RUNPOD_KEY=$")
-        self.assertNotRegex(template, r"(?m)^RUNPOD_API_KEY=")
+            self.assertFalse(Path(".env.local").exists())
 
     def test_rerunning_init_changes_no_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
@@ -100,12 +88,6 @@ class InitTests(unittest.TestCase):
             self.assertFalse(Path(".env.local").exists())
         self.assertEqual(code, 1)
         self.assertIn("kura workspace migrate", output)
-
-    @unittest.skipIf(os.name == "nt", "POSIX permissions")
-    def test_env_local_is_private(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
-            _init()
-            self.assertEqual(Path(".env.local").stat().st_mode & 0o777, 0o600)
 
     def test_reports_only_what_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):

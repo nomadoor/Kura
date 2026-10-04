@@ -154,6 +154,12 @@ evaluation skills: cards Kura ships in `.kura/knowledge/model-families/` and
 the user's own in `knowledge/model-families/`. Read both; where they disagree,
 the user's fact wins.
 
+Cards are knowledge, not a list of what Kura can train. Which models a backend
+accepts comes from `kura run capabilities <backend>` (its `model_arch` values).
+A family without a card can still be trained: say once that there is no card
+for it, then work from upstream primary sources and the user's own card, and
+record what you learn in the run's `notes.md`.
+
 A model family often trains on one variant and generates with another, and the
 relationship is not visible in the names. Never infer compatibility from a name
 matching or not matching. A card that says nothing about a pair means there is
@@ -166,5 +172,14 @@ with a `source:` line; shipped cards change only with Kura.
 
 If this workspace is under version control, never commit dataset payloads, model weights, checkpoints, outputs, downloads, caches, or credentials.
 
-Never bake secrets into Docker images or write them to `workspace.yaml`, `run.yaml`, `resolved/env.lock`, logs, README files, or run artifacts. Local secrets belong in ignored `.env.local` files or environment variables.
+Never bake secrets into Docker images or write them to `workspace.yaml`, `run.yaml`, `resolved/env.lock`, logs, README files, or run artifacts.
+
+Secrets are the user's to enter; you never handle their values. Kura keeps them
+in a user-level file outside every workspace, and a workspace `.env.local` can
+override it. Never ask for a secret in the chat, never read, print, or edit a
+secrets file or `.env.local`, and never run `kura secrets set` yourself. When a
+command reports a missing secret, tell the user to run `kura secrets set
+<NAME>` in their own terminal, and wait. `kura doctor secrets` shows which are
+set, without values. If the user pastes a secret into the chat anyway, do not
+repeat it; suggest they revoke it and set a new one with `kura secrets set`.
 

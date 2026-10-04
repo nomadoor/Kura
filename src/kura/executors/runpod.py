@@ -27,6 +27,7 @@ from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, p
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
+from kura.secrets import MissingSecret, missing
 from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 
@@ -182,7 +183,7 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> 
     settings = _runpod_settings(config)
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
-        return {"status": "unavailable", "reason": f"{settings['api_key_env']} is not exported", "candidates": []}
+        return {"status": "unavailable", "reason": missing(settings["api_key_env"], "needed to list RunPod GPUs"), "candidates": []}
     aliases: list[str] = []
     for index, gpu_type_id in enumerate(gpu_type_ids):
         cloud_fields = []
@@ -508,7 +509,7 @@ def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
     access_key = os.environ.get(access_key_env)
     secret_key = os.environ.get(secret_key_env)
     if not access_key or not secret_key:
-        raise ValueError(f"{access_key_env} and {secret_key_env} must be exported for object staging")
+        raise ValueError(f"{access_key_env} and {secret_key_env} are needed for object staging; run `kura secrets set` for each in your own terminal")
     prefix = str(object_store.get("prefix", "kura")).strip("/")
     return {
         "endpoint_url": str(object_store["endpoint_url"]),
@@ -992,7 +993,7 @@ sleep infinity
         return None
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
-        raise ValueError(f"{settings['api_key_env']} must be exported to launch a RunPod run")
+        raise MissingSecret(settings["api_key_env"], "needed to launch a RunPod run")
     if wait_for_capacity_sec < 0:
         raise ValueError("wait_for_capacity_sec must be zero or greater")
     if wait_for_capacity_sec and capacity_poll_interval_sec <= 0:
@@ -1277,7 +1278,7 @@ sleep infinity
         return None
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
-        raise ValueError(f"{settings['api_key_env']} must be exported to launch a RunPod session")
+        raise MissingSecret(settings["api_key_env"], "needed to launch a RunPod session")
     _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec)
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
@@ -1350,7 +1351,7 @@ def reconcile_runpod(
         settings = _runpod_settings(config)
         api_key = os.environ.get(settings["api_key_env"])
         if not api_key:
-            raise ValueError(f"{settings['api_key_env']} must be exported to reconcile a RunPod run")
+            raise MissingSecret(settings["api_key_env"], "needed to reconcile a RunPod run")
         status = _load_status(run_dir)
         realization_ref = status.get("last_realization")
         if not isinstance(realization_ref, str):
@@ -1424,7 +1425,7 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         )
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
-        raise ValueError(f"{settings['api_key_env']} must be exported to stop a RunPod run")
+        raise MissingSecret(settings["api_key_env"], "needed to stop a RunPod run")
     pod_id = status.get("pod_id")
     if not isinstance(pod_id, str):
         raise ValueError("run has no RunPod pod ID")

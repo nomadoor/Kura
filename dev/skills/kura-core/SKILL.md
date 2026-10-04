@@ -53,7 +53,7 @@ The durable path rules are in
 ## Safety rules
 
 - Never write secrets to `workspace.yaml`, `run.yaml`, `env.lock`, logs, README, or Docker images.
-- Keep local secrets in ignored `.env.local` or exported environment variables.
+- Secrets come from the environment, a workspace `.env.local`, or the user secrets file, in that order (`docs/adr/user-secrets.md`); a command that needs a missing one reports `kura secrets set <NAME>`, and nothing makes an agent handle a value.
 - Do not commit datasets, model weights, checkpoints, outputs, caches, downloads, or generated workspace data.
 - Registry image names belong in workspace/config, not hardcoded policy.
 

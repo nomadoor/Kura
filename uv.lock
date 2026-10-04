@@ -43,6 +43,7 @@ wheels = [
 name = "kura"
 source = { editable = "." }
 dependencies = [
+    { name = "platformdirs" },
     { name = "plotext" },
     { name = "pyperclip" },
     { name = "pyyaml" },
@@ -59,6 +60,7 @@ object-staging = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", marker = "extra == 'object-staging'", specifier = ">=1.43.34,<2" },
+    { name = "platformdirs", specifier = ">=4,<5" },
     { name = "plotext", specifier = ">=5.3.2,<6" },
     { name = "pyperclip", specifier = ">=1.9.0,<2" },
     { name = "pyyaml", specifier = ">=6.0,<7" },

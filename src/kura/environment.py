@@ -1,7 +1,7 @@
-"""Environment variables a user sets for Kura, and the `.env.local` template.
+"""Environment variables a user sets for Kura.
 
-`kura init` writes the template from this list, and a test keeps the list in
-step with the variables Kura actually reads. Variables Kura sets for its own
+`kura secrets set` accepts these names, and a test keeps the list in step with
+the variables Kura actually reads. Variables Kura sets for its own
 containers or reads from the host system are listed separately.
 """
 
@@ -41,16 +41,3 @@ INTERNAL_VARIABLES = frozenset({
     # Cache locations `kura doctor disk` reports when the host sets them.
     "KURA_CACHE_DIR", "HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE", "TORCH_HOME", "XDG_CACHE_HOME",
 })
-
-
-def env_local_template(runpod_api_key_env: str = "RUNPOD_API_KEY") -> str:
-    """The template, naming the RunPod key as `runpod.api_key_env` configures it."""
-    lines = [
-        "# Secrets and local settings for this workspace. Fill in only what you need.",
-        "# Every `kura` command loads this file; it must never be shared or committed.",
-        "",
-    ]
-    for variable in USER_VARIABLES:
-        name = runpod_api_key_env if variable.name == "RUNPOD_API_KEY" else variable.name
-        lines.extend([f"# {variable.purpose}", f"{name}=", ""])
-    return "\n".join(lines)

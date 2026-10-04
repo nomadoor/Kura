@@ -110,10 +110,8 @@ class ManagedFileTests(unittest.TestCase):
         with _workspace_with_source() as (root, _):
             _init()
             (root / "knowledge" / "regrets.md").unlink()
-            (root / ".env.local").unlink()
             _init()
             self.assertFalse((root / "knowledge" / "regrets.md").exists())
-            self.assertFalse((root / ".env.local").exists())
 
     def test_refresh_never_touches_user_data(self) -> None:
         with _workspace_with_source() as (root, source):

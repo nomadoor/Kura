@@ -32,7 +32,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolk
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
-from kura.cli import _docker_cleanup_image, _load_env_local, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
 from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
@@ -123,7 +123,7 @@ class InitCommandTests(unittest.TestCase):
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 self.assertEqual(cmd_init(argparse.Namespace()), 0)
                 root = Path(directory)
-                for relative in ("workspace.yaml", "index.jsonl", ".env.local", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "knowledge/regrets.md"):
+                for relative in ("workspace.yaml", "index.jsonl", "datasets", "runs", "workflows", "promptsets", "cache/huggingface", "cache/models", "knowledge/regrets.md"):
                     self.assertTrue((root / relative).exists(), relative)
                 for relative in ("experiments", "backends", "executors", "docker"):
                     self.assertFalse((root / relative).exists(), relative)
@@ -1380,49 +1380,6 @@ class TuiPathDisplayTests(unittest.TestCase):
                     self.assertNotEqual(app.screen.selected_run_id, first_selected)
 
         asyncio.run(run_case())
-
-
-class EnvLocalTests(unittest.TestCase):
-    def test_env_local_loads_values_without_overriding_environment(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            env_path = Path(directory) / ".env.local"
-            env_path.write_text(
-                "\n".join([
-                    "# local secrets",
-                    "KURA_NOTIFY=desktop,ntfy",
-                    "export KURA_NTFY_TOPIC=kura-test-topic",
-                    "KURA_NTFY_SERVER='https://ntfy.example.com'",
-                    'KURA_NTFY_TOKEN="token-example"',
-                    "EXISTING=value-from-file",
-                ]),
-                encoding="utf-8",
-            )
-            with patch.dict(os.environ, {"EXISTING": "value-from-env"}, clear=False):
-                for key in ("KURA_NOTIFY", "KURA_NTFY_TOPIC", "KURA_NTFY_SERVER", "KURA_NTFY_TOKEN"):
-                    os.environ.pop(key, None)
-                _load_env_local(env_path)
-                self.assertEqual(os.environ["KURA_NOTIFY"], "desktop,ntfy")
-                self.assertEqual(os.environ["KURA_NTFY_TOPIC"], "kura-test-topic")
-                self.assertEqual(os.environ["KURA_NTFY_SERVER"], "https://ntfy.example.com")
-                self.assertEqual(os.environ["KURA_NTFY_TOKEN"], "token-example")
-                self.assertEqual(os.environ["EXISTING"], "value-from-env")
-
-    def test_env_local_loads_from_workspace_root_when_called_in_subdirectory(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            nested = root / "datasets" / "tiny"
-            nested.mkdir(parents=True)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
-            (root / ".env.local").write_text("KURA_NTFY_TOPIC=root-topic\n", encoding="utf-8")
-            previous = Path.cwd()
-            os.chdir(nested)
-            try:
-                with patch.dict(os.environ, {}, clear=True):
-                    _load_env_local()
-                    self.assertEqual(os.environ["KURA_NTFY_TOPIC"], "root-topic")
-                    self.assertEqual(_workspace(), root)
-            finally:
-                os.chdir(previous)
 
 
 class WorkspaceDiscoveryTests(unittest.TestCase):

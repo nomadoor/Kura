@@ -166,7 +166,7 @@ class SecretAndArtifactCommandTests(unittest.TestCase):
         from kura import cli
 
         for argv in (["kura", "check", "secrets", "x"], ["kura", "check", "artifacts", "x"], ["kura", "workflow", "check"], ["kura", "doctor", "workspace"]):
-            with self.subTest(argv=argv), patch("sys.argv", argv), patch.object(cli, "_load_env_local") as load, \
+            with self.subTest(argv=argv), patch("sys.argv", argv), patch.object(cli, "_load_secrets") as load, \
                     patch.object(cli, "cmd_check_secrets", return_value=0), patch.object(cli, "cmd_check_artifacts", return_value=0), \
                     patch.object(cli, "cmd_workflow_check", return_value=0), patch.object(cli, "cmd_doctor_workspace", return_value=0):
                 with self.assertRaises(SystemExit):
