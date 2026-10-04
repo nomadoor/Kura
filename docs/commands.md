@@ -369,6 +369,17 @@ When `prompt` is workflow-fixed, promptset items may omit `prompt`; requiring a
 placeholder that is never rendered would make the file claim an input Kura does
 not own.
 
+A trained LoRA renders at strength 0.8 unless the run says otherwise, because
+LoRAs are conventionally trained to look right there and a workflow's own LoRA
+node holds whatever value was last left in it. `render.lora_strength` changes
+that strength for the run: Kura sets it on the LoRA node bound by
+`workflow_patches.lora` (model and clip strength), or on the LoRA it inserts
+from the sidecar's `lora_insert`, where a strength written in the sidecar is
+otherwise kept. A strength bound per case in `workflow_patches` wins over both.
+The `render:` mapping accepts only `output_dir`, `timeout_sec`, `default_seed`,
+`workflow_fixed`, `lora_strength`, and `lora_stage`, and run.yaml may not set
+facts compile writes itself, such as `lora_insert`.
+
 ## Checks
 
 | Command | Purpose |

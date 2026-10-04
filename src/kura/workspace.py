@@ -145,7 +145,7 @@ WORKSPACE_SCHEMA = _mapping({
     }),
     "comfyui": _mapping({
         **{name: _STRING for name in ("endpoint", "lora_dir", "lora_stage_subdir", "model_patches_dir", "model_patch_stage_subdir", "input_dir", "input_stage_subdir")},
-        **{name: _value("string", choices=("symlink", "copy")) for name in ("lora_stage_mode", "model_patch_stage_mode", "input_stage_mode")},
+        **{name: _value("string", choices=("auto", "symlink", "copy")) for name in ("lora_stage_mode", "model_patch_stage_mode", "input_stage_mode")},
         **{name: _value("string", choices=("remove_after_render", "keep")) for name in ("lora_stage_cleanup", "model_patch_stage_cleanup", "input_stage_cleanup")},
         "model_registry": _MODEL_REGISTRY,
         # Render sessions use RunPod compute/network settings, but do not use a

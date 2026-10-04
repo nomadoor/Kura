@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -383,6 +384,38 @@ def patch_workflow(
     return patched
 
 
+# The strength a trained LoRA is rendered at unless the run says otherwise.
+# LoRAs are conventionally trained to look right at this strength, and a
+# workflow's own LoRA node holds whatever value was last left in it.
+DEFAULT_LORA_STRENGTH = 0.8
+
+
+def bound_lora_strength_inputs(workflow: dict[str, Any], patches: Any) -> list[str]:
+    """The strength inputs of the `workflow_patches.lora` node Kura may set.
+
+    An input linked to another node, or set per case by another binding, is
+    not Kura's to set.
+    """
+    binding = patches.get("lora") if isinstance(patches, dict) else None
+    if not isinstance(binding, dict) or not isinstance(binding.get("node"), str):
+        return []
+    node = workflow.get(binding["node"])
+    inputs = node.get("inputs") if isinstance(node, dict) and isinstance(node.get("inputs"), dict) else {}
+    bound = {(patch.get("node"), patch.get("field")) for name, patch in patches.items() if name != "lora" and isinstance(patch, dict)}
+    return [
+        key for key in ("strength_model", "strength_clip")
+        if isinstance(inputs.get(key), (int, float)) and not isinstance(inputs.get(key), bool) and (binding["node"], f"inputs.{key}") not in bound
+    ]
+
+
+def apply_bound_lora_strength(workflow: dict[str, Any], patches: dict[str, Any], strength: float) -> dict[str, Any]:
+    """Set the strength of the workflow LoRA node bound by `workflow_patches.lora`."""
+    keys = bound_lora_strength_inputs(workflow, patches)
+    for key in keys:
+        workflow[patches["lora"]["node"]]["inputs"][key] = strength
+    return workflow
+
+
 def _link(node: str, output: int) -> list[Any]:
     return [node, output]
 
@@ -422,12 +455,12 @@ def _lora_insert_from_sidecar(sidecar: dict[str, Any]) -> dict[str, Any] | None:
         "class_type": class_type,
         "model_node": model_node,
         "model_output": _as_output_index(raw.get("model_output", model.get("output")), 0, context="lora_insert.model"),
-        "strength_model": float(raw.get("strength_model", 0.8)),
+        "strength_model": float(raw.get("strength_model", DEFAULT_LORA_STRENGTH)),
     }
     if class_type == "LoraLoader":
         spec["clip_node"] = _as_node_id(raw.get("clip_node", clip.get("node", model_node)), context="lora_insert.clip")
         spec["clip_output"] = _as_output_index(raw.get("clip_output", clip.get("output")), 1, context="lora_insert.clip")
-        spec["strength_clip"] = float(raw.get("strength_clip", 0.8))
+        spec["strength_clip"] = float(raw.get("strength_clip", DEFAULT_LORA_STRENGTH))
     return spec
 
 
@@ -502,6 +535,11 @@ def checkpoint_application(
             "class_type": node.get("class_type"),
         }
         if name == "lora":
+            render_settings = frozen.get("render") if isinstance(frozen.get("render"), dict) else {}
+            if lora_name and isinstance(render_settings.get("lora_strength"), (int, float)):
+                inputs = dict(inputs)
+                for key in bound_lora_strength_inputs(workflow, patches):
+                    inputs[key] = float(render_settings["lora_strength"])
             if isinstance(inputs.get("strength_model"), (int, float)):
                 application["strength_model"] = inputs["strength_model"]
             if isinstance(inputs.get("strength_clip"), (int, float)):
@@ -558,7 +596,40 @@ def _safe_stage_name(run_id: str, source: Path) -> str:
     return f"{prefix}{stem[:max_stem]}{tail}"
 
 
-def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+@lru_cache(maxsize=8)
+def _endpoint_os(endpoint: str | None) -> str | None:
+    """The OS a ComfyUI endpoint runs on (`posix` or `nt`), or None when it does not say."""
+    if not isinstance(endpoint, str) or not endpoint:
+        return None
+    try:
+        with urllib.request.urlopen(f"{endpoint.rstrip('/')}/system_stats", timeout=5) as response:
+            stats = json.loads(response.read())
+    except Exception:
+        return None
+    system = stats.get("system") if isinstance(stats, dict) else None
+    value = system.get("os") if isinstance(system, dict) else None
+    return value if value in ("posix", "nt") else None
+
+
+def _stage_mode(value: Any, name: str, endpoint: str | None) -> str:
+    """How to expose a staged file to ComfyUI: as configured, or decided here.
+
+    `auto` (the default) links when ComfyUI runs on Linux or in WSL, which can
+    follow a link Kura makes, and copies when ComfyUI runs on Windows, which
+    cannot follow a link made in WSL, when it does not report its OS, or when
+    Kura itself runs on Windows, where making a link needs privileges.
+    """
+    mode = str(value or "auto").strip().lower()
+    if mode not in ("auto", "symlink", "copy"):
+        raise ValueError(f"comfyui.{name} must be auto, symlink, or copy")
+    if mode != "auto":
+        return mode
+    if os.name != "nt" and _endpoint_os(endpoint) == "posix":
+        return "symlink"
+    return "copy"
+
+
+def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any], endpoint: str | None = None) -> dict[str, Any] | None:
     if "lora" not in frozen.get("workflow_patches", {}) and not frozen.get("lora_insert"):
         return None
     if str(frozen.get("render", {}).get("lora_stage", "auto")).strip().lower() in ("0", "false", "off", "none", "no"):
@@ -572,9 +643,6 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
     if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.lora_stage_subdir must be a safe relative directory name")
-    mode = str(comfyui.get("lora_stage_mode") or "symlink").strip().lower()
-    if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.lora_stage_mode must be symlink or copy")
     cleanup = str(comfyui.get("lora_stage_cleanup") or "remove_after_render").strip().lower()
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.lora_stage_cleanup must be remove_after_render or keep")
@@ -582,6 +650,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     if lora_dir is None:
         return None
     stage_dir = (lora_dir / stage_subdir).resolve()
+    mode = _stage_mode(comfyui.get("lora_stage_mode"), "lora_stage_mode", endpoint)
     target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {
         "kind": "LoRA",
@@ -594,7 +663,7 @@ def _lora_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], che
     }
 
 
-def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, Any], checkpoint: dict[str, Any], endpoint: str | None = None) -> dict[str, Any] | None:
     if "model_patch" not in frozen.get("workflow_patches", {}):
         return None
     source = _workspace_path(workspace, checkpoint.get("path"))
@@ -609,13 +678,12 @@ def _model_patch_stage_plan(workspace: Path, run_dir: Path, frozen: dict[str, An
     stage_subdir = str(comfyui.get("model_patch_stage_subdir") or "Kura_tmp").strip("/\\")
     if not stage_subdir or Path(stage_subdir).is_absolute() or ".." in Path(stage_subdir).parts:
         raise ValueError("comfyui.model_patch_stage_subdir must be a safe relative directory name")
-    mode = str(comfyui.get("model_patch_stage_mode") or "symlink").strip().lower()
-    if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.model_patch_stage_mode must be symlink or copy")
     cleanup = str(comfyui.get("model_patch_stage_cleanup") or "remove_after_render").strip().lower()
     if cleanup not in ("remove_after_render", "keep"):
         raise ValueError("comfyui.model_patch_stage_cleanup must be remove_after_render or keep")
-    target = (directory / stage_subdir).resolve() / _safe_stage_name(run_dir.name, source)
+    stage_dir = (directory / stage_subdir).resolve()
+    mode = _stage_mode(comfyui.get("model_patch_stage_mode"), "model_patch_stage_mode", endpoint)
+    target = stage_dir / _safe_stage_name(run_dir.name, source)
     return {"kind": "model patch", "source": str(source), "target": str(target), "model_patch_name": f"{stage_subdir}/{target.name}", "mode": mode, "cleanup": cleanup, "created": False}
 
 
@@ -684,8 +752,10 @@ def _image_stage_plans(workspace: Path, run_dir: Path, frozen: dict[str, Any]) -
     # leaves its input directory, so a symlinked input fails validation at queue
     # time even though a symlinked model loads fine.
     mode = str(comfyui.get("input_stage_mode") or "copy").strip().lower()
+    if mode == "auto":
+        mode = "copy"  # ComfyUI rejects symlinked LoadImage inputs
     if mode not in ("symlink", "copy"):
-        raise ValueError("comfyui.input_stage_mode must be symlink or copy")
+        raise ValueError("comfyui.input_stage_mode must be auto, symlink, or copy")
     if mode == "symlink":
         print(
             "warning: comfyui.input_stage_mode=symlink is set, but ComfyUI rejects symlinked LoadImage inputs "
@@ -780,6 +850,20 @@ def _materialize_stage(plan: dict[str, Any]) -> None:
         shutil.copy2(source, target)
         plan["mode"] = "copy"
         plan["created"] = True
+
+
+def _materialize_visible(plan: dict[str, Any], ensure_visible: Any) -> None:
+    """Stage a file and confirm ComfyUI lists it, copying when a link was not listed."""
+    _materialize_stage(plan)
+    try:
+        ensure_visible(plan)
+    except ValueError:
+        if plan.get("mode") != "symlink" or not plan.get("created"):
+            raise
+        Path(str(plan["target"])).unlink(missing_ok=True)
+        plan.update({"mode": "copy", "created": False, "fell_back_from": "symlink"})
+        _materialize_stage(plan)
+        ensure_visible(plan)
 
 
 def _cleanup_stage(plan: dict[str, Any] | None) -> None:
@@ -1136,9 +1220,34 @@ class ComfyUIClient:
             return response.read()
 
 
+# Facts compile writes into the run lock. In run.yaml they would be copied and
+# then overwritten, so a value there would be silently ignored.
+COMPILED_RENDER_KEYS = ("lora_insert", "comfyui", "comfyui_models", "comfyui_model_registry", "comfyui_endpoint_identity", "comfyui_required_models", "promptset_images", "_kura")
+RENDER_SETTINGS = ("output_dir", "timeout_sec", "default_seed", "workflow_fixed", "lora_strength", "lora_stage")
+
+
+def _render_lora_strength(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not -10 <= float(value) <= 10:
+        raise ValueError("render.lora_strength must be a number, for example 0.8 or 1.0")
+    return float(value)
+
+
 def compile_render(workspace: Path, run_dir: Path) -> None:
     run = load_yaml(run_dir / "run.yaml")
     workspace_config = load_optional_yaml(workspace / "workspace.yaml")
+    compiled_only = [key for key in COMPILED_RENDER_KEYS if key in run]
+    if compiled_only:
+        hint = "; to change the inserted LoRA's strength, set render.lora_strength" if "lora_insert" in compiled_only else ""
+        raise ValueError(
+            f"render run.yaml cannot set {', '.join(compiled_only)}: compile writes these from the workflow, its sidecar, and workspace.yaml{hint}"
+        )
+    if run.get("render") is not None and not isinstance(run.get("render"), dict):
+        raise ValueError("render must be a mapping")
+    unknown_settings = sorted(str(key) for key in (run.get("render") or {}) if key not in RENDER_SETTINGS)
+    if unknown_settings:
+        raise ValueError(f"render has unsupported keys: {', '.join(unknown_settings)}; supported: {', '.join(RENDER_SETTINGS)}")
     inputs = run.get("inputs", {})
     if not isinstance(inputs, dict):
         raise ValueError("render inputs must be a mapping")
@@ -1173,6 +1282,17 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
     sidecar = _workflow_sidecar(workflow_path)
     lora_insert = _lora_insert_from_sidecar(sidecar) if isinstance(sidecar, dict) else None
     render_settings = run.get("render") if isinstance(run.get("render"), dict) else {}
+    lora_strength = _render_lora_strength(render_settings.get("lora_strength"))
+    bound_lora = isinstance((run.get("workflow_patches") or {}).get("lora"), dict) if isinstance(run.get("workflow_patches"), dict) else False
+    if lora_strength is not None and lora_insert is None and not bound_lora:
+        raise ValueError(
+            "render.lora_strength sets the strength of the trained LoRA, and this workflow neither inserts it from a sidecar "
+            "lora_insert nor binds a LoRA node in workflow_patches.lora"
+        )
+    if lora_strength is not None and lora_insert is not None:
+        lora_insert["strength_model"] = lora_strength
+        if "strength_clip" in lora_insert:
+            lora_insert["strength_clip"] = lora_strength
     workflow_fixed = normalized_workflow_fixed(render_settings.get("workflow_fixed"))
     fixed = set(workflow_fixed)
     patches = run.get("workflow_patches")
@@ -1206,6 +1326,16 @@ def compile_render(workspace: Path, run_dir: Path) -> None:
         )
     frozen = deepcopy(run)
     frozen["workflow_patches"] = deepcopy(patches)
+    if bound_lora:
+        if bound_lora_strength_inputs(workflow, patches):
+            if not isinstance(frozen.get("render"), dict):
+                frozen["render"] = {}
+            frozen["render"]["lora_strength"] = DEFAULT_LORA_STRENGTH if lora_strength is None else lora_strength
+        elif lora_strength is not None and lora_insert is None:
+            raise ValueError(
+                "render.lora_strength cannot reach the LoRA node bound by workflow_patches.lora: its strength inputs are "
+                "linked to other nodes or bound per case; set the strength where those inputs come from"
+            )
     frozen.setdefault("inputs", {})["train_run"] = train_run
     if lora_insert:
         insert_lora_loader(workflow, lora_insert, "placeholder.safetensors")
@@ -1364,8 +1494,8 @@ def launch_render(
     model_patch_stages: dict[str, dict[str, Any]] = {}
     for case in cases:
         checkpoint = case.get("checkpoint") if isinstance(case.get("checkpoint"), dict) else {}
-        lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
-        model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint) if manage_lora_stage else None
+        lora_stage = _lora_stage_plan(workspace, run_dir, frozen, checkpoint, endpoint) if manage_lora_stage else None
+        model_patch_stage = _model_patch_stage_plan(workspace, run_dir, frozen, checkpoint, endpoint) if manage_lora_stage else None
         if lora_stage:
             lora_stage = lora_stages.setdefault(str(lora_stage["target"]), lora_stage)
         if model_patch_stage:
@@ -1461,11 +1591,9 @@ def launch_render(
                     "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
                 )
         for lora_stage in lora_stages.values():
-            _materialize_stage(lora_stage)
-            _ensure_lora_stage_visible(client, endpoint, lora_stage)
+            _materialize_visible(lora_stage, lambda plan: _ensure_lora_stage_visible(client, endpoint, plan))
         for model_patch_stage in model_patch_stages.values():
-            _materialize_stage(model_patch_stage)
-            _ensure_model_patch_stage_visible(client, endpoint, model_patch_stage)
+            _materialize_visible(model_patch_stage, lambda plan: _ensure_model_patch_stage_visible(client, endpoint, plan))
         if resolved_executor == "local":
             for plan in image_stages:
                 _materialize_stage(plan)
@@ -1481,6 +1609,9 @@ def launch_render(
             image_values = _image_values_for_item({"id": case["id"], **values}, patches, image_stages)
             patched = patch_workflow(workflow, patches, prompt=values.get("prompt", ""), negative_prompt=values.get("negative_prompt", ""), seed=values.get("seed"), checkpoint=lora_name, model_patch=model_patch_name, item={"id": case["id"], **values}, image_values=image_values)
             patched = insert_lora_loader(patched, frozen.get("lora_insert"), lora_name)
+            if lora_name:
+                render_settings = frozen.get("render") if isinstance(frozen.get("render"), dict) else {}
+                patched = apply_bound_lora_strength(patched, patches, float(render_settings.get("lora_strength", DEFAULT_LORA_STRENGTH)))
             case_application = checkpoint_application(frozen, patched, lora_name=lora_name, checkpoint_record=checkpoint)
             applied_values = {name: image_values.get(name, values.get(name)) for name in patches if name not in ASSET_PATCH_NAMES}
             for name in patches:
