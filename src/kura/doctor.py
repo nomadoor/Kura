@@ -42,10 +42,6 @@ def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.Comp
     return subprocess.run(command, text=True, capture_output=capture, check=False)
 
 
-def _secret_state() -> dict[str, str]:
-    return {name: "present" if os.environ.get(name) else "absent" for name in ("HF_TOKEN", "RUNPOD_API_KEY")}
-
-
 def _safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
 
@@ -966,7 +962,9 @@ def cmd_doctor_secrets(_: argparse.Namespace) -> int:
         registries = sorted(json.loads(config.read_text(encoding="utf-8")).get("auths", {}).keys())
     except (OSError, json.JSONDecodeError):
         pass
-    print(json.dumps({"secrets": _secret_state(), "docker_login_registries": registries}, indent=2))
+    from kura.secrets import sources, user_secrets_path
+
+    print(json.dumps({"secrets": sources(), "user_secrets_file": str(user_secrets_path()), "docker_login_registries": registries}, indent=2))
     return 0
 
 
@@ -1049,7 +1047,7 @@ def readiness_gaps(root: Path) -> list[str]:
     runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
     api_key_env = runpod.get("api_key_env") if isinstance(runpod.get("api_key_env"), str) and runpod.get("api_key_env") else "RUNPOD_API_KEY"
     if not os.environ.get(api_key_env):
-        gaps.append(f"{api_key_env} is not set (put it in .env.local): RunPod training and renders need it. See `kura doctor runpod`.")
+        gaps.append(f"{api_key_env} is not set: RunPod training and renders need it. Run `kura secrets set {api_key_env}` in your own terminal.")
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
     endpoint = comfyui.get("endpoint")
     if isinstance(endpoint, str) and endpoint:

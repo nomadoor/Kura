@@ -9,6 +9,7 @@ description = "Agent-first training workspace for reproducible model runs"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
+    "platformdirs>=4,<5",
     "plotext>=5.3.2,<6",
     "PyYAML>=6.0,<7",
     "pyperclip>=1.9.0,<2",

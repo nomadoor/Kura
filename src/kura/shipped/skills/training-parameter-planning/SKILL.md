@@ -31,6 +31,7 @@ Before proposing parameters, inspect:
    selected GPU resources, cache state, and download estimates;
 4. the matching family card, when present: `.kura/knowledge/model-families/<family>.md`
    (shipped) and `knowledge/model-families/<family>.md` (the user's, which wins);
+   a missing card is not a reason to refuse the model;
 5. `knowledge/user-preferences.md` and prior evaluated runs under comparable
    conditions;
 6. `kura run capabilities <backend>` and the compiled plan for backend mechanics.

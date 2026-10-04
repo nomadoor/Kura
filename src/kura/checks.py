@@ -14,8 +14,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from kura.render import is_safe_component
+from kura.secrets import is_secret_file
 
-# A workspace keeps its secrets here; no check ever opens it.
+# A workspace may keep secrets here; no check ever opens it, nor the user secrets file.
 NEVER_READ = {".env.local"}
 
 SECRET_SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".lock"}
@@ -48,7 +49,7 @@ def expand(paths: Iterable[Path]) -> list[Path]:
     for path in paths:
         candidates = [path] if path.is_file() else _walk(path)
         for candidate in candidates:
-            if _never_read(candidate) or ".git" in candidate.parts:
+            if never_read(candidate) or ".git" in candidate.parts:
                 continue
             files.append(candidate)
     return files
@@ -74,10 +75,10 @@ def _walk(directory: Path) -> list[Path]:
     return sorted(found)
 
 
-def _never_read(path: Path) -> bool:
+def never_read(path: Path) -> bool:
     """A never-read file, by its own name or the name a symlink points at."""
 
-    return path.name in NEVER_READ or path.resolve().name in NEVER_READ
+    return path.name in NEVER_READ or path.resolve().name in NEVER_READ or is_secret_file(path)
 
 
 def _display(path: Path, root: Path) -> str:
@@ -98,7 +99,7 @@ def secret_findings(files: Iterable[Path], root: Path) -> list[str]:
     findings: list[str] = []
     for path in files:
         suffix = path.suffix.lower()
-        if _never_read(path) or suffix in SECRET_SKIP_SUFFIXES or suffix in MODEL_SUFFIXES:
+        if never_read(path) or suffix in SECRET_SKIP_SUFFIXES or suffix in MODEL_SUFFIXES:
             continue
         shown = _display(path, root)
         try:

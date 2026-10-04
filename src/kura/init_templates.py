@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 from pathlib import Path
 
-import yaml
-
 from kura.doctor import readiness_gaps
-from kura.environment import env_local_template
 from kura.managed import created_once, is_kura_checkout, plan_restore, record_created_once, sync
 from kura.workspace import WORKSPACE_SCHEMA_VERSION, dump_yaml, require_workspace
 
@@ -34,25 +30,14 @@ def _enclosing_workspace(root: Path) -> Path | None:
     return None
 
 
-def _write_once(path: Path, text: str, *, private: bool = False) -> None:
-    """Create `path` with `text` unless it exists; a private file is readable only by its owner."""
+def _write_once(path: Path, text: str) -> None:
+    """Create `path` with `text` unless it exists."""
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600 if private else 0o666)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     except FileExistsError:
         return
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(text)
-
-
-def _runpod_api_key_env(workspace: Path) -> str:
-    """The variable an existing workspace.yaml names for the RunPod key."""
-    try:
-        config = yaml.safe_load(workspace.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
-        return "RUNPOD_API_KEY"
-    runpod = config.get("runpod") if isinstance(config, dict) else None
-    name = runpod.get("api_key_env") if isinstance(runpod, dict) else None
-    return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else "RUNPOD_API_KEY"
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -78,10 +63,10 @@ def cmd_init(args: argparse.Namespace) -> int:
         dump_yaml(workspace, {"schema_version": WORKSPACE_SCHEMA_VERSION, "name": root.name, "storage": {"host_drive": "", "docker_data_drive": ""}, "docker": {"workspace_target": "/workspace", "gpu": True, "mounts": [{"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"}]}, "comfyui": {"endpoint": "http://127.0.0.1:8188", "lora_dir": "", "lora_stage_subdir": "Kura_tmp", "lora_stage_mode": "symlink", "lora_stage_cleanup": "remove_after_render", "model_patches_dir": "", "model_patch_stage_subdir": "Kura_tmp", "model_patch_stage_mode": "symlink", "model_patch_stage_cleanup": "remove_after_render", "model_registry": {}, "runpod": {"gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "container_disk_gb": 80, "ports": ["22/tcp"]}}, "runpod": {"template_id": "0fqzfjy6f3", "api_key_env": "RUNPOD_API_KEY", "storage_mode": "upload", "gpu_type_ids": ["NVIDIA RTX A5000", "NVIDIA A40"], "gpu_count": 1, "container_disk_gb": 150, "volume_in_gb": 0, "workspace_path": "/workspace", "ports": ["8675/http", "22/tcp"], "backend_ports": {"comfyui": ["22/tcp"]}, "cloud_type": "ANY", "gpu_type_priority": "custom", "interruptible": False}})
     # Written once each; a file the user deleted after that stays deleted.
     already = created_once(root)
-    once = [*USER_KNOWLEDGE, ".env.local"]
+    once = list(USER_KNOWLEDGE)
     for relative in once:
         if relative not in already:
-            _write_once(root / relative, USER_KNOWLEDGE.get(relative) or env_local_template(_runpod_api_key_env(workspace)), private=relative == ".env.local")
+            _write_once(root / relative, USER_KNOWLEDGE[relative])
     try:
         record_created_once(root, once)
     except (OSError, ValueError) as exc:

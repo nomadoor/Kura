@@ -310,18 +310,6 @@ def parse_env_file_line(line: str) -> tuple[str, str] | None:
     return key, value
 
 
-def load_env_local(path: Path | None = None) -> None:
-    env_path = path or (workspace() / ".env.local")
-    if not env_path.is_file():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        parsed = parse_env_file_line(line)
-        if parsed is None:
-            continue
-        key, value = parsed
-        os.environ.setdefault(key, value)
-
-
 def run_path(run_id: str) -> Path:
     return require_workspace() / "runs" / run_id
 
