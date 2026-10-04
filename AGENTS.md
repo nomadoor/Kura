@@ -42,6 +42,19 @@ git log --oneline -5
 
 Use `uv` for Python commands when available, and identify the relevant tests before editing. Preserve unrelated user changes.
 
+Git hygiene in a shared checkout:
+
+- Stage the paths you changed by name. Do not use `git add -A`, `git add .`,
+  `git stash`, `git reset --hard`, or `git checkout .`: they sweep up or discard
+  the owner's uncommitted work, such as a local `.claude/settings.json`.
+- Answer a question before editing anything, and when a request conflicts with
+  a rule here, say so and confirm before overriding the rule.
+
+Never run these unless the user asks for that run: real smokes, model
+downloads, Docker image builds or publishes, anything that creates a RunPod
+Pod, and `kura cleanup` without `--dry-run`. Read a script before running it,
+even in a dry or preview mode.
+
 New owner decisions that change behavior, information architecture, naming, writing rules, or design rules must be reflected in an ADR before implementation.
 Before writing an ADR, apply the criteria in `docs/adr/README.md`.
 

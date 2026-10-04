@@ -20,6 +20,27 @@ class ShippedContentTests(unittest.TestCase):
         self.assertTrue(any((root / "knowledge" / "model-families").iterdir()))
         self.assertTrue((root / "workflow-samples" / "README.md").is_file())
 
+    def test_agents_md_routes_every_skill_and_the_moved_rules_live_in_skills(self) -> None:
+        root = Path(str(shipped_root()))
+        agents = (root / "AGENTS.md").read_text(encoding="utf-8")
+        routing = agents.split("## Which skill to read first", 1)[1]
+        for skill in SHIPPED_SKILLS:
+            self.assertIn(f"`{skill}` — before", routing, skill)
+
+        def skill(name: str) -> str:
+            return " ".join((root / "skills" / name / "SKILL.md").read_text(encoding="utf-8").split())
+
+        moved = {
+            "comfyui-render-workflow": ["Author one explicit `inputs.cases` JSONL queue", "intentional agent-owned presentation task"],
+            "lora-evaluation": ["dataset-prep -> training-parameter-planning -> training -> lora-evaluation"],
+            "training-parameter-planning": ["Training configuration and compute selection are one plan"],
+            "dataset-prep": ["the dataset manifest inventories inputs"],
+            "local-disk-safety": ["allow_many_checkpoints", "fix-permissions"],
+        }
+        for name, phrases in moved.items():
+            for phrase in phrases:
+                self.assertIn(phrase, skill(name), name)
+
     def test_development_skills_stay_in_the_repository(self) -> None:
         development = sorted(path.name for path in (ROOT / "dev" / "skills").iterdir())
         self.assertEqual(development, ["backend-upgrade-audit", "kura-core", "monitor-tui", "release-check", "training-backends"])

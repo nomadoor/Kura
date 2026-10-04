@@ -7,7 +7,10 @@ description: Plan Kura training quality, memory, runtime, and cost trade-offs. U
 
 Choose a useful training recipe, not merely one that starts. Preserve the
 user's intent and make every quality, speed, memory, and cost trade-off visible
-in `run.yaml` and the compiled plan.
+in `run.yaml` and the compiled plan. Training configuration and compute
+selection are one plan: dataset size, resolution, batch, accumulation,
+precision, rank, optimizer, and low-memory options all affect quality, runtime,
+memory, and cost.
 
 ## Approval model
 

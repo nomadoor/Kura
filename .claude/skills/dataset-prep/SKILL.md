@@ -7,6 +7,10 @@ description: Dataset preparation and validation for Kura training runs. Use when
 
 Use this skill for dataset operations.
 
+Built-in training requires the dataset manifest contract: the dataset manifest
+inventories inputs, `run.yaml` selects them, and the `resolved/` input lock
+records the backend projection actually handed to the trainer.
+
 ## Rules
 
 - If the workspace is under version control, never commit dataset payloads;
