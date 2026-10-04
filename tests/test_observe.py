@@ -19,6 +19,24 @@ from kura.run_commands.plan import stage_run
 from kura.tui import _progress_text
 
 
+class RunStatusSummaryTests(unittest.TestCase):
+    def test_the_summary_lists_the_first_twenty_outputs_and_says_where_the_rest_are(self) -> None:
+        outputs = [f"outputs/file-{index:02d}.safetensors" for index in range(21)]
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = io.StringIO()
+            with (
+                patch("kura.cli._run_path", return_value=Path(directory)),
+                patch("kura.cli._workspace_config", return_value={}),
+                patch("kura.cli.observe_run", return_value={"state": "completed", "outputs": outputs}),
+                patch("sys.stdout", stdout),
+            ):
+                self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["summary"]["outputs"], outputs[:20])
+        self.assertIn("20 of 21", payload["summary"]["outputs_shown"])
+        self.assertEqual(payload["outputs"], outputs)
+
+
 class ObserveRunTests(unittest.TestCase):
     def _docker_run(self, root: Path, *, state: str = "running", step: int | None = None, total: int | None = None) -> Path:
         run_dir = root / "runs" / "example"
