@@ -7483,7 +7483,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "launch_failed")
 
-    def test_launch_runpod_wait_backs_off_after_transient_create_error(self) -> None:
+    def test_launch_runpod_wait_backs_off_after_a_rate_limited_create(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = self._run_dir(root)
@@ -7492,7 +7492,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with (
                     patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)) as probe,
-                    patch("kura.executors.runpod._runpod_request", side_effect=[RunPodAPIError("RunPod API POST /pods failed (503): service unavailable", status_code=503), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request,
+                    patch("kura.executors.runpod._runpod_request", side_effect=[RunPodAPIError("RunPod GraphQL failed (429): slow down", status_code=429), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request,
+                    patch("kura.executors.runpod._runpod_pods_named") as listed,
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
                     realization_id = launch_runpod(
@@ -7507,7 +7508,97 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(realization_id)
             self.assertEqual(probe.call_count, 2)
             self.assertEqual(request.call_count, 2)
+            listed.assert_not_called()
             sleep.assert_called_once_with(10)
+
+    def test_an_unconfirmed_create_is_never_retried_and_is_handed_over(self) -> None:
+        from kura.executors.runpod import unresolved_create_intents
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {**self._config(), "cloud_types": ["COMMUNITY"]}
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with (
+                    patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)),
+                    patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed (503): unavailable", status_code=503)) as request,
+                    patch("kura.executors.runpod._runpod_pods_named", return_value=[]) as listed,
+                    patch("kura.executors.runpod.time.sleep"),
+                ):
+                    with self.assertRaisesRegex(ValueError, "kura run reconcile"):
+                        launch_runpod(
+                            run_dir=run_dir,
+                            spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                            image="registry/image:tag",
+                            config=config,
+                            wait_for_capacity_sec=60,
+                            capacity_poll_interval_sec=5,
+                            yes=True,
+                        )
+            self.assertEqual(request.call_count, 1)
+            self.assertEqual(listed.call_count, 2)
+            self.assertEqual(len(unresolved_create_intents(run_dir)), 1)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
+
+    def test_an_unconfirmed_create_that_did_succeed_is_adopted_without_a_second_create(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {**self._config(), "cloud_types": ["COMMUNITY"]}
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with (
+                    patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API is unreachable: timed out")) as request,
+                    patch("kura.executors.runpod._runpod_pods_named", side_effect=lambda _key, name: [{"id": "pod-late", "name": name, "desiredStatus": "RUNNING"}]),
+                    patch("kura.executors.runpod.time.sleep"),
+                ):
+                    realization_id = launch_runpod(
+                        run_dir=run_dir,
+                        spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                        image="registry/image:tag",
+                        config=config,
+                        yes=True,
+                    )
+            self.assertEqual(request.call_count, 1)
+            realization = json.loads((run_dir / "realizations" / f"{realization_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(realization["pod"]["id"], "pod-late")
+            self.assertEqual(realization["create_intent"], f"{realization_id}.create-intent.json")
+            self.assertTrue((run_dir / "realizations" / realization["create_intent"]).is_file())
+
+    def test_cancelling_a_capacity_wait_after_refused_creates_settles_the_intent(self) -> None:
+        from kura.executors.runpod import unresolved_create_intents
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {**self._config(), "cloud_types": ["COMMUNITY"]}
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with (
+                    patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)),
+                    patch("kura.executors.runpod._runpod_request", side_effect=RunPodAPIError("RunPod GraphQL failed: There are no longer any instances available with the requested specifications", status_code=400)),
+                    patch("kura.executors.runpod.time.sleep", side_effect=KeyboardInterrupt),
+                ):
+                    with self.assertRaisesRegex(ValueError, "no Pod was created"):
+                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
+            self.assertEqual(unresolved_create_intents(run_dir), [])
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "launch_failed")
+
+    def test_the_create_intent_is_written_before_the_create_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            seen: list[bool] = []
+
+            def create(*_args, **_kwargs):
+                seen.append(any((run_dir / "realizations").glob("*.create-intent.json")))
+                return {"id": "pod-1", "desiredStatus": "RUNNING"}
+
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod._runpod_request", side_effect=create):
+                launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
+            self.assertEqual(seen, [True])
 
     def test_launch_runpod_wait_does_not_create_while_probe_is_rate_limited(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -25,6 +25,7 @@ from kura.dataset_handoff import (
     load_frozen_dataset_projection,
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
+from kura.executors.runpod import unresolved_create_intents
 from kura.images import launch_image, launch_image_warnings
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
@@ -1635,6 +1636,11 @@ def stop_run(run_id: str) -> int:
     try:
         run_dir = _run_path(run_id)
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        if unresolved_create_intents(run_dir):
+            raise ValueError(
+                f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` "
+                "first, which finds the Pod by name so this command can delete it"
+            )
         realization_ref = status.get("last_realization")
         if not isinstance(realization_ref, str):
             raise ValueError("run has no realization to stop")
