@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import json
 import tempfile
 import unittest
@@ -253,12 +254,46 @@ class BoundLoraStrengthTests(unittest.TestCase):
         self.assertEqual((applied["7"]["inputs"]["strength_model"], applied["7"]["inputs"]["strength_clip"]), (1.3, 1.0))
         self.assertEqual(apply_bound_lora_strength(workflow, {}, 1.0), workflow)
 
+    def test_the_recorded_application_matches_the_strength_sent(self) -> None:
+        from kura.render import checkpoint_application
+
+        workflow = {"7": {"class_type": "LoraLoader", "inputs": {"lora_name": "x", "strength_model": 1.3, "strength_clip": 1.3}}}
+        frozen = {"workflow_patches": {"lora": {"node": "7", "field": "inputs.lora_name"}}, "render": {"lora_strength": 0.8}}
+        application = checkpoint_application(frozen, workflow, lora_name="Kura_tmp/x.safetensors")
+        self.assertEqual((application["strength_model"], application["strength_clip"]), (0.8, 0.8))
+        self.assertEqual(workflow["7"]["inputs"]["strength_model"], 1.3)
+
+
+class StageFallbackTests(unittest.TestCase):
+    def test_a_link_comfyui_does_not_list_is_replaced_by_a_copy(self) -> None:
+        from kura.render import _materialize_visible
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "lora.safetensors"
+            source.write_bytes(b"weights")
+            target = Path(directory) / "stage" / "lora.safetensors"
+            plan = {"source": str(source), "target": str(target), "mode": "symlink", "cleanup": "remove_after_render", "created": False}
+            calls = []
+
+            def ensure(current):
+                calls.append(current["mode"])
+                if current["mode"] == "symlink":
+                    raise ValueError("not visible")
+
+            if os.name == "nt":
+                self.skipTest("symlinks need extra privileges on Windows")
+            _materialize_visible(plan, ensure)
+            self.assertEqual(calls, ["symlink", "copy"])
+            self.assertFalse(target.is_symlink())
+            self.assertEqual(target.read_bytes(), b"weights")
+            self.assertEqual(plan["fell_back_from"], "symlink")
+
 
 class StageModeTests(unittest.TestCase):
     def test_auto_links_for_a_linux_comfyui_and_copies_otherwise(self) -> None:
         from kura.render import _stage_mode
 
-        frozen = {"generator": {"endpoint": "http://127.0.0.1:8189"}}
+        frozen = "http://127.0.0.1:8189"
         with patch("kura.render.os.name", "posix"):
             for reported, expected in (("posix", "symlink"), ("nt", "copy"), (None, "copy")):
                 with self.subTest(reported=reported), patch("kura.render._endpoint_os", return_value=reported):

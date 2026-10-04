@@ -280,6 +280,13 @@ class RenderCasesCompileTests(unittest.TestCase):
         return run_dir
 
     @staticmethod
+    def _give_lora_node_strengths(root: Path, value: Any) -> None:
+        path = next((root / "workflows").glob("*.json"))
+        workflow = json.loads(path.read_text(encoding="utf-8"))
+        workflow["12"]["inputs"].update({"strength_model": value, "strength_clip": value})
+        path.write_text(json.dumps(workflow), encoding="utf-8")
+
+    @staticmethod
     def _edit_run(run_dir: Path, change) -> None:
         run = yaml.safe_load((run_dir / "run.yaml").read_text(encoding="utf-8"))
         change(run)
@@ -304,11 +311,23 @@ class RenderCasesCompileTests(unittest.TestCase):
                 case = _case("lora", step=1800, prompt="same", seed=42, strength=1.0, cfg=4.0)
                 run_dir = _workspace(root, cases=[case])
                 _write_checkpoint(root, case["checkpoint"], b"lora")
+                self._give_lora_node_strengths(root, 1.3)
                 if authored is not None:
                     self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"lora_strength": authored}))
                 compile_render(root, run_dir)
                 frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
                 self.assertEqual(frozen["render"]["lora_strength"], expected)
+
+    def test_a_strength_that_cannot_reach_a_linked_input_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            case = _case("lora", step=1800, prompt="same", seed=42, strength=1.0, cfg=4.0)
+            run_dir = _workspace(root, cases=[case])
+            _write_checkpoint(root, case["checkpoint"], b"lora")
+            self._give_lora_node_strengths(root, ["99", 0])
+            self._edit_run(run_dir, lambda run: run.setdefault("render", {}).update({"lora_strength": 1.0}))
+            with self.assertRaisesRegex(ValueError, "cannot reach"):
+                compile_render(root, run_dir)
 
     def test_a_compiled_fact_in_run_yaml_is_refused_not_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
