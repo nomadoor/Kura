@@ -52,8 +52,8 @@ One append-only record of a launch attempt under `realizations/`, together
 with the sibling records written for it.
 
 **Status**:
-The latest materialized state of a run in `status.json`, derived from its
-realizations and observations; never the only record of a fact.
+The latest materialized state of a run in `status.json`, projected from its
+records; never the only record of a fact.
 
 **Reconcile**:
 Re-observe a run's external state (container, Pod) and update its status from
@@ -67,6 +67,18 @@ launch was approved.
 The one long-running Kura process (`kura runner`) that claims launch requests
 and controls launched runs until they finish, keeping no state of its own.
 _Avoid_: daemon, controller (for the process)
+
+**Claim**:
+The file a job runner creates exclusively to take a launch request; a claimed
+request is never launched again.
+
+**Stop request**:
+The file in a run that asks for it to be stopped; the job runner, or the CLI
+when no runner is running, carries it out and records the result.
+
+**Epoch**:
+The number a job runner takes when it starts, one higher than the last, and
+records in what it writes, so a replaced runner cannot overwrite newer facts.
 
 ## Training
 
