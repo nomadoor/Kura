@@ -591,6 +591,9 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+STATUS_SUMMARY_OUTPUTS = 20
+
+
 def cmd_run_status(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
@@ -601,14 +604,18 @@ def cmd_run_status(args: argparse.Namespace) -> int:
         observation_ref = status.get("last_observation")
         if isinstance(observation_ref, str) and (run_dir / observation_ref).is_file():
             status["latest_observation"] = json.loads((run_dir / observation_ref).read_text(encoding="utf-8"))
-        status["summary"] = {
+        outputs = status.get("outputs") if isinstance(status.get("outputs"), list) else []
+        summary = {
             "state": status.get("state"),
             "exit_code": status.get("exit_code"),
             "pod_id": status.get("pod_id"),
             "downloaded_run": status.get("downloaded_run"),
-            "outputs": status.get("outputs", []),
+            "outputs": outputs[:STATUS_SUMMARY_OUTPUTS],
         }
-        print(json.dumps(status, indent=2))
+        if len(outputs) > STATUS_SUMMARY_OUTPUTS:
+            summary["outputs_shown"] = f"{STATUS_SUMMARY_OUTPUTS} of {len(outputs)}; every output is listed under outputs below"
+        # The summary leads so a reader that stops early has read what matters.
+        print(json.dumps({"summary": summary, **status}, indent=2))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"cannot read status: {_safe_error(exc)}", file=sys.stderr)
         return 1

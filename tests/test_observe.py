@@ -177,6 +177,8 @@ class ObserveRunTests(unittest.TestCase):
             ):
                 self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
             payload = json.loads(stdout.getvalue())
+            self.assertEqual(next(iter(payload)), "summary")
+            self.assertEqual(payload["summary"]["state"], "completed")
             summary = collect_run_summaries(root)[0]
             self.assertEqual((payload["state"], payload["last_step"], payload["total_steps"]), ("completed", 10, 10))
             self.assertEqual((summary.state, summary.progress.step, summary.progress.total), ("completed", 10, 10))

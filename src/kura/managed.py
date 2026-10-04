@@ -271,7 +271,7 @@ def is_kura_checkout(root: Path) -> bool:
 
 
 def ensure_current(root: Path) -> None:
-    """Refresh managed files when the shipped content changed; name user-kept ones.
+    """Refresh managed files when the shipped content changed, naming files kept instead.
 
     Runs before every `kura` command in a workspace. It writes only when the
     shipped content changed, and never stops a command: a read-only, locked,
@@ -283,14 +283,11 @@ def ensure_current(root: Path) -> None:
         if not (root / MANIFEST).is_file():
             print("kura: this workspace has no Kura agent files yet; run `kura init` to add them", file=sys.stderr)
             return
-        manifest = _read_manifest(root)
-        if manifest["shipped_identity"] == shipped_identity(shipped_files()):
-            report = Report(
-                edited=[path for path, entry in manifest["files"].items() if entry.get("state") == "edited"],
-                preexisting=[path for path, entry in manifest["files"].items() if entry.get("state") == "user"],
-            )
-        else:
-            report = sync(root)
+        if _read_manifest(root)["shipped_identity"] == shipped_identity(shipped_files()):
+            # Nothing shipped changed, so there is nothing new to say; kept
+            # edits are named when a new shipment passes them by.
+            return
+        report = sync(root)
     except (OSError, ValueError):
         return
     for line in report.lines():

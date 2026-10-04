@@ -83,7 +83,7 @@ class ManagedFileTests(unittest.TestCase):
             second = _refresh(root)
             self.assertEqual((root / "AGENTS.md").read_text(encoding="utf-8"), "my rules\n")
             self.assertIn("AGENTS.md", first)
-            self.assertIn("AGENTS.md", second)
+            self.assertEqual(second, "")
             code, output = _init(restore=True, yes=True)
             self.assertEqual(code, 0, output)
             self.assertIn("new shipped rules", (root / "AGENTS.md").read_text(encoding="utf-8"))
@@ -134,7 +134,7 @@ class ManagedFileTests(unittest.TestCase):
             self.assertFalse((root / "workflows" / "samples" / "anima").exists())
             self.assertEqual((root / ".kura" / "reference" / "external-access.md").read_text(encoding="utf-8"), "my notes\n")
             self.assertIn("external-access.md", output)
-            self.assertIn("external-access.md", _refresh(root))
+            self.assertEqual(_refresh(root), "")
 
     def test_a_previous_agents_stub_is_replaced_with_either_line_ending(self) -> None:
         stub = b"# Repository Guidelines\n\nKura is file-first: use the CLI for mutations and keep secrets out of run artifacts.\n"
@@ -163,16 +163,17 @@ class ManagedFileTests(unittest.TestCase):
             with patch("kura.managed.sync", side_effect=ValueError("lock busy")):
                 self.assertEqual(_refresh(root), "")
 
-    def test_an_unchanged_shipment_names_kept_files_without_writing(self) -> None:
+    def test_an_unchanged_shipment_stays_quiet_and_writes_nothing(self) -> None:
         with _workspace_with_source() as (root, source):
             _init()
             (root / "AGENTS.md").write_text("mine\n", encoding="utf-8")
             (source / "AGENTS.md").write_text("# Kura workspace\n\nnewer\n", encoding="utf-8")
-            _refresh(root)
+            self.assertIn("AGENTS.md", _refresh(root))
             before = (root / MANIFEST).stat().st_mtime_ns
-            output = _refresh(root)
-            self.assertIn("AGENTS.md", output)
+            self.assertEqual(_refresh(root), "")
             self.assertEqual((root / MANIFEST).stat().st_mtime_ns, before)
+            (source / "AGENTS.md").write_text("# Kura workspace\n\nnewest\n", encoding="utf-8")
+            self.assertIn("AGENTS.md", _refresh(root))
 
     def test_undoing_an_edit_returns_the_file_to_kura(self) -> None:
         with _workspace_with_source() as (root, source):
