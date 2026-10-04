@@ -51,6 +51,12 @@ stop Pod
   `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
   does. Before relaunching such a run, confirm in the RunPod console that the
   Pod is really gone.
+- Kura records its intent before creating a Pod. If a launch dies, or RunPod
+  does not confirm a create, Kura never creates again on its own: launch and
+  stop refuse until `kura run reconcile` has looked for the Pod by name. A Pod
+  it finds is recorded as `interrupted` and still bills until
+  `kura run stop <run-id>` deletes it (with any duplicate); finding none
+  records the launch as failed. Tell the user which one happened.
 - Pod-side deletion (shared by training and render Pods) uses the Pod-scoped `RUNPOD_API_KEY` from the init process
   and calls `podTerminate`, then `podStop`, with a non-Python User-Agent. Do not
   rely on the Pod's preinstalled `runpodctl`; its syntax follows the version

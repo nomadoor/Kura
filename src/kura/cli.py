@@ -32,7 +32,8 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, observe_run, reconcile_docker, reconcile_runpod
-from kura.fsio import atomic_write_json, atomic_write_text
+from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
+from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
 from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
@@ -618,9 +619,22 @@ def cmd_run_status(args: argparse.Namespace) -> int:
 def cmd_run_reconcile(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
+        if unresolved_create_intents(run_dir):
+            try:
+                with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
+                    for line in resolve_runpod_create_intents(run_dir, _workspace_config().get("runpod", {})):
+                        print(line, file=sys.stderr)
+            except FileLockBusy:
+                print(f"cannot reconcile run: a launch of {args.run_id} is still creating its Pod; reconcile again after it returns", file=sys.stderr)
+                return 1
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        if not isinstance(status.get("last_realization"), str):
+            raise ValueError("run has no launched realization")
         realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
-        if realization.get("executor") == "runpod":
+        if realization.get("executor") == "runpod" and not isinstance(realization.get("pod"), dict):
+            # A launch that created no Pod has nothing outside the workspace to observe.
+            print(json.dumps(status, indent=2))
+        elif realization.get("executor") == "runpod":
             try:
                 reconcile_runpod(run_dir, _workspace_config().get("runpod", {}))
             except MissingSecret as exc:

@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
+from kura.executors.runpod import unresolved_create_intents
+from kura.fsio import file_lock
 from kura.notifications import notify as _notify
 from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases
 from kura.workspace import load_yaml as _load_yaml
@@ -291,15 +293,18 @@ def launch_render_runpod(
             plan["billing"] = _render_runpod_billing_plan(runpod_config, max_lease_sec=max_lease_sec)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
-        launch_runpod_session(
-            run_dir=run_dir,
-            image=remote_image,
-            config=runpod_config,
-            purpose="comfyui-render",
-            dry_run=False,
-            yes=yes,
-            max_lease_sec=max_lease_sec,
-        )
+        if unresolved_create_intents(run_dir):
+            raise ValueError(f"an earlier launch stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` first")
+        with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
+            launch_runpod_session(
+                run_dir=run_dir,
+                image=remote_image,
+                config=runpod_config,
+                purpose="comfyui-render",
+                dry_run=False,
+                yes=yes,
+                max_lease_sec=max_lease_sec,
+            )
         launched = True
         details = _runpod_ssh_details(run_dir, timeout_sec=300, interval_sec=5)
         ssh_details = details
