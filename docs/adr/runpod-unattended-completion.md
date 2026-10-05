@@ -34,8 +34,9 @@ other step is added to this path.
 
 **After training ends, an uncollected Pod waits, then stops.**
 
-- The wait is the longer of 2 hours and the time the training took, measured
-  from the remote job start, so it includes input transfer and model download.
+- The wait starts when training ends and lasts the longer of 2 hours and the
+  time the training took. The training time is measured from the remote job
+  start, so it includes input transfer and model download.
 - When the wait ends without collection, the Pod stops itself instead of
   deleting itself. The GPU is released, so only the volume disk is billed, and
   the outputs stay on it.
@@ -68,6 +69,11 @@ and never runs when the controller is present.
 - Every RunPod run now pays for a volume disk while it runs and while stopped.
   `kura init` and the plan size it from the expected outputs; the previous
   default of no volume disk is no longer valid for training.
+- The Pod-side helper (`container_scripts/pod_self_delete.sh`) changes with
+  this decision: the unattended wait and the maximum lease call `podStop` only,
+  and `podTerminate` is reserved for the controller after it has verified the
+  downloaded outputs. The terminate-then-stop order described below is the
+  behavior this decision replaces.
 - Before this ships, real smokes must show that a Pod can stop itself from
   inside, that a stopped Pod keeps `/workspace`, and that a Pod restarted with
   no GPU accepts SSH for the download.
