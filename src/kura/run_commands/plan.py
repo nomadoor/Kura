@@ -1692,7 +1692,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
-            raise ValueError("run is running; stop or reconcile it before staging")
+            raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")
         if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):
             raise ValueError("run must be compiled before staging")
         dataset_ids = [item.get("id") for item in _run_datasets(locked)]

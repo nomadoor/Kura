@@ -13,8 +13,9 @@ from typing import Any
 
 import yaml
 
-from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker
-from kura.executors.common import append_run_event, record_launch_phase
+from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker, reconcile_runpod
+from kura.executors.runpod import RunPodAPIError
+from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, launch_phases, record_launch_phase
 from kura.executors.runpod import unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -32,7 +33,7 @@ from kura.run_commands.render_completion import format_render_completion
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
-from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries
+from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job
 from kura.dataset_transfer import TransferRefused
 from kura.run_envelope import run_executor
 
@@ -55,7 +56,23 @@ def _unattended_wait(value: Any) -> tuple[int | None, str]:
     return seconds, f"{value} after training, then the Pod deletes itself if outputs were not collected"
 
 
-def run_remote(
+def run_remote(run_id: str, **kwargs: Any) -> int:
+    """Launch (or follow) a RunPod run and collect it; one controller per run at a time."""
+    try:
+        run_dir = _run_path(run_id)
+        if not run_dir.is_dir():
+            raise ValueError(f"run does not exist: {run_id}")
+        with _run_operation_lock(run_dir, "controller", blocking=False):
+            return _run_remote_locked(run_id, **kwargs)
+    except _OperationBusy:
+        print(f"cannot run remote job: another `kura run execute` is already controlling {run_id}; let it finish or stop it first", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as exc:
+        print(f"cannot run remote job: {_safe_error(exc)}", file=sys.stderr)
+        return 1
+
+
+def _run_remote_locked(
     run_id: str,
     *,
     upload_timeout: int,
@@ -71,6 +88,7 @@ def run_remote(
     capacity_poll_interval: Any = "30s",
     yes: bool = False,
     unattended_wait: Any = "auto",
+    reattach: bool = False,
 ) -> int:
     run_dir = _run_path(run_id)
     launched = False
@@ -87,31 +105,42 @@ def run_remote(
         repeat_interval = _parse_duration_seconds(notify_repeat_interval)
         wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
         capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval)
-        stage_code = stage_run(run_id, executor="runpod")
-        if stage_code:
-            return stage_code
-        launch_code = launch_run(
-            run_id,
-            executor="runpod",
-            dry_run=False,
-            image=image,
-            wait_for_capacity=wait_for_capacity_sec,
-            capacity_poll_interval=capacity_poll_interval_sec,
-            yes=yes,
-            max_lease=max_lease_sec,
-            unattended_wait=unattended_label,
-        )
-        if launch_code:
-            return launch_code
-        launched = True
-        exit_code = _runpod_run_over_ssh(
-            run_dir,
-            ssh_timeout_sec=upload_timeout,
-            job_timeout_sec=job_timeout,
-            remote_notify="ntfy" in _notification_channels(notify_channels),
-            max_lease_sec=max_lease_sec,
-            unattended_wait_sec=unattended_wait_sec,
-        )
+        if reattach:
+            # Checked again under the controller lock: the run may have changed
+            # since execute looked, and a stale decision must not follow or relaunch.
+            if not _running_remote_job(run_id):
+                raise ValueError(f"run {run_id} is no longer running a job to follow; check `kura run status {run_id}`")
+            # An earlier controller started this job and died; the job and its
+            # Pod-side timers kept running, so only following and collecting remain.
+            launched = True
+            print(f"run {run_id} is already running on its Pod; following it and collecting its outputs", file=sys.stderr)
+            exit_code = follow_running_runpod_job(run_dir, ssh_timeout_sec=upload_timeout, job_timeout_sec=job_timeout)
+        else:
+            stage_code = stage_run(run_id, executor="runpod")
+            if stage_code:
+                return stage_code
+            launch_code = launch_run(
+                run_id,
+                executor="runpod",
+                dry_run=False,
+                image=image,
+                wait_for_capacity=wait_for_capacity_sec,
+                capacity_poll_interval=capacity_poll_interval_sec,
+                yes=yes,
+                max_lease=max_lease_sec,
+                unattended_wait=unattended_label,
+            )
+            if launch_code:
+                return launch_code
+            launched = True
+            exit_code = _runpod_run_over_ssh(
+                run_dir,
+                ssh_timeout_sec=upload_timeout,
+                job_timeout_sec=job_timeout,
+                remote_notify="ntfy" in _notification_channels(notify_channels),
+                max_lease_sec=max_lease_sec,
+                unattended_wait_sec=unattended_wait_sec,
+            )
         realization_id = _latest_realization_id(run_dir)
         if realization_id:
             record_launch_phase(run_dir, realization_id, "download_started")
@@ -152,8 +181,9 @@ def run_remote(
         print(f"cannot run remote job: {message}", file=sys.stderr)
         deadline_note = (
             "Once its job has ended, the Pod deletes itself (with its outputs) after "
-            f"the unattended wait ({unattended_label}) unless they are collected first, "
-            "and in any case at the maximum lease."
+            + ("the unattended wait armed at launch (see the run's stdout.log) " if reattach else f"the unattended wait ({unattended_label}) ")
+            + "unless they are collected first, and in any case at the maximum lease. "
+            f"Run `kura run execute {run_id}` again to follow the job and collect."
         )
         print(deadline_note, file=sys.stderr)
         _notify(
@@ -205,6 +235,45 @@ def cmd_run_remote(args: argparse.Namespace) -> int:
     )
 
 
+def _running_remote_job(run_id: str) -> bool:
+    """Whether a RunPod run's remote job is already running for this command to follow.
+
+    True when an earlier controller started the current realization's job and
+    is gone. The Pod is checked explicitly first, so a Pod that deleted itself
+    is reported, not followed; a Pod whose job never started is refused.
+    """
+    run_dir = _run_path(run_id)
+    if not (run_dir / "status.json").is_file():
+        return False
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    if status.get("state") != "running" or not isinstance(status.get("pod_id"), str) or status.get("pod_stopped_at"):
+        return False
+    try:
+        # An automatic observation never records a missing Pod: one 404 can be
+        # transient, and recording it would let a later execute launch anew.
+        status = reconcile_runpod(run_dir, _workspace_config().get("runpod", {}), source="automatic")
+    except _OperationBusy as exc:
+        raise ValueError(f"cannot check the Pod of {run_id} right now ({exc}); try again") from exc
+    except RunPodAPIError as exc:
+        if exc.status_code != 404:
+            raise
+        raise ValueError(
+            f"RunPod reports no Pod for {run_id}: if it deleted itself after its wait or lease, its uncollected outputs are gone. "
+            f"Confirm with `kura run reconcile {run_id}`, which records it, before launching again"
+        ) from exc
+    if status.get("state") != "running":
+        return False
+    realization_ref = status.get("last_realization")
+    realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else ""
+    started = realization_id and any(phase.get("phase") == "remote_job_started" for phase in launch_phases(run_dir, realization_id))
+    if not started:
+        raise ValueError(
+            f"run {run_id} has a running Pod but its job never started (an earlier launch stopped mid-way); "
+            f"run `kura run stop {run_id}`, then execute it again"
+        )
+    return True
+
+
 def execute_run(
     run_id: str,
     *,
@@ -232,6 +301,11 @@ def execute_run(
     compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
     executor = run_executor(locked)
     if executor == "runpod":
+        try:
+            reattach = _running_remote_job(run_id)
+        except ValueError as exc:
+            print(f"cannot execute run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
         capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
         frozen_wait = capacity.get("timeout", "24h") if capacity.get("mode", "immediate") == "wait" else "0"
         frozen_poll = capacity.get("poll_interval", "30s")
@@ -250,6 +324,7 @@ def execute_run(
             capacity_poll_interval=frozen_poll if capacity_poll_interval is None else capacity_poll_interval,
             yes=yes,
             unattended_wait=unattended_wait,
+            reattach=reattach,
         )
     if executor == "docker":
         return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
