@@ -4,8 +4,9 @@ Status: accepted owner decision.
 
 Date: 2026-10-02
 
-Updated: 2026-10-05 — an uncollected Pod stops instead of deleting itself, so
-its outputs survive until a controller returns; relay storage becomes optional.
+Updated: 2026-10-05 — keeping outputs past the wait by stopping the Pod, or by
+writing them to other storage, was evaluated and not adopted; see "Alternatives
+measured".
 
 ## Context
 
@@ -22,61 +23,38 @@ loses little, while losing a 24-hour run is severe.
 
 ## Decision
 
-**Outputs live where a stop keeps them.** A training Pod writes its outputs
-to its volume disk (`/workspace`), which survives a stop and is deleted only
-with the Pod. Its container disk, which a stop erases, holds nothing Kura
-needs after training. A RunPod run therefore always has a volume disk large
-enough for its outputs.
+**After training ends, the Pod waits for collection, then deletes itself.**
 
-**With the controller present, nothing changes.** The controller waits for the
-remote exit, downloads, verifies, and then terminates the Pod. No upload or
-other step is added to this path.
-
-**After training ends, an uncollected Pod waits, then stops.**
-
-- The wait starts when training ends and lasts the longer of 2 hours and the
-  time the training took. The training time is measured from the remote job
-  start, so it includes input transfer and model download.
-- When the wait ends without collection, the Pod stops itself instead of
-  deleting itself. The GPU is released, so only the volume disk is billed, and
-  the outputs stay on it.
+- By default the wait is the longer of 2 hours and the time the training took.
+  `--unattended-wait <duration>` sets it explicitly, and `0` disables the
+  post-training timer.
+- The training time is measured from the remote job start, so it includes
+  input transfer and model download.
+- The maximum lease runs from the remote job start and still ends everything.
+  The wait therefore never outlasts the lease time remaining when training
+  ends: the lease can end the Pod before the wait finishes, so a run expected
+  to take longer than the lease needs a lease covering training plus the wait.
+- The billing confirmation shows the wait and the lease before launch, and the
+  user can change both (`--unattended-wait`, `--max-lease`).
 - A controller that starts collecting marks the Pod, so the timer waits for an
-  in-progress download instead of stopping the Pod under it.
-- The maximum lease still runs from the remote job start and ends billing for
-  compute. It stops the Pod the same way, so reaching it no longer destroys
-  outputs either.
-- The billing confirmation shows the wait, the lease, and the volume disk
-  before launch, and the user can change them (`--unattended-wait`,
-  `--max-lease`).
+  in-progress download instead of deleting the Pod under it.
 
-**A returning controller finishes the job.** When a controller finds a run
-whose Pod stopped before collection, it starts the Pod again, downloads and
-verifies the outputs, and then terminates it. RunPod may start it with no GPU
-when the original machine is busy; collection needs none. Terminating is the
-only step that deletes the outputs, and it happens only after they are
-verified locally.
+**Optional relay storage, to be added later**
 
-**Relay storage stays optional.** For a user who expects to be away longer
-than they are willing to pay for a stopped volume, a later option can upload
-outputs to temporary relay storage before stopping. It is never on by default
-and never runs when the controller is present.
+- When it is enabled, the Pod uploads its outputs to a relay destination
+  after training and deletes itself immediately.
+- Destinations are pluggable. A private Hugging Face repository comes first,
+  using a write-scoped token; other storage follows.
+- The controller downloads from the relay, verifies the files, and then
+  deletes the relay copy. The relay is temporary transfer storage, not an
+  archive.
 
 ## Consequences
 
-- A run left unattended costs at most about two hours of idle GPU time, then
-  only volume storage until a controller returns. Its outputs are no longer
-  lost when nobody collects them in time.
-- Every RunPod run now pays for a volume disk while it runs and while stopped.
-  `kura init` and the plan size it from the expected outputs; the previous
-  default of no volume disk is no longer valid for training.
-- The Pod-side helper (`container_scripts/pod_self_delete.sh`) changes with
-  this decision: the unattended wait and the maximum lease call `podStop` only,
-  and `podTerminate` is reserved for the controller after it has verified the
-  downloaded outputs. The terminate-then-stop order described below is the
-  behavior this decision replaces.
-- Before this ships, real smokes must show that a Pod can stop itself from
-  inside, that a stopped Pod keeps `/workspace`, and that a Pod restarted with
-  no GPU accepts SSH for the download.
+- With the default wait, a short run left unattended now costs at most about
+  two hours of idle Pod time instead of twelve.
+- A long run keeps its outputs for at least as long as it took to produce
+  them, unless the maximum lease expires first.
 - The remote job script gains a post-exit timer. With the controller present,
   transfer, training, collection, and Pod stop are unchanged, so existing RunPod
   evidence carries over through a behavior-preserving identity migration; the
@@ -93,3 +71,26 @@ and never runs when the controller is present.
   self-delete (`container_scripts/pod_self_delete.sh`).
 - A Pod that deleted itself is a normal outcome, so `kura run reconcile` records
   a missing Pod as `interrupted` instead of failing.
+
+## Alternatives measured (2026-10-05)
+
+The loss that prompted this review came from the controller, not the Pod: an
+agent host ended `kura run execute` after two hours. That is answered by a
+controller that outlives the agent (`files-only-state-and-job-runner.md`) and,
+until it ships, by `kura run execute` resuming collection of a running run.
+Two ways to keep outputs past the wait were tried and set aside:
+
+- **Stop instead of delete.** A stopped Pod keeps its volume disk, but that
+  disk belongs to the physical machine, and the API starts a stopped Pod only
+  when that machine has a free GPU again (`podResume` with `gpuCount: 0` is
+  ignored; starting without a GPU is offered only in the RunPod console). A
+  real smoke was refused for that reason. Keeping the whole workspace on the
+  volume also bills about $1 a day for 150 GB while stopped.
+- **Upload outputs elsewhere, then delete.** RunPod network volumes survive
+  deletion but pin the Pod to one Secure Cloud datacenter, which removes most
+  of the GPU types and prices Kura uses. A user-owned S3-compatible bucket
+  written through controller-presigned URLs avoids credentials in the Pod but
+  adds an account, an upload on the billed Pod, and new failure paths; it
+  stays a candidate for users who leave their machine off for longer than the
+  wait.
+
