@@ -2237,7 +2237,8 @@ def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeou
     workspace = _runpod_workspace_for_run(run_dir)
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
     _start_ssh_master(details)
-    record_launch_phase(run_dir, realization_id, "controller_reattached")
+    if realization_id:
+        record_launch_phase(run_dir, realization_id, "controller_reattached")
     return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_dir.name, realization_id=realization_id, job_timeout_sec=job_timeout_sec)
 
 

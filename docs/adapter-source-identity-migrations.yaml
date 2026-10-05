@@ -53,7 +53,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: cbb6a207918f993cc8c23e4653388de45944a41d1da274452f1b55765dc111ca
+      value: 55f2cc5fd73d608f6d821523be0a2ce29aaaa9d70e02c0be5bd7b6dfee77767a
   - id: runpod-executor-create-intent-2026-10-04
     executor: runpod
     reason: Before creating a Pod, Kura now writes a create-intent record and marks the run launching;
