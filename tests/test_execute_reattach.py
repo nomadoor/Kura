@@ -70,17 +70,32 @@ class ExecuteReattachTests(unittest.TestCase):
         follow.assert_not_called()
         self.assertIn("never started", stderr.getvalue())
 
-    def test_a_pod_that_deleted_itself_is_reported_not_followed(self) -> None:
-        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
+    def test_a_pod_that_deleted_itself_is_reported_not_followed_or_recorded(self) -> None:
+        from kura.executors.runpod import RunPodAPIError
+
+        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}) as run_dir:
             stderr = io.StringIO()
-            gone = {"state": "interrupted", "pod_id": "pod-1", "pod_missing_at": "t2"}
-            with patch.object(launch, "reconcile_runpod", return_value=gone), patch.object(launch, "follow_running_runpod_job") as follow, \
-                    patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
+            with patch.object(launch, "reconcile_runpod", side_effect=RunPodAPIError("RunPod Pod not found", status_code=404)) as reconcile, \
+                    patch.object(launch, "follow_running_runpod_job") as follow, patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
                 code = launch.execute_run("example", yes=True)
+            state = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"]
+        self.assertEqual(code, 1)
+        self.assertEqual(reconcile.call_args.kwargs["source"], "automatic")
+        follow.assert_not_called()
+        stage.assert_not_called()
+        self.assertEqual(state, "running")
+        self.assertIn("kura run reconcile example", stderr.getvalue())
+
+    def test_reattach_is_checked_again_under_the_controller_lock(self) -> None:
+        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}) as run_dir:
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "pod_id": "pod-1", "pod_stopped_at": "t"}), encoding="utf-8")
+            stderr = io.StringIO()
+            with patch.object(launch, "follow_running_runpod_job") as follow, patch.object(launch, "stage_run") as stage, redirect_stderr(stderr):
+                code = launch.run_remote("example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0, reattach=True)
         self.assertEqual(code, 1)
         follow.assert_not_called()
         stage.assert_not_called()
-        self.assertIn("outputs are gone", stderr.getvalue())
+        self.assertIn("no longer running", stderr.getvalue())
 
     def test_remote_on_a_missing_run_is_an_error_not_a_traceback(self) -> None:
         with _runpod_run({"state": "compiled"}):

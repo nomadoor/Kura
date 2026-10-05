@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker, reconcile_runpod
+from kura.executors.runpod import RunPodAPIError
 from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, launch_phases, record_launch_phase
 from kura.executors.runpod import unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
@@ -105,6 +106,10 @@ def _run_remote_locked(
         wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
         capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval)
         if reattach:
+            # Checked again under the controller lock: the run may have changed
+            # since execute looked, and a stale decision must not follow or relaunch.
+            if not _running_remote_job(run_id):
+                raise ValueError(f"run {run_id} is no longer running a job to follow; check `kura run status {run_id}`")
             # An earlier controller started this job and died; the job and its
             # Pod-side timers kept running, so only following and collecting remain.
             launched = True
@@ -244,14 +249,18 @@ def _running_remote_job(run_id: str) -> bool:
     if status.get("state") != "running" or not isinstance(status.get("pod_id"), str) or status.get("pod_stopped_at"):
         return False
     try:
-        status = reconcile_runpod(run_dir, _workspace_config().get("runpod", {}))
+        # An automatic observation never records a missing Pod: one 404 can be
+        # transient, and recording it would let a later execute launch anew.
+        status = reconcile_runpod(run_dir, _workspace_config().get("runpod", {}), source="automatic")
     except _OperationBusy as exc:
         raise ValueError(f"cannot check the Pod of {run_id} right now ({exc}); try again") from exc
-    if status.get("pod_missing_at"):
+    except RunPodAPIError as exc:
+        if exc.status_code != 404:
+            raise
         raise ValueError(
-            f"the Pod of {run_id} no longer exists (it deleted itself after its wait or lease, or was deleted elsewhere), "
-            "so its uncollected outputs are gone; the run is recorded as interrupted, and `kura run execute` again launches it anew"
-        )
+            f"RunPod reports no Pod for {run_id}: if it deleted itself after its wait or lease, its uncollected outputs are gone. "
+            f"Confirm with `kura run reconcile {run_id}`, which records it, before launching again"
+        ) from exc
     if status.get("state") != "running":
         return False
     realization_ref = status.get("last_realization")
