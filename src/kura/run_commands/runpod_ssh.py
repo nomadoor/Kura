@@ -2191,6 +2191,11 @@ echo $!
         _mutate_run_status(run_dir, mutate)
     except (OSError, json.JSONDecodeError):
         pass
+    return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_id, realization_id=realization_id, job_timeout_sec=job_timeout_sec)
+
+
+def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, realization_id: str, job_timeout_sec: int | None) -> int:
+    """Follow a started remote job until its exit record appears; return its exit code."""
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None
     # The Pod bills until the controller notices the job ended, so the cheap
     # remote-exit check runs every few seconds; the heavier log and
@@ -2218,6 +2223,22 @@ echo $!
                 return int(exit_code) if isinstance(exit_code, int) else 1
             next_exit_check = now + exit_check_interval_sec
         time.sleep(2)
+
+
+def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None) -> int:
+    """Pick up a remote job an earlier controller started, and follow it to its exit.
+
+    The job keeps running on the Pod when the controller that started it
+    dies; following it again needs only the Pod and the job's exit record.
+    """
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    realization_ref = status.get("last_realization")
+    realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else ""
+    workspace = _runpod_workspace_for_run(run_dir)
+    details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
+    _start_ssh_master(details)
+    record_launch_phase(run_dir, realization_id, "controller_reattached")
+    return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_dir.name, realization_id=realization_id, job_timeout_sec=job_timeout_sec)
 
 
 def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:

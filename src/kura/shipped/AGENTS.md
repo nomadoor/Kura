@@ -94,7 +94,10 @@ run's approval cannot be found in the conversation, ask again. If the tracked
 session is lost, observe or reconcile the run; never assume completion,
 relaunch it, or advance to another run. For a RunPod run, session loss is
 billing exposure: follow the `runpod-lifecycle` recovery flow at once, and do
-not stop the Pod before remote exit and local download are confirmed.
+not stop the Pod before remote exit and local download are confirmed. When only
+the tracked `kura run execute` ended (for example at a host time limit) while
+its job runs on, run `kura run execute <run-id>` again: it follows the running
+job and collects instead of launching another.
 
 An approval covers that run only. Do not attach a render, evaluation, or sample
 generation to a training approval. After the run finishes you may offer a

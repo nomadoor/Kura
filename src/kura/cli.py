@@ -1503,7 +1503,7 @@ def main() -> None:
     plan.add_argument("run_id")
     plan.add_argument("--json", action="store_true", help="Print the plan as JSON")
     plan.set_defaults(func=cmd_run_plan)
-    execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run")
+    execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run; for a RunPod run whose job is already running, follow it and collect instead")
     execute.add_argument("run_id")
     execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
     execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after training, how long the Pod waits for Kura to collect outputs before deleting itself: auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")

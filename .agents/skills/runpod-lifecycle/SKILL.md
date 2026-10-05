@@ -136,7 +136,12 @@ stop Pod
 
 ## Recovery commands
 
+When the controller (`kura run execute`) ended but the remote job is still
+running, `kura run execute <run-id>` again follows that job and finishes the
+normal collection and stop; it never launches a second Pod for a running run.
+
 ```sh
+kura run execute <run-id>
 kura doctor runpod
 kura run reconcile <run-id>
 kura run download <run-id> --force
