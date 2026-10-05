@@ -25,12 +25,15 @@ loses little, while losing a 24-hour run is severe.
 
 **After training ends, the Pod waits for collection, then deletes itself.**
 
-- The wait is the longer of 2 hours and the time the training took.
+- By default the wait is the longer of 2 hours and the time the training took.
+  `--unattended-wait <duration>` sets it explicitly, and `0` disables the
+  post-training timer.
 - The training time is measured from the remote job start, so it includes
   input transfer and model download.
 - The maximum lease runs from the remote job start and still ends everything.
   The wait therefore never outlasts the lease time remaining when training
-  ends, and a run expected to take longer than the lease needs a longer lease.
+  ends: the lease can end the Pod before the wait finishes, so a run expected
+  to take longer than the lease needs a lease covering training plus the wait.
 - The billing confirmation shows the wait and the lease before launch, and the
   user can change both (`--unattended-wait`, `--max-lease`).
 - A controller that starts collecting marks the Pod, so the timer waits for an
@@ -48,8 +51,8 @@ loses little, while losing a 24-hour run is severe.
 
 ## Consequences
 
-- A short run left unattended now costs at most about two hours of idle Pod
-  time instead of twelve.
+- With the default wait, a short run left unattended now costs at most about
+  two hours of idle Pod time instead of twelve.
 - A long run keeps its outputs for at least as long as it took to produce
   them, unless the maximum lease expires first.
 - The remote job script gains a post-exit timer. With the controller present,
