@@ -1,0 +1,52 @@
+schema_version: 1
+campaign: M2b runtime images benchmarked against the images they replace, same settings, local Docker
+observed_at: '2026-10-07'
+host_gpu: NVIDIA GeForce RTX 4070 Ti 12 GB (driver 616.92)
+purpose: runtime update adoption (speed and loss parity); no LoRA quality claim
+runs:
+  sd-scripts-sdxl-docker-2026-10-07:
+    model: stabilityai/stable-diffusion-xl-base-1.0
+    dataset: real-smoke-image
+    settings: 512px, batch 1, AdamW8bit, bf16, rank 4, 40 optimizer steps, seed 1
+    old:
+      run_id: 20261007-1107_sdxl-old-retry_2c96
+      image: nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901
+      runtime: torch 2.7.1, CUDA 12.8
+      seconds_per_step: 2.69
+      avr_loss: 0.034
+    new:
+      run_id: 20261007-1026_sdxl-new_4d43
+      image: nomadoor/kura-sd-scripts@sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+      runtime: torch 2.8.0, CUDA 12.8
+      seconds_per_step: 2.35
+      avr_loss: 0.034
+      outputs: published adapter
+  musubi-zimage-docker-2026-10-07:
+    model: Comfy-Org/z_image
+    dataset: real-smoke-image
+    settings: 256px, batch 1, fp8 base/LLM, 24 swapped blocks, rank 1, 30 optimizer steps, seed 1
+    old:
+      run_id: 20261007-1113_zimage-old-save30_b057
+      image: nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211
+      runtime: torch 2.7.1, CUDA 12.8
+      seconds_per_step: 1.71
+      avr_loss: 0.0807
+    new:
+      run_id: 20261007-1113_zimage-new-save30_377b
+      image: nomadoor/kura-musubi-tuner@sha256:21294bb1fcd9d7253181a8eb386d8a924837c136a3dcbb03b55a3aeadd8a18a1
+      runtime: torch 2.9.1, CUDA 13.0
+      seconds_per_step: 1.64
+      avr_loss: 0.0815
+      outputs: published adapter
+  comfyui-sd15-render-2026-10-07:
+    model: Comfy-Org/stable-diffusion-v1-5-archive v1-5-pruned-emaonly-fp16
+    settings: 512x512, euler/normal, 30 steps, cfg 7, seeds 1234-1237; same ComfyUI commit 0f42ba51
+    old:
+      image: nomadoor/kura-comfyui (built from the same Dockerfile and ComfyUI commit, torch 2.7.1 + CUDA 12.8)
+      seconds_per_image_warm: 1.62
+      log: "You need pytorch with cu130 or higher to use optimized CUDA operations"
+    new:
+      image: nomadoor/kura-comfyui@sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097
+      runtime: torch 2.11.0, CUDA 13.0
+      seconds_per_image_warm: 1.62
+    image_parity: seed 1234 mean absolute pixel difference 0.39 of 255

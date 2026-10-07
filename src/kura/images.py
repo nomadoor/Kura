@@ -13,9 +13,9 @@ from typing import Any
 
 PINNED_IMAGES: dict[str, str] = {
     "ai-toolkit": "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
-    "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211",
-    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901",
-    "comfyui": "nomadoor/kura-comfyui@sha256:4607399fc1b9bcde0ea416ba43eb28069eafb1b80a1914e9906762dba8d24f5a",
+    "musubi-tuner": "nomadoor/kura-musubi-tuner@sha256:21294bb1fcd9d7253181a8eb386d8a924837c136a3dcbb03b55a3aeadd8a18a1",
+    "sd-scripts": "nomadoor/kura-sd-scripts@sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02",
+    "comfyui": "nomadoor/kura-comfyui@sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097",
 }
 
 # The build argument that selects each image's upstream source, and the value
@@ -35,6 +35,9 @@ IMAGE_CUDA_VERSIONS: dict[str, str] = {
     "sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211": "12.8",
     "sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901": "12.8",
     "sha256:4607399fc1b9bcde0ea416ba43eb28069eafb1b80a1914e9906762dba8d24f5a": "12.8",
+    "sha256:21294bb1fcd9d7253181a8eb386d8a924837c136a3dcbb03b55a3aeadd8a18a1": "13.0",
+    "sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02": "12.8",
+    "sha256:280fefddccc40ea06d9b96f8106124d7297bdd4d0ed0d3bf7b28a902a4b1d097": "13.0",
 }
 
 # The newest CUDA version seen on RunPod hosts (2026-10-07). A newer driver

@@ -7115,7 +7115,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch("sys.stdout", stdout), patch("kura.executors.runpod._runpod_request") as request:
                 launch_runpod_session(run_dir=run_dir, image=PINNED_IMAGES["comfyui"], config=self._config(), purpose="comfyui-render", dry_run=True)
             request.assert_not_called()
-            self.assertEqual(json.loads(stdout.getvalue())["runpod_create_request"]["minCudaVersion"], "12.8")
+            self.assertEqual(json.loads(stdout.getvalue())["runpod_create_request"]["minCudaVersion"], "13.0")
 
     def test_launch_runpod_session_non_tty_requires_yes_before_any_runpod_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
