@@ -1652,7 +1652,7 @@ def launch_render(
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     from kura.executors.common import StaleRunnerEpoch
 
-    status(run_dir, state="running", started=now(), ended=None, exit_code=None, last_step=0, total_steps=len(cases), current_case_id=None)
+    status(run_dir, state="running", started=now(), ended=None, exit_code=None, error=None, last_step=0, total_steps=len(cases), current_case_id=None)
     active_runtime_case: dict[str, Any] | None = None
     queued_prompt_id: str | None = None
     generated = 0
@@ -1690,8 +1690,8 @@ def launch_render(
             from kura.executors.common import check_stop
 
             check_stop()
-            status(run_dir, current_case_id=case["id"])
             event(run_dir, {"event": "render_case_started", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases)})
+            status(run_dir, current_case_id=case["id"])
             prompt_id = client.queue(patched)
             queued_prompt_id = prompt_id
             with stdout_log.open("a", encoding="utf-8") as handle:
@@ -1716,8 +1716,8 @@ def launch_render(
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "case_id": case["id"], "case_index": case["index"], "file": relative})
                 generated += 1
             completed_cases += 1
-            status(run_dir, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
             event(run_dir, {"event": "render_case_completed", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases), "image_count": len(images)})
+            status(run_dir, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
         write_realization(run_dir, status_changes={"state": "completed", "ended": now(), "exit_code": 0, "last_step": len(cases), "total_steps": len(cases), "current_case_id": None}, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, image_count=generated)

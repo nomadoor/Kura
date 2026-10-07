@@ -180,25 +180,31 @@ def run_finished(status: dict[str, Any]) -> bool:
 
 
 def end_run(run_dir: Path, state: str, *, reason: str, error: str | None = None, keep_exit_code: bool = False,
-            facts: dict[str, Any] | None = None) -> dict[str, Any]:
+            facts: dict[str, Any] | None = None, unless_finished: bool = False) -> dict[str, Any]:
     """Record why a run ended without its own outcome (a follower's decision), then project it into status.
 
-    The record comes first, so status never holds a fact no record has.
+    The record is written under the status lock, after the epoch fence and before
+    status changes, so status never holds a fact no record has and a replaced
+    follower writes neither. `unless_finished` leaves a run someone else already
+    ended untouched.
     """
-    from datetime import datetime
-
+    reserved = {"state", "ended", "exit_code", "error"} & set(facts or {})
+    if reserved:
+        raise ValueError(f"end_run facts may not set {sorted(reserved)}")
     at = _now()
-    reference = _load_status(run_dir).get("last_realization")
-    realization_id = Path(reference).stem if isinstance(reference, str) else "unrecorded"
-    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
-    path = run_dir / "realizations" / f"{realization_id}.ended-{stamp}.json"
-    path.parent.mkdir(exist_ok=True)
-    atomic_write_json(path, record("run_end", {
-        "realization_id": realization_id, "state": state, "at": at, "reason": reason, **({"error": error} if error else {}),
-        **(facts or {}),
-    }))
 
     def mutate(latest: dict[str, Any]) -> None:
+        if unless_finished and run_finished(latest):
+            return
+        reference = latest.get("last_realization")
+        realization_id = Path(reference).stem if isinstance(reference, str) else "unrecorded"
+        path = run_dir / "realizations" / f"{realization_id}.ended-{_realization_id()}.json"
+        path.parent.mkdir(exist_ok=True)
+        epoch = _runner_child_epoch()
+        _write_json(path, record("run_end", {
+            "realization_id": realization_id, "state": state, "at": at, "reason": reason,
+            **({"error": error} if error else {}), **({"epoch": epoch} if epoch is not None else {}), **(facts or {}),
+        }))
         latest.update({"state": state, "ended": at, **({} if keep_exit_code else {"exit_code": None}), **(facts or {})})
         if "current_case_id" in latest:
             latest["current_case_id"] = None

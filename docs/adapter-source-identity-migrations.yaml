@@ -53,7 +53,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 9646170a1c003a36bdd44c4cde085f9482b82d93fc73800d5b511f3b95837854
+      value: a255c565a7e1b1af3d229677b86ef0da242bfa85ee87d00019c1434317c63bb7
   - id: runpod-executor-render-runner-2026-10-08
     executor: runpod
     reason: The lease guard's shell moved into the executor module, and a render session Pod keeps its

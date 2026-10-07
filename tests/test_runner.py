@@ -232,6 +232,51 @@ class EpochTests(unittest.TestCase):
                 render.write_realization(run_dir, status_changes={"state": "failed"}, state="failed")
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
 
+    def test_a_render_whose_runner_was_replaced_mid_render_records_no_outcome(self) -> None:
+        from kura.render import launch_render
+
+        with _workspace() as (root, run_dir):
+            _render_run(run_dir)
+
+            class Client:
+                def __init__(self, endpoint, timeout):
+                    pass
+
+                def object_info(self):
+                    return {"KSampler": {}}
+
+                def queue(self, workflow):
+                    return "prompt-1"
+
+                def wait(self, prompt_id):
+                    # A newer runner takes the run over while this case renders.
+                    current = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                    _status(run_dir, **{**current, "epoch": 9})
+                    return [{"filename": "a.png"}]
+
+                def download(self, image):
+                    return b"png"
+
+                def cancel(self, prompt_id):
+                    pass
+
+            with patch.dict(os.environ, {"KURA_RUNNER_EPOCH": "3"}), patch("kura.render.ComfyUIClient", Client), \
+                    self.assertRaises(StaleRunnerEpoch):
+                launch_render(root, run_dir, controlled_by={"request": "r.launch.json"})
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+            self.assertEqual([path for path in (run_dir / "realizations").glob("*.json") if "." not in path.stem], [])
+
+    def test_a_run_already_ended_by_someone_else_is_left_as_it_is(self) -> None:
+        from kura.executors.common import end_run
+
+        with _workspace() as (_, run_dir):
+            _status(run_dir, state="completed", last_realization="realizations/r1.json")
+            end_run(run_dir, "failed", reason="late", unless_finished=True)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "completed")
+            self.assertEqual(list((run_dir / "realizations").glob("*.ended-*.json")), [])
+            with self.assertRaises(ValueError):
+                end_run(run_dir, "failed", reason="x", facts={"state": "completed"})
+
     def test_a_run_ended_by_a_follower_has_a_record_before_its_status(self) -> None:
         from kura.executors.common import end_run
 
