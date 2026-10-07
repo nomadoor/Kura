@@ -3324,7 +3324,9 @@ class RunPodLiveSyncTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["last_step"], 7)
             self.assertEqual(status["total_steps"], 30)
-            self.assertEqual(status["remote_log_bytes"], 77)
+            # The cursor is the sync's own bookkeeping and stays out of status.
+            self.assertNotIn("remote_log_bytes", status)
+            self.assertEqual(json.loads((run_dir / "logs" / "stdout.remote-cursor.json").read_text(encoding="utf-8"))["remote_bytes"], 77)
             self.assertIn("avr_loss=0.123", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
 
     def test_concurrent_remote_stdout_sync_does_not_duplicate_payload(self) -> None:
