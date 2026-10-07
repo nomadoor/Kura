@@ -1,0 +1,24 @@
+schema_version: 1
+campaign: M3 S4, RunPod training through the job runner (docs/adr/files-only-state-and-job-runner.md)
+observed_at: '2026-10-07'
+run_id: 20261007-2331_sdxl-runpod-runner_3c24
+setup: sd-scripts SDXL LoRA, 1 optimizer step, GPU candidates RTX A5000 / RTX 4000 Ada / RTX A4000, capacity wait 20m, max lease 12h
+pod: 9v6vpam3xq88tv (RTX A5000)
+sequence:
+  - step: kura run execute --yes, interrupted with SIGINT after 150 s
+    observed: billing confirmed at the terminal; launch request written and claimed; the runner waited one round for capacity, created the Pod, uploaded, and started the job; the run kept going after the command stopped
+  - step: ps on the Pod over SSH
+    observed: the maximum-lease guard (sleep 43200) had started 79 s earlier, about a minute before the job (21 s), i.e. before upload
+  - step: kill -9 of the runner process
+    observed: the follower child survived; kura run status woke runner epoch 6, which started no second follower
+  - step: kura run execute again
+    observed: followed to completion and exited 0 (startup 1m 05s, upload 8s, job 52s, download 15s)
+outcome:
+  state: completed
+  publication_state: completed
+  outputs: [outputs/20261007-2331_sdxl-runpod-runner_3c24.safetensors]
+  pod_stopped_at: '2026-10-07T23:35:10.741703+09:00'
+  pods_left_on_account: none
+  runner: exited on its own once nothing was left to control
+findings_fixed_after_this_smoke:
+  - the follower printed the billing confirmation block a second time when it created the Pod; it now prints one line naming the confirmation it acts on

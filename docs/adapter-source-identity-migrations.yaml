@@ -56,7 +56,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 54135dcff166b469dfb6f10efda47b9aa08d36ef20de44ebef59897835cd09f1
+      value: 94cdc2364932f039b5001702e2c0a7b496b81c86d866581067dd72ee718bc066
   - id: runpod-executor-job-runner-2026-10-07
     executor: runpod
     reason: The shared executor module gains the job runner's finish predicate, epoch fencing of

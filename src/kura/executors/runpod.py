@@ -286,6 +286,7 @@ def _confirm_runpod_launch(
     wait_for_capacity_sec: int = 0,
     unattended_wait: str | None = None,
     min_cuda_version: str | None = None,
+    confirmed_at: str | None = None,
 ) -> dict[str, Any]:
     """Require one authorization before a billable Pod-creation attempt sequence."""
 
@@ -297,6 +298,10 @@ def _confirm_runpod_launch(
         )
 
     measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
+    if confirmed_at:
+        # The command that wrote the launch request showed this and took the confirmation.
+        print(f"Creating the RunPod Pod confirmed at {confirmed_at}", file=sys.stderr)
+        return measurement
     candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
     measured_by_id = {
         candidate.get("gpu_type_id"): candidate
@@ -1216,6 +1221,7 @@ sleep infinity
         wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait,
         min_cuda_version=request_body["minCudaVersion"],
+        confirmed_at=(controlled_by or {}).get("billing_confirmed_at"),
     )
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None

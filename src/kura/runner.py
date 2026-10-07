@@ -727,7 +727,8 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
     from kura.run_commands.launch import _run_remote_locked
 
     options = dict(details.get("options") or {})
-    controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}
+    controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
+                     "billing_confirmed_at": details.get("billing_confirmed_at")}
     return _run_remote_locked(
         run_dir.name, yes=True, reattach=reattach, controlled_by=controlled_by,
         runpod_config_override=details.get("runpod_config"), **options,
