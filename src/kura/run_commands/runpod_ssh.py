@@ -39,7 +39,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _run_operation_lock, append_run_event, record_launch_phase, run_events
+from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, _run_operation_lock, append_run_event, record_launch_phase, run_events
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
@@ -666,6 +666,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                         if isinstance(source_step, int):
                             status["current_run_step"] = steps - source_step
                             status["current_run_total_steps"] = steps - source_step
+                    _record_progress(run_dir, status)
 
             _mutate_run_status(run_dir, mutate)
             return True, recovery_artifacts
@@ -2166,6 +2167,7 @@ chmod 600 {shlex.quote(remote_secret_path)}
         pod_id=pod_id if isinstance(pod_id, str) else "",
         log_path=f"{workspace}/runs/{run_id}/logs/stdout.log",
     )
+    remote_pid_path = f"/tmp/kura-jobs/{run_id}.{realization_id}.pid"
     start_script = f"""
 set -euo pipefail
 mkdir -p /tmp/kura-jobs
@@ -2173,14 +2175,31 @@ cat > {shlex.quote(remote_job_path)}
 chmod 700 {shlex.quote(remote_job_path)}
 {lease_guard}
 nohup sh {shlex.quote(remote_job_path)} </dev/null >{shlex.quote(remote_controller_log)} 2>&1 &
+echo $! > {shlex.quote(remote_pid_path)} || true
 echo $!
 """.strip()
+    # Intent before effect: a crash after this line leaves the pid file on the
+    # Pod to show whether the job started; it is never started a second time.
+    intent_path = run_dir / "realizations" / f"{realization_id}.remote-job-intent.json"
+    atomic_write_json(intent_path, record("remote_job_intent", {
+        "realization_id": realization_id, "requested_at": datetime.now().astimezone().isoformat(),
+        "job_path": remote_job_path, "pid_path": remote_pid_path,
+    }))
     started = _run_bounded([*_ssh_base(details), start_script], input=remote_job_script, text=True, capture_output=True, context="remote job start")
     if started.returncode:
         detail = _redact_secret_text(started.stderr.strip() or started.stdout.strip() or "remote job start failed")
         raise ValueError(f"remote job start failed with exit code {started.returncode}: {detail}")
     remote_pid = started.stdout.strip().splitlines()[-1] if started.stdout.strip() else None
     remote_job_started_at = datetime.now().astimezone().isoformat()
+    try:
+        atomic_write_json(run_dir / "realizations" / f"{realization_id}.remote-job.json", record("remote_job", {
+            "realization_id": realization_id, "started_at": remote_job_started_at, "pid": remote_pid,
+            "job_path": remote_job_path, "pid_path": remote_pid_path, "intent": intent_path.name,
+        }))
+    except OSError as exc:
+        # The job is running; following it matters more than this record, and
+        # the launch phase below still marks it started for a later reattach.
+        print(f"warning: could not record the started remote job: {exc}", file=sys.stderr)
     record_launch_phase(
         run_dir, realization_id, "remote_job_started", at=remote_job_started_at,
         max_lease_sec=max_lease_sec,

@@ -24,6 +24,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
     CREATE_INTENT_SUFFIX,
+    PROGRESS_FIELDS,
     settle_status_from_realization,
     _event_exists,
     unresolved_create_intents,
@@ -539,6 +540,9 @@ def _record_container_started(run_dir: Path, draft: dict[str, Any], container_id
         latest.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": realization.get("host"),
                        "last_realization": str(realization_path.relative_to(run_dir)), "container_id": container_id, "container_name": draft["container"]["name"]})
         latest.pop("last_observation", None)
+        # A new realization starts its own progress; an earlier one's step is not its.
+        for key in PROGRESS_FIELDS:
+            latest.pop(key, None)
 
     _mutate_run_status(run_dir, mutate)
     append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id,

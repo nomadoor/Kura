@@ -159,6 +159,23 @@ def write_create_unconfirmed(run_dir: Path, realization_id: str, *, error: str) 
     return path
 
 
+def remote_job_record(run_dir: Path, realization_id: str) -> dict[str, Any] | None:
+    """The record of a remote job Kura started for this realization, if any."""
+    path = run_dir / "realizations" / f"{realization_id}.remote-job.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def remote_job_started(run_dir: Path, realization_id: str) -> bool:
+    """Whether Kura started this realization's remote job, by record, or by phase for older runs."""
+    return remote_job_record(run_dir, realization_id) is not None or any(
+        phase.get("phase") == "remote_job_started" for phase in launch_phases(run_dir, realization_id)
+    )
+
+
 def append_capacity_wait(run_dir: Path, realization_id: str, line: dict[str, Any]) -> None:
     """Append one capacity-wait fact; the last line says where the wait stands."""
     path = run_dir / "realizations" / f"{realization_id}.capacity-wait.jsonl"
@@ -424,6 +441,49 @@ def _stdout_progress(run_dir: Path) -> tuple[int | None, int | None, float | Non
     return step, total, seconds_per_iter
 
 
+PROGRESS_FIELDS = ("last_step", "total_steps", "seconds_per_iter", "current_run_step", "current_run_total_steps")
+
+
+def _last_line(path: Path, *, max_bytes: int = 4096) -> str | None:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - max_bytes))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    return lines[-1] if lines else None
+
+
+def _record_progress(run_dir: Path, status: dict[str, Any]) -> None:
+    """Append a progress observation when training progress changed.
+
+    Status keeps the latest numbers for fast reading; this record is where they
+    come from. Only changes are appended, so a long run's file stays small.
+    """
+    reference = status.get("last_realization")
+    if not isinstance(reference, str):
+        return
+    progress = {key: status[key] for key in PROGRESS_FIELDS if status.get(key) is not None}
+    if not progress:
+        return
+    path = run_dir / "realizations" / f"{Path(reference).stem}.progress.jsonl"
+    last = _last_line(path)
+    if last:
+        try:
+            previous = json.loads(last)
+        except json.JSONDecodeError:
+            previous = {}
+        if isinstance(previous, dict) and {key: previous.get(key) for key in PROGRESS_FIELDS} == {key: progress.get(key) for key in PROGRESS_FIELDS}:
+            return
+    try:
+        append_line_durably(path, json.dumps(record("progress", {"at": _now(), **progress}), ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError as exc:
+        # Progress is shown, not acted on; losing one observation never fails a run.
+        print(f"warning: could not record training progress: {exc}", file=sys.stderr)
+
+
 def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
     step, total, seconds_per_iter = _stdout_progress(run_dir)
     resume_lock: dict[str, Any] = {}
@@ -468,6 +528,7 @@ def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state
         status["last_step"] = max(existing_step, candidate) if isinstance(existing_step, int) else candidate
     if seconds_per_iter is not None:
         status["seconds_per_iter"] = seconds_per_iter
+    _record_progress(run_dir, status)
     if state == "completed" and status.get("publication_state") != "completed":
         outputs_dir = run_dir / "outputs"
         if outputs_dir.is_dir():
