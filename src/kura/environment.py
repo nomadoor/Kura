@@ -40,6 +40,8 @@ INTERNAL_VARIABLES = frozenset({
     "TMPDIR", "WSL_DISTRO_NAME",
     # Set by the job runner for its followers, so their status writes carry its epoch.
     "KURA_RUNNER_EPOCH",
+    # Development switches for the status projection's shadow mode.
+    "KURA_STATUS_SHADOW", "KURA_STATUS_SHADOW_COLLECT",
     # The login name `kura doctor` uses when it checks whether logout ends the runner.
     "USER", "LOGNAME",
     # Cache locations `kura doctor disk` reports when the host sets them.

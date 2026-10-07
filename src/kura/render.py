@@ -206,17 +206,22 @@ def status(run_dir: Path, **changes: Any) -> None:
     _mutate_run_status(run_dir, lambda current: current.update(changes))
 
 
-def _write_realization_file(run_dir: Path, **details: Any) -> str:
+def _write_realization_file(run_dir: Path, *, timestamp: str | None = None, **details: Any) -> str:
     realization_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     path = run_dir / "realizations" / f"{realization_id}.json"
     path.parent.mkdir(exist_ok=True)
-    atomic_write_json(path, as_record("realization", {"id": realization_id, "timestamp": now(), **details}))
+    atomic_write_json(path, as_record("realization", {"id": realization_id, "timestamp": timestamp or now(), **details}))
     return path.relative_to(run_dir).as_posix()
 
 
 def write_realization(run_dir: Path, *, status_changes: dict[str, Any] | None = None, **details: Any) -> None:
-    """Write the render's realization, then point status at it with `status_changes` in the same step."""
-    status(run_dir, **(status_changes or {}), last_realization=_write_realization_file(run_dir, **details))
+    """Write the render's realization, then point status at it with `status_changes` in the same step.
+
+    The realization's timestamp is the status's `ended`, so both name the same instant.
+    """
+    changes = status_changes or {}
+    ended = changes.get("ended") if isinstance(changes.get("ended"), str) else None
+    status(run_dir, **changes, last_realization=_write_realization_file(run_dir, timestamp=ended, **details))
 
 
 def _set_path(document: dict[str, Any], node: str, field: str, value: Any) -> None:
@@ -1652,7 +1657,10 @@ def launch_render(
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     from kura.executors.common import StaleRunnerEpoch
 
-    status(run_dir, state="running", started=now(), ended=None, exit_code=None, error=None, last_step=0, total_steps=len(cases), current_case_id=None)
+    # The event first: status says running because of it.
+    started_at = now()
+    event(run_dir, {"event": "render_started", "timestamp": started_at, "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "case_count": len(cases), "image_stages": image_stages})
+    status(run_dir, state="running", started=started_at, ended=None, exit_code=None, error=None, last_step=0, total_steps=len(cases), current_case_id=None)
     active_runtime_case: dict[str, Any] | None = None
     queued_prompt_id: str | None = None
     generated = 0
@@ -1665,7 +1673,6 @@ def launch_render(
         if resolved_executor == "local":
             for plan in image_stages:
                 _materialize_stage(plan)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "case_count": len(cases), "image_stages": image_stages})
         for runtime_case in runtime_cases:
             active_runtime_case = runtime_case
             case = runtime_case["case"]
@@ -1754,7 +1761,7 @@ def launch_render(
         failed_status = {"state": "failed", "ended": failed_at, "exit_code": 1, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": failed_case_id}
         try:
             # The record first; status then points at it.
-            failed_status["last_realization"] = _write_realization_file(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
+            failed_status["last_realization"] = _write_realization_file(run_dir, timestamp=failed_at, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
         except Exception as realization_exc:
             _append_runtime_warning(
                 stdout_log,
