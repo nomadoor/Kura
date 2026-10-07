@@ -23,7 +23,9 @@ from kura.dataset_handoff import (
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
+    CREATE_INTENT_SUFFIX,
     _event_exists,
+    unresolved_create_intents,
     dataset_input_drift_warning,
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
@@ -46,6 +48,7 @@ from kura.executors.common import (
     _write_observation,
     _write_status,
 )
+from kura.fsio import file_lock
 from kura.paths import workspace_mount_mappings
 from kura.runtime_io import validated_write_roots
 
@@ -449,26 +452,14 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         print(json.dumps({"docker_run_command": safe_command, "container_name": name, "logs_path": f"runs/{run_dir.name}/logs/stdout.log"}, ensure_ascii=False, indent=2))
         return command, None
 
-    start_requested_at = _now()
-    try:
-        result = subprocess.run(command, text=True, capture_output=True, check=False)
-    except FileNotFoundError as exc:
-        raise ValueError("docker executable was not found on PATH") from exc
-    if result.returncode:
-        message = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker run failed")
-        raise ValueError(message)
-    container_id = result.stdout.strip()
-    if not container_id:
-        raise ValueError("docker run did not return a container ID")
-
-    realization_path = run_dir / "realizations" / f"{realization_id}.json"
-    realization_path.parent.mkdir(exist_ok=True)
-    realization = {
-        "id": realization_id, "executor": "docker", "state": "running", "launched_at": _now(),
+    # Everything the realization records except what only the start returns, so
+    # a crash after `docker run` can still be recorded from the intent alone.
+    draft = {
+        "id": realization_id, "executor": "docker",
         "local_image": image, "image_id": image_id,
         **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}),
         "image_identity": image_reference_identity(image, image_id),
-        "container": {"id": container_id, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
+        "container": {"id": None, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command,
         "workspace_mount": ({"source": str(workspace.resolve()), "target": workspace_target} if mount_workspace else None),
         "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in effective_mounts],
@@ -479,14 +470,143 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
         "platform": platform.platform(), "host": platform.node(), **kura_provenance(), "preflight": preflight,
     }
-    _write_json(realization_path, realization)
-    record_launch_phase(run_dir, realization_id, "container_start_requested", at=start_requested_at)
-    status = _load_status(run_dir)
-    status.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": platform.node(), "last_realization": str(realization_path.relative_to(run_dir)), "container_id": container_id, "container_name": name})
-    status.pop("last_observation", None)
-    _write_status(run_dir, status)
-    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id})
+    with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):
+        _write_container_create_intent(run_dir, realization_id, name, draft)
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+        except FileNotFoundError as exc:
+            _record_container_launch_failed(run_dir, draft, None, "docker executable was not found on PATH")
+            raise ValueError("docker executable was not found on PATH") from exc
+        container_id = result.stdout.strip() if not result.returncode else ""
+        if not container_id:
+            error = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker run did not return a container ID")
+            # `docker run` can create the container and then fail to start it.
+            try:
+                container = _find_container(run_dir.name, realization_id)
+            except ValueError as lookup:
+                raise ValueError(
+                    f"{error}; Kura could not check whether Docker created the container ({lookup}), so the launch stays "
+                    f"unsettled: run `kura run reconcile {run_dir.name}` once Docker answers"
+                ) from None
+            _record_container_launch_failed(run_dir, draft, container, error)
+            raise ValueError(error)
+        _record_container_started(run_dir, draft, container_id)
     return command, realization_id
+
+
+DOCKER_LAUNCH_LOCK = "docker-launch.lock"
+
+
+def _write_container_create_intent(run_dir: Path, realization_id: str, name: str, draft: dict[str, Any]) -> None:
+    """Record that Kura is about to create a container, before `docker run`."""
+    requested_at = _now()
+    path = run_dir / "realizations" / f"{realization_id}{CREATE_INTENT_SUFFIX}"
+    path.parent.mkdir(exist_ok=True)
+    _write_json(path, {
+        "kind": "container_create_intent", "schema_version": 1, "realization_id": realization_id, "executor": "docker",
+        "container_name": name, "requested_at": requested_at, "realization": draft,
+    })
+    record_launch_phase(run_dir, realization_id, "container_start_requested", at=requested_at)
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": "launching", "host": platform.node(), "started": None, "ended": None, "exit_code": None})
+        # A previous realization's container must never be mistaken for this one.
+        for key in ("container_id", "container_name", "last_observation"):
+            latest.pop(key, None)
+
+    _mutate_run_status(run_dir, mutate)
+
+
+def _record_container_started(run_dir: Path, draft: dict[str, Any], container_id: str, *, recovered_from: str | None = None, launched_at: str | None = None) -> None:
+    realization_id = draft["id"]
+    realization_path = run_dir / "realizations" / f"{realization_id}.json"
+    realization = {
+        **draft, "state": "running", "launched_at": launched_at or _now(),
+        "container": {**draft["container"], "id": container_id},
+        "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
+        **({"recovered_from_intent": recovered_from} if recovered_from else {}),
+    }
+    _write_json(realization_path, realization)
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": realization.get("host"),
+                       "last_realization": str(realization_path.relative_to(run_dir)), "container_id": container_id, "container_name": draft["container"]["name"]})
+        latest.pop("last_observation", None)
+
+    _mutate_run_status(run_dir, mutate)
+    append_run_event(run_dir, {"event": "run_started", "timestamp": _now(), "executor": "docker", "realization_id": realization_id, "container_id": container_id,
+                               **({"recovered_from_intent": recovered_from} if recovered_from else {})})
+
+
+def _record_container_launch_failed(run_dir: Path, draft: dict[str, Any], container: dict[str, Any] | None, error: str) -> None:
+    realization_id = draft["id"]
+    realization_path = run_dir / "realizations" / f"{realization_id}.json"
+    failed_at = _now()
+    realization = {
+        **draft, "state": "launch_failed", "attempted_at": failed_at, "error": error,
+        "container": {**draft["container"], "id": container.get("id") if container else None,
+                      **({"state": container.get("state")} if container else {})},
+        "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
+    }
+    _write_json(realization_path, realization)
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None,
+                       "last_realization": str(realization_path.relative_to(run_dir))})
+        latest.pop("last_observation", None)
+
+    _mutate_run_status(run_dir, mutate)
+    append_run_event(run_dir, {"event": "run_launch_failed", "timestamp": failed_at, "executor": "docker", "realization_id": realization_id, "error": error,
+                               **({"container_id": container.get("id")} if container else {})})
+
+
+def _find_container(run_id: str, realization_id: str) -> dict[str, Any] | None:
+    """The container Kura created for this realization, found by its labels."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--all", "--no-trunc", "--filter", f"label=io.kura.run_id={run_id}",
+             "--filter", f"label=io.kura.realization_id={realization_id}", "--format", "{{.ID}} {{.State}}"],
+            text=True, capture_output=True, check=False, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"cannot list Docker containers: {exc}") from exc
+    if result.returncode:
+        raise ValueError(_redact_secret_text(result.stderr.strip() or "docker ps failed"))
+    found = [line.split(" ", 1) for line in result.stdout.splitlines() if line.strip()]
+    if len(found) > 1:
+        raise ValueError(f"more than one container carries realization {realization_id}: " + ", ".join(item[0] for item in found))
+    if not found:
+        return None
+    return {"id": found[0][0], "state": found[0][1] if len(found[0]) > 1 else None}
+
+
+def resolve_docker_create_intents(run_dir: Path) -> list[str]:
+    """Settle every container create intent that has no realization, by discovery only.
+
+    The container Kura names for an intent can only be this launch's. If it
+    exists, its training is already running, so it is recorded as started and
+    reconcile follows it; nothing is started again. If none exists, the launch
+    is recorded as failed. Returns one line per settled intent for the user.
+    """
+    lines = []
+    for intent_path in unresolved_create_intents(run_dir, "docker"):
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        draft = intent.get("realization")
+        if not isinstance(draft, dict) or not isinstance(draft.get("id"), str):
+            raise ValueError(f"{intent_path.name} has no realization draft")
+        container = _find_container(run_dir.name, draft["id"])
+        if container is None:
+            _record_container_launch_failed(run_dir, draft, None, "the launch stopped before Docker created its container")
+            lines.append(f"no container exists for realization {draft['id']}; the launch is recorded as failed")
+        elif container.get("state") == "created":
+            _record_container_launch_failed(run_dir, draft, container, "Docker created the container but it never started")
+            lines.append(f"container {container['id'][:12]} was created but never started; the launch is recorded as failed")
+        else:
+            # Docker started it at about the time the intent was written; a terminal
+            # observation later replaces this with Docker's own start time.
+            _record_container_started(run_dir, draft, container["id"], recovered_from=intent_path.name, launched_at=intent.get("requested_at"))
+            lines.append(f"found container {container['id'][:12]} the launch started; it is recorded and reconcile now follows it")
+    return lines
 
 
 def _docker_timestamp(value: Any) -> str | None:

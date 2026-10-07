@@ -72,6 +72,33 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
+# A launch writes `<realization id>.create-intent.json` before it creates a Pod
+# or a container, so a crash between the two leaves something to discover.
+CREATE_INTENT_SUFFIX = ".create-intent.json"
+
+
+def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> list[Path]:
+    """Create intents with no realization yet: Pods or containers that may exist unrecorded."""
+    directory = run_dir / "realizations"
+    if not directory.is_dir():
+        return []
+    intents = sorted(
+        path for path in directory.glob(f"*{CREATE_INTENT_SUFFIX}")
+        if not (directory / f"{path.name[: -len(CREATE_INTENT_SUFFIX)]}.json").exists()
+    )
+    return intents if executor is None else [path for path in intents if create_intent_executor(path) == executor]
+
+
+def create_intent_executor(path: Path) -> str:
+    """The executor a create intent belongs to; intents from before Docker had them are RunPod's."""
+    try:
+        intent = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "runpod"
+    executor = intent.get("executor") if isinstance(intent, dict) else None
+    return executor if isinstance(executor, str) else "runpod"
+
+
 def is_realization_record(path: Path) -> bool:
     """Whether a file in `realizations/` is a realization itself.
 

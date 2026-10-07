@@ -32,6 +32,7 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, observe_run, reconcile_docker, reconcile_runpod
+from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
 from kura.init_templates import cmd_init
@@ -626,7 +627,15 @@ def cmd_run_status(args: argparse.Namespace) -> int:
 def cmd_run_reconcile(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
-        if unresolved_create_intents(run_dir):
+        if unresolved_create_intents(run_dir, "docker"):
+            try:
+                with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):
+                    for line in resolve_docker_create_intents(run_dir):
+                        print(line, file=sys.stderr)
+            except FileLockBusy:
+                print(f"cannot reconcile run: a launch of {args.run_id} is still creating its container; reconcile again after it returns", file=sys.stderr)
+                return 1
+        if unresolved_create_intents(run_dir, "runpod"):
             try:
                 with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
                     for line in resolve_runpod_create_intents(run_dir, _workspace_config().get("runpod", {})):
