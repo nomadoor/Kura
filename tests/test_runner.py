@@ -630,6 +630,30 @@ class LocalRenderTests(unittest.TestCase):
             realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual((realization["state"], realization["controlled_by"]), ("interrupted", {"request": "r.launch.json"}))
 
+    def test_cancel_deletes_the_prompt_and_interrupts_only_that_prompt(self) -> None:
+        from kura.render import ComfyUIClient
+
+        for running, interrupts in (([[0, "prompt-1"]], True), ([[0, "someone-else"]], False)):
+            sent = []
+
+            def fake_json(path, payload=None, running=running):
+                sent.append((path, payload))
+                return {"queue_running": running, "queue_pending": []} if payload is None else {}
+
+            client = ComfyUIClient("http://127.0.0.1:8188", 5)
+            with patch.object(client, "_json", side_effect=fake_json):
+                client.cancel("prompt-1")
+            self.assertEqual(sent[0], ("/queue", {"delete": ["prompt-1"]}))
+            self.assertEqual(("/interrupt", {"prompt_id": "prompt-1"}) in sent, interrupts)
+
+    def test_a_manifest_that_is_not_a_mapping_removes_nothing(self) -> None:
+        from kura.render import remove_leftover_stages
+
+        with _workspace() as (root, run_dir):
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("- a\n- b\n", encoding="utf-8")
+            self.assertEqual(remove_leftover_stages(root, run_dir), [])
+
     def test_an_unreachable_comfyui_is_refused_before_the_request(self) -> None:
         from kura.run_commands import launch
 

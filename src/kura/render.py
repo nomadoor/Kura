@@ -828,6 +828,8 @@ def remove_leftover_stages(workspace: Path, run_dir: Path) -> list[str]:
         frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return []
+    if not isinstance(frozen, dict):
+        return []
     comfyui = frozen.get("comfyui") if isinstance(frozen.get("comfyui"), dict) else {}
     removed = []
     for dir_key, subdir_key, cleanup_key in STAGE_KINDS:
@@ -1260,7 +1262,9 @@ class ComfyUIClient:
         queue = self._json("/queue")
         running = queue.get("queue_running") if isinstance(queue, dict) else None
         if isinstance(running, list) and any(isinstance(item, list) and len(item) > 1 and item[1] == prompt_id for item in running):
-            self._json("/interrupt", {})
+            # A server that knows prompt_id interrupts only this prompt, so one
+            # that started after the queue read is left alone.
+            self._json("/interrupt", {"prompt_id": prompt_id})
 
     def download(self, image: dict[str, Any]) -> bytes:
         query = urllib.parse.urlencode({key: image.get(key, "") for key in ("filename", "subfolder", "type")})
