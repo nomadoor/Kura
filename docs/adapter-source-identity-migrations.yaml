@@ -52,7 +52,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 712507c3f35b1378b96c932f9f307b9577d5178148f6b9f06d2655a5eb73281d
+      value: c1efe795c575a219bb0aef54c1e3841fbd6bd094f7fcda39560e64e61699cc7f
   - id: runpod-executor-run-end-records-2026-10-08
     executor: runpod
     reason: A run a follower ends (Pod gone, job never started, collection failed, render cut short)
