@@ -14,6 +14,41 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: sd-scripts-sdxl-docker-2026-10-07
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 2bc911af1addb27ae40bc33fc1c67fe6f58a47a6cc010d851c372052c1b65063
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+    native_path:
+      architecture: sdxl
+      mode: lora
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 40
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-07'
+    artifact: smoke-evidence/2026-10-07-m2b-image-runtime.yaml
+  - id: musubi-zimage-docker-2026-10-07
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: b40e2d68ff60173fad0b70d39068e0584b889e98d31877c0f9be2d8d8f5acd7d
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:21294bb1fcd9d7253181a8eb386d8a924837c136a3dcbb03b55a3aeadd8a18a1
+    native_path:
+      architecture: zimage
+      executor: docker
+      dataset: real-smoke-image
+      optimizer_steps: 30
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-07'
+    artifact: smoke-evidence/2026-10-07-m2b-image-runtime.yaml
   - id: ai-toolkit-flux2-klein-4b-2026-10-02-2236
     backend: ai-toolkit
     adapter_source:

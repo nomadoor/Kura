@@ -85,7 +85,7 @@ class ImageCudaTests(unittest.TestCase):
         self.assertEqual(runpod_min_cuda_version(PINNED_IMAGES["ai-toolkit"]), "13.0")
         # The digest identifies the image, whatever repository names it.
         digest = PINNED_IMAGES["comfyui"].partition("@")[2]
-        self.assertEqual(runpod_min_cuda_version("mirror/comfy@" + digest), "12.8")
+        self.assertEqual(runpod_min_cuda_version("mirror/comfy@" + digest), "13.0")
 
     def test_an_unknown_image_asks_for_the_newest_known_cuda(self) -> None:
         for reference in ("example/sd:test", "example/sd@sha256:" + "2" * 64, "localhost:5000/x@sha256:" + "4" * 64, ""):
