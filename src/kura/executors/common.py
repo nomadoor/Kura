@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
+from kura.records import record, without_record_fields
 from kura.training_artifacts import is_training_state_output
 
 
@@ -330,7 +331,7 @@ def _load_status(run_dir: Path) -> dict[str, Any]:
 
 
 def _write_status(run_dir: Path, status: dict[str, Any]) -> None:
-    _write_json(_status_path(run_dir), status)
+    _write_json(_status_path(run_dir), record("run_status", status))
 
 
 def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], *, blocking: bool = True) -> dict[str, Any]:
@@ -340,8 +341,9 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
         status = _load_status(run_dir)
         original = copy.deepcopy(status)
         mutate(status)
-        redacted = _redact_secrets(status)
-        if redacted != original:
+        redacted = _redact_secrets(record("run_status", status))
+        # Adding the record fields alone is no new fact, so it never rewrites the file.
+        if without_record_fields(redacted) != without_record_fields(original):
             atomic_write_json(_status_path(run_dir), redacted)
         return redacted
 
@@ -349,7 +351,7 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
 def _write_observation(run_dir: Path, realization_id: str, observation: dict[str, Any]) -> Path:
     """Append an immutable lifecycle observation without rewriting its launch record."""
     path = run_dir / "realizations" / f"{realization_id}.observed-{_realization_id()}.json"
-    _write_json(path, observation)
+    _write_json(path, record("observation", observation))
     return path
 
 

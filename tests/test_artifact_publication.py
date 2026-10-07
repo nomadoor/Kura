@@ -186,6 +186,30 @@ class LocalOutputPublicationTests(unittest.TestCase):
                 "sha256": hashlib.sha256(_safetensors_bytes()).hexdigest(),
             }])
 
+    def test_records_say_what_they_are_and_a_legacy_manifest_still_matches(self) -> None:
+        from kura.artifact_publication import publish_outputs
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+            status = self._reconcile(run_dir)
+            manifest_path = run_dir / status["publication_manifest"]
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual((manifest["kind"], manifest["schema_version"]), ("publication", 1))
+            on_disk = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((on_disk["kind"], on_disk["schema_version"]), ("run_status", 1))
+            # The fixture wrote the realization by hand; the observation is Kura's.
+            realization = json.loads((run_dir / on_disk["last_realization"]).read_text(encoding="utf-8"))
+            observation = json.loads((run_dir / on_disk["last_observation"]).read_text(encoding="utf-8"))
+            self.assertEqual((observation["kind"], observation["schema_version"]), ("observation", 1))
+            # A manifest written before records carried kinds is the same publication.
+            legacy = {key: value for key, value in manifest.items() if key != "kind"}
+            manifest_path.write_text(json.dumps(legacy), encoding="utf-8")
+            contract = {"required": [{"role": "trained-adapter", "suffix": ".safetensors", "minimum": 1}]}
+            self.assertEqual(publish_outputs(run_dir, realization["id"], contract)[0], status["publication_manifest"])
+
     def test_terminal_reconcile_records_postflight_then_removes_view(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run(Path(directory))

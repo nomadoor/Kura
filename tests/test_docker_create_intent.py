@@ -85,6 +85,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             realization = _realization(run_dir)
             self.assertEqual((realization["state"], realization["container"]["id"]), ("running", "container-1"))
             self.assertEqual(realization["create_intent"], f"{realization_id}{CREATE_INTENT_SUFFIX}")
+            self.assertEqual((realization["kind"], realization["schema_version"]), ("realization", 1))
             self.assertEqual((_status(run_dir)["state"], _status(run_dir)["container_id"]), ("running", "container-1"))
             self.assertEqual(unresolved_create_intents(run_dir), [])
 

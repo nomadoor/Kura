@@ -32,6 +32,7 @@ from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, missing
 from kura.executors.common import CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, settle_status_from_realization, unresolved_create_intents, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
+from kura.records import record as as_record
 
 
 # Defines kura_pod_self_delete for every Pod-side guard (unattended wait and
@@ -632,7 +633,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
             pod_id = pods[0]["id"]
             ids = ", ".join(pod["id"] for pod in pods)
             lines.append(f"found Pod {ids} named {pod_name}; it is recorded as interrupted and still billing: run `kura run stop {run_dir.name}` to delete it")
-        _write_json(realization_path, realization)
+        _write_json(realization_path, as_record("realization", realization))
 
         def mutate(latest: dict[str, Any], realization: dict[str, Any] = realization, pod_id: str | None = pod_id) -> None:
             latest.update({"state": realization["state"], "ended": at, "exit_code": None, "host": "runpod",
@@ -751,7 +752,7 @@ def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]
     }
     stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
     stage_path.parent.mkdir(exist_ok=True)
-    _write_json(stage_path, record)
+    _write_json(stage_path, as_record("stage", record))
     status = _load_status(run_dir)
     status["last_stage"] = str(stage_path.relative_to(run_dir))
     _write_status(run_dir, status)
@@ -816,7 +817,7 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     record = {"timestamp": staged_at, "executor": "runpod", **storage_label, "files": [key for _, key in files], "total_bytes": total_bytes}
     stage_path = run_dir / "realizations" / f"stage-{_realization_id()}.json"
     stage_path.parent.mkdir(exist_ok=True)
-    _write_json(stage_path, record)
+    _write_json(stage_path, as_record("stage", record))
     status = _load_status(run_dir)
     status["last_stage"] = str(stage_path.relative_to(run_dir))
     _write_status(run_dir, status)
@@ -961,7 +962,7 @@ def finalize_runpod_dataset_handoff(
             "remote_view_link_verification": remote_links,
             **({"record_conflicts": conflicts} if conflicts else {}),
         }
-        _write_json(postflight_path, postflight)
+        _write_json(postflight_path, as_record("dataset_input_postflight", postflight))
     return postflight_ref, postflight
 
 
@@ -990,7 +991,7 @@ def project_runpod_dataset_handoff(run_dir: Path, downloaded_run: Path, realizat
             "error": detail,
         }
         try:
-            _write_json(run_dir / ref, record)
+            _write_json(run_dir / ref, as_record("dataset_input_postflight", record))
         except OSError as write_error:
             return {
                 "status": "uncheckable",
@@ -1348,11 +1349,11 @@ sleep infinity
         if intent_written:
             # Every create so far was refused, so no Pod exists; settle the intent here.
             realization_path = run_dir / "realizations" / f"{realization_id}.json"
-            _write_json(realization_path, {
+            _write_json(realization_path, as_record("realization", {
                 "id": realization_id, "executor": "runpod", "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
                 "request": safe_request, "logs_path": log_path, "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
                 "error": "the capacity wait was cancelled; every create attempt had been refused, so no Pod exists", **kura_provenance(),
-            })
+            }))
             _mutate_run_status(run_dir, lambda latest: latest.update({"state": "launch_failed", "last_realization": str(realization_path.relative_to(run_dir))}))
         raise ValueError("RunPod capacity wait cancelled; no Pod was created") from exc
     if pod is None or used_request is None:
@@ -1371,7 +1372,7 @@ sleep infinity
             "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
             **kura_provenance(),
         }
-        _write_json(realization_path, realization)
+        _write_json(realization_path, as_record("realization", realization))
         status = _load_status(run_dir)
         status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir))})
         status.pop("pod_id", None)
@@ -1404,7 +1405,7 @@ sleep infinity
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"}, **kura_provenance(),
     }
-    _write_json(realization_path, realization)
+    _write_json(realization_path, as_record("realization", realization))
     record_launch_phase(run_dir, realization_id, "pod_created", at=realization["launched_at"], pod_id=pod_id)
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
@@ -1526,7 +1527,7 @@ sleep infinity
         failed_request = dict(safe_request)
         failed_request["launch_attempts"] = launch_errors
         realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), **kura_provenance()}
-        _write_json(realization_path, realization)
+        _write_json(realization_path, as_record("realization", realization))
         status = _load_status(run_dir)
         status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir))})
         status.pop("pod_id", None)
@@ -1549,7 +1550,7 @@ sleep infinity
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)
     realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
-    _write_json(realization_path, realization)
+    _write_json(realization_path, as_record("realization", realization))
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
     status.pop("last_observation", None)
