@@ -51,11 +51,11 @@ records:
     previous:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 26900612047d6031a88244c9594d3ffa9b1b9a626dda9952502483eeb1820761
+      value: ffc0e3afa7c13b50171deba01c0f6470ff0457f810fc8113f4d5cff67544cc3f
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: c9d5c3d78e4397e3110c2a0c4bddbdad50427ef5aa5fd4b56d326d6784e7174a
+      value: e09e7115adc0858868faf22adf23b5c9f80d8cc5108ea91f64d2c4ee744c1cf0
   - id: runpod-executor-remote-job-and-progress-2026-10-07
     executor: runpod
     reason: Starting the remote job now writes `<rid>.remote-job-intent.json` first and
