@@ -37,7 +37,7 @@ from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _pa
 from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
-from kura.executors.common import _safe_env, format_launch_phases, launch_phases, record_launch_phase
+from kura.executors.common import _safe_env, format_launch_phases, launch_phases, record_launch_phase, unresolved_create_intents
 from kura.executors.docker import _docker_timestamp
 from kura.run_commands.experiment import format_run_completion
 import kura.run_commands.runpod_ssh as runpod_ssh_module
@@ -7695,6 +7695,9 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertNotIn("capacity_wait", status)
             realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual(realization["request"]["launch_attempts"][-1]["classification"], "capacity")
+            wait = [json.loads(line) for line in (run_dir / "realizations" / f"{realization['id']}.capacity-wait.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([line["kind"] for line in wait], ["capacity_wait_round", "capacity_wait_end"])
+            self.assertEqual((wait[0]["attempts"], wait[-1]["outcome"]), (1, "gave_up"))
 
     def test_launch_runpod_capacity_wait_stops_on_probe_auth_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7762,6 +7765,40 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(status["state"], "interrupted")
             self.assertNotIn("pod_id", status)
             self.assertNotIn("capacity_wait", status)
+            [wait_path] = list((run_dir / "realizations").glob("*.capacity-wait.jsonl"))
+            wait = [json.loads(line) for line in wait_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([(line["kind"], line.get("outcome")) for line in wait], [("capacity_wait_round", None), ("capacity_wait_end", "cancelled")])
+            self.assertTrue(wait_path.read_text(encoding="utf-8").endswith("\n"))
+
+    def test_an_unconfirmed_create_during_a_capacity_wait_still_ends_the_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = self._run_dir(root)
+            self._stage_upload(root, run_dir)
+            config = {**self._config(), "cloud_types": ["COMMUNITY"]}
+            availability = [self._availability(available=False), self._availability(available=True)]
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with (
+                    patch("kura.executors.runpod.runpod_gpu_availability", side_effect=availability),
+                    patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API is unreachable: timed out")),
+                    patch("kura.executors.runpod._discover_pods", return_value=[]),
+                    patch("kura.executors.runpod.time.sleep"),
+                ):
+                    with self.assertRaisesRegex(ValueError, "did not confirm"):
+                        launch_runpod(
+                            run_dir=run_dir,
+                            spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                            image="registry/image:tag",
+                            config=config,
+                            wait_for_capacity_sec=600,
+                            capacity_poll_interval_sec=5,
+                            yes=True,
+                        )
+            [wait_path] = list((run_dir / "realizations").glob("*.capacity-wait.jsonl"))
+            wait = [json.loads(line) for line in wait_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual((wait[-1]["kind"], wait[-1]["outcome"]), ("capacity_wait_end", "abandoned"))
+            self.assertEqual(sum(line["kind"] == "capacity_wait_end" for line in wait), 1)
+            self.assertEqual(len(list((run_dir / "realizations").glob("*.create-unconfirmed.json"))), 1)
 
     def test_launch_runpod_capacity_wait_records_create_phase_interruption(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7787,6 +7824,10 @@ class RunPodLifecycleTests(unittest.TestCase):
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(events[-1]["event"], "runpod_capacity_wait_cancelled")
             self.assertEqual(events[-1]["phase"], "create")
+            # The interruption is recorded beside the intent, which stays for discovery.
+            [unconfirmed] = list((run_dir / "realizations").glob("*.create-unconfirmed.json"))
+            self.assertEqual(json.loads(unconfirmed.read_text(encoding="utf-8"))["kind"], "create_unconfirmed")
+            self.assertEqual(len(unresolved_create_intents(run_dir)), 1)
 
     def test_run_launch_uses_explicit_compute_gpu_for_runpod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9579,6 +9620,19 @@ class RunPodLifecycleTests(unittest.TestCase):
                 with patch("kura.executors.runpod._runpod_request", return_value={}):
                     stop_runpod(run_dir, self._config())
             self.assertEqual([item["phase"] for item in launch_phases(run_dir, "r1")], ["pod_stop_requested", "pod_stopped"])
+            stops = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.stop-*.json")]
+            self.assertEqual(len(stops), 1)
+            self.assertEqual((stops[0]["kind"], stops[0]["outcome"], stops[0]["targets"]), ("stop", "stopped", [{"pod_id": "pod-1", "result": "deleted"}]))
+
+    def test_stop_runpod_records_a_failed_delete_before_raising(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                with patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API failed (500)")), self.assertRaises(ValueError):
+                    stop_runpod(run_dir, self._config())
+            [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.stop-*.json")]
+            self.assertEqual((stop["outcome"], stop["stopped_at"], stop["targets"]), ("failed", None, [{"pod_id": "pod-1", "result": "failed"}]))
 
     def test_stop_runpod_explains_how_to_cancel_capacity_wait(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -27,6 +27,7 @@ from kura.executors.common import (
     settle_status_from_realization,
     _event_exists,
     unresolved_create_intents,
+    write_stop_record,
     dataset_input_drift_warning,
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
@@ -852,10 +853,19 @@ def stop_docker(run_dir: Path) -> dict[str, Any]:
     name = status.get("container_id") or status.get("container_name")
     if not isinstance(name, str):
         raise ValueError("run has no running container identity")
+    reference = status.get("last_realization")
+    # A status from before realizations still gets its stop recorded.
+    realization_id = Path(reference).stem if isinstance(reference, str) else "unrecorded"
+    requested_at = _now()
     try:
         result = subprocess.run(["docker", "stop", name], text=True, capture_output=True, check=False)
     except FileNotFoundError as exc:
         raise ValueError("docker executable was not found on PATH") from exc
     if result.returncode:
-        raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker stop failed"))
+        error = _redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker stop failed")
+        write_stop_record(run_dir, realization_id, executor="docker", targets=[{"container": name, "result": "failed"}],
+                          requested_at=requested_at, stopped_at=None, outcome="failed", error=error)
+        raise ValueError(error)
+    write_stop_record(run_dir, realization_id, executor="docker", targets=[{"container": name, "result": "stopped"}],
+                      requested_at=requested_at, stopped_at=_now(), outcome="stopped")
     return reconcile_docker(run_dir)

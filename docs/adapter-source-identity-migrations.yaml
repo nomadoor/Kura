@@ -8,6 +8,53 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-status-only-facts-2026-10-07
+    executor: runpod
+    reason: Facts that lived only in status.json now also have records - each capacity-wait round and
+      its end in `<rid>.capacity-wait.jsonl`, an unconfirmed create in `<rid>.create-unconfirmed.json`
+      beside its still-unresolved intent, and each stop in `<rid>.stop-*.json` before status changes.
+      Capacity-wait and cancel status writes now go through the status lock. Requests, transfers,
+      training, collection, publication, and Pod deletion are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 558dda5262d3af17b865b109329066a61fe06a28697c3ffc0c88af8cd37d92cc
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 2114087dbf4549754b542cd8f986bfd9b13c934609fce2dc713ea5b3b239136e
   - id: runpod-executor-record-kinds-2026-10-07
     executor: runpod
     reason: Realizations, observations, stage, postflight, remote-exit, and publication records, and
