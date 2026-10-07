@@ -7972,6 +7972,10 @@ class RunPodLifecycleTests(unittest.TestCase):
                 calls.append((args, kwargs))
                 command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
                 if "nohup sh" in command_text:
+                    # The intent is on disk before the job starts, and names the pid file the Pod keeps.
+                    intent = json.loads((run_dir / "realizations" / "r1.remote-job-intent.json").read_text(encoding="utf-8"))
+                    self.assertIn(intent["pid_path"], command_text)
+                    self.assertFalse((run_dir / "realizations" / "r1.remote-job.json").exists())
                     return subprocess.CompletedProcess(args[0], 0, "1234\n", "")
                 if "remote-exit-*.json" in command_text:
                     return subprocess.CompletedProcess(args[0], 0, json.dumps({"event": "remote_exit", "exit_code": 0}), "")
@@ -7984,6 +7988,8 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.runpod_ssh._try_sync_runpod_checkpoints", return_value=True) as checkpoint_sync:
                     with patch("kura.cli.subprocess.run", side_effect=fake_run):
                         self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1), 0)
+            job = json.loads((run_dir / "realizations" / "r1.remote-job.json").read_text(encoding="utf-8"))
+            self.assertEqual((job["kind"], job["pid"], job["intent"]), ("remote_job", "1234", "r1.remote-job-intent.json"))
 
             checkpoint_sync.assert_called_with(
                 run_dir,

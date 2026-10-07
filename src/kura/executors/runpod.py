@@ -30,7 +30,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, missing
-from kura.executors.common import CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import PROGRESS_FIELDS, CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 
@@ -1430,6 +1430,9 @@ sleep infinity
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
     status.pop("last_observation", None)
     status.pop("capacity_wait", None)
+    # A new realization starts its own progress; an earlier one's step is not its.
+    for key in PROGRESS_FIELDS:
+        status.pop(key, None)
     _write_status(run_dir, status)
     if capacity_wait_started_at is not None:
         append_run_event(run_dir, {"event": "runpod_capacity_acquired", "timestamp": _now(), "executor": "runpod", "attempts": capacity_rounds + 1, "pod_id": pod_id})

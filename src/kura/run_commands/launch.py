@@ -15,7 +15,7 @@ import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker, reconcile_runpod
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, launch_phases, record_launch_phase
+from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started
 from kura.executors.runpod import unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -265,7 +265,7 @@ def _running_remote_job(run_id: str) -> bool:
         return False
     realization_ref = status.get("last_realization")
     realization_id = Path(realization_ref).stem if isinstance(realization_ref, str) else ""
-    started = realization_id and any(phase.get("phase") == "remote_job_started" for phase in launch_phases(run_dir, realization_id))
+    started = realization_id and remote_job_started(run_dir, realization_id)
     if not started:
         raise ValueError(
             f"run {run_id} has a running Pod but its job never started (an earlier launch stopped mid-way); "

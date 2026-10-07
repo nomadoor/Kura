@@ -90,6 +90,13 @@ class ObserveRunTests(unittest.TestCase):
             self.assertEqual((status["last_step"], status["total_steps"]), (5, 10))
             self.assertFalse(list((run_dir / "realizations").glob("*.observed-*.json")))
             self.assertFalse((run_dir / "logs" / "events.jsonl").exists())
+            # The numbers status shows come from a progress observation, appended only on change.
+            [progress_path] = list((run_dir / "realizations").glob("*.progress.jsonl"))
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
+                observe_run(run_dir)
+            lines = [json.loads(line) for line in progress_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(lines), 1)
+            self.assertEqual((lines[0]["kind"], lines[0]["last_step"], lines[0]["total_steps"]), ("progress", 5, 10))
 
     def test_unchanged_observation_does_not_rewrite_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

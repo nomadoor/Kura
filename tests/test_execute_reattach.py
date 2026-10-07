@@ -36,6 +36,14 @@ def _runpod_run(status: dict):
 
 
 class ExecuteReattachTests(unittest.TestCase):
+    def test_a_remote_job_record_counts_as_started_without_a_phase(self) -> None:
+        from kura.executors.common import remote_job_started
+
+        with _runpod_run({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}) as run_dir:
+            self.assertFalse(remote_job_started(run_dir, "r1"))
+            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"kind": "remote_job", "schema_version": 1, "pid": "42"}), encoding="utf-8")
+            self.assertTrue(remote_job_started(run_dir, "r1"))
+
     def test_a_running_job_is_followed_and_collected_without_launching_again(self) -> None:
         with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
             with patch.object(launch, "follow_running_runpod_job", return_value=0) as follow, \

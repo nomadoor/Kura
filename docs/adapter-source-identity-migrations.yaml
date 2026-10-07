@@ -8,6 +8,54 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-remote-job-and-progress-2026-10-07
+    executor: runpod
+    reason: Starting the remote job now writes `<rid>.remote-job-intent.json` first and
+      `<rid>.remote-job.json` after, and the Pod-side start writes the job's pid to a file so a later
+      check can tell whether the job started; reattach reads the record and falls back to the launch
+      phase for older runs. Training progress is appended to `<rid>.progress.jsonl` when it changes,
+      and a new realization no longer inherits an earlier one's progress in status. The job,
+      transfers, training, collection, publication, and Pod stop are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 2114087dbf4549754b542cd8f986bfd9b13c934609fce2dc713ea5b3b239136e
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: ffc0e3afa7c13b50171deba01c0f6470ff0457f810fc8113f4d5cff67544cc3f
   - id: runpod-executor-status-only-facts-2026-10-07
     executor: runpod
     reason: Facts that lived only in status.json now also have records - each capacity-wait round and
