@@ -826,7 +826,7 @@ class RenderCasesLaunchTests(unittest.TestCase):
 
             with (
                 patch("kura.render.ComfyUIClient", FailingClient),
-                patch("kura.render.write_realization", side_effect=RuntimeError("realization broke")),
+                patch("kura.render._write_realization_file", side_effect=RuntimeError("realization broke")),
             ):
                 self.assertEqual(launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188"), 1)
 

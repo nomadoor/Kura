@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
-from kura.executors.common import _mutate_run_status, check_stop, run_finished
+from kura.executors.common import check_stop
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
@@ -429,18 +429,9 @@ def launch_render_runpod(
 
 def _settle_unfinished(run_dir: Path, state: str, *, error: str | None = None) -> None:
     """A render that ended before its cases finished is never left looking like it still runs."""
-    from datetime import datetime
+    from kura.executors.common import end_run
 
-    at = datetime.now().astimezone().isoformat()
-
-    def mutate(latest: dict[str, Any]) -> None:
-        if run_finished(latest):
-            return
-        latest.update({"state": state, "ended": at, "exit_code": None, "current_case_id": None})
-        if error:
-            latest["error"] = error
-
-    _mutate_run_status(run_dir, mutate)
+    end_run(run_dir, state, reason="the RunPod render ended before its cases finished", error=error, unless_finished=True)
 
 
 def _record_session_lease(run_dir: Path, details: dict[str, Any]) -> None:

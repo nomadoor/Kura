@@ -712,12 +712,11 @@ def _work_render_local(workspace: Path, run_dir: Path, request: Path) -> int:
 
 
 def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, status: dict[str, Any], *, executor: str = "local") -> None:
-    from kura.executors.common import _mutate_run_status
     from kura.render import remove_leftover_stages, write_realization
 
     at = _now()
-    _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None, "current_case_id": None}))
-    write_realization(run_dir, controlled_by={"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}, executor=executor, generator="comfyui", state="interrupted",
+    # The realization is the record; status follows it in the same step.
+    write_realization(run_dir, status_changes={"state": "interrupted", "ended": at, "exit_code": None, "current_case_id": None}, controlled_by={"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}, executor=executor, generator="comfyui", state="interrupted",
                       completed_case_count=status.get("last_step"), case_count=status.get("total_steps"),
                       error="the runner's follower stopped mid-render; images written so far are kept")
     if executor == "local":
@@ -880,7 +879,7 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
     from kura.executors.common import remote_job_record, remote_job_started
     from kura.run_commands.runpod_ssh import remote_job_pid
 
-    from kura.executors.common import _mutate_run_status
+    from kura.executors.common import end_run
 
     status = _status(run_dir)
     realization_id = str(realization.get("id"))
@@ -894,8 +893,7 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
         return 0
     if not isinstance(realization.get("pod"), dict) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
         # The Pod is gone or was never created; nothing is left to follow.
-        at = _now()
-        _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None}))
+        end_run(run_dir, "interrupted", reason="the follower found the Pod gone or never created")
         return 0
     if remote_job_started(run_dir, realization_id):
         from kura.executors.runpod import reconcile_runpod
@@ -903,8 +901,7 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
         # An explicit observation records a Pod that is gone, so it is not followed or retried.
         current = reconcile_runpod(run_dir, _runpod_config(workspace), source="explicit")
         if current.get("pod_missing_at"):
-            at = _now()
-            _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None}))
+            end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
             _notify_text(details, f"Kura run interrupted: {run_dir.name}",
                          f"Run {run_dir.name}'s Pod no longer exists; outputs not collected before it went are gone.")
             return 0
@@ -923,16 +920,11 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
 
 
 def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> int:
-    from kura.executors.common import _mutate_run_status
+    from kura.executors.common import end_run
     from kura.executors.runpod import stop_runpod
 
     stop_runpod(run_dir, _runpod_config(workspace))
-    at = _now()
-
-    def mutate(latest: dict[str, Any]) -> None:
-        latest.update({"state": "interrupted", "ended": at, "exit_code": None})
-
-    _mutate_run_status(run_dir, mutate)
+    end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
     _log(f"{run_dir.name}: the Pod's job never started, so the Pod was deleted")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
                  f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Launch it again with `kura run execute {run_dir.name}`.")
@@ -941,7 +933,7 @@ def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details
 
 def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any], code: int) -> int:
     """A finished run ends the follower; repeated failures to collect hand the run to a person."""
-    from kura.executors.common import _mutate_run_status
+    from kura.executors.common import end_run
 
     status = _status(run_dir)
     if run_finished(status) and not _pod_left_running(status):
@@ -952,12 +944,8 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     atomic_write_json(failures_path, record("follower_failures", {"count": failures, "at": _now()}))
     if failures < COLLECTION_ATTEMPTS:
         return 1
-    at = _now()
-
-    def mutate(latest: dict[str, Any]) -> None:
-        latest.update({"state": "recovery_required", "recovery_required": True, "ended": at})
-
-    _mutate_run_status(run_dir, mutate)
+    end_run(run_dir, "recovery_required", reason=f"collection failed {failures} times", keep_exit_code=True,
+            facts={"recovery_required": True})
     _log(f"{run_dir.name}: collection failed {failures} times; the run needs a person (see logs/runner.log)")
     _notify_text(details, f"Kura run needs attention: {run_dir.name}",
                  f"Run {run_dir.name} could not be collected after {failures} attempts, and its Pod may still be billing. "

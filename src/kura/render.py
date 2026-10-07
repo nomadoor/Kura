@@ -184,8 +184,10 @@ def _workflow_sidecar(path: Path) -> dict[str, Any]:
 
 
 def event(run_dir: Path, payload: dict[str, Any]) -> None:
-    with (run_dir / "logs" / "events.jsonl").open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    """Append a render event durably; the case progress in status follows from these."""
+    from kura.executors.common import append_run_event
+
+    append_run_event(run_dir, payload)
 
 
 def _append_runtime_warning(stdout_log: Path, message: str) -> None:
@@ -198,18 +200,23 @@ def _append_runtime_warning(stdout_log: Path, message: str) -> None:
 
 
 def status(run_dir: Path, **changes: Any) -> None:
-    path = run_dir / "status.json"
-    current = json.loads(path.read_text(encoding="utf-8"))
-    current.update(changes)
-    atomic_write_json(path, as_record("run_status", current))
+    """Change the render's status under the run's status lock, fenced against a replaced runner."""
+    from kura.executors.common import _mutate_run_status
+
+    _mutate_run_status(run_dir, lambda current: current.update(changes))
 
 
-def write_realization(run_dir: Path, **details: Any) -> None:
+def _write_realization_file(run_dir: Path, **details: Any) -> str:
     realization_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     path = run_dir / "realizations" / f"{realization_id}.json"
     path.parent.mkdir(exist_ok=True)
     atomic_write_json(path, as_record("realization", {"id": realization_id, "timestamp": now(), **details}))
-    status(run_dir, last_realization=str(path.relative_to(run_dir)))
+    return path.relative_to(run_dir).as_posix()
+
+
+def write_realization(run_dir: Path, *, status_changes: dict[str, Any] | None = None, **details: Any) -> None:
+    """Write the render's realization, then point status at it with `status_changes` in the same step."""
+    status(run_dir, **(status_changes or {}), last_realization=_write_realization_file(run_dir, **details))
 
 
 def _set_path(document: dict[str, Any], node: str, field: str, value: Any) -> None:
@@ -1643,7 +1650,9 @@ def launch_render(
     stdout_log = run_dir / "logs" / "stdout.log"
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
-    status(run_dir, state="running", started=now(), ended=None, exit_code=None, last_step=0, total_steps=len(cases), current_case_id=None)
+    from kura.executors.common import StaleRunnerEpoch
+
+    status(run_dir, state="running", started=now(), ended=None, exit_code=None, error=None, last_step=0, total_steps=len(cases), current_case_id=None)
     active_runtime_case: dict[str, Any] | None = None
     queued_prompt_id: str | None = None
     generated = 0
@@ -1681,8 +1690,8 @@ def launch_render(
             from kura.executors.common import check_stop
 
             check_stop()
-            status(run_dir, current_case_id=case["id"])
             event(run_dir, {"event": "render_case_started", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases)})
+            status(run_dir, current_case_id=case["id"])
             prompt_id = client.queue(patched)
             queued_prompt_id = prompt_id
             with stdout_log.open("a", encoding="utf-8") as handle:
@@ -1707,12 +1716,11 @@ def launch_render(
                 event(run_dir, {"event": "image_generated", "timestamp": now(), "case_id": case["id"], "case_index": case["index"], "file": relative})
                 generated += 1
             completed_cases += 1
-            status(run_dir, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
             event(run_dir, {"event": "render_case_completed", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases), "image_count": len(images)})
+            status(run_dir, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
-        status(run_dir, state="completed", ended=now(), exit_code=0, last_step=len(cases), total_steps=len(cases), current_case_id=None)
-        write_realization(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, image_count=generated)
+        write_realization(run_dir, status_changes={"state": "completed", "ended": now(), "exit_code": 0, "last_step": len(cases), "total_steps": len(cases), "current_case_id": None}, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
     except KeyboardInterrupt:
@@ -1725,11 +1733,15 @@ def launch_render(
                 _append_runtime_warning(stdout_log, f"could not withdraw prompt {queued_prompt_id}: {type(cancel_exc).__name__}: {cancel_exc}")
         interrupted_at = now()
         try:
-            status(run_dir, state="interrupted", ended=interrupted_at, exit_code=None, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
-            write_realization(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="interrupted", workflow_fixed=list(workflow_fixed), endpoint=endpoint, case_count=len(cases), completed_case_count=completed_cases, generated_image_count=generated)
+            write_realization(run_dir, status_changes={"state": "interrupted", "ended": interrupted_at, "exit_code": None, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": None}, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="interrupted", workflow_fixed=list(workflow_fixed), endpoint=endpoint, case_count=len(cases), completed_case_count=completed_cases, generated_image_count=generated)
             event(run_dir, {"event": "render_interrupted", "timestamp": interrupted_at, "completed_case_count": completed_cases, "image_count": generated})
+        except StaleRunnerEpoch:
+            raise
         except Exception as record_exc:
             _append_runtime_warning(stdout_log, f"failed to record the interruption: {type(record_exc).__name__}: {record_exc}")
+        raise
+    except StaleRunnerEpoch:
+        # A newer runner controls this run now; this follower records nothing more.
         raise
     except Exception as exc:
         failed_case_id = active_runtime_case["case"]["id"] if active_runtime_case is not None else None
@@ -1739,11 +1751,23 @@ def launch_render(
                 handle.write(f"{type(exc).__name__}: {exc}\n")
         except OSError:
             pass
+        failed_status = {"state": "failed", "ended": failed_at, "exit_code": 1, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": failed_case_id}
         try:
-            status(run_dir, state="failed", ended=failed_at, exit_code=1, last_step=completed_cases, total_steps=len(cases), current_case_id=failed_case_id)
+            # The record first; status then points at it.
+            failed_status["last_realization"] = _write_realization_file(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
+        except Exception as realization_exc:
+            _append_runtime_warning(
+                stdout_log,
+                "failed to persist render failure realization: "
+                f"{type(realization_exc).__name__}: {realization_exc}",
+            )
+        try:
+            status(run_dir, **failed_status)
+        except StaleRunnerEpoch:
+            raise
         except Exception as status_exc:
             try:
-                atomic_write_json(run_dir / "status.json", as_record("run_status", {"state": "failed", "ended": failed_at, "exit_code": 1, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": failed_case_id}))
+                atomic_write_json(run_dir / "status.json", as_record("run_status", failed_status))
             except Exception as fallback_exc:
                 _append_runtime_warning(
                     stdout_log,
@@ -1751,14 +1775,6 @@ def launch_render(
                     f"{type(status_exc).__name__}: {status_exc}; fallback "
                     f"{type(fallback_exc).__name__}: {fallback_exc}",
                 )
-        try:
-            write_realization(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
-        except Exception as realization_exc:
-            _append_runtime_warning(
-                stdout_log,
-                "failed to persist render failure realization: "
-                f"{type(realization_exc).__name__}: {realization_exc}",
-            )
         try:
             event(run_dir, {"event": "render_failed", "timestamp": failed_at, "error": str(exc)})
         except OSError as event_exc:
