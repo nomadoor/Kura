@@ -331,7 +331,7 @@ def execute_run(
         # A render names its executor in `executor.name`, not in `compute`.
         render_executor = (locked.get("executor") or {}).get("name") if isinstance(locked.get("executor"), dict) else None
         if render_executor == "runpod":
-            return launch_run(run_id, executor="runpod", dry_run=False, image=image, notify_channels=notify_channels, yes=yes, max_lease=max_lease)
+            return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels, runpod={"image": image, "yes": yes, "max_lease": max_lease})
         return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels)
     if executor == "runpod" and locked.get("type", "train") != "render" and not _runs_outside_the_runner(run_id):
         capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
@@ -686,8 +686,12 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
     return code
 
 
-def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels: Any = None) -> int:
-    """Hand a local render to the job runner after checking it here, then follow it or return."""
+def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels: Any = None, runpod: dict[str, Any] | None = None) -> int:
+    """Hand a render to the job runner after checking it here, then follow it or return.
+
+    For a RunPod render (`runpod` given) the checks include the billing
+    confirmation; the runner creates the Pod from the settings confirmed here.
+    """
     from kura import runner
 
     workspace = _workspace()
@@ -702,7 +706,31 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
         # never started (still compiled) is launched with a new request below.
         print(format_render_completion(workspace, run_dir, exit_code=runner.EXIT_FOR_STATE.get(str(status.get("state")), 2)))
         return runner.EXIT_FOR_STATE.get(str(status.get("state")), 2)
-    if not in_progress:
+    if not in_progress and runpod is not None:
+        prepared: dict[str, Any] = {}
+        try:
+            max_lease_sec = 12 * 3600 if runpod.get("max_lease") is None else _parse_duration_seconds(runpod["max_lease"])
+        except ValueError as exc:
+            print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        if launch_render_runpod(run_id, dry_run=False, image=runpod.get("image"), yes=bool(runpod.get("yes")),
+                                max_lease_sec=max_lease_sec, check_only=True, prepared=prepared):
+            return 1
+        missing = runner.env_only_secrets()
+        if missing:
+            print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
+                  "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
+        try:
+            request = runner.write_launch_request(run_dir, executor="render-runpod", notify=notify_channels, extra={
+                "options": {"max_lease_sec": max_lease_sec},
+                "runpod_config": prepared.get("runpod_config"), "remote_image": prepared.get("remote_image"),
+                "billing_confirmed_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except (OSError, ValueError) as exc:
+            print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        print(f"launch request {request.name} written; the job runner creates the Pod and renders", file=sys.stderr)
+    elif not in_progress:
         try:
             launch_render(workspace, run_dir, executor_name="local", check_only=True)
         except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, http.client.HTTPException) as exc:
@@ -830,9 +858,10 @@ def cmd_run_launch(args: argparse.Namespace) -> int:
                 "wait_for_capacity": getattr(args, "wait_for_capacity", "0"),
                 "capacity_poll_interval": getattr(args, "capacity_poll_interval", "30s"),
             })
-        if run_type == "render" and args.executor != "runpod":
+        if run_type == "render":
             # `kura render launch` has always waited for the render; `kura run launch` waits with --wait.
-            return _launch_render_through_runner(args.run_id, follow=bool(getattr(args, "wait", True)), notify_channels=getattr(args, "notify", None))
+            runpod = {"image": getattr(args, "image", None), "yes": bool(getattr(args, "yes", False)), "max_lease": None} if args.executor == "runpod" else None
+            return _launch_render_through_runner(args.run_id, follow=bool(getattr(args, "wait", True)), notify_channels=getattr(args, "notify", None), runpod=runpod)
         if run_type != "render":
             return _launch_docker_through_runner(
                 args.run_id, image=getattr(args, "image", None), follow=bool(getattr(args, "wait", False)), relaunch=True,

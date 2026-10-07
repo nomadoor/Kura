@@ -712,20 +712,218 @@ class LocalRenderTests(unittest.TestCase):
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             self.assertTrue(runner.stop_done(run_dir))
 
-    def test_execute_sends_a_runpod_render_to_runpod_and_a_local_one_to_the_runner(self) -> None:
+    def test_execute_sends_every_render_to_the_runner_with_runpod_settings_only_for_runpod(self) -> None:
         import yaml
 
         from kura.run_commands import launch
 
         with _workspace() as (root, run_dir):
             (run_dir / "resolved").mkdir()
-            for name, expected in (("runpod", "launch_run"), ("local", "_launch_render_through_runner")):
+            for name in ("runpod", "local"):
                 (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({"type": "render", "executor": {"name": name}}), encoding="utf-8")
                 with patch.object(launch, "_run_path", return_value=run_dir), \
-                     patch.object(launch, "launch_run", return_value=0) as launch_run, \
                      patch.object(launch, "_launch_render_through_runner", return_value=0) as through_runner:
-                    launch.execute_run("example")
-                called = launch_run if expected == "launch_run" else through_runner
-                called.assert_called_once()
-                if expected == "launch_run":
-                    self.assertEqual(launch_run.call_args.kwargs["executor"], "runpod")
+                    launch.execute_run("example", yes=True)
+                through_runner.assert_called_once()
+                runpod = through_runner.call_args.kwargs.get("runpod")
+                if name == "runpod":
+                    self.assertEqual((runpod["yes"], runpod["max_lease"]), (True, "12h"))
+                else:
+                    self.assertIsNone(runpod)
+
+
+def _render_runpod_request(run_dir: Path, **extra) -> Path:
+    return runner.write_launch_request(run_dir, executor="render-runpod", extra={
+        "options": {"max_lease_sec": 3600}, "runpod_config": {"gpu_type_ids": ["A"]}, "remote_image": "img",
+        "billing_confirmed_at": "2026-10-08T00:00:00+00:00", **extra,
+    })
+
+
+class RunPodRenderTests(unittest.TestCase):
+    def test_a_request_without_billing_confirmation_creates_nothing(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="render-runpod")
+            with patch("kura.run_commands.render_runpod.launch_render_runpod") as render:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            render.assert_not_called()
+            self.assertIn("billing confirmation", runner.request_outcome(request)["error"])
+
+    def test_the_first_attempt_renders_once_with_the_confirmed_settings(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+
+            def rendered(*_args, **kwargs):
+                _runpod_launched(run_dir, request, state="completed", pod_stopped_at="t")
+                return 0
+
+            with patch("kura.run_commands.render_runpod.launch_render_runpod", side_effect=rendered) as render, \
+                    patch("kura.executors.runpod.stop_runpod") as stop:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            kwargs = render.call_args.kwargs
+            self.assertTrue(kwargs["yes"])
+            self.assertEqual((kwargs["max_lease_sec"], kwargs["image"], kwargs["runpod_config_override"]), (3600, "img", {"gpu_type_ids": ["A"]}))
+            self.assertEqual(kwargs["controlled_by"]["request"], request.name)
+            stop.assert_not_called()  # the render deleted its own Pod
+            self.assertIsNone(runner.request_outcome(request))
+            self.assertFalse(runner.run_unfinished(run_dir))
+
+    def test_a_pod_the_render_left_running_is_deleted(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+
+            def rendered(*_args, **kwargs):
+                _runpod_launched(run_dir, request, state="failed")
+                return 1
+
+            with patch("kura.run_commands.render_runpod.launch_render_runpod", side_effect=rendered), \
+                    patch("kura.executors.runpod.stop_runpod") as stop:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["A"]})
+
+    def test_a_render_whose_follower_died_is_interrupted_and_its_pod_deleted_not_continued(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)  # the follower that was rendering died
+            _runpod_launched(run_dir, request, state="running", last_step=2, total_steps=5)
+
+            def stopped(run_dir, config):
+                _mutate = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                _status(run_dir, **{**_mutate, "pod_stopped_at": "t"})
+                return {}
+
+            with patch("kura.run_commands.render_runpod.launch_render_runpod") as render, \
+                    patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, patch("kura.render.write_realization") as realization:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            render.assert_not_called()
+            stop.assert_called_once()
+            self.assertEqual(realization.call_args.kwargs["executor"], "runpod")
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
+            self.assertFalse(runner.run_unfinished(run_dir))
+
+    def test_a_pod_that_could_not_be_deleted_is_tried_again(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)
+            _runpod_launched(run_dir, request, state="running")
+            with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")):
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            self.assertTrue(runner.run_unfinished(run_dir))
+
+    def test_a_stop_request_is_acknowledged_after_the_render_ends(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+
+            def rendered(*_args, **kwargs):
+                _runpod_launched(run_dir, request, state="interrupted", pod_stopped_at="t")
+                runner.write_stop_request(run_dir)
+                return 130
+
+            with patch("kura.run_commands.render_runpod.launch_render_runpod", side_effect=rendered):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertTrue(runner.stop_done(run_dir))
+
+    def test_a_render_that_never_started_is_recorded_as_a_failed_launch(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            with patch("kura.run_commands.render_runpod.launch_render_runpod", return_value=1):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertEqual(runner.request_outcome(request)["kind"], "launch_failed")
+
+
+class RunPodSessionLeaseTests(unittest.TestCase):
+    def test_the_session_pod_keeps_its_lease_in_the_deadline_file(self) -> None:
+        from kura.executors import runpod
+
+        captured = {}
+
+        def create(method, path, api_key, body=None, **_):
+            captured["body"] = body
+            return {"id": "pod-1", "desiredStatus": "RUNNING"}
+
+        with _workspace() as (root, run_dir), patch.dict(os.environ, {"RUNPOD_API_KEY": "k"}), \
+                patch.object(runpod, "_runpod_request", side_effect=create), \
+                patch.object(runpod, "_confirm_runpod_launch", return_value={}):
+            runpod.launch_runpod_session(run_dir=run_dir, image="img", config={"gpu_type_ids": ["A"]}, purpose="comfyui-render",
+                                         yes=True, max_lease_sec=3600, controlled_by={"request": "r.launch.json"})
+            script = captured["body"]["dockerStartCmd"][-1]
+            self.assertIn(runpod.LEASE_DEADLINE_PATH, script)
+            self.assertNotIn('sleep "$KURA_MAX_LEASE_SEC"', script)
+            realization = json.loads(next(p for p in (run_dir / "realizations").glob("*.json") if "." not in p.stem).read_text(encoding="utf-8"))
+            self.assertEqual((realization["lease_guard"], realization["controlled_by"]), ("deadline_file", {"request": "r.launch.json"}))
+
+    def test_only_a_render_pod_with_a_deadline_file_takes_a_lease_change(self) -> None:
+        from kura.run_commands.runpod_ssh import change_runpod_lease
+
+        with _workspace() as (root, run_dir):
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "purpose": "comfyui-render", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            _status(run_dir, last_realization="realizations/r1.json", pod_id="pod-1", state="running")
+            with self.assertRaisesRegex(ValueError, "before Kura kept the deadline"):
+                change_runpod_lease(run_dir, 3600, yes=True)
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "purpose": "comfyui-render", "lease_guard": "deadline_file", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", side_effect=ValueError("reached the Pod")):
+                with self.assertRaisesRegex(ValueError, "reached the Pod"):
+                    change_runpod_lease(run_dir, 3600, yes=True)
+
+
+class RunPodRenderLaunchTests(unittest.TestCase):
+    def _render(self, root: Path) -> Path:
+        import yaml
+
+        (root / "workspace.yaml").write_text("images:\n  comfyui: remote/comfy\nrunpod:\n  gpu_type_ids: [A]\n", encoding="utf-8")
+        run_dir = root / "runs" / "example"
+        resolved = run_dir / "resolved"
+        resolved.mkdir(parents=True, exist_ok=True)
+        (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
+        (resolved / "comfyui_model_registry.json").write_text("{}", encoding="utf-8")
+        (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump({
+            "type": "render", "generator": {"name": "comfyui"}, "executor": {"name": "runpod"},
+            "comfyui_models": [], "comfyui_model_registry": {},
+        }), encoding="utf-8")
+        return run_dir
+
+    def test_a_render_interrupted_before_its_cases_is_recorded_and_its_pod_deleted(self) -> None:
+        from kura.run_commands import render_runpod
+
+        with _workspace() as (root, _):
+            run_dir = self._render(root)
+
+            def session(**kwargs):
+                _status(run_dir, state="running", pod_id="pod-1", last_realization="realizations/r1.json")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(render_runpod, "launch_runpod_session", side_effect=session), \
+                        patch.object(render_runpod, "_runpod_ssh_details", side_effect=KeyboardInterrupt), \
+                        patch.object(render_runpod, "stop_runpod") as stop, patch("sys.stderr", io.StringIO()):
+                    code = render_runpod.launch_render_runpod("example", dry_run=False, yes=True, runpod_config_override={"gpu_type_ids": ["A"]})
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 130)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
+            stop.assert_called_once_with(run_dir, {"gpu_type_ids": ["A"]})
+
+    def test_check_only_confirms_billing_and_creates_nothing(self) -> None:
+        from kura.run_commands import render_runpod
+
+        with _workspace() as (root, _):
+            self._render(root)
+            prepared: dict = {}
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(render_runpod, "confirm_runpod_billing") as confirm, \
+                        patch.object(render_runpod, "launch_runpod_session") as session:
+                    code = render_runpod.launch_render_runpod("example", dry_run=False, yes=True, max_lease_sec=7200, check_only=True, prepared=prepared)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 0)
+            session.assert_not_called()
+            self.assertEqual(confirm.call_args.kwargs["max_lease_sec"], 7200)
+            self.assertEqual((prepared["remote_image"], prepared["runpod_config"]["gpu_type_ids"]), ("remote/comfy", ["A"]))

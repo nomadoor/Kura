@@ -2016,17 +2016,25 @@ class RenderNotificationTests(unittest.TestCase):
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
+            (run_dir / "status.json").write_text('{"state": "compiled"}', encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, \
+                        patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.follow", return_value=0), \
+                        patch("sys.stdout", new_callable=io.StringIO) as stdout, patch("sys.stderr", new_callable=io.StringIO):
                     code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="runpod", dry_run=False, yes=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
             self.assertIn("completed  exit 0", stdout.getvalue())
+            # The command checks and confirms billing; the runner launches from the request.
+            self.assertTrue(launch.call_args.kwargs["check_only"])
             self.assertTrue(launch.call_args.kwargs["yes"])
             self.assertEqual(launch.call_args.kwargs["max_lease_sec"], 12 * 3600)
+            request = json.loads(next((run_dir / "requests").glob("*.launch.json")).read_text(encoding="utf-8"))
+            self.assertEqual((request["executor"], request["options"]["max_lease_sec"]), ("render-runpod", 12 * 3600))
+            self.assertTrue(request["billing_confirmed_at"])
 
     def test_render_launch_notifies_on_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3063,7 +3071,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "kura.run_commands.render_runpod._wait_http_ready",
                 ), patch("kura.run_commands.render_runpod.launch_render", return_value=0) as render, patch(
                     "kura.run_commands.render_runpod._sync_runpod_remote_stdout",
-                ), patch("kura.run_commands.render_runpod.stop_run"), patch("kura.run_commands.render_runpod._notify"):
+                ), patch("kura.run_commands.render_runpod.stop_runpod"), patch("kura.run_commands.render_runpod._record_session_lease"), patch("kura.run_commands.render_runpod._notify"):
                     self.assertEqual(launch_render_runpod("render-1", dry_run=False, yes=True), 0)
             finally:
                 os.chdir(previous)
