@@ -1004,6 +1004,11 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
         except (OSError, ValueError, yaml.YAMLError) as exc:
             configuration_error = _safe_error(exc)
             warnings.append(configuration_error)
+    from kura.runner import logout_stops_runner
+
+    logout_warning = logout_stops_runner()
+    if logout_warning:
+        warnings.append(logout_warning)
     subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets")}
     print(json.dumps({
         "workspace_root": str(workspace),

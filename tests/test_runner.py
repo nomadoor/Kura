@@ -253,6 +253,99 @@ class ViewerTests(unittest.TestCase):
             self.assertEqual(status["state"], "running")
 
 
+class StopAndQueueTests(unittest.TestCase):
+    def test_a_follower_carries_out_a_stop_request_once(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="docker")
+            runner.claim_request(request, 1)
+            _launched(run_dir, request, state="running")
+            runner.write_stop_request(run_dir)
+            states = iter([{"state": "running"}, {"state": "failed", "publication_state": "not-required"}])
+            with patch("kura.executors.docker.stop_docker") as stop, \
+                 patch("kura.executors.docker.reconcile_docker", side_effect=lambda *_a, **_k: next(states)):
+                self.assertEqual(runner.work(root, "example", request.name, sleep=lambda _: None), 0)
+            stop.assert_called_once()
+            self.assertTrue(runner.stop_done(run_dir))
+
+    def test_a_stop_before_launch_cancels_the_request(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="docker")
+            runner.write_stop_request(run_dir)
+            runner.serve(root, spawn_child=lambda *_: self.fail("launched a stopped request"), sleep=lambda _: None)
+            self.assertEqual(runner.request_outcome(request)["kind"], "not_launched")
+
+    def test_local_training_waits_for_a_free_slot(self) -> None:
+        with _workspace() as (root, first):
+            second = root / "runs" / "second"
+            (second / "realizations").mkdir(parents=True)
+            _status(second, state="compiled")
+            busy = runner.write_launch_request(first, executor="docker")
+            runner.claim_request(busy, 1)
+            _launched(first, busy, state="running")
+            waiting = runner.write_launch_request(second, executor="docker")
+            polls = [0]
+
+            def sleep(_):
+                polls[0] += 1
+                if polls[0] == 3:
+                    self.assertEqual(runner.pending_requests(second), [waiting])
+                    self.assertTrue(runner.local_slots_full(root))
+                    _launched(first, busy, state="completed", publication_state="completed")
+
+            def spawn(workspace, run_id, request):
+                if run_id == "second":
+                    (second / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "controlled_by": {"request": request.name}}), encoding="utf-8")
+                    _status(second, last_realization="realizations/r1.json", state="completed", publication_state="completed")
+                return Child(0)
+
+            with _run_operation_lock(first, "controller"):
+                runner.serve(root, spawn_child=spawn, sleep=sleep)
+            self.assertEqual(runner.pending_requests(second), [])
+            self.assertGreaterEqual(polls[0], 3)
+
+
+class OrderAndCancelTests(unittest.TestCase):
+    def test_requests_are_taken_in_the_order_written_not_by_run_name(self) -> None:
+        with _workspace() as (root, _):
+            older_dir, newer_dir = root / "runs" / "zzz", root / "runs" / "aaa"
+            for run_dir in (older_dir, newer_dir):
+                (run_dir / "realizations").mkdir(parents=True)
+                _status(run_dir, state="compiled")
+            older = runner.write_launch_request(older_dir, executor="docker")
+            time.sleep(0.01)
+            runner.write_launch_request(newer_dir, executor="docker")
+            claimed = []
+
+            def spawn(workspace, run_id, request):
+                claimed.append(run_id)
+                run_dir = workspace / "runs" / run_id
+                (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "controlled_by": {"request": request.name}}), encoding="utf-8")
+                _status(run_dir, last_realization="realizations/r1.json", state="completed", publication_state="completed")
+                return Child(0)
+
+            runner.serve(root, spawn_child=spawn, sleep=lambda _: None)
+            self.assertEqual(claimed[0], "zzz")
+            self.assertTrue(older.with_name(older.name.replace(".launch.json", ".claim.json")).exists())
+
+    def test_a_pending_request_is_cancelled_without_a_runner(self) -> None:
+        from kura.run_commands.plan import _stop_through_runner
+
+        with _workspace() as (_, run_dir):
+            request = runner.write_launch_request(run_dir, executor="docker")
+            self.assertEqual(_stop_through_runner(run_dir), 0)
+            self.assertEqual(runner.request_outcome(request)["kind"], "not_launched")
+
+    def test_stopping_a_finished_run_does_not_wait_for_a_follower(self) -> None:
+        from kura.run_commands.plan import _stop_through_runner
+
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="docker")
+            runner.claim_request(request, 1)
+            _launched(run_dir, request, state="completed", publication_state="completed")
+            with file_lock(root / ".kura" / "runner" / "runner.lock", blocking=False):
+                self.assertIsNone(_stop_through_runner(run_dir, timeout_sec=0.1))
+
+
 class ProcessTests(unittest.TestCase):
     def test_a_detached_runner_starts_records_its_epoch_and_exits_when_idle(self) -> None:
         with _workspace() as (root, _):

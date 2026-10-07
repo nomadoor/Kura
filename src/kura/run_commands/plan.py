@@ -1658,9 +1658,40 @@ def _parse_duration_seconds(value: Any) -> int:
     return amount * scale
 
 
+def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
+    """Hand the stop to the runner's follower when one will see it; None when the CLI should act."""
+    import time
+
+    from kura import runner
+
+    workspace = run_dir.parent.parent
+    if not runner.follower_present(workspace, run_dir):
+        if runner.pending_requests(run_dir) and runner.cancel_pending(workspace, run_dir):
+            print("the launch request had not started; it is recorded as not launched", file=sys.stderr)
+            return 0
+        return None
+    path = runner.write_stop_request(run_dir)
+    if path is None:
+        return None
+    print(f"stop request {path.name} written; the runner's follower stops the run", file=sys.stderr)
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        request = runner.latest_request(run_dir)
+        if runner.stop_done(run_dir) or (request is not None and runner.request_outcome(request) is not None):
+            print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
+            return 0
+        time.sleep(1)
+    print(f"the stop request stays in effect and the follower carries it out when it next checks; "
+          f"confirm with `kura run status {run_dir.name}`", file=sys.stderr)
+    return 1
+
+
 def stop_run(run_id: str) -> int:
     try:
         run_dir = _run_path(run_id)
+        handed_over = _stop_through_runner(run_dir)
+        if handed_over is not None:
+            return handed_over
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         if unresolved_create_intents(run_dir):
             raise ValueError(

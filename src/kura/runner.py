@@ -169,6 +169,37 @@ def stop_runner(workspace: Path) -> dict[str, Any]:
     return {"stopped": True, "pid": pid}
 
 
+def logout_stops_runner() -> str | None:
+    """A warning when this Linux host ends a user's processes at logout and the user is not exempt."""
+    if not sys.platform.startswith("linux"):
+        return None
+    kill = "no"
+    for path in [Path("/etc/systemd/logind.conf"), *sorted(Path("/etc/systemd/logind.conf.d").glob("*.conf"))]:
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                key, _, value = line.strip().partition("=")
+                if key.strip() == "KillUserProcesses":
+                    kill = value.strip().lower()
+        except OSError:
+            continue
+    if kill not in {"yes", "true", "1"}:
+        return None
+    import getpass
+
+    try:
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or getpass.getuser()
+    except (KeyError, OSError):
+        user = "<your user name>"
+    try:
+        linger = subprocess.run(["loginctl", "show-user", user, "-p", "Linger", "--value"], capture_output=True, text=True, timeout=5, check=False).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        linger = ""
+    if linger == "yes":
+        return None
+    return ("this host ends your processes when you log out (KillUserProcesses=yes), which stops the job runner; "
+            f"run `loginctl enable-linger {user}` so runs continue after you disconnect")
+
+
 # Requests and claims ------------------------------------------------------------
 
 def requests_dir(run_dir: Path) -> Path:
@@ -268,6 +299,52 @@ def foreign_requests(workspace: Path) -> list[str]:
 
 def _record_request_outcome(request: Path, suffix: str, kind: str, **facts: Any) -> None:
     atomic_write_json(_sibling(request, suffix), record(kind, {"request": request.name, "at": _now(), **facts}))
+
+
+# Stop requests ----------------------------------------------------------------------
+
+def stop_request(run_dir: Path) -> Path | None:
+    """The stop request for the run's latest launch request, if one was written."""
+    request = latest_request(run_dir)
+    path = _sibling(request, ".stop.json") if request is not None else None
+    return path if path is not None and path.exists() else None
+
+
+def write_stop_request(run_dir: Path) -> Path | None:
+    """Ask whoever follows the run's latest launch to stop it; None when there is no launch request."""
+    request = latest_request(run_dir)
+    if request is None:
+        return None
+    path = _sibling(request, ".stop.json")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        return path
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record("stop_request", {"request": request.name, "at": _now()}), handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
+
+
+def cancel_pending(workspace: Path, run_dir: Path) -> bool:
+    """Settle a pending request as not launched when no runner is there to see a stop request."""
+    cancelled = False
+    for request in pending_requests(run_dir):
+        if claim_request(request, current_epoch(workspace)):
+            _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+            cancelled = True
+    return cancelled
+
+
+def stop_done(run_dir: Path) -> bool:
+    request = latest_request(run_dir)
+    return request is not None and _sibling(request, ".stop-done.json").exists()
+
+
+def follower_present(workspace: Path, run_dir: Path) -> bool:
+    """Whether a runner or a surviving follower will see a stop request for this run."""
+    return _held(run_dir) or (runner_alive(workspace) and (run_unfinished(run_dir) or bool(pending_requests(run_dir))))
 
 
 # Which runs the runner controls ------------------------------------------------------
@@ -402,16 +479,25 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
             _log(f"runner epoch {epoch} stopped on request; runs continue and the next runner follows them")
             return 0
         busy = False
-        for run_dir in sorted((workspace / "runs").glob("*")) if (workspace / "runs").is_dir() else []:
-            run_id = run_dir.name
-            for request in pending_requests(run_dir):
-                details = _read_json(request)
-                if details.get("kura_version") != __version__:
-                    # Left pending for a runner of that version; `kura runner status` names it.
-                    continue
-                busy = True
+        run_dirs = sorted((workspace / "runs").glob("*")) if (workspace / "runs").is_dir() else []
+        # Requests are taken in the order they were written, across runs; their ids record it.
+        pending = sorted((request for run_dir in run_dirs for request in pending_requests(run_dir)), key=lambda path: path.name)
+        for request in pending:
+            if _read_json(request).get("kura_version") != __version__:
+                # Left pending for a runner of that version; `kura runner status` names it.
+                continue
+            busy = True
+            if _sibling(request, ".stop.json").exists():
                 if claim_request(request, epoch):
-                    _log(f"{run_id}: claimed {request.name}")
+                    _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+                continue
+            if local_slots_full(workspace):
+                # Local training waits its turn; later requests wait behind this one.
+                break
+            if claim_request(request, epoch):
+                _log(f"{request.parent.parent.name}: claimed {request.name}")
+        for run_dir in run_dirs:
+            run_id = run_dir.name
             if run_id in children or not run_unfinished(run_dir):
                 continue
             busy = True
@@ -429,6 +515,28 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
             _log(f"runner epoch {epoch} has nothing left to control; exiting")
             return 0
         sleep(poll_sec)
+
+
+def _local_slots(workspace: Path) -> int:
+    import yaml
+
+    try:
+        config = yaml.safe_load((workspace / "workspace.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return 1
+    value = (config.get("runner") or {}).get("local_slots") if isinstance(config, dict) else None
+    # Values below 1 would stop all local training; they count as 1.
+    return value if isinstance(value, int) and value > 0 else 1
+
+
+def _active_local_runs(workspace: Path) -> int:
+    """Claimed local launches that are not finished: the slots in use."""
+    return sum(1 for run_dir in (workspace / "runs").glob("*") if run_unfinished(run_dir))
+
+
+def local_slots_full(workspace: Path) -> bool:
+    """Whether every local training slot is taken, so a new local request waits."""
+    return _active_local_runs(workspace) >= _local_slots(workspace)
 
 
 def threading_main() -> bool:
@@ -478,6 +586,9 @@ def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
                 _log(f"{run_dir.name}: {line}")
     realization = _realization(run_dir, _status(run_dir).get("last_realization"))
     launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
+    if not launched and _sibling(request, ".stop.json").exists():
+        _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+        return 0
     if not launched:
         if not _first_attempt(request):
             # An earlier follower took this request and died before recording any
@@ -503,6 +614,8 @@ def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             return 0
     failures = 0
     while True:
+        if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
+            _carry_out_stop(run_dir, request)
         try:
             status = reconcile_docker(run_dir)
             failures = 0
@@ -516,6 +629,19 @@ def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             _notify_finished(run_dir, request, status)
             return 0
         sleep(poll_sec)
+
+
+def _carry_out_stop(run_dir: Path, request: Path) -> None:
+    """Stop the run's container the way `kura run stop` does, and record that the request was carried out."""
+    from kura.executors.docker import stop_docker
+
+    try:
+        stop_docker(run_dir)
+    except (OSError, ValueError) as exc:
+        _log(f"{run_dir.name}: could not stop the container ({exc}); trying again")
+        return
+    _record_request_outcome(request, ".stop-done.json", "stop_done")
+    _log(f"{run_dir.name}: stopped on request")
 
 
 def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> None:
@@ -545,6 +671,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     """
     out = out or sys.stderr
     restarts = 0
+    queued_said = False
     log_path = run_dir / "logs" / "stdout.log"
     offset = log_path.stat().st_size if log_path.exists() else 0
     while True:
@@ -553,6 +680,9 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             print(f"the runner did not launch this run: {outcome.get('error') or outcome.get('kind')}", file=out)
             return 1
         offset = _stream_log(log_path, offset)
+        if not queued_said and request in pending_requests(run_dir) and runner_alive(workspace) and local_slots_full(workspace):
+            queued_said = True
+            print("waiting for a free local slot: another local training run is using it (`runner.local_slots`)", file=out)
         status = _status(run_dir)
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
@@ -579,6 +709,9 @@ def await_claim(workspace: Path, run_dir: Path, request: Path, *, timeout_sec: f
     restarted = False
     while clock() < deadline:
         if _sibling(request, ".claim.json").exists():
+            return True
+        if runner_alive(workspace) and local_slots_full(workspace):
+            print("the request waits for a free local slot; the runner launches it in turn", file=sys.stderr)
             return True
         if not runner_alive(workspace) and not restarted:
             restarted = True
