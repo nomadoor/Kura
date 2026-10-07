@@ -40,7 +40,7 @@ stop Pod
   `--wait-for-capacity` and `--capacity-poll-interval` explicitly or it uses its
   immediate-launch default.
 - `--hold-for 30m`: normal post-download review window.
-- `--max-lease 12h`: the Pod deletes itself after this long, whatever the local controller does.
+- `--max-lease 12h`: the Pod deletes itself this long after Kura first reaches it, whatever the local controller does.
 - `--unattended-wait auto`: after training, if the outputs were not collected,
   the Pod deletes itself after the longer of 2 hours and the job time
   (from remote job start, including model download). Collecting the outputs marks the
@@ -141,9 +141,14 @@ stop Pod
 
 ## Recovery commands
 
-When the controller (`kura run execute`) ended but the remote job is still
-running, `kura run execute <run-id>` again follows that job and finishes the
-normal collection and stop; it never launches a second Pod for a running run.
+The job runner launches, follows, collects, and deletes the Pod; `kura run
+execute` only confirms billing and follows. When the command ended, run
+`kura run execute <run-id>` again to follow; it never launches a second Pod.
+The runner deletes a Pod whose job never started (nothing can be collected
+there), and after three failed collections it marks the run
+`recovery_required` and notifies; then collect and stop by hand with the
+commands below. A job started before the runner existed is still followed
+in-process by `kura run execute`.
 
 ```sh
 kura run execute <run-id>

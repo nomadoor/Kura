@@ -249,7 +249,8 @@ def latest_request(run_dir: Path) -> Path | None:
     return requests[-1] if requests else None
 
 
-def write_launch_request(run_dir: Path, *, executor: str, image: str | None = None, notify: Any = None, out: Any = None) -> Path:
+def write_launch_request(run_dir: Path, *, executor: str, image: str | None = None, notify: Any = None, out: Any = None,
+                         extra: dict[str, Any] | None = None) -> Path:
     """Write a launch request after the approval the run needs; at most one is pending.
 
     A pending request written by another Kura version is replaced, after saying so.
@@ -264,7 +265,7 @@ def write_launch_request(run_dir: Path, *, executor: str, image: str | None = No
         path = requests_dir(run_dir) / f"{_request_id()}.launch.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(path, record("launch_request", {
-            "run_id": run_dir.name, "executor": executor, "image": image, "notify": notify, "confirmed": True,
+            "run_id": run_dir.name, "executor": executor, "image": image, "notify": notify, "confirmed": True, **(extra or {}),
             "kura_version": __version__, "written_at": _now(),
         }))
         return path
@@ -387,7 +388,15 @@ def run_unfinished(run_dir: Path) -> bool:
     if realization is None or realization.get("controlled_by", {}).get("request") != request.name:
         # Claimed, but its launch is not recorded yet: the follower settles it.
         return True
-    return not run_finished(status)
+    return not run_finished(status) or _pod_left_running(status)
+
+
+def _pod_left_running(status: dict[str, Any]) -> bool:
+    """A finished run whose Pod still bills; only a person's recovery keeps it on purpose."""
+    return (
+        isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at")
+        and status.get("state") != "recovery_required"
+    )
 
 
 def _realization(run_dir: Path, reference: Any) -> dict[str, Any] | None:
@@ -502,9 +511,9 @@ def _serve_epoch(workspace: Path, epoch: int, *, poll_sec: float, spawn_child: C
                 if claim_request(request, epoch):
                     _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
                 continue
-            if local_slots_full(workspace):
-                # Local training waits its turn; later requests wait behind this one.
-                break
+            if _request_executor(request) == "docker" and local_slots_full(workspace):
+                # Local training waits its turn; RunPod requests start at once.
+                continue
             if claim_request(request, epoch):
                 _log(f"{request.parent.parent.name}: claimed {request.name}")
         for run_dir in run_dirs:
@@ -540,9 +549,16 @@ def _local_slots(workspace: Path) -> int:
     return value if isinstance(value, int) and value > 0 else 1
 
 
+def _request_executor(request: Path | None) -> str | None:
+    return _read_json(request).get("executor") if request is not None else None
+
+
 def _active_local_runs(workspace: Path) -> int:
-    """Claimed local launches that are not finished: the slots in use."""
-    return sum(1 for run_dir in (workspace / "runs").glob("*") if run_unfinished(run_dir))
+    """Claimed local Docker launches that are not finished: the slots in use. RunPod runs take none."""
+    return sum(
+        1 for run_dir in (workspace / "runs").glob("*")
+        if _request_executor(controlling_request(run_dir)) == "docker" and run_unfinished(run_dir)
+    )
 
 
 def local_slots_full(workspace: Path) -> bool:
@@ -584,6 +600,12 @@ def work(workspace: Path, run_id: str, request_name: str, *, sleep: Callable[[fl
 
 
 def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float) -> int:
+    if _request_executor(request) == "runpod":
+        return _work_runpod(workspace, run_dir, request)
+    return _work_docker(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec)
+
+
+def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float) -> int:
     from kura.executors.common import unresolved_create_intents
     from kura.executors.docker import DOCKER_LAUNCH_LOCK, reconcile_docker, resolve_docker_create_intents
 
@@ -643,6 +665,195 @@ def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
         sleep(poll_sec)
 
 
+# RunPod followers ---------------------------------------------------------------------
+
+COLLECTION_ATTEMPTS = 3
+
+
+def _runpod_config(workspace: Path) -> dict[str, Any]:
+    import yaml
+
+    try:
+        config = yaml.safe_load((workspace / "workspace.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    runpod = config.get("runpod") if isinstance(config, dict) else None
+    return runpod if isinstance(runpod, dict) else {}
+
+
+def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
+    """Launch or continue a confirmed RunPod launch; billing was confirmed by the writer."""
+    from kura.executors.common import StopRequested, set_stop_check, unresolved_create_intents
+    from kura.executors.runpod import resolve_runpod_create_intents
+
+    details = _read_json(request)
+    if not details.get("billing_confirmed_at"):
+        _record_request_outcome(request, ".launch-failed.json", "launch_failed", error="the request carries no billing confirmation; nothing was created")
+        return 0
+    set_stop_check(lambda: _sibling(request, ".stop.json").exists())
+    try:
+        if unresolved_create_intents(run_dir, "runpod"):
+            with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
+                for line in resolve_runpod_create_intents(run_dir, _runpod_config(workspace)):
+                    _log(f"{run_dir.name}: {line}")
+        realization = _realization(run_dir, _status(run_dir).get("last_realization"))
+        launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
+        try:
+            if not launched:
+                if _sibling(request, ".stop.json").exists():
+                    _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+                    return 0
+                # With no create intent no Pod exists, so a confirmed launch simply continues (run-records ADR).
+                _first_attempt(request)
+                code = _remote(run_dir, request, details, reattach=False)
+            else:
+                code = _continue_runpod(workspace, run_dir, request, details, realization)
+        except (OSError, ValueError) as exc:
+            _log(f"{run_dir.name}: {exc}")
+            code = 1
+        if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
+            # A stop that ended a step inside the launch (a wait, a hold) is finished here.
+            _stop_runpod_on_request(workspace, run_dir, request)
+            return 0
+        return _settle_runpod_attempt(run_dir, request, details, code)
+    except StopRequested:
+        _stop_runpod_on_request(workspace, run_dir, request)
+        return 0
+    finally:
+        set_stop_check(None)
+
+
+def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: bool) -> int:
+    from kura.run_commands.launch import _run_remote_locked
+
+    options = dict(details.get("options") or {})
+    controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
+                     "billing_confirmed_at": details.get("billing_confirmed_at")}
+    return _run_remote_locked(
+        run_dir.name, yes=True, reattach=reattach, controlled_by=controlled_by,
+        runpod_config_override=details.get("runpod_config"), **options,
+    )
+
+
+def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int:
+    """Pick up a launch an earlier follower started, from its records."""
+    from kura.executors.common import remote_job_record, remote_job_started
+    from kura.run_commands.runpod_ssh import remote_job_pid
+
+    from kura.executors.common import _mutate_run_status
+
+    status = _status(run_dir)
+    realization_id = str(realization.get("id"))
+    if run_finished(status):
+        if _pod_left_running(status):
+            # Collected or never started: either way nothing on the Pod is still needed.
+            from kura.executors.runpod import stop_runpod
+
+            stop_runpod(run_dir, _runpod_config(workspace))
+            _log(f"{run_dir.name}: deleted the Pod a finished run left running")
+        return 0
+    if not isinstance(realization.get("pod"), dict) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
+        # The Pod is gone or was never created; nothing is left to follow.
+        at = _now()
+        _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None}))
+        return 0
+    if remote_job_started(run_dir, realization_id):
+        from kura.executors.runpod import reconcile_runpod
+
+        # An explicit observation records a Pod that is gone, so it is not followed or retried.
+        current = reconcile_runpod(run_dir, _runpod_config(workspace), source="explicit")
+        if current.get("pod_missing_at"):
+            at = _now()
+            _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None}))
+            _notify_text(details, f"Kura run interrupted: {run_dir.name}",
+                         f"Run {run_dir.name}'s Pod no longer exists; outputs not collected before it went are gone.")
+            return 0
+        return _remote(run_dir, request, details, reattach=True)
+    intent = _read_json(run_dir / "realizations" / f"{realization_id}.remote-job-intent.json")
+    if intent:
+        pid = remote_job_pid(run_dir, str(intent.get("pid_path")))  # raises when the Pod cannot be asked
+        if pid is not None:
+            atomic_write_json(run_dir / "realizations" / f"{realization_id}.remote-job.json", record("remote_job", {
+                "realization_id": realization_id, "started_at": _now(), "pid": pid, "pid_path": intent.get("pid_path"),
+                "intent": f"{realization_id}.remote-job-intent.json", "recovered": True,
+            }))
+            return _remote(run_dir, request, details, reattach=True)
+    # The job never started, so nothing on the Pod can be collected (run-records ADR).
+    return _delete_unstarted_pod(workspace, run_dir, request, details)
+
+
+def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> int:
+    from kura.executors.common import _mutate_run_status
+    from kura.executors.runpod import stop_runpod
+
+    stop_runpod(run_dir, _runpod_config(workspace))
+    at = _now()
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": "interrupted", "ended": at, "exit_code": None})
+
+    _mutate_run_status(run_dir, mutate)
+    _log(f"{run_dir.name}: the Pod's job never started, so the Pod was deleted")
+    _notify_text(details, f"Kura run interrupted: {run_dir.name}",
+                 f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Launch it again with `kura run execute {run_dir.name}`.")
+    return 0
+
+
+def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any], code: int) -> int:
+    """A finished run ends the follower; repeated failures to collect hand the run to a person."""
+    from kura.executors.common import _mutate_run_status
+
+    status = _status(run_dir)
+    if run_finished(status) and not _pod_left_running(status):
+        _notify_finished(run_dir, request, status)
+        return 0
+    failures_path = _sibling(request, ".failures.json")
+    failures = int(_read_json(failures_path).get("count", 0)) + 1
+    atomic_write_json(failures_path, record("follower_failures", {"count": failures, "at": _now()}))
+    if failures < COLLECTION_ATTEMPTS:
+        return 1
+    at = _now()
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": "recovery_required", "recovery_required": True, "ended": at})
+
+    _mutate_run_status(run_dir, mutate)
+    _log(f"{run_dir.name}: collection failed {failures} times; the run needs a person (see logs/runner.log)")
+    _notify_text(details, f"Kura run needs attention: {run_dir.name}",
+                 f"Run {run_dir.name} could not be collected after {failures} attempts, and its Pod may still be billing. "
+                 f"Inspect with `kura run status {run_dir.name}`, then `kura run download {run_dir.name} --force` "
+                 f"and `kura run stop {run_dir.name}`.")
+    return 0
+
+
+def _stop_runpod_on_request(workspace: Path, run_dir: Path, request: Path) -> None:
+    from kura.executors.runpod import resolve_runpod_create_intents, stop_runpod, unresolved_create_intents
+
+    try:
+        if unresolved_create_intents(run_dir, "runpod"):
+            resolve_runpod_create_intents(run_dir, _runpod_config(workspace))
+        status = _status(run_dir)
+        if isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at"):
+            stop_runpod(run_dir, _runpod_config(workspace))
+    except (OSError, ValueError) as exc:
+        _log(f"{run_dir.name}: could not stop the Pod ({exc}); the next follower tries again")
+        return
+    _record_request_outcome(request, ".stop-done.json", "stop_done")
+    _log(f"{run_dir.name}: stopped on request")
+
+
+def _notify_text(details: dict[str, Any], subject: str, body: str) -> None:
+    channels = details.get("notify") or (details.get("options") or {}).get("notify_channels")
+    if not channels:
+        return
+    from kura.notifications import notify
+
+    try:
+        notify(channels, subject=subject, body=body, priority="4")
+    except Exception as exc:  # a notification never fails the run
+        _log(f"notification failed: {exc}")
+
+
 def _carry_out_stop(run_dir: Path, request: Path) -> None:
     """Stop the run's container the way `kura run stop` does, and record that the request was carried out."""
     from kura.executors.docker import stop_docker
@@ -686,19 +897,26 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     queued_said = False
     log_path = run_dir / "logs" / "stdout.log"
     offset = log_path.stat().st_size if log_path.exists() else 0
+    # The follower's own messages (capacity wait, transfer, download, stop) are part of what the user sees.
+    runner_log = run_dir / "logs" / "runner.log"
+    runner_offset = runner_log.stat().st_size if runner_log.exists() else 0
+    held_for_review = str((_read_json(request).get("options") or {}).get("hold_for") or "0") not in ("0", "0s", "")
     while True:
         outcome = request_outcome(request)
         if outcome is not None:
             print(f"the runner did not launch this run: {outcome.get('error') or outcome.get('kind')}", file=out)
             return 1
         offset = _stream_log(log_path, offset)
+        runner_offset = _stream_log(runner_log, runner_offset)
         if not queued_said and request in pending_requests(run_dir) and runner_alive(workspace) and local_slots_full(workspace):
             queued_said = True
             print("waiting for a free local slot: another local training run is using it (`runner.local_slots`)", file=out)
         status = _status(run_dir)
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
-        if launched and run_finished(status) and not _held(run_dir):
+        if launched and run_finished(status) and (not _held(run_dir) or (held_for_review and status.get("downloaded_run"))):
+            if _held(run_dir):
+                print("outputs are collected; the Pod is held for review, then the runner deletes it", file=out)
             state = str(status.get("state"))
             return EXIT_FOR_STATE.get(state, 2)
         if not runner_alive(workspace) and (not launched or not run_finished(status)):

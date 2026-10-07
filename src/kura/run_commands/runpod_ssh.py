@@ -39,7 +39,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, _run_operation_lock, append_run_event, record_launch_phase, run_events
+from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
@@ -1333,6 +1333,24 @@ def _wait_process(process: subprocess.Popen[str], timeout_sec: int) -> None:
         raise ValueError(f"runpodctl send failed with exit code {process.returncode}")
 
 
+def remote_job_pid(run_dir: Path, pid_path: str, *, timeout_sec: int = 120) -> str | None:
+    """The pid a started remote job left on its Pod, or None when the Pod has no such file.
+
+    Raises ValueError when the Pod cannot be asked, so an unanswered question is
+    never taken for "the job did not start".
+    """
+    details = _runpod_ssh_details(run_dir, timeout_sec=timeout_sec, interval_sec=5)
+    script = f"if [ -f {shlex.quote(pid_path)} ]; then cat {shlex.quote(pid_path)}; else echo __KURA_NO_PID__; fi"
+    try:
+        result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=60)
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"checking the remote job timed out after {exc.timeout} seconds") from exc
+    if result.returncode:
+        raise ValueError(_redact_secret_text(result.stderr.strip() or "checking the remote job failed"))
+    value = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    return None if value in ("", "__KURA_NO_PID__") else value
+
+
 def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 10) -> dict[str, Any]:
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     pod_id = status.get("pod_id")
@@ -1364,7 +1382,7 @@ def _runpod_ssh_details(run_dir: Path, *, timeout_sec: int, interval_sec: int = 
                     started = pod.get("lastStartedAt")
                     return {"pod_id": pod_id, "ip": ip, "port": port, "key": key, "container_started_at": started if isinstance(started, str) and started else None}
                 last_error = str(ssh.get("error") or "pod SSH is not ready")
-        time.sleep(interval_sec)
+        sleep_checking_stop(interval_sec)
     raise ValueError(f"pod SSH did not become ready before timeout: {last_error}")
 
 
@@ -2100,6 +2118,10 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     command_env = prepared_upload["command_env"]
     realization_id = str(realization.get("id") or Path(realization_ref).stem)
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
+    # The lease starts at first contact, so a Pod that fails before its job starts is still bounded.
+    lease_pod_id = status.get("pod_id")
+    _start_runpod_session_lease_guard({**details, "pod_id": lease_pod_id if isinstance(lease_pod_id, str) else ""},
+                                      workspace=workspace, run_id=run_id, max_lease_sec=max_lease_sec)
     record_launch_phase(run_dir, realization_id, "ssh_ready", container_started_at=details.get("container_started_at"))
     _start_ssh_master(details)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
@@ -2161,19 +2183,12 @@ chmod 600 {shlex.quote(remote_secret_path)}
     )
     remote_job_path = f"/tmp/kura-jobs/{run_id}.sh"
     remote_controller_log = f"/tmp/kura-jobs/{run_id}.controller.log"
-    pod_id = status.get("pod_id")
-    lease_guard = _runpod_lease_guard_shell(
-        max_lease_sec=max_lease_sec,
-        pod_id=pod_id if isinstance(pod_id, str) else "",
-        log_path=f"{workspace}/runs/{run_id}/logs/stdout.log",
-    )
     remote_pid_path = f"/tmp/kura-jobs/{run_id}.{realization_id}.pid"
     start_script = f"""
 set -euo pipefail
 mkdir -p /tmp/kura-jobs
 cat > {shlex.quote(remote_job_path)}
 chmod 700 {shlex.quote(remote_job_path)}
-{lease_guard}
 nohup sh {shlex.quote(remote_job_path)} </dev/null >{shlex.quote(remote_controller_log)} 2>&1 &
 echo $! > {shlex.quote(remote_pid_path)} || true
 echo $!
@@ -2227,6 +2242,7 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
     exit_check_interval_sec = 4.0
     next_exit_check = 0.0
     while True:
+        check_stop()
         now = time.monotonic()
         if deadline is not None and now >= deadline:
             raise subprocess.TimeoutExpired(["runpod-remote-job", run_id], job_timeout_sec)
@@ -2244,7 +2260,7 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
                 exit_code = exit_record.get("exit_code")
                 return int(exit_code) if isinstance(exit_code, int) else 1
             next_exit_check = now + exit_check_interval_sec
-        time.sleep(2)
+        sleep_checking_stop(2)
 
 
 def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None) -> int:
@@ -2269,7 +2285,7 @@ def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
         code = download_run(run_id, force=True)
         if code == 0:
             return 0
-        time.sleep(interval_sec)
+        sleep_checking_stop(interval_sec)
     return 1
 
 

@@ -30,7 +30,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, missing
-from kura.executors.common import PROGRESS_FIELDS, CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import PROGRESS_FIELDS, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 
@@ -286,6 +286,7 @@ def _confirm_runpod_launch(
     wait_for_capacity_sec: int = 0,
     unattended_wait: str | None = None,
     min_cuda_version: str | None = None,
+    confirmed_at: str | None = None,
 ) -> dict[str, Any]:
     """Require one authorization before a billable Pod-creation attempt sequence."""
 
@@ -297,6 +298,10 @@ def _confirm_runpod_launch(
         )
 
     measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
+    if confirmed_at:
+        # The command that wrote the launch request showed this and took the confirmation.
+        print(f"Creating the RunPod Pod confirmed at {confirmed_at}", file=sys.stderr)
+        return measurement
     candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
     measured_by_id = {
         candidate.get("gpu_type_id"): candidate
@@ -539,7 +544,7 @@ def _discover_pods(api_key: str, name: str, *, settle_sec: float = 5.0) -> list[
     return found
 
 
-def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, request: dict[str, Any], image: str, logs_path: str, purpose: str | None = None) -> None:
+def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, request: dict[str, Any], image: str, logs_path: str, purpose: str | None = None, controlled_by: dict[str, Any] | None = None) -> None:
     """Record that Kura is about to create a Pod, before the request is sent."""
     requested_at = _now()
     path = run_dir / "realizations" / f"{realization_id}{CREATE_INTENT_SUFFIX}"
@@ -548,6 +553,7 @@ def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, r
         "kind": "pod_create_intent", "schema_version": 1, "realization_id": realization_id, "executor": "runpod",
         "pod_name": pod_name, "requested_at": requested_at, "remote_image": image, "logs_path": logs_path,
         "request": request, **({"purpose": purpose} if purpose else {}),
+        **({"controlled_by": controlled_by} if controlled_by else {}),
     })
     record_launch_phase(run_dir, realization_id, "pod_create_requested", at=requested_at)
 
@@ -558,6 +564,23 @@ def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, r
             latest.pop(key, None)
 
     _mutate_run_status(run_dir, mutate)
+
+
+def confirm_runpod_billing(
+    config: dict[str, Any], image: str, *, yes: bool, max_lease_sec: int | None,
+    wait_for_capacity_sec: int = 0, unattended_wait: str | None = None,
+) -> dict[str, Any]:
+    """Show the launch's cost and take the user's confirmation without creating anything.
+
+    The job runner launches later from the same settings; a confirmation is the
+    writer's, never the runner's.
+    """
+    settings = _runpod_settings(config)
+    min_cuda = runpod_min_cuda_version("" if settings.get("template_id") else image)
+    return _confirm_runpod_launch(
+        config, settings, yes=yes, max_lease_sec=max_lease_sec, wait_for_capacity_sec=wait_for_capacity_sec,
+        unattended_wait=unattended_wait, min_cuda_version=min_cuda,
+    )
 
 
 def _hand_over_unconfirmed_create(run_dir: Path, realization_id: str, pod_name: str, error: str) -> ValueError:
@@ -618,6 +641,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
         base = {
             "id": realization_id, "executor": "runpod", "recovered_from_intent": intent_path.name,
             "remote_image": intent.get("remote_image"), "request": intent.get("request"), "logs_path": intent.get("logs_path"),
+            **({"controlled_by": intent["controlled_by"]} if isinstance(intent.get("controlled_by"), dict) else {}),
             **({"purpose": intent["purpose"]} if isinstance(intent.get("purpose"), str) else {}), **kura_provenance(),
         }
         if not pods:
@@ -1059,6 +1083,7 @@ def launch_runpod(
     yes: bool = False,
     max_lease_sec: int | None = None,
     unattended_wait: str | None = None,
+    controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
     """Create a RunPod Pod using a pre-staged workspace."""
     settings = _runpod_settings(config)
@@ -1196,6 +1221,7 @@ sleep infinity
         wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait,
         min_cuda_version=request_body["minCudaVersion"],
+        confirmed_at=(controlled_by or {}).get("billing_confirmed_at"),
     )
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
@@ -1265,7 +1291,7 @@ sleep infinity
                 attempt_request.update(placement)
                 controller_phase = "create"
                 if not intent_written:
-                    _write_create_intent(run_dir, realization_id, pod_name=request_body["name"], request=safe_request, image=image, logs_path=log_path)
+                    _write_create_intent(run_dir, realization_id, pod_name=request_body["name"], request=safe_request, image=image, logs_path=log_path, controlled_by=controlled_by)
                     intent_written = True
                 try:
                     pod = _runpod_request("POST", "/pods", api_key, attempt_request)
@@ -1338,7 +1364,7 @@ sleep infinity
                 file=sys.stderr,
             )
             controller_phase = "sleep"
-            time.sleep(sleep_for)
+            sleep_checking_stop(sleep_for)
             controller_phase = "probe"
     except KeyboardInterrupt as exc:
         cancelled_at = _now()
@@ -1362,7 +1388,7 @@ sleep infinity
             # Every create so far was refused, so no Pod exists; settle the intent here.
             realization_path = run_dir / "realizations" / f"{realization_id}.json"
             _write_json(realization_path, as_record("realization", {
-                "id": realization_id, "executor": "runpod", "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
+                "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": "launch_failed", "attempted_at": cancelled_at, "pod": None,
                 "request": safe_request, "logs_path": log_path, "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
                 "error": "the capacity wait was cancelled; every create attempt had been refused, so no Pod exists", **kura_provenance(),
             }))
@@ -1381,7 +1407,7 @@ sleep infinity
         failed_request = dict(safe_request)
         failed_request["launch_attempts"] = launch_errors
         realization = {
-            "id": realization_id, "executor": "runpod", "state": "launch_failed", "attempted_at": failed_at,
+            "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": "launch_failed", "attempted_at": failed_at,
             "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": None, "request": failed_request,
             "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
             "logs_path": log_path,
@@ -1417,7 +1443,7 @@ sleep infinity
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)
     realization = {
-        "id": realization_id, "executor": "runpod", "state": state, "launched_at": _now(),
+        "id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "state": state, "launched_at": _now(),
         "remote_image": image, "image_identity": image_reference_identity(image), **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}), "pod": _runpod_pod_snapshot(pod),
         "request": safe_used_request, "container_cwd": spec["cwd"], "backend_command": spec["argv"], "write_roots": spec.get("write_roots", []),
         "logs_path": log_path, "workspace_contract": workspace_contract, "transfer": transfer_codes,

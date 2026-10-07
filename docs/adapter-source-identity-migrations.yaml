@@ -8,6 +8,55 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-through-job-runner-2026-10-07
+    executor: runpod
+    reason: RunPod training launches go through the job runner. The writer confirms billing and records
+      the confirmed settings in the launch request; the runner's follower launches from those settings
+      with the same requests as before and follows, collects, and deletes the Pod as before. The
+      maximum lease now starts when Kura first reaches the Pod over SSH instead of when the job
+      starts, the controller deletes the Pod directly after collection, and capacity waits, SSH
+      waits, the follow loop, downloads, and review holds also end on a stop request. Training,
+      transfer, and publication are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: e09e7115adc0858868faf22adf23b5c9f80d8cc5108ea91f64d2c4ee744c1cf0
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 94cdc2364932f039b5001702e2c0a7b496b81c86d866581067dd72ee718bc066
   - id: runpod-executor-job-runner-2026-10-07
     executor: runpod
     reason: The shared executor module gains the job runner's finish predicate, epoch fencing of

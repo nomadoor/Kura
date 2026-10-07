@@ -470,7 +470,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 patch("kura.run_commands.launch.launch_run", return_value=0),
                 patch("kura.run_commands.launch._runpod_run_over_ssh", side_effect=StagedTransferChanged("replaced")),
                 patch("kura.run_commands.launch.download_with_retries") as download,
-                patch("kura.run_commands.launch.stop_run", return_value=0) as stop,
+                patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop,
                 patch("kura.run_commands.launch.time.sleep") as sleep,
                 patch("kura.run_commands.launch._notify"),
                 patch("sys.stderr", new_callable=io.StringIO),
@@ -481,7 +481,8 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                 )
 
             self.assertEqual(code, 1)
-            stop.assert_called_once_with("example")
+            stop.assert_called_once()
+            self.assertEqual(stop.call_args.args[0].name, "example")
             download.assert_not_called()
             sleep.assert_not_called()
 

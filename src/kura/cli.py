@@ -1584,7 +1584,7 @@ def main() -> None:
     launch.add_argument("--executor", default="docker", choices=("docker", "runpod"))
     launch.add_argument("--dry-run", action="store_true")
     launch.add_argument("--image", help="Override the runtime image for this run only")
-    launch.add_argument("--wait", action="store_true", help="For local Docker runs, wait for the container to exit and reconcile status")
+    launch.add_argument("--wait", action="store_true", help="Follow the run until it finishes, as `kura run execute` does; without it the job runner continues alone")
     launch.add_argument("--wait-for-capacity", default="0", help="For RunPod, retry capacity-only launch failures for this long, e.g. 6h. Defaults to 0 (do not wait).")
     launch.add_argument("--capacity-poll-interval", default="30s", help="How often to retry RunPod capacity while waiting, e.g. 30s")
     launch.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")

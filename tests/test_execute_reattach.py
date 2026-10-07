@@ -49,7 +49,7 @@ class ExecuteReattachTests(unittest.TestCase):
             with patch.object(launch, "follow_running_runpod_job", return_value=0) as follow, \
                     patch.object(launch, "stage_run") as stage, patch.object(launch, "launch_run") as launch_run, \
                     patch.object(launch, "download_with_retries", return_value=0) as download, \
-                    patch.object(launch, "stop_run", return_value=0) as stop, \
+                    patch.object(launch, "stop_runpod", return_value={}) as stop, \
                     patch.object(launch, "format_run_completion", return_value="done"), patch.object(launch, "_notify"), \
                     redirect_stderr(io.StringIO()), patch("sys.stdout", io.StringIO()):
                 code = launch.execute_run("example", yes=True)
@@ -58,7 +58,8 @@ class ExecuteReattachTests(unittest.TestCase):
         stage.assert_not_called()
         launch_run.assert_not_called()
         download.assert_called_once()
-        stop.assert_called_once_with("example")
+        stop.assert_called_once()
+        self.assertEqual(stop.call_args.args[0].name, "example")
 
     def test_a_running_pod_whose_job_never_started_is_refused(self) -> None:
         with _runpod_run({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/r1.json"}):
@@ -113,11 +114,21 @@ class ExecuteReattachTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("run does not exist", stderr.getvalue())
 
-    def test_a_compiled_run_launches_as_before(self) -> None:
+    def test_a_compiled_run_launches_through_the_runner(self) -> None:
         with _runpod_run({"state": "compiled"}):
-            with patch.object(launch, "run_remote", return_value=0) as run_remote:
+            with patch.object(launch, "_launch_runpod_through_runner", return_value=0) as through_runner, \
+                    patch.object(launch, "run_remote") as run_remote:
                 launch.execute_run("example", yes=True)
-        self.assertFalse(run_remote.call_args.kwargs["reattach"])
+        through_runner.assert_called_once()
+        run_remote.assert_not_called()
+
+    def test_a_job_started_before_the_runner_keeps_its_in_process_follower(self) -> None:
+        with _runpod_run({"state": "running", "pod_id": "pod-1", "remote_job_started_at": "t", "last_realization": "realizations/r1.json"}):
+            with patch.object(launch, "_launch_runpod_through_runner") as through_runner, \
+                    patch.object(launch, "run_remote", return_value=0) as run_remote:
+                launch.execute_run("example", yes=True)
+        through_runner.assert_not_called()
+        self.assertTrue(run_remote.call_args.kwargs["reattach"])
 
 
     def test_a_second_controller_for_the_same_run_is_refused(self) -> None:
