@@ -32,7 +32,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
-from kura.executors.runpod import POD_SELF_DELETE_FUNCTION
+from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
 from kura.fsio import atomic_write_json
 from kura.records import record
 from kura.workspace import load_yaml as _load_yaml
@@ -1514,12 +1514,12 @@ def _wait_http_ready(endpoint: str, *, timeout_sec: int = 180) -> None:
             return
         except (OSError, urllib.error.URLError) as exc:
             last_error = _safe_error(exc)
-        time.sleep(2)
+        sleep_checking_stop(2)
     raise ValueError(f"ComfyUI endpoint did not become ready before timeout: {last_error}")
 
 
 def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = 12 * 3600) -> None:
-    """Start the Pod-side lease fuse before any render setup or uploads."""
+    """Start the Pod-side lease fuse over SSH; it never moves a deadline the Pod already set."""
 
     if max_lease_sec <= 0:
         return
@@ -1771,10 +1771,6 @@ echo "[kura] unattended completion: the Pod deletes itself in ${{kura_wait}}s un
 """.strip()
 
 
-# Where the Pod keeps its lease deadline, in seconds since the epoch.
-LEASE_DEADLINE_PATH = "/tmp/kura-lease-deadline"
-
-
 def record_lease_deadline(run_dir: Path, deadline_epoch: int, *, reason: str, previous_epoch: int | None = None) -> Path:
     """Record the Pod's lease deadline in the run, so a follower can compare it with the training left."""
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
@@ -1802,36 +1798,6 @@ def latest_lease_deadline(run_dir: Path, realization_id: str) -> int | None:
         if isinstance(value, int):
             return value
     return None
-
-
-def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
-    """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
-    if max_lease_sec <= 0:
-        return ""
-    pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
-    deadline_file = shlex.quote(LEASE_DEADLINE_PATH)
-    # The deadline lives in a file, so `kura run lease` can move it; an unreadable
-    # file falls back to the deadline set here.
-    return f"""
-{POD_SELF_DELETE_FUNCTION}
-kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
-# A guard started again on the same Pod never moves a deadline already set.
-[ -s {deadline_file} ] || {{ echo "$kura_lease_initial" > {deadline_file}.tmp && mv {deadline_file}.tmp {deadline_file}; }}
-(
-  set +e
-  {pod_export}
-  while :; do
-    kura_lease_deadline=$(cat {deadline_file} 2>/dev/null)
-    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.
-    case "$kura_lease_deadline" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac
-    [ "$(date +%s)" -ge "$kura_lease_deadline" ] && break
-    sleep 30
-  done
-  mkdir -p "$(dirname {shlex.quote(log_path)})" || true
-  echo "[kura] the maximum lease ended; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
-  kura_pod_self_delete {shlex.quote(log_path)} || true
-) </dev/null >/dev/null 2>&1 &
-""".strip()
 
 
 def _mark_runpod_outputs_collecting(details: dict[str, Any], run_id: str) -> None:
@@ -2426,9 +2392,9 @@ def change_runpod_lease(run_dir: Path, duration_sec: int, *, yes: bool, input_st
         raise ValueError("this run has no RunPod Pod to change the lease of")
     if status.get("pod_stopped_at") or status.get("pod_missing_at"):
         raise ValueError("this run's Pod is already stopped")
-    if realization.get("purpose") == "comfyui-render":
-        # A render session Pod also carries a fixed timer set when it was created, which this cannot move.
-        raise ValueError("a render Pod's lease cannot be changed yet; its creation-time timer still ends it")
+    if realization.get("purpose") == "comfyui-render" and realization.get("lease_guard") != "deadline_file":
+        # A render Pod from before this also carries a fixed timer set when it was created, which this cannot move.
+        raise ValueError("this render Pod's lease cannot be changed; it was created before Kura kept the deadline in a file")
     details = _runpod_ssh_details(run_dir, timeout_sec=120, interval_sec=5)
     path = shlex.quote(LEASE_DEADLINE_PATH)
     # The Pod's clock decides when the guard fires, so deadlines are computed there.

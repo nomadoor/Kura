@@ -66,6 +66,11 @@ now, after showing the current and the new deadline and taking the same
 confirmation a launch takes; it is recorded in the run. Kura never moves the
 deadline on its own: a longer lease is a billing decision.
 
+A render session Pod keeps its deadline in the same file (2026-10-08), so the
+same command changes it. Its lease starts when the Pod starts rather than at
+first contact: the Pod sets the deadline itself, and a second guard started
+over SSH never moves a deadline already set.
+
 While it follows a job, Kura estimates the time left from the training
 progress. When training plus collection looks unlikely to finish before the
 deadline, it warns once in the run's log and by notification, naming the

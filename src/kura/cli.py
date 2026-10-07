@@ -1746,7 +1746,8 @@ def cmd_runner_stop(_: argparse.Namespace) -> int:
     from kura import runner
 
     runner.stop_runner(_workspace())
-    print("runner stopped; containers keep running, and `kura runner start` or the next launch follows them again")
+    print("runner stopped; containers and Pods keep running, a render or launch already in progress finishes, "
+          "and `kura runner start` or the next launch follows the rest again")
     return 0
 
 

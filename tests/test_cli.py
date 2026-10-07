@@ -2016,17 +2016,25 @@ class RenderNotificationTests(unittest.TestCase):
             run_dir = root / "runs" / "render-1"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("type: render\n", encoding="utf-8")
+            (run_dir / "status.json").write_text('{"state": "compiled"}', encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, \
+                        patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.follow", return_value=0), \
+                        patch("sys.stdout", new_callable=io.StringIO) as stdout, patch("sys.stderr", new_callable=io.StringIO):
                     code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="runpod", dry_run=False, yes=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
             self.assertIn("completed  exit 0", stdout.getvalue())
+            # The command checks and confirms billing; the runner launches from the request.
+            self.assertTrue(launch.call_args.kwargs["check_only"])
             self.assertTrue(launch.call_args.kwargs["yes"])
             self.assertEqual(launch.call_args.kwargs["max_lease_sec"], 12 * 3600)
+            request = json.loads(next((run_dir / "requests").glob("*.launch.json")).read_text(encoding="utf-8"))
+            self.assertEqual((request["executor"], request["options"]["max_lease_sec"]), ("render-runpod", 12 * 3600))
+            self.assertTrue(request["billing_confirmed_at"])
 
     def test_render_launch_notifies_on_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3063,7 +3071,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "kura.run_commands.render_runpod._wait_http_ready",
                 ), patch("kura.run_commands.render_runpod.launch_render", return_value=0) as render, patch(
                     "kura.run_commands.render_runpod._sync_runpod_remote_stdout",
-                ), patch("kura.run_commands.render_runpod.stop_run"), patch("kura.run_commands.render_runpod._notify"):
+                ), patch("kura.run_commands.render_runpod.stop_runpod"), patch("kura.run_commands.render_runpod._record_session_lease"), patch("kura.run_commands.render_runpod._notify"):
                     self.assertEqual(launch_render_runpod("render-1", dry_run=False, yes=True), 0)
             finally:
                 os.chdir(previous)
@@ -8177,7 +8185,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "remote lease guard setup timed out"):
                 _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
 
-    def test_runpod_comfyui_lease_guard_starts_before_model_prepare(self) -> None:
+    def test_runpod_comfyui_start_prepares_models_before_the_server(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
         with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
             _start_runpod_comfyui(
@@ -8188,12 +8196,12 @@ class RunPodLifecycleTests(unittest.TestCase):
                 registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
                 lora_remote_name=None,
                 lora_remote_path=None,
-                max_lease_sec=60,
             )
         script = run.call_args.args[0][-1]
         self.assertIn("trap cleanup EXIT", script)
         self.assertIn('rm -f "$secret_file"', script)
-        self.assertLess(script.index("runpodctl pod delete"), script.index("kura_comfy_prepare.py"))
+        # The Pod's own deadline-file guard bounds it; no second, fixed timer.
+        self.assertNotIn("runpodctl", script)
         self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
 
     def test_runpod_comfyui_start_failure_reports_ssh_error(self) -> None:
@@ -8208,7 +8216,6 @@ class RunPodLifecycleTests(unittest.TestCase):
                     registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
                     lora_remote_name=None,
                     lora_remote_path=None,
-                    max_lease_sec=0,
                 )
 
     def test_runpod_scp_is_non_interactive_and_bounded(self) -> None:

@@ -187,7 +187,8 @@ decision 7).
 Pod gone is recorded as interrupted. Continuing it is a new decision made with
 `kura run resume` from its saved training state; the runner never resumes on
 its own. A render run whose child died is recorded as interrupted with the
-images it already wrote; it is not continued from a later case.
+images it already wrote; it is not continued from a later case, and its RunPod
+Pod, which holds nothing those images lack, is deleted.
 
 **Servers.** Kura can run on a Linux or WSL host that the user operates over
 SSH. The workspace, runner, Docker, GPU, secrets, and agent are all on that

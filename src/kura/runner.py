@@ -604,6 +604,8 @@ def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
         return _work_runpod(workspace, run_dir, request)
     if _request_executor(request) == "render-local":
         return _work_render_local(workspace, run_dir, request)
+    if _request_executor(request) == "render-runpod":
+        return _work_render_runpod(workspace, run_dir, request)
     return _work_docker(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec)
 
 
@@ -684,6 +686,7 @@ def _work_render_local(workspace: Path, run_dir: Path, request: Path) -> int:
             _record_render_interrupted(workspace, run_dir, request, status)
         elif realization is None or realization.get("controlled_by", {}).get("request") != request.name:
             _record_request_outcome(request, ".not-launched.json", "not_launched", error="the runner stopped before the render began; launch it again")
+        _acknowledge_stop(run_dir, request)
         return 0
     if _sibling(request, ".stop.json").exists():
         _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
@@ -708,20 +711,98 @@ def _work_render_local(workspace: Path, run_dir: Path, request: Path) -> int:
     return 0
 
 
-def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, status: dict[str, Any]) -> None:
+def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, status: dict[str, Any], *, executor: str = "local") -> None:
     from kura.executors.common import _mutate_run_status
     from kura.render import remove_leftover_stages, write_realization
 
     at = _now()
     _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None, "current_case_id": None}))
-    write_realization(run_dir, controlled_by={"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}, executor="local", generator="comfyui", state="interrupted",
+    write_realization(run_dir, controlled_by={"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}, executor=executor, generator="comfyui", state="interrupted",
                       completed_case_count=status.get("last_step"), case_count=status.get("total_steps"),
                       error="the runner's follower stopped mid-render; images written so far are kept")
-    removed = remove_leftover_stages(workspace, run_dir)
-    _log(f"{run_dir.name}: render interrupted; removed {len(removed)} staged file(s)")
+    if executor == "local":
+        removed = remove_leftover_stages(workspace, run_dir)
+        _log(f"{run_dir.name}: render interrupted; removed {len(removed)} staged file(s)")
+    else:
+        _log(f"{run_dir.name}: render interrupted")
     _notify_text(_read_json(request), f"Kura render interrupted: {run_dir.name}",
                  f"Render {run_dir.name} stopped mid-way; images written so far are kept. Create a new render run to finish it.",
                  auto=True)
+
+
+def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
+    """Render once on a Pod whose billing the writer confirmed; a render cut short is recorded, its Pod deleted."""
+    from kura.executors.common import set_stop_check
+    from kura.run_commands.render_runpod import launch_render_runpod
+
+    details = _read_json(request)
+    if not details.get("billing_confirmed_at"):
+        _record_request_outcome(request, ".launch-failed.json", "launch_failed", error="the request carries no billing confirmation; nothing was created")
+        return 0
+    if not _first_attempt(request):
+        # An earlier follower died: its Pod holds nothing worth keeping, so it goes, and the render is not continued.
+        if not _delete_render_pod(workspace, run_dir, details):
+            return 1
+        status = _status(run_dir)
+        realization = _realization(run_dir, status.get("last_realization"))
+        if realization is None or realization.get("controlled_by", {}).get("request") != request.name:
+            _record_request_outcome(request, ".not-launched.json", "not_launched", error="the runner stopped before the render began; launch it again")
+        elif not run_finished(status):
+            _record_render_interrupted(workspace, run_dir, request, status, executor="runpod")
+        _acknowledge_stop(run_dir, request)
+        return 0
+    if _sibling(request, ".stop.json").exists():
+        _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+        return 0
+    controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
+                     "billing_confirmed_at": details.get("billing_confirmed_at")}
+    options = details.get("options") or {}
+    set_stop_check(lambda: _sibling(request, ".stop.json").exists())
+    try:
+        # It notifies on completion and failure itself, on the request's channels or Kura's defaults.
+        launch_render_runpod(
+            run_dir.name, dry_run=False, image=details.get("remote_image"), notify_channels=details.get("notify"), yes=True,
+            max_lease_sec=int(options.get("max_lease_sec") or 12 * 3600), controlled_by=controlled_by,
+            runpod_config_override=details.get("runpod_config"),
+        )
+    finally:
+        set_stop_check(None)
+    # A create cut short leaves an intent; the Pod it may have made is found by name and deleted.
+    if not _delete_render_pod(workspace, run_dir, details):
+        return 1
+    status = _status(run_dir)
+    realization = _realization(run_dir, status.get("last_realization"))
+    if realization is None or realization.get("controlled_by", {}).get("request") != request.name:
+        _record_request_outcome(request, ".launch-failed.json", "launch_failed", error=f"the render did not start; see runs/{run_dir.name}/logs/runner.log")
+    _acknowledge_stop(run_dir, request)
+    return 0
+
+
+def _acknowledge_stop(run_dir: Path, request: Path) -> None:
+    """A render that has ended carried out any stop asked of it; `kura run stop` waits for this record."""
+    if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
+        _record_request_outcome(request, ".stop-done.json", "stop_done")
+        _log(f"{run_dir.name}: render stopped on request")
+
+
+def _delete_render_pod(workspace: Path, run_dir: Path, details: dict[str, Any]) -> bool:
+    """Settle an unconfirmed create and delete a render Pod still running; False when RunPod could not be asked."""
+    from kura.executors.runpod import resolve_runpod_create_intents, stop_runpod, unresolved_create_intents
+
+    config = details.get("runpod_config") if isinstance(details.get("runpod_config"), dict) else _runpod_config(workspace)
+    try:
+        if unresolved_create_intents(run_dir, "runpod"):
+            with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
+                for line in resolve_runpod_create_intents(run_dir, config):
+                    _log(f"{run_dir.name}: {line}")
+        status = _status(run_dir)
+        if isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at"):
+            stop_runpod(run_dir, config)
+            _log(f"{run_dir.name}: deleted the render Pod")
+    except (OSError, ValueError) as exc:
+        _log(f"{run_dir.name}: could not delete the render Pod ({exc}); the next follower tries again")
+        return False
+    return True
 
 
 # RunPod followers ---------------------------------------------------------------------
@@ -935,6 +1016,7 @@ def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, au
     from kura.notifications import notify
 
     state = status.get("state")
+    # A RunPod render notifies from its own launch, so only a local render reaches here as a render.
     noun = "render" if _request_executor(request) == "render-local" else "run"
     try:
         notify(channels or None, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.", priority="3")

@@ -1466,6 +1466,41 @@ sleep infinity
     return realization_id
 
 
+# Where the Pod keeps its lease deadline, in seconds since the epoch.
+LEASE_DEADLINE_PATH = "/tmp/kura-lease-deadline"
+
+
+def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
+    """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
+    if max_lease_sec <= 0:
+        return ""
+    pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
+    deadline_file = shlex.quote(LEASE_DEADLINE_PATH)
+    # The deadline lives in a file, so `kura run lease` can move it; an unreadable
+    # file falls back to the deadline set here.
+    return f"""
+{POD_SELF_DELETE_FUNCTION}
+kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
+# A guard started again on the same Pod never moves a deadline already set.
+[ -s {deadline_file} ] || {{ echo "$kura_lease_initial" > {deadline_file}.tmp && mv {deadline_file}.tmp {deadline_file}; }}
+(
+  set +e
+  {pod_export}
+  while :; do
+    kura_lease_deadline=$(cat {deadline_file} 2>/dev/null)
+    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.
+    case "$kura_lease_deadline" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac
+    [ "$(date +%s)" -ge "$kura_lease_deadline" ] && break
+    sleep 30
+  done
+  mkdir -p "$(dirname {shlex.quote(log_path)})" || true
+  echo "[kura] the maximum lease ended; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
+  kura_pod_self_delete {shlex.quote(log_path)} || true
+) </dev/null >/dev/null 2>&1 &
+""".strip()
+
+
+
 def launch_runpod_session(
     *,
     run_dir: Path,
@@ -1475,17 +1510,24 @@ def launch_runpod_session(
     dry_run: bool = False,
     yes: bool = False,
     max_lease_sec: int = 12 * 3600,
+    controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
-    """Create a thin disposable RunPod session without Kura training staging."""
+    """Create a thin disposable RunPod session without Kura training staging.
+
+    The Pod's maximum lease runs from its start and lives in the deadline file,
+    so `kura run lease` can move it like a training Pod's.
+    """
     settings = _runpod_settings(config)
     realization_id = _realization_id()
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name, max_lease_sec=max_lease_sec)
+    # The lease is armed first, so a Pod whose SSH setup stalls is still bounded.
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 touch "$KURA_LOG_PATH"
+'''.strip() + "\n" + _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path) + "\n" + r'''
 if ! command -v sshd >/dev/null 2>&1; then
   apt-get update >> "$KURA_LOG_PATH" 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
@@ -1497,13 +1539,6 @@ if [ -n "${PUBLIC_KEY:-}" ]; then
   chmod 600 /root/.ssh/authorized_keys
 fi
 /usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
-if [ "${KURA_MAX_LEASE_SEC:-0}" -gt 0 ] 2>/dev/null; then
-  (
-    sleep "$KURA_MAX_LEASE_SEC"
-    echo "[kura] session maximum lease of ${KURA_MAX_LEASE_SEC}s expired; deleting the Pod" >> "$KURA_LOG_PATH" 2>&1 || true
-    kura_pod_self_delete "$KURA_LOG_PATH" || true
-  ) </dev/null >/dev/null 2>&1 &
-fi
 echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
 sleep infinity
 '''.strip()
@@ -1537,7 +1572,8 @@ sleep infinity
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
         raise MissingSecret(settings["api_key_env"], "needed to launch a RunPod session")
-    _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec, min_cuda_version=request_body["minCudaVersion"])
+    _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec, min_cuda_version=request_body["minCudaVersion"],
+                           confirmed_at=(controlled_by or {}).get("billing_confirmed_at"))
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
@@ -1550,7 +1586,7 @@ sleep infinity
                 attempt_request["cloudType"] = cloud_type
                 attempt_request.update(placement)
                 if not intent_written:
-                    _write_create_intent(run_dir, realization_id, pod_name=request_body["name"], request=safe_request, image=image, logs_path=log_path, purpose=purpose)
+                    _write_create_intent(run_dir, realization_id, pod_name=request_body["name"], request=safe_request, image=image, logs_path=log_path, purpose=purpose, controlled_by=controlled_by)
                     intent_written = True
                 try:
                     pod = _runpod_request("POST", "/pods", api_key, attempt_request)
@@ -1574,7 +1610,7 @@ sleep infinity
         realization_path.parent.mkdir(exist_ok=True)
         failed_request = dict(safe_request)
         failed_request["launch_attempts"] = launch_errors
-        realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), **kura_provenance()}
+        realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "state": "launch_failed", "attempted_at": failed_at, "remote_image": image, "pod": None, "request": failed_request, "logs_path": log_path, "error": "; ".join(f"{item['gpu_type_ids']} {item['cloud_type']}: {item['error']}" for item in launch_errors), **kura_provenance()}
         _write_json(realization_path, as_record("realization", realization))
         status = _load_status(run_dir)
         status.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir))})
@@ -1597,7 +1633,7 @@ sleep infinity
     state, _ = _runpod_state(pod)
     realization_path = run_dir / "realizations" / f"{realization_id}.json"
     realization_path.parent.mkdir(exist_ok=True)
-    realization = {"id": realization_id, "executor": "runpod", "purpose": purpose, "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
+    realization = {"id": realization_id, "executor": "runpod", **({"controlled_by": controlled_by} if controlled_by else {}), "purpose": purpose, "lease_guard": "deadline_file", "state": state, "launched_at": _now(), "remote_image": image, "pod": _runpod_pod_snapshot(pod), "request": safe_used_request, "logs_path": log_path, "workspace_contract": "Thin RunPod session; Kura connects over SSH tunnel and records render artifacts locally", "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}", **kura_provenance()}
     _write_json(realization_path, as_record("realization", realization))
     status = _load_status(run_dir)
     status.update({"state": state, "started": realization["launched_at"], "ended": None, "exit_code": None, "host": "runpod", "last_realization": str(realization_path.relative_to(run_dir)), "pod_id": pod_id})
