@@ -925,7 +925,8 @@ class RunPodRenderLaunchTests(unittest.TestCase):
                 os.chdir(previous)
             self.assertEqual(code, 130)
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
-            stop.assert_called_once_with(run_dir, {"gpu_type_ids": ["A"]})
+            stop.assert_called_once()
+            self.assertEqual((stop.call_args.args[0].resolve(), stop.call_args.args[1]), (run_dir.resolve(), {"gpu_type_ids": ["A"]}))
 
     def test_check_only_confirms_billing_and_creates_nothing(self) -> None:
         from kura.run_commands import render_runpod
