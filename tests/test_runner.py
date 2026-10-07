@@ -576,3 +576,132 @@ class RunPodWriterTests(unittest.TestCase):
             self.assertTrue(payload["billing_confirmed_at"])
             self.assertEqual(payload["runpod_config"], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertEqual(payload["options"], {"max_lease": "3h"})
+
+
+def _render_run(run_dir: Path, *, lora_dir: Path | None = None) -> None:
+    import yaml
+
+    from kura.comfyui_models import endpoint_fingerprint
+
+    resolved = run_dir / "resolved"
+    resolved.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "type": "render", "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"},
+        "inputs": {"workflow": {"path": "workflows/test.json"}, "promptset": {"path": "promptsets/test.jsonl"}, "checkpoint": {}},
+        "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 5},
+        "comfyui_endpoint_identity": endpoint_fingerprint({"KSampler": {}}),
+        **({"comfyui": {"lora_dir": str(lora_dir)}} if lora_dir else {}),
+    }
+    (resolved / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    (resolved / "workflow_used.json").write_text("{}", encoding="utf-8")
+    (resolved / "promptset_used.jsonl").write_text('{"id":"p1","prompt":"hello","seeds":[1]}\n', encoding="utf-8")
+    _status(run_dir, state="compiled")
+
+
+class LocalRenderTests(unittest.TestCase):
+    def test_an_interrupted_render_withdraws_only_its_own_prompt(self) -> None:
+        from kura.render import launch_render
+
+        with _workspace() as (root, run_dir):
+            _render_run(run_dir)
+            calls = []
+
+            class Client:
+                def __init__(self, endpoint, timeout):
+                    pass
+
+                def object_info(self):
+                    return {"KSampler": {}}
+
+                def queue(self, workflow):
+                    return "prompt-1"
+
+                def wait(self, prompt_id):
+                    raise KeyboardInterrupt
+
+                def cancel(self, prompt_id):
+                    calls.append(prompt_id)
+
+            with patch("kura.render.ComfyUIClient", Client), self.assertRaises(KeyboardInterrupt):
+                launch_render(root, run_dir, controlled_by={"request": "r.launch.json"})
+            self.assertEqual(calls, ["prompt-1"])
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "interrupted")
+            realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+            self.assertEqual((realization["state"], realization["controlled_by"]), ("interrupted", {"request": "r.launch.json"}))
+
+    def test_an_unreachable_comfyui_is_refused_before_the_request(self) -> None:
+        from kura.run_commands import launch
+
+        with _workspace() as (root, run_dir):
+            _render_run(run_dir)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(launch, "launch_render", side_effect=OSError("connection refused")), patch("sys.stderr", io.StringIO()):
+                    self.assertEqual(launch._launch_render_through_runner("example", follow=False), 1)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(runner.launch_requests(run_dir), [])
+
+    def test_a_follower_renders_once_with_its_request(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="render-local")
+            runner.claim_request(request, 1)
+            with patch("kura.render.launch_render", return_value=0) as render:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertEqual(render.call_args.kwargs["controlled_by"]["request"], request.name)
+            # A second follower never renders again.
+            with patch("kura.render.launch_render") as again:
+                runner.work(root, "example", request.name)
+            again.assert_not_called()
+
+    def test_a_render_cut_short_is_recorded_and_its_staged_files_removed(self) -> None:
+        with _workspace() as (root, run_dir):
+            lora_dir = root / "comfy" / "loras"
+            (lora_dir / "Kura_tmp").mkdir(parents=True)
+            mine = lora_dir / "Kura_tmp" / "example-lora-1234abcd.safetensors"
+            others = lora_dir / "Kura_tmp" / "other-run-lora-1234abcd.safetensors"
+            mine.write_bytes(b"x")
+            others.write_bytes(b"y")
+            _render_run(run_dir, lora_dir=lora_dir)
+            request = runner.write_launch_request(run_dir, executor="render-local")
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)  # the follower that was rendering died
+            _status(run_dir, state="running", last_step=3, total_steps=10)
+            with patch("kura.render.launch_render") as render:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            render.assert_not_called()
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "interrupted")
+            self.assertFalse(mine.exists())
+            self.assertTrue(others.exists())
+            self.assertFalse(runner.run_unfinished(run_dir))
+
+    def test_a_stop_request_ends_the_render(self) -> None:
+        from kura.executors.common import StopRequested
+
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="render-local")
+            runner.claim_request(request, 1)
+            with patch("kura.render.launch_render", side_effect=StopRequested()):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertTrue(runner.stop_done(run_dir))
+
+    def test_execute_sends_a_runpod_render_to_runpod_and_a_local_one_to_the_runner(self) -> None:
+        import yaml
+
+        from kura.run_commands import launch
+
+        with _workspace() as (root, run_dir):
+            (run_dir / "resolved").mkdir()
+            for name, expected in (("runpod", "launch_run"), ("local", "_launch_render_through_runner")):
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({"type": "render", "executor": {"name": name}}), encoding="utf-8")
+                with patch.object(launch, "_run_path", return_value=run_dir), \
+                     patch.object(launch, "launch_run", return_value=0) as launch_run, \
+                     patch.object(launch, "_launch_render_through_runner", return_value=0) as through_runner:
+                    launch.execute_run("example")
+                called = launch_run if expected == "launch_run" else through_runner
+                called.assert_called_once()
+                if expected == "launch_run":
+                    self.assertEqual(launch_run.call_args.kwargs["executor"], "runpod")

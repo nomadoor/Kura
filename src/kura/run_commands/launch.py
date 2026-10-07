@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import subprocess
 import sys
@@ -325,6 +326,12 @@ def execute_run(
         return 1
     compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
     executor = run_executor(locked)
+    if locked.get("type") == "render":
+        # A render names its executor in `executor.name`, not in `compute`.
+        render_executor = (locked.get("executor") or {}).get("name") if isinstance(locked.get("executor"), dict) else None
+        if render_executor == "runpod":
+            return launch_run(run_id, executor="runpod", dry_run=False, image=image, notify_channels=notify_channels, yes=yes, max_lease=max_lease)
+        return _launch_render_through_runner(run_id, follow=True, notify_channels=notify_channels)
     if executor == "runpod" and locked.get("type", "train") != "render" and not _runs_outside_the_runner(run_id):
         capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
         return _launch_runpod_through_runner(run_id, follow=True, yes=yes, options={
@@ -678,6 +685,52 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
     return code
 
 
+def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels: Any = None) -> int:
+    """Hand a local render to the job runner after checking it here, then follow it or return."""
+    from kura import runner
+
+    workspace = _workspace()
+    run_dir = _run_path(run_id)
+    request = runner.latest_request(run_dir)
+    in_progress = request is not None and runner.request_outcome(request) is None and (
+        request in runner.pending_requests(run_dir) or runner.run_unfinished(run_dir)
+    )
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    if request is not None and not in_progress and status.get("state") != "compiled":
+        # A render that ran is never launched twice; a new one is a new render run. One that
+        # never started (still compiled) is launched with a new request below.
+        print(format_render_completion(workspace, run_dir, exit_code=runner.EXIT_FOR_STATE.get(str(status.get("state")), 2)))
+        return runner.EXIT_FOR_STATE.get(str(status.get("state")), 2)
+    if not in_progress:
+        try:
+            launch_render(workspace, run_dir, executor_name="local", check_only=True)
+        except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, http.client.HTTPException) as exc:
+            print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        try:
+            request = runner.write_launch_request(run_dir, executor="render-local", notify=notify_channels)
+        except (OSError, ValueError) as exc:
+            print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        print(f"launch request {request.name} written; the job runner renders it", file=sys.stderr)
+    if runner.ensure_runner(workspace, launching=True):
+        runner.await_runner(workspace)
+    if not follow:
+        if not runner.await_claim(workspace, run_dir, request):
+            print(f"no runner took launch request {request.name}; see .kura/runner/runner.log and run `kura runner start`", file=sys.stderr)
+            return 1
+        print(f"the render continues without this command; follow it with `kura run execute {run_id}`", file=sys.stderr)
+        return 0
+    print("following the render; interrupting this command does not stop it (`kura run stop` does)", file=sys.stderr)
+    try:
+        code = runner.follow(workspace, run_dir, request)
+    except KeyboardInterrupt:
+        print(f"\nstopped following; the render continues. Follow it again with `kura run execute {run_id}`", file=sys.stderr)
+        return 130
+    print(format_render_completion(workspace, run_dir, exit_code=code))
+    return code
+
+
 def _runs_outside_the_runner(run_id: str) -> bool:
     """A RunPod job started before the runner existed keeps its in-process follower."""
     from kura import runner
@@ -776,6 +829,9 @@ def cmd_run_launch(args: argparse.Namespace) -> int:
                 "wait_for_capacity": getattr(args, "wait_for_capacity", "0"),
                 "capacity_poll_interval": getattr(args, "capacity_poll_interval", "30s"),
             })
+        if run_type == "render" and args.executor != "runpod":
+            # `kura render launch` has always waited for the render; `kura run launch` waits with --wait.
+            return _launch_render_through_runner(args.run_id, follow=bool(getattr(args, "wait", True)), notify_channels=getattr(args, "notify", None))
         if run_type != "render":
             return _launch_docker_through_runner(
                 args.run_id, image=getattr(args, "image", None), follow=bool(getattr(args, "wait", False)), relaunch=True,
