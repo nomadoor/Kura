@@ -4,6 +4,9 @@ Status: accepted owner decision.
 
 Date: 2026-10-02
 
+Updated: 2026-10-07 — the maximum lease starts when Kura first reaches the Pod,
+not when the job starts.
+
 Updated: 2026-10-05 — keeping outputs past the wait by stopping the Pod, or by
 writing them to other storage, was evaluated and not adopted; see "Alternatives
 measured".
@@ -30,7 +33,9 @@ loses little, while losing a 24-hour run is severe.
   post-training timer.
 - The training time is measured from the remote job start, so it includes
   input transfer and model download.
-- The maximum lease runs from the remote job start and still ends everything.
+- The maximum lease starts as soon as Kura reaches the Pod over SSH, before
+  anything is uploaded, and still ends everything (amended 2026-10-07: a Pod
+  that failed before its job started used to have no timer at all).
   The wait therefore never outlasts the lease time remaining when training
   ends: the lease can end the Pod before the wait finishes, so a run expected
   to take longer than the lease needs a lease covering training plus the wait.

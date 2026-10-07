@@ -4,6 +4,9 @@ Status: accepted owner decision.
 
 Date: 2026-10-04
 
+Updated: 2026-10-07 — the job runner deletes a Pod of its own launch whose job
+never started, and continues a confirmed RunPod launch that created nothing yet.
+
 Refines `files-only-state-and-job-runner.md` for the runner and `kura ui`.
 
 ## Context
@@ -59,6 +62,11 @@ creates nothing, so only decisions 3 to 7 apply to it.
   Pod into a running job and never deletes one: it records the run as
   `interrupted` with every matching Pod's id, and `kura run stop` deletes them
   all. The user decides whether to stop or keep a Pod that is still billing.
+  One exception (2026-10-07): when the job runner finds a Pod of its own launch
+  whose records show the remote job never started (no remote-job intent, or an
+  intent whose pid file the Pod does not have), it deletes the Pod, records the
+  run as interrupted, and notifies. Nothing on that Pod can be collected, and
+  waiting for a person only bills.
 - A create that fails with a timeout or a transient error ends the attempt
   loop and goes to discovery. Only an explicit refusal, such as no capacity,
   may try the next GPU candidate.
@@ -81,7 +89,10 @@ request file that the runner, or the CLI when no runner is running, carries
 out and records. A claim with no realization and no create intent after it means
 the runner died before acting; nothing external exists, so the next runner, or
 `kura run reconcile` when none is running, records the request as not
-launched, and the request can be written again. Claims rely on exclusive create on a local file system,
+launched, and the request can be written again. A RunPod request is the
+exception (2026-10-07): its billing was confirmed, and with no create intent no
+Pod exists, so the next runner continues that launch, including a wait for
+capacity. Claims rely on exclusive create on a local file system,
 which is where the runner ADR and `windows-execution-model.md` place the
 workspace; network shares are not supported.
 
