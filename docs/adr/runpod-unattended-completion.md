@@ -4,6 +4,10 @@ Status: accepted owner decision.
 
 Date: 2026-10-02
 
+Updated: 2026-10-08 — a person or agent can move the lease deadline of a running
+Pod, and Kura warns when training looks unlikely to finish inside it; see
+"Changing the lease".
+
 Updated: 2026-10-07 — the maximum lease starts when Kura first reaches the Pod,
 not when the job starts.
 
@@ -53,6 +57,19 @@ loses little, while losing a 24-hour run is severe.
 - The controller downloads from the relay, verifies the files, and then
   deletes the relay copy. The relay is temporary transfer storage, not an
   archive.
+
+## Changing the lease (2026-10-07)
+
+The Pod keeps its lease deadline in a file and deletes itself once that time
+passes. `kura run lease <run-id> <duration>` sets the deadline to that long from
+now, after showing the current and the new deadline and taking the same
+confirmation a launch takes; it is recorded in the run. Kura never moves the
+deadline on its own: a longer lease is a billing decision.
+
+While it follows a job, Kura estimates the time left from the training
+progress. When training plus collection looks unlikely to finish before the
+deadline, it warns once in the run's log and by notification, naming the
+command that extends the lease.
 
 ## Consequences
 
