@@ -492,7 +492,38 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
         # Adding the record fields alone is no new fact, so it never rewrites the file.
         if without_record_fields(redacted) != without_record_fields(original):
             atomic_write_json(_status_path(run_dir), redacted)
+            _shadow_projection(run_dir, redacted)
         return redacted
+
+
+def _shadow_projection(run_dir: Path, written: dict[str, Any]) -> None:
+    """Compare the written status with the one its records imply, and log any difference.
+
+    Shadow mode for status as a projection (run-records ADR, decision 5); it never
+    changes the write and never fails it. `KURA_STATUS_SHADOW=0` turns it off.
+    """
+    if os.environ.get("KURA_STATUS_SHADOW") == "0":
+        return
+    try:
+        from kura.status_projection import shadow_differences
+
+        differences = shadow_differences(run_dir, written)
+        if differences:
+            line = json.dumps({"at": _now(), "differences": differences}, ensure_ascii=False, default=str) + "\n"
+            log = run_dir / "logs" / "status-shadow.jsonl"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+            collect = os.environ.get("KURA_STATUS_SHADOW_COLLECT")
+            if collect:
+                import inspect
+
+                caller = next((f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}:{frame.function}" for frame in inspect.stack()[2:6]
+                               if not frame.filename.endswith("common.py")), "")
+                with open(collect, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"caller": caller, "differences": differences}, default=str) + "\n")
+    except Exception:  # shadow mode never affects the run
+        pass
 
 
 class StaleRunnerEpoch(RuntimeError):

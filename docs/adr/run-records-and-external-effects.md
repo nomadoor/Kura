@@ -4,6 +4,8 @@ Status: accepted owner decision.
 
 Date: 2026-10-04
 
+Updated: 2026-10-08 — the status projection runs in shadow mode first.
+
 Updated: 2026-10-07 — the job runner deletes a Pod of its own launch whose job
 never started, and continues a confirmed RunPod launch that created nothing yet.
 
@@ -110,6 +112,12 @@ comes from: progress is written as observations, and the capacity wait and
 the stop each write a record. One function builds a run's status from those
 records, and `status.json` is its output, kept for fast reading. Deleting it
 and projecting again gives the same result, and a test holds Kura to that.
+
+The projection starts in shadow mode (2026-10-08): `status.json` is still
+written step by step, and after each write the lifecycle fields the
+projection covers are compared with it; a difference is appended to the run's
+`logs/status-shadow.jsonl` and changes nothing else. Status is written from the
+projection only once real runs show no differences.
 
 **6. Records say what they are.** The launch, observation, publication, exit,
 and stop records, and `status.json`, carry `kind` and `schema_version`.

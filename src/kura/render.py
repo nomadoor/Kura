@@ -1652,7 +1652,10 @@ def launch_render(
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     from kura.executors.common import StaleRunnerEpoch
 
-    status(run_dir, state="running", started=now(), ended=None, exit_code=None, error=None, last_step=0, total_steps=len(cases), current_case_id=None)
+    # The event first: status says running because of it.
+    started_at = now()
+    event(run_dir, {"event": "render_started", "timestamp": started_at, "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "case_count": len(cases), "image_stages": image_stages})
+    status(run_dir, state="running", started=started_at, ended=None, exit_code=None, error=None, last_step=0, total_steps=len(cases), current_case_id=None)
     active_runtime_case: dict[str, Any] | None = None
     queued_prompt_id: str | None = None
     generated = 0
@@ -1665,7 +1668,6 @@ def launch_render(
         if resolved_executor == "local":
             for plan in image_stages:
                 _materialize_stage(plan)
-        event(run_dir, {"event": "render_started", "timestamp": now(), "train_run": train_run, "generator": "comfyui", "executor": resolved_executor, "endpoint": endpoint, "case_count": len(cases), "image_stages": image_stages})
         for runtime_case in runtime_cases:
             active_runtime_case = runtime_case
             case = runtime_case["case"]
