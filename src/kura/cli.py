@@ -35,6 +35,7 @@ from kura.executors import _redact_secret_text, observe_run, reconcile_docker, r
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
+from kura.records import record
 from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
@@ -233,7 +234,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         "sampling": {"prompts": [], "cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
-    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
+    atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
     atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
@@ -354,7 +355,7 @@ def _create_resume_derived_run(
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
         _dump_yaml(run_dir / "run.yaml", derived)
-        atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
+        atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
         atomic_write_text(run_dir / "plan.md", "# Training Resume plan\n\n")
         atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     except OSError:
@@ -426,7 +427,7 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
-    atomic_write_json(run_dir / "status.json", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []})
+    atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
     atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id); return 0
@@ -584,7 +585,7 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         status_path = run_dir / "status.json"
         status = json.loads(status_path.read_text(encoding="utf-8"))
         status["state"] = "compiled"
-        atomic_write_json(status_path, status)
+        atomic_write_json(status_path, record("run_status", status))
     except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
         shutil.rmtree(resolved, ignore_errors=True)
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)

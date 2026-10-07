@@ -34,6 +34,7 @@ from kura.artifact_publication import output_contract, publish_outputs, record_p
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.executors.runpod import POD_SELF_DELETE_FUNCTION
 from kura.fsio import atomic_write_json
+from kura.records import record
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
@@ -1660,7 +1661,7 @@ def _record_remote_exit_observation(run_dir: Path, exit_record: dict[str, Any]) 
         "remote_timestamp": exit_record.get("timestamp"),
         "recovery_required": True,
     }
-    atomic_write_json(observation_path, _redact_secrets(observation))
+    atomic_write_json(observation_path, _redact_secrets(record("remote_exit_observation", observation)))
     def mutate(current: dict[str, Any]) -> None:
         current.update({
             "remote_state": observation["remote_state"],
@@ -1983,6 +1984,8 @@ memory_peak = optional_int("KURA_CGROUP_MEMORY_PEAK")
 path = f"{{workspace}}/runs/{{run_id}}/realizations/remote-exit-{{now.replace(':', '').replace('.', '-')}}.json"
 with open(path, "w", encoding="utf-8") as handle:
     json.dump({{
+        "kind": "remote_exit",
+        "schema_version": 1,
         "event": "remote_exit",
         "timestamp": now,
         "exit_code": exit_code,

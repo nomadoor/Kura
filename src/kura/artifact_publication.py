@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.fsio import atomic_write_json
+from kura.records import record, without_record_fields
 from kura.training_artifacts import _validate_safetensors_file, is_training_state_output
 
 
@@ -66,12 +67,12 @@ def record_publication_failure(run_dir: Path, realization_id: str, error: str) -
     timestamp = datetime.now().astimezone()
     compact = timestamp.strftime("%Y%m%d-%H%M%S-%f")
     path = run_dir / "realizations" / f"{realization_id}.publication-attempt-{compact}-{secrets.token_hex(3)}.json"
-    atomic_write_json(path, {
+    atomic_write_json(path, record("publication_attempt", {
         "realization_id": realization_id,
         "observed_at": timestamp.isoformat(),
         "result": "blocked",
         "error": error,
-    })
+    }))
     return path.relative_to(run_dir).as_posix()
 
 
@@ -119,16 +120,17 @@ def publish_outputs(
     if adapter_count < 1:
         raise ValueError("required trained-adapter safetensors output is missing")
     manifest_path = run_dir / "realizations" / f"{realization_id}.publication.json"
-    manifest = {
+    manifest = record("publication", {
         "schema_version": 1,
         "run_id": run_dir.name,
         "realization_id": realization_id,
         "contract": contract,
         "files": files,
-    }
+    })
     if manifest_path.exists():
         prior = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if prior != manifest:
+        # A manifest written before records carried kinds holds the same facts.
+        if not isinstance(prior, dict) or without_record_fields(prior) != without_record_fields(manifest):
             raise ValueError("output inventory changed after publication; the prior manifest is immutable")
     else:
         atomic_write_json(manifest_path, manifest)

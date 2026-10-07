@@ -22,6 +22,7 @@ import yaml
 from kura.install_source import kura_provenance
 from kura.comfyui_models import endpoint_fingerprint, merged_registry, resolve_model_specs, visible_model_refs
 from kura.fsio import atomic_write_json
+from kura.records import record as as_record
 from kura.workspace import dump_yaml
 
 
@@ -200,14 +201,14 @@ def status(run_dir: Path, **changes: Any) -> None:
     path = run_dir / "status.json"
     current = json.loads(path.read_text(encoding="utf-8"))
     current.update(changes)
-    atomic_write_json(path, current)
+    atomic_write_json(path, as_record("run_status", current))
 
 
 def write_realization(run_dir: Path, **details: Any) -> None:
     realization_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
     path = run_dir / "realizations" / f"{realization_id}.json"
     path.parent.mkdir(exist_ok=True)
-    atomic_write_json(path, {"id": realization_id, "timestamp": now(), **details})
+    atomic_write_json(path, as_record("realization", {"id": realization_id, "timestamp": now(), **details}))
     status(run_dir, last_realization=str(path.relative_to(run_dir)))
 
 
@@ -1663,7 +1664,7 @@ def launch_render(
             status(run_dir, state="failed", ended=failed_at, exit_code=1, last_step=completed_cases, total_steps=len(cases), current_case_id=failed_case_id)
         except Exception as status_exc:
             try:
-                atomic_write_json(run_dir / "status.json", {"state": "failed", "ended": failed_at, "exit_code": 1, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": failed_case_id})
+                atomic_write_json(run_dir / "status.json", as_record("run_status", {"state": "failed", "ended": failed_at, "exit_code": 1, "last_step": completed_cases, "total_steps": len(cases), "current_case_id": failed_case_id}))
             except Exception as fallback_exc:
                 _append_runtime_warning(
                     stdout_log,

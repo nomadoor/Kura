@@ -50,6 +50,7 @@ from kura.executors.common import (
     _write_status,
 )
 from kura.fsio import file_lock
+from kura.records import record as as_record
 from kura.paths import workspace_mount_mappings
 from kura.runtime_io import validated_write_roots
 
@@ -164,7 +165,7 @@ def _finalize_dataset_handoff(
                 "error": _redact_secret_text(str(exc)),
                 "input_sha256": lock.get("input_sha256") if isinstance(lock, dict) else None,
             }
-        _write_json(postflight_path, postflight)
+        _write_json(postflight_path, as_record("dataset_input_postflight", postflight))
     if announced.get("record") != postflight_ref and not _event_exists(
         run_dir, event="dataset_input_postflight", realization_id=realization_id, record=postflight_ref,
     ):
@@ -213,7 +214,7 @@ def _finalize_dataset_handoff(
         if cleanup["status"] == "failed" or cleanup_path.exists():
             cleanup_ref = f"realizations/{realization_id}.dataset-view-cleanup-attempt-{_realization_id()}.json"
             cleanup_path = run_dir / cleanup_ref
-        _write_json(cleanup_path, cleanup)
+        _write_json(cleanup_path, as_record("dataset_view_cleanup", cleanup))
     if (
         cleanup_ref is not None
         and announced.get("cleanup_record") != cleanup_ref
@@ -531,7 +532,7 @@ def _record_container_started(run_dir: Path, draft: dict[str, Any], container_id
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
         **({"recovered_from_intent": recovered_from} if recovered_from else {}),
     }
-    _write_json(realization_path, realization)
+    _write_json(realization_path, as_record("realization", realization))
 
     def mutate(latest: dict[str, Any]) -> None:
         latest.update({"state": "running", "started": realization["launched_at"], "ended": None, "exit_code": None, "host": realization.get("host"),
@@ -553,7 +554,7 @@ def _record_container_launch_failed(run_dir: Path, draft: dict[str, Any], contai
                       **({"state": container.get("state")} if container else {})},
         "create_intent": f"{realization_id}{CREATE_INTENT_SUFFIX}",
     }
-    _write_json(realization_path, realization)
+    _write_json(realization_path, as_record("realization", realization))
 
     def mutate(latest: dict[str, Any]) -> None:
         latest.update({"state": "launch_failed", "started": None, "ended": failed_at, "exit_code": None,
