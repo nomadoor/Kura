@@ -30,7 +30,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, missing
-from kura.executors.common import CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, settle_status_from_realization, unresolved_create_intents, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 
@@ -562,6 +562,7 @@ def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, r
 
 def _hand_over_unconfirmed_create(run_dir: Path, realization_id: str, pod_name: str, error: str) -> ValueError:
     at = _now()
+    write_create_unconfirmed(run_dir, realization_id, error=error)
 
     def mutate(latest: dict[str, Any]) -> None:
         latest.update({"state": "interrupted", "ended": at, "exit_code": None})
@@ -1200,6 +1201,16 @@ sleep infinity
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []
     capacity_wait_started_at: str | None = None
+    capacity_wait_closed = False
+
+    def close_capacity_wait(outcome: str, **facts: Any) -> None:
+        """Write the wait's one end line, if a wait started; the last line says where it stands."""
+        nonlocal capacity_wait_closed
+        if capacity_wait_started_at is None or capacity_wait_closed:
+            return
+        capacity_wait_closed = True
+        append_capacity_wait(run_dir, realization_id, as_record("capacity_wait_end", {"at": _now(), "outcome": outcome, "failed_rounds": capacity_rounds, **facts}))
+
     capacity_wait_started_monotonic = time.monotonic()
     capacity_rounds = 0
     transient_rounds = 0
@@ -1301,29 +1312,24 @@ sleep infinity
                     },
                 )
             remaining = max(wait_for_capacity_sec - elapsed, 0)
-            status = _load_status(run_dir)
-            status.update(
-                {
-                    "state": "queued",
-                    "started": None,
-                    "ended": None,
-                    "exit_code": None,
-                    "host": "runpod",
-                    "capacity_wait": {
-                        "started_at": capacity_wait_started_at,
-                        "attempts": capacity_rounds,
-                        "last_attempt_at": now,
-                        "remaining_sec": round(remaining),
-                        "poll_interval_sec": capacity_poll_interval_sec,
-                        "gpu_type_ids": settings["gpu_type_ids"],
-                        "cloud_types": settings["cloud_types"],
-                        "last_result": launch_errors[-1].get("classification") if launch_errors else "capacity",
-                    },
-                }
-            )
-            status.pop("pod_id", None)
-            status.pop("last_observation", None)
-            _write_status(run_dir, status)
+            capacity_wait = {
+                "started_at": capacity_wait_started_at,
+                "attempts": capacity_rounds,
+                "last_attempt_at": now,
+                "remaining_sec": round(remaining),
+                "poll_interval_sec": capacity_poll_interval_sec,
+                "gpu_type_ids": settings["gpu_type_ids"],
+                "cloud_types": settings["cloud_types"],
+                "last_result": launch_errors[-1].get("classification") if launch_errors else "capacity",
+            }
+            append_capacity_wait(run_dir, realization_id, as_record("capacity_wait_round", capacity_wait))
+
+            def mutate_queued(latest: dict[str, Any], capacity_wait: dict[str, Any] = capacity_wait) -> None:
+                latest.update({"state": "queued", "started": None, "ended": None, "exit_code": None, "host": "runpod", "capacity_wait": capacity_wait})
+                latest.pop("pod_id", None)
+                latest.pop("last_observation", None)
+
+            _mutate_run_status(run_dir, mutate_queued)
             backoff = min(2 ** min(transient_rounds, 4), 10) if transient_probe or transient_rounds else 1
             sleep_for = min(capacity_poll_interval_sec * backoff, 300, remaining)
             print(
@@ -1336,10 +1342,16 @@ sleep infinity
             controller_phase = "probe"
     except KeyboardInterrupt as exc:
         cancelled_at = _now()
-        status = _load_status(run_dir)
-        status.update({"state": "interrupted", "ended": cancelled_at, "exit_code": None, "host": "runpod"})
-        status.pop("capacity_wait", None)
-        _write_status(run_dir, status)
+        if capacity_wait_started_at is not None:
+            close_capacity_wait("cancelled")
+        if controller_phase == "create" and intent_written:
+            write_create_unconfirmed(run_dir, realization_id, error="the launch was interrupted while RunPod was creating the Pod")
+
+        def mutate_cancelled(latest: dict[str, Any]) -> None:
+            latest.update({"state": "interrupted", "ended": cancelled_at, "exit_code": None, "host": "runpod"})
+            latest.pop("capacity_wait", None)
+
+        _mutate_run_status(run_dir, mutate_cancelled)
         append_run_event(run_dir, {"event": "runpod_capacity_wait_cancelled", "timestamp": cancelled_at, "executor": "runpod", "attempts": capacity_rounds, "phase": controller_phase})
         if controller_phase == "create":
             raise ValueError(
@@ -1356,8 +1368,14 @@ sleep infinity
             }))
             _mutate_run_status(run_dir, lambda latest: latest.update({"state": "launch_failed", "last_realization": str(realization_path.relative_to(run_dir))}))
         raise ValueError("RunPod capacity wait cancelled; no Pod was created") from exc
+    except Exception as exc:
+        # An unconfirmed create, or any other failure, still ends the wait.
+        close_capacity_wait("abandoned", error=_redact_secret_text(str(exc)))
+        raise
     if pod is None or used_request is None:
         failed_at = _now()
+        if capacity_wait_started_at is not None:
+            close_capacity_wait("gave_up", last_result=launch_errors[-1].get("classification") if launch_errors else None)
         realization_path = run_dir / "realizations" / f"{realization_id}.json"
         realization_path.parent.mkdir(exist_ok=True)
         failed_request = dict(safe_request)
@@ -1391,6 +1409,7 @@ sleep infinity
     safe_used_request["countryCandidates"] = settings.get("country_codes")
     if capacity_wait_started_at is not None:
         safe_used_request["capacityWait"] = {"startedAt": capacity_wait_started_at, "failedRounds": capacity_rounds}
+        close_capacity_wait("created")
     pod_id = pod.get("id")
     if not isinstance(pod_id, str) or not pod_id:
         raise ValueError("RunPod create response did not include a pod ID")
@@ -1656,6 +1675,8 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("run has no RunPod pod ID")
     realization = status.get("last_realization")
     realization_id = Path(realization).stem if isinstance(realization, str) else None
+    # A status from before realizations still gets its stop recorded.
+    stop_record_id = realization_id or "unrecorded"
     if realization_id:
         record_launch_phase(run_dir, realization_id, "pod_stop_requested", pod_id=pod_id)
     # The Pod's container disk is disposable; terminate compute explicitly,
@@ -1668,14 +1689,21 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
             recorded = {}
         if isinstance(recorded, dict) and isinstance(recorded.get("duplicate_pod_ids"), list):
             duplicates = [item for item in recorded["duplicate_pod_ids"] if isinstance(item, str) and item != pod_id]
+    requested_at = _now()
+    targets: list[dict[str, Any]] = []
     for target in (pod_id, *duplicates):
         try:
             _runpod_request("DELETE", f"/pods/{target}", api_key)
+            targets.append({"pod_id": target, "result": "deleted"})
         except ValueError as exc:
             message = str(exc).lower()
             if "404" not in message and "pod not found" not in message:
+                write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets + [{"pod_id": target, "result": "failed"}],
+                                  requested_at=requested_at, stopped_at=None, outcome="failed", error=_redact_secret_text(str(exc)))
                 raise
+            targets.append({"pod_id": target, "result": "already_gone"})
     ended_at = _now()
+    write_stop_record(run_dir, stop_record_id, executor="runpod", targets=targets, requested_at=requested_at, stopped_at=ended_at, outcome="stopped")
 
     def mutate(latest: dict[str, Any]) -> None:
         if latest.get("pod_id") != pod_id:

@@ -130,6 +130,42 @@ def create_intent_executor(path: Path) -> str:
     return executor if isinstance(executor, str) else "runpod"
 
 
+def write_stop_record(
+    run_dir: Path, realization_id: str, *, executor: str, targets: list[dict[str, Any]],
+    requested_at: str, stopped_at: str | None, outcome: str, error: str | None = None,
+) -> Path:
+    """Record what a stop did, before status reflects it.
+
+    `targets` names every Pod or container the stop acted on and what happened
+    to it; `outcome` is `stopped` or `failed`.
+    """
+    path = run_dir / "realizations" / f"{realization_id}.stop-{_realization_id()}.json"
+    path.parent.mkdir(exist_ok=True)
+    _write_json(path, record("stop", {
+        "realization_id": realization_id, "executor": executor, "requested_at": requested_at,
+        "stopped_at": stopped_at, "outcome": outcome, "targets": targets, **({"error": error} if error else {}),
+    }))
+    return path
+
+
+def write_create_unconfirmed(run_dir: Path, realization_id: str, *, error: str) -> Path:
+    """Record that a create was sent but never confirmed.
+
+    The intent stays unresolved on purpose: only discovery settles it, so
+    `kura run reconcile` and `kura run stop` can still find what was created.
+    """
+    path = run_dir / "realizations" / f"{realization_id}.create-unconfirmed.json"
+    _write_json(path, record("create_unconfirmed", {"realization_id": realization_id, "at": _now(), "error": error}))
+    return path
+
+
+def append_capacity_wait(run_dir: Path, realization_id: str, line: dict[str, Any]) -> None:
+    """Append one capacity-wait fact; the last line says where the wait stands."""
+    path = run_dir / "realizations" / f"{realization_id}.capacity-wait.jsonl"
+    path.parent.mkdir(exist_ok=True)
+    append_line_durably(path, json.dumps(_redact_secrets(line), ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def is_realization_record(path: Path) -> bool:
     """Whether a file in `realizations/` is a realization itself.
 

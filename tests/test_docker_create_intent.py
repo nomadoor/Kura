@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kura.executors.common import CREATE_INTENT_SUFFIX, unresolved_create_intents
-from kura.executors.docker import DOCKER_LAUNCH_LOCK, launch_docker, resolve_docker_create_intents
+from kura.executors.docker import DOCKER_LAUNCH_LOCK, launch_docker, resolve_docker_create_intents, stop_docker
 from kura.fsio import file_lock
 
 SPEC = {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}
@@ -168,7 +168,6 @@ class DockerCreateIntentTests(unittest.TestCase):
             self.assertIn("still creating its container", stderr.getvalue())
             self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
 
-
     def test_a_launch_that_stopped_before_status_followed_its_realization_is_settled(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -207,6 +206,31 @@ class DockerCreateIntentTests(unittest.TestCase):
             with _docker([]) as docker, self.assertRaisesRegex(ValueError, "started first"):
                 launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
             self.assertEqual([command[:2] for command in docker], [])
+
+    def test_a_stop_records_what_it_did_before_reconciling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _run(root)
+            with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            with _docker([subprocess.CompletedProcess([], 0, "container-1\n", "")]), patch("kura.executors.docker.reconcile_docker", return_value={}) as reconcile:
+                stop_docker(run_dir)
+            reconcile.assert_called_once()
+            [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob(f"{realization_id}.stop-*.json")]
+            self.assertEqual((stop["kind"], stop["executor"], stop["outcome"]), ("stop", "docker", "stopped"))
+            self.assertEqual(stop["targets"], [{"container": "container-1", "result": "stopped"}])
+
+    def test_a_failed_stop_is_recorded_before_the_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _run(root)
+            with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            with _docker([subprocess.CompletedProcess([], 1, "", "permission denied")]), self.assertRaisesRegex(ValueError, "permission denied"):
+                stop_docker(run_dir)
+            [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob(f"{realization_id}.stop-*.json")]
+            self.assertEqual((stop["outcome"], stop["stopped_at"], stop["error"]), ("failed", None, "permission denied"))
+
 
 if __name__ == "__main__":
     unittest.main()
