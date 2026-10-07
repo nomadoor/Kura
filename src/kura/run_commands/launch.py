@@ -218,7 +218,12 @@ def _run_remote_locked(
             # Stop the Pod directly: this command, or the runner's follower running it,
             # is the one that would otherwise receive a stop request for its own run.
             try:
-                print(json.dumps(stop_runpod(run_dir, _workspace_config().get("runpod", {})), indent=2))
+                runpod_config = _workspace_config().get("runpod", {})
+            except (OSError, ValueError):
+                # An unreadable workspace.yaml must not keep a collected Pod billing.
+                runpod_config = {}
+            try:
+                print(json.dumps(stop_runpod(run_dir, runpod_config), indent=2))
             except (OSError, ValueError) as exc:
                 print(f"cannot stop the RunPod pod: {_safe_error(exc)}; run `kura run stop {run_id}`", file=sys.stderr)
         elif launched:
