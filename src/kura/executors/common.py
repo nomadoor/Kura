@@ -179,6 +179,35 @@ def run_finished(status: dict[str, Any]) -> bool:
     return status.get("state") not in UNFINISHED_STATES and status.get("publication_state") != "pending"
 
 
+def end_run(run_dir: Path, state: str, *, reason: str, error: str | None = None, keep_exit_code: bool = False,
+            facts: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Record why a run ended without its own outcome (a follower's decision), then project it into status.
+
+    The record comes first, so status never holds a fact no record has.
+    """
+    from datetime import datetime
+
+    at = _now()
+    reference = _load_status(run_dir).get("last_realization")
+    realization_id = Path(reference).stem if isinstance(reference, str) else "unrecorded"
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    path = run_dir / "realizations" / f"{realization_id}.ended-{stamp}.json"
+    path.parent.mkdir(exist_ok=True)
+    atomic_write_json(path, record("run_end", {
+        "realization_id": realization_id, "state": state, "at": at, "reason": reason, **({"error": error} if error else {}),
+        **(facts or {}),
+    }))
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": state, "ended": at, **({} if keep_exit_code else {"exit_code": None}), **(facts or {})})
+        if "current_case_id" in latest:
+            latest["current_case_id"] = None
+        if error:
+            latest["error"] = error
+
+    return _mutate_run_status(run_dir, mutate)
+
+
 def write_stop_record(
     run_dir: Path, realization_id: str, *, executor: str, targets: list[dict[str, Any]],
     requested_at: str, stopped_at: str | None, outcome: str, error: str | None = None,

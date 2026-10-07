@@ -223,6 +223,26 @@ class EpochTests(unittest.TestCase):
             written = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual((written["state"], written["epoch"]), ("interrupted", 7))
 
+    def test_a_render_of_a_replaced_follower_records_nothing(self) -> None:
+        from kura import render
+
+        with _workspace() as (_, run_dir):
+            _status(run_dir, state="running", epoch=5, last_step=1)
+            with patch.dict(os.environ, {"KURA_RUNNER_EPOCH": "3"}), self.assertRaises(StaleRunnerEpoch):
+                render.write_realization(run_dir, status_changes={"state": "failed"}, state="failed")
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "running")
+
+    def test_a_run_ended_by_a_follower_has_a_record_before_its_status(self) -> None:
+        from kura.executors.common import end_run
+
+        with _workspace() as (_, run_dir):
+            _status(run_dir, state="running", last_realization="realizations/r1.json", exit_code=None)
+            end_run(run_dir, "interrupted", reason="the Pod is gone", error="gone")
+            recorded = json.loads(next((run_dir / "realizations").glob("r1.ended-*.json")).read_text(encoding="utf-8"))
+            self.assertEqual((recorded["kind"], recorded["state"], recorded["reason"]), ("run_end", "interrupted", "the Pod is gone"))
+            written = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((written["state"], written["ended"], written["error"]), ("interrupted", recorded["at"], "gone"))
+
     def test_a_new_runner_epoch_never_goes_back(self) -> None:
         with _workspace() as (root, run_dir):
             _status(run_dir, state="running", epoch=9)
@@ -860,7 +880,8 @@ class RunPodRenderTests(unittest.TestCase):
                 return {}
 
             with patch("kura.run_commands.render_runpod.launch_render_runpod") as render, \
-                    patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, patch("kura.render.write_realization") as realization:
+                    patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
+                    patch("kura.render.write_realization", wraps=__import__("kura.render", fromlist=["x"]).write_realization) as realization:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             render.assert_not_called()
             stop.assert_called_once()
