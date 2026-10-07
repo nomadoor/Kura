@@ -1,0 +1,25 @@
+schema_version: 1
+campaign: M3 job runner, local Docker training (docs/adr/files-only-state-and-job-runner.md)
+observed_at: '2026-10-07'
+host: WSL2 Ubuntu, NVIDIA GeForce RTX 4070 Ti 12 GB
+run_id: 20261007-1650_sdxl-runner_2620
+setup: sd-scripts SDXL LoRA, 512px, 30 optimizer steps, pinned image sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+sequence:
+  - step: kura run execute, interrupted with SIGINT after 45 s
+    observed: launch request written and claimed by runner epoch 3; the container kept running after the command stopped
+  - step: kill -9 of the runner process
+    observed: the follower child survived and kept the run's controller lock
+  - step: kura run status (a viewer)
+    observed: started runner epoch 4 without writing the run; epoch 4 started no second follower beside the surviving one
+  - step: kura run execute again
+    observed: followed the run to the end and exited 0 with the completion summary on stdout and the run log on stderr
+outcome:
+  state: completed
+  publication_state: completed
+  last_step: 30
+  outputs: [outputs/20261007-1650_sdxl-runner_2620.safetensors]
+  dataset_input_postflight: recorded before the follower released the run
+  runner: exited on its own once nothing was left to control
+findings_fixed_after_this_smoke:
+  - the follower recorded an observation on every 5 s poll (84 files); it now observes with source automatic, which records only state changes
+  - the first follow check could see a runner that had not taken its lock yet; launching commands now wait for it

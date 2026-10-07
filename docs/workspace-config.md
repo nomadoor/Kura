@@ -66,6 +66,12 @@ digest moves only after compatibility checks.
 | `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch | `100` |
 | `docker.build_cache_limit_gb` | Docker build cache limit checked before local Docker launch | `30` |
 
+## Job runner
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `runner.local_slots` | How many local Docker training runs the job runner runs at once; later launches wait in the order they were requested. Values below 1 count as 1 | `1` |
+
 Default Hugging Face cache mount:
 
 ```yaml

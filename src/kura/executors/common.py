@@ -130,6 +130,20 @@ def create_intent_executor(path: Path) -> str:
     return executor if isinstance(executor, str) else "runpod"
 
 
+# States in which something is still happening to the run.
+UNFINISHED_STATES = frozenset({"queued", "staged", "launching", "running", "publishing"})
+
+
+def run_finished(status: dict[str, Any]) -> bool:
+    """Whether nothing more will happen to the run without a new decision.
+
+    A run is finished once its execution ended and publication is no longer
+    pending: completed, failed, interrupted, launch_failed, recovery_required,
+    or unknown (its container is gone).
+    """
+    return status.get("state") not in UNFINISHED_STATES and status.get("publication_state") != "pending"
+
+
 def write_stop_record(
     run_dir: Path, realization_id: str, *, executor: str, targets: list[dict[str, Any]],
     requested_at: str, stopped_at: str | None, outcome: str, error: str | None = None,
@@ -393,12 +407,42 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
     with _run_operation_lock(run_dir, "status", blocking=blocking):
         status = _load_status(run_dir)
         original = copy.deepcopy(status)
+        recorded_epoch = status.get("epoch") if isinstance(status.get("epoch"), int) else 0
+        runner_epoch = _runner_child_epoch()
+        if runner_epoch is not None and runner_epoch < recorded_epoch:
+            # A newer runner took over this run; a replaced follower stops instead of
+            # overwriting its facts.
+            raise StaleRunnerEpoch(f"status of {run_dir.name} belongs to runner epoch {recorded_epoch}; this follower has epoch {runner_epoch}")
         mutate(status)
+        # Command-line writers are serialized by the run locks and keep the epoch they found.
+        epoch = runner_epoch if runner_epoch is not None else max(recorded_epoch, _workspace_epoch(run_dir))
+        if epoch:
+            status["epoch"] = epoch
         redacted = _redact_secrets(record("run_status", status))
         # Adding the record fields alone is no new fact, so it never rewrites the file.
         if without_record_fields(redacted) != without_record_fields(original):
             atomic_write_json(_status_path(run_dir), redacted)
         return redacted
+
+
+class StaleRunnerEpoch(RuntimeError):
+    """A follower of a replaced runner tried to write a run a newer runner controls."""
+
+
+def _runner_child_epoch() -> int | None:
+    """The epoch of the runner this process follows a run for, if it is a runner follower."""
+    value = os.environ.get("KURA_RUNNER_EPOCH")
+    return int(value) if value and value.isdigit() else None
+
+
+def _workspace_epoch(run_dir: Path) -> int:
+    """The workspace's current runner epoch, or 0 when no runner ever started."""
+    try:
+        info = json.loads((run_dir.parent.parent / ".kura" / "runner" / "runner.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    epoch = info.get("epoch") if isinstance(info, dict) else None
+    return epoch if isinstance(epoch, int) else 0
 
 
 def _write_observation(run_dir: Path, realization_id: str, observation: dict[str, Any]) -> Path:
