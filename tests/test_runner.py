@@ -364,3 +364,215 @@ class ProcessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _runpod_request(run_dir: Path, **extra) -> Path:
+    return runner.write_launch_request(run_dir, executor="runpod", extra={
+        "options": {"max_lease": "3h", "hold_for": "0"}, "runpod_config": {"gpu_type_ids": ["NVIDIA A40"]},
+        "billing_confirmed_at": "2026-10-07T00:00:00+00:00", **extra,
+    })
+
+
+def _runpod_launched(run_dir: Path, request: Path, **status) -> None:
+    (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "pod": {"id": "pod-1"},
+                                                                  "controlled_by": {"request": request.name}}), encoding="utf-8")
+    _status(run_dir, last_realization="realizations/r1.json", pod_id="pod-1", **status)
+
+
+class RunPodFollowerTests(unittest.TestCase):
+    def test_a_request_without_billing_confirmation_creates_nothing(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = runner.write_launch_request(run_dir, executor="runpod")
+            with patch("kura.run_commands.launch._run_remote_locked") as remote:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            remote.assert_not_called()
+            self.assertIn("billing confirmation", runner.request_outcome(request)["error"])
+
+    def test_the_first_attempt_launches_with_the_confirmed_settings(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+
+            def launched(*_args, **kwargs):
+                _runpod_launched(run_dir, request, state="completed", publication_state="completed", pod_stopped_at="t")
+                return 0
+
+            with patch("kura.run_commands.launch._run_remote_locked", side_effect=launched) as remote:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            kwargs = remote.call_args.kwargs
+            self.assertEqual((kwargs["yes"], kwargs["reattach"], kwargs["max_lease"]), (True, False, "3h"))
+            self.assertEqual(kwargs["runpod_config_override"], {"gpu_type_ids": ["NVIDIA A40"]})
+            self.assertEqual(kwargs["controlled_by"]["request"], request.name)
+
+    def test_a_follower_without_a_create_intent_continues_the_confirmed_launch(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)  # an earlier follower died during the capacity wait
+            with patch("kura.run_commands.launch._run_remote_locked", return_value=0) as remote:
+                runner.work(root, "example", request.name)
+            remote.assert_called_once()
+            self.assertIsNone(runner.request_outcome(request))
+
+    def test_a_pod_whose_job_never_started_is_deleted(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+
+            def stopped(run_dir_arg, _config):
+                _status(run_dir_arg, **{**json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8")), "pod_stopped_at": "t"})
+                return {}
+
+            with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
+                 patch("kura.run_commands.launch._run_remote_locked") as remote:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            stop.assert_called_once()
+            remote.assert_not_called()
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
+
+    def test_a_finished_run_that_left_its_pod_running_gets_the_pod_deleted(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            # Recovered from a create intent, or collected before a crash: finished, Pod still up.
+            _runpod_launched(run_dir, request, state="interrupted")
+            self.assertTrue(runner.run_unfinished(run_dir))
+
+            def stopped(run_dir_arg, _config):
+                _status(run_dir_arg, **{**json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8")), "pod_stopped_at": "t"})
+                return {}
+
+            with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            stop.assert_called_once()
+            self.assertFalse(runner.run_unfinished(run_dir))
+
+    def test_a_job_whose_pid_file_exists_is_followed_not_deleted(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job-intent.json").write_text(json.dumps({"pid_path": "/tmp/kura-jobs/x.pid"}), encoding="utf-8")
+            with patch("kura.run_commands.runpod_ssh.remote_job_pid", return_value="42"), \
+                 patch("kura.executors.runpod.stop_runpod") as stop, \
+                 patch("kura.run_commands.launch._run_remote_locked", return_value=0) as remote:
+                runner.work(root, "example", request.name)
+            stop.assert_not_called()
+            self.assertTrue(remote.call_args.kwargs["reattach"])
+            self.assertEqual(json.loads((run_dir / "realizations" / "r1.remote-job.json").read_text(encoding="utf-8"))["pid"], "42")
+
+    def test_an_unreachable_pod_is_never_taken_for_a_job_that_did_not_start(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job-intent.json").write_text(json.dumps({"pid_path": "/tmp/kura-jobs/x.pid"}), encoding="utf-8")
+            with patch("kura.run_commands.runpod_ssh.remote_job_pid", side_effect=ValueError("ssh timed out")), \
+                 patch("kura.executors.runpod.stop_runpod") as stop:
+                # Counted as a failed attempt and retried later, never taken as "the job did not start".
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            stop.assert_not_called()
+
+    def test_repeated_collection_failures_hand_the_run_to_a_person(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+            codes = []
+            with patch("kura.run_commands.launch._run_remote_locked", return_value=1):
+                for _ in range(runner.COLLECTION_ATTEMPTS):
+                    codes.append(runner.work(root, "example", request.name))
+            self.assertEqual(codes, [1] * (runner.COLLECTION_ATTEMPTS - 1) + [0])
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((status["state"], status["recovery_required"]), ("recovery_required", True))
+            self.assertTrue(run_finished(status))
+
+    def test_a_stop_request_stops_the_pod(self) -> None:
+        from kura.executors.common import StopRequested
+
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+            with patch("kura.run_commands.launch._run_remote_locked", side_effect=StopRequested()), \
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=lambda run_dir_arg, *_a, **_k: json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8"))), \
+                 patch("kura.executors.runpod.stop_runpod", return_value={}) as stop:
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            stop.assert_called_once()
+            self.assertTrue(runner.stop_done(run_dir))
+
+    def test_a_stop_that_ended_the_capacity_wait_is_acknowledged_not_counted_as_a_failure(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+
+            def stop_arrives_during_the_wait(*_args, **_kwargs):
+                # launch_runpod turns the stop into "capacity wait cancelled" and the launch returns 1.
+                runner.write_stop_request(run_dir)
+                return 1
+
+            with patch("kura.run_commands.launch._run_remote_locked", side_effect=stop_arrives_during_the_wait):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertTrue(runner.stop_done(run_dir))
+            self.assertFalse(request.with_name(request.name.replace(".launch.json", ".failures.json")).exists())
+
+    def test_runpod_requests_do_not_wait_for_a_local_slot(self) -> None:
+        with _workspace() as (root, first):
+            busy = runner.write_launch_request(first, executor="docker")
+            runner.claim_request(busy, 1)
+            _launched(first, busy, state="running")
+            second = root / "runs" / "second"
+            (second / "realizations").mkdir(parents=True)
+            _status(second, state="compiled")
+            remote = _runpod_request(second)
+            polls = [0]
+
+            def sleep(_):
+                polls[0] += 1
+                if polls[0] > 2:
+                    _launched(first, busy, state="completed", publication_state="completed")
+
+            spawned = []
+
+            def spawn(workspace, run_id, request):
+                spawned.append(run_id)
+                _runpod_launched(second, request, state="completed", publication_state="completed", pod_stopped_at="t")
+                return Child(0)
+
+            with _run_operation_lock(first, "controller"):
+                runner.serve(root, spawn_child=spawn, sleep=sleep)
+            self.assertEqual(spawned, ["second"])
+            self.assertTrue(remote.with_name(remote.name.replace(".launch.json", ".claim.json")).exists())
+
+
+class RunPodWriterTests(unittest.TestCase):
+    def test_billing_is_confirmed_before_the_request_and_recorded_in_it(self) -> None:
+        from kura.run_commands import launch
+
+        with _workspace() as (root, run_dir):
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(launch, "launch_run", return_value=1) as check:
+                    self.assertEqual(launch._launch_runpod_through_runner("example", follow=False, yes=False, options={"max_lease": "3h"}), 1)
+                self.assertTrue(check.call_args.kwargs["check_only"])
+                self.assertEqual(runner.launch_requests(run_dir), [])
+
+                def confirmed(*_args, **kwargs):
+                    kwargs["prepared"].update({"runpod_config": {"gpu_type_ids": ["NVIDIA A40"]}, "remote_image": "img@sha256:" + "0" * 64})
+                    return 0
+
+                with patch.object(launch, "launch_run", side_effect=confirmed), \
+                     patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.await_claim", return_value=True):
+                    self.assertEqual(launch._launch_runpod_through_runner("example", follow=False, yes=True, options={"max_lease": "3h", "image": None}), 0)
+            finally:
+                os.chdir(previous)
+            [request] = runner.launch_requests(run_dir)
+            payload = json.loads(request.read_text(encoding="utf-8"))
+            self.assertEqual(payload["executor"], "runpod")
+            self.assertTrue(payload["billing_confirmed_at"])
+            self.assertEqual(payload["runpod_config"], {"gpu_type_ids": ["NVIDIA A40"]})
+            self.assertEqual(payload["options"], {"max_lease": "3h"})

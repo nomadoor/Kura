@@ -90,17 +90,16 @@ until it returns, then verify and report the result from Kura's status, exit
 code, realization, logs, and output artifacts. Start the next approved run only
 after the previous one is mechanically complete, and stop on failure, uncertain
 state, or a new decision; a note or cursor is never approval, so if a later
-run's approval cannot be found in the conversation, ask again. Local Docker
-training runs under Kura's job runner, so the run continues if the command or
-the session ends; run `kura run execute <run-id>` again to follow it and get
-its result, which never launches it a second time. If the tracked session is
-lost, follow, observe, or reconcile the run; never assume completion, relaunch
-it, or advance to another run. For a RunPod run, session loss is
-billing exposure: follow the `runpod-lifecycle` recovery flow at once, and do
-not stop the Pod before remote exit and local download are confirmed. When only
-the tracked `kura run execute` ended (for example at a host time limit) while
-its job runs on, run `kura run execute <run-id>` again: it follows the running
-job and collects instead of launching another.
+run's approval cannot be found in the conversation, ask again. Training runs,
+local and on RunPod, run under Kura's job runner, so the run continues, and a
+RunPod run is collected and its Pod deleted, if the command or the session
+ends; run `kura run execute <run-id>` again to follow it and get its result,
+which never launches it a second time. If the tracked session is lost, follow,
+observe, or reconcile the run; never assume completion, relaunch it, or
+advance to another run. For a RunPod run, check at once that a runner is
+following it (`kura runner status`, `kura run status`) and use the
+`runpod-lifecycle` recovery flow if not; do not stop the Pod before remote exit
+and local download are confirmed.
 
 An approval covers that run only. Do not attach a render, evaluation, or sample
 generation to a training approval. After the run finishes you may offer a

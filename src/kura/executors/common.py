@@ -73,6 +73,41 @@ def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 
 
+class StopRequested(KeyboardInterrupt):
+    """A stop request reached a runner follower; handled like Ctrl-C at a safe point."""
+
+
+_stop_check: Callable[[], bool] | None = None
+
+
+def set_stop_check(check: Callable[[], bool] | None) -> None:
+    """Let a runner follower see its run's stop request at the safe points below."""
+    global _stop_check
+    _stop_check = check
+
+
+def check_stop() -> None:
+    """Raise StopRequested if a stop was requested; called only between steps, never mid-create."""
+    if _stop_check is not None and _stop_check():
+        raise StopRequested()
+
+
+def sleep_checking_stop(seconds: float, *, step: float = 2.0) -> None:
+    """Sleep, looking for a stop request every `step` seconds."""
+    import time
+
+    if _stop_check is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + max(seconds, 0)
+    while True:
+        check_stop()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(step, remaining))
+
+
 # A launch writes `<realization id>.create-intent.json` before it creates a Pod
 # or a container, so a crash between the two leaves something to discover.
 CREATE_INTENT_SUFFIX = ".create-intent.json"

@@ -15,8 +15,8 @@ import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker, reconcile_runpod
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started
-from kura.executors.runpod import unresolved_create_intents, unstopped_recovered_pod
+from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, sleep_checking_stop
+from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
@@ -89,6 +89,8 @@ def _run_remote_locked(
     yes: bool = False,
     unattended_wait: Any = "auto",
     reattach: bool = False,
+    controlled_by: dict[str, Any] | None = None,
+    runpod_config_override: dict[str, Any] | None = None,
 ) -> int:
     run_dir = _run_path(run_id)
     launched = False
@@ -129,6 +131,8 @@ def _run_remote_locked(
                 yes=yes,
                 max_lease=max_lease_sec,
                 unattended_wait=unattended_label,
+                controlled_by=controlled_by,
+                runpod_config_override=runpod_config_override,
             )
             if launch_code:
                 return launch_code
@@ -208,15 +212,31 @@ def _run_remote_locked(
                     if notify_subject and notify_body:
                         _sleep_with_completion_reminders(delay_sec=hold_for_sec, interval_sec=repeat_interval, channels=notify_channels, subject=notify_subject, body=notify_body)
                     else:
-                        time.sleep(hold_for_sec)
+                        sleep_checking_stop(hold_for_sec)
                 except KeyboardInterrupt:
                     print("review hold interrupted; stopping RunPod pod now.", file=sys.stderr)
-            stop_run(run_id)
+            # Stop the Pod directly: this command, or the runner's follower running it,
+            # is the one that would otherwise receive a stop request for its own run.
+            try:
+                print(json.dumps(stop_runpod(run_dir, _workspace_config().get("runpod", {})), indent=2))
+            except (OSError, ValueError) as exc:
+                print(f"cannot stop the RunPod pod: {_safe_error(exc)}; run `kura run stop {run_id}`", file=sys.stderr)
         elif launched:
             print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `uv run kura run stop {run_id}` after recovery", file=sys.stderr)
 
 
 def cmd_run_remote(args: argparse.Namespace) -> int:
+    if not _runs_outside_the_runner(args.run_id):
+        return _launch_runpod_through_runner(args.run_id, follow=True, yes=bool(getattr(args, "yes", False)), options={
+            "upload_timeout": args.upload_timeout, "job_timeout": args.job_timeout,
+            "download_attempts": args.download_attempts, "download_interval": args.download_interval,
+            "hold_for": getattr(args, "hold_for", "30m"), "max_lease": getattr(args, "max_lease", "12h"),
+            "unattended_wait": getattr(args, "unattended_wait", "auto"),
+            "notify_repeat_interval": getattr(args, "notify_repeat_interval", "10m"),
+            "notify_channels": getattr(args, "notify", None), "image": getattr(args, "image", None),
+            "wait_for_capacity": getattr(args, "wait_for_capacity", "0"),
+            "capacity_poll_interval": getattr(args, "capacity_poll_interval", "30s"),
+        })
     return run_remote(
         args.run_id,
         upload_timeout=args.upload_timeout,
@@ -300,6 +320,16 @@ def execute_run(
         return 1
     compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
     executor = run_executor(locked)
+    if executor == "runpod" and locked.get("type", "train") != "render" and not _runs_outside_the_runner(run_id):
+        capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
+        return _launch_runpod_through_runner(run_id, follow=True, yes=yes, options={
+            "upload_timeout": upload_timeout, "job_timeout": job_timeout, "download_attempts": download_attempts,
+            "download_interval": download_interval, "hold_for": hold_for, "max_lease": max_lease,
+            "notify_repeat_interval": notify_repeat_interval, "notify_channels": notify_channels, "image": image,
+            "wait_for_capacity": (capacity.get("timeout", "24h") if capacity.get("mode", "immediate") == "wait" else "0") if wait_for_capacity is None else wait_for_capacity,
+            "capacity_poll_interval": capacity.get("poll_interval", "30s") if capacity_poll_interval is None else capacity_poll_interval,
+            "unattended_wait": unattended_wait,
+        })
     if executor == "runpod":
         try:
             reattach = _running_remote_job(run_id)
@@ -384,6 +414,8 @@ def launch_run(
     unattended_wait: str | None = None,
     check_only: bool = False,
     controlled_by: dict[str, Any] | None = None,
+    runpod_config_override: dict[str, Any] | None = None,
+    prepared: dict[str, Any] | None = None,
 ) -> int:
     """Launch a compiled run; `check_only` runs every check a Docker launch makes and stops before it."""
     run_dir = _run_path(run_id)
@@ -551,6 +583,18 @@ def launch_run(
             elif isinstance(gpu_override, list) and all(isinstance(item, str) and item for item in gpu_override):
                 runpod_config["gpu_type_ids"] = list(gpu_override)
                 runpod_config["gpu_type_priority"] = "custom"
+            if runpod_config_override is not None:
+                # A runner launch uses the settings the user confirmed, not workspace.yaml as it is now.
+                runpod_config = dict(runpod_config_override)
+            if prepared is not None:
+                prepared.update({"runpod_config": runpod_config, "remote_image": remote_image})
+            if check_only:
+                confirm_runpod_billing(
+                    runpod_config, remote_image, yes=yes,
+                    max_lease_sec=None if max_lease is None else _parse_duration_seconds(max_lease),
+                    wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity), unattended_wait=unattended_wait,
+                )
+                return 0
             with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
                 launch_runpod(
                     run_dir=run_dir,
@@ -563,6 +607,7 @@ def launch_run(
                     yes=yes,
                     max_lease_sec=None if max_lease is None else _parse_duration_seconds(max_lease),
                     unattended_wait=unattended_wait,
+                    controlled_by=controlled_by,
                 )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
@@ -628,13 +673,104 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
     return code
 
 
+def _runs_outside_the_runner(run_id: str) -> bool:
+    """A RunPod job started before the runner existed keeps its in-process follower."""
+    from kura import runner
+
+    run_dir = _run_path(run_id)
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if status.get("state") != "running" or runner.runner_controlled(run_dir):
+        return False
+    return True
+
+
+def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, options: dict[str, Any], relaunch: bool = False) -> int:
+    """Confirm billing here, then hand the RunPod launch to the job runner and follow it."""
+    from kura import runner
+
+    workspace = _workspace()
+    run_dir = _run_path(run_id)
+    request = runner.latest_request(run_dir)
+    in_progress = request is not None and runner.request_outcome(request) is None and (
+        request in runner.pending_requests(run_dir) or runner.run_unfinished(run_dir)
+    )
+    if request is not None and not in_progress and not relaunch:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        outcome = runner.request_outcome(request)
+        if outcome is not None:
+            print(f"the last launch request was not launched: {outcome.get('error') or outcome.get('kind')}; "
+                  f"start a new launch with `kura run launch {run_id} --executor runpod --wait`", file=sys.stderr)
+            return 1
+        print(format_run_completion(workspace, run_dir, status))
+        return runner.EXIT_FOR_STATE.get(str(status.get("state")), 2)
+    if not in_progress:
+        try:
+            unattended_seconds, unattended_label = _unattended_wait(options.get("unattended_wait", "auto"))
+        except ValueError as exc:
+            print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        prepared: dict[str, Any] = {}
+        code = launch_run(
+            run_id, executor="runpod", dry_run=False, image=options.get("image"), check_only=True, yes=yes,
+            max_lease=options.get("max_lease", "12h"), wait_for_capacity=options.get("wait_for_capacity", "0"),
+            capacity_poll_interval=options.get("capacity_poll_interval", "30s"), unattended_wait=unattended_label,
+            prepared=prepared,
+        )
+        if code:
+            return code
+        if str(options.get("wait_for_capacity") or "0") not in ("0", "0s"):
+            print("  The runner may wait for capacity; prices can change before the Pod is created.", file=sys.stderr)
+        missing = runner.env_only_secrets()
+        if missing:
+            print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
+                  "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
+        try:
+            request = runner.write_launch_request(run_dir, executor="runpod", image=options.get("image"), notify=options.get("notify_channels"), extra={
+                "options": {key: value for key, value in options.items() if value is not None},
+                "runpod_config": prepared.get("runpod_config"), "remote_image": prepared.get("remote_image"),
+                "billing_confirmed_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except (OSError, ValueError) as exc:
+            print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        print(f"launch request {request.name} written; the job runner creates the Pod", file=sys.stderr)
+    if runner.ensure_runner(workspace, launching=True):
+        runner.await_runner(workspace)
+    if not follow:
+        if not runner.await_claim(workspace, run_dir, request):
+            print(f"no runner took launch request {request.name}; see .kura/runner/runner.log and run `kura runner start`", file=sys.stderr)
+            return 1
+        print(f"the run continues without this command; follow it with `kura run execute {run_id}`", file=sys.stderr)
+        return 0
+    print("following the run; interrupting this command does not stop it (`kura run stop` does)", file=sys.stderr)
+    try:
+        code = runner.follow(workspace, run_dir, request)
+    except KeyboardInterrupt:
+        print(f"\nstopped following; the run continues. Follow it again with `kura run execute {run_id}`", file=sys.stderr)
+        return 130
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    print(format_run_completion(workspace, run_dir, status))
+    return code
+
+
 def cmd_run_launch(args: argparse.Namespace) -> int:
-    if args.executor == "docker" and not args.dry_run:
+    if not args.dry_run:
         try:
             run_type = _load_yaml(_run_path(args.run_id) / "resolved" / "manifest.lock.yaml").get("type", "train")
         except (OSError, ValueError, yaml.YAMLError) as exc:
             print(f"cannot launch run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
             return 1
+        if run_type != "render" and args.executor == "runpod":
+            return _launch_runpod_through_runner(args.run_id, follow=bool(getattr(args, "wait", False)), yes=bool(getattr(args, "yes", False)), relaunch=True, options={
+                "upload_timeout": 600, "job_timeout": 0, "download_attempts": 60, "download_interval": 20, "hold_for": "0",
+                "max_lease": "12h", "unattended_wait": "auto", "notify_repeat_interval": "10m",
+                "notify_channels": getattr(args, "notify", None), "image": getattr(args, "image", None),
+                "wait_for_capacity": getattr(args, "wait_for_capacity", "0"),
+                "capacity_poll_interval": getattr(args, "capacity_poll_interval", "30s"),
+            })
         if run_type != "render":
             return _launch_docker_through_runner(
                 args.run_id, image=getattr(args, "image", None), follow=bool(getattr(args, "wait", False)), relaunch=True,

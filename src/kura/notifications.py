@@ -98,7 +98,10 @@ def sleep_with_completion_reminders(*, delay_sec: int, interval_sec: int, channe
     elapsed = 0
     while remaining > 0:
         chunk = remaining if interval <= 0 else min(interval, remaining)
-        time.sleep(chunk)
+        # A runner follower's review hold still ends on a stop request.
+        from kura.executors.common import sleep_checking_stop
+
+        sleep_checking_stop(chunk)
         elapsed += chunk
         remaining -= chunk
         if interval > 0 and remaining > 0:
