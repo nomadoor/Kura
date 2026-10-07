@@ -1,4 +1,4 @@
-"""Best-effort refresh of materialized run state for read paths."""
+"""Reading a run's status for views, and observing it for commands about to act on it."""
 
 from __future__ import annotations
 
@@ -23,6 +23,35 @@ def _runpod_config(run_dir: Path, config: dict[str, Any] | None) -> dict[str, An
     return runpod if isinstance(runpod, dict) else {}
 
 
+def read_run_status(run_dir: Path) -> dict[str, Any]:
+    """Return the run's status as recorded, for commands and views that only show runs.
+
+    Viewers never reconcile (run-records ADR, decision 7): the job runner
+    observes the runs it controls, and `kura run reconcile` or the command
+    following a run observes the rest. A viewer only wakes a runner that is gone.
+    """
+    from kura import runner
+
+    run_dir = Path(run_dir)
+    snapshot = _load_status(run_dir)
+    try:
+        # Any unfinished runner-controlled run, including a claimed launch not yet
+        # recorded and a finished run whose Pod still bills; `_wake_runner` decides.
+        if runner.controlling_request(run_dir) is not None:
+            _wake_runner(run_dir)
+    except (OSError, ValueError):
+        pass
+    return snapshot
+
+
+def _realization(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]:
+    reference = status.get("last_realization")
+    if not isinstance(reference, str):
+        return {}
+    value = json.loads((run_dir / reference).read_text(encoding="utf-8"))
+    return value if isinstance(value, dict) else {}
+
+
 def observe_run(
     run_dir: Path,
     *,
@@ -30,6 +59,9 @@ def observe_run(
     timeout: float = 2.0,
 ) -> dict[str, Any]:
     """Return status, refreshing it from the executor when observable.
+
+    Only a command that is about to act on the run (launch, stage) uses this;
+    commands and views that only show runs use `read_run_status`.
 
     A missing or malformed status snapshot remains a caller-visible error.
     Failures after that snapshot is loaded are observation failures and fall
@@ -41,11 +73,10 @@ def observe_run(
     if snapshot.get("state") not in OBSERVABLE_STATES:
         return snapshot
     try:
-        realization_ref = snapshot.get("last_realization")
-        if not isinstance(realization_ref, str):
+        if not isinstance(snapshot.get("last_realization"), str):
             return snapshot
-        realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-        if not isinstance(realization, dict):
+        realization = _realization(run_dir, snapshot)
+        if not realization:
             return snapshot
         if isinstance(realization.get("controlled_by"), dict):
             # The job runner owns this run's records; a viewer only reads them

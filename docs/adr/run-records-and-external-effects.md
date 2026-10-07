@@ -123,7 +123,7 @@ crash left unfinished.
 `kura monitor`, `kura run status`, run listings, and `kura ui`, read the files
 and never reconcile. Reconciling belongs to the runner for runner-controlled
 runs, and to `kura run reconcile` and to a command that is following the run
-it launched for the rest. A viewer shows when each run was last observed, so a
+it launched for the rest. A viewer shows when each run was last observed or updated, so a
 stale view is visible rather than silent.
 
 ## Consequences

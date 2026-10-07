@@ -27,7 +27,7 @@ class RunStatusSummaryTests(unittest.TestCase):
             with (
                 patch("kura.cli._run_path", return_value=Path(directory)),
                 patch("kura.cli._workspace_config", return_value={}),
-                patch("kura.cli.observe_run", return_value={"state": "completed", "outputs": outputs}),
+                patch("kura.cli.read_run_status", return_value={"state": "completed", "outputs": outputs}),
                 patch("sys.stdout", stdout),
             ):
                 self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
@@ -178,7 +178,7 @@ class ObserveRunTests(unittest.TestCase):
                     self.assertEqual(observe_run(run_dir)["state"], state)
             reconcile.assert_not_called()
 
-    def test_status_command_and_monitor_share_persisted_state(self) -> None:
+    def test_status_command_and_monitor_share_what_an_observation_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = self._docker_run(root)
@@ -194,17 +194,21 @@ class ObserveRunTests(unittest.TestCase):
                 "",
             )
             stdout = io.StringIO()
+            # The command following the run observes; the viewers only read what it recorded.
+            with patch("kura.executors.docker.subprocess.run", return_value=result):
+                observe_run(run_dir)
             with (
-                patch("kura.executors.docker.subprocess.run", return_value=result),
+                patch("kura.executors.docker.subprocess.run") as docker,
                 patch("kura.cli._run_path", return_value=run_dir),
-                patch("kura.cli._workspace_config", return_value={}),
                 patch("sys.stdout", stdout),
             ):
                 self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+                summary = collect_run_summaries(root)[0]
+            docker.assert_not_called()
             payload = json.loads(stdout.getvalue())
             self.assertEqual(next(iter(payload)), "summary")
             self.assertEqual(payload["summary"]["state"], "completed")
-            summary = collect_run_summaries(root)[0]
+            self.assertTrue(payload["summary"]["last_observed_at"])
             self.assertEqual((payload["state"], payload["last_step"], payload["total_steps"]), ("completed", 10, 10))
             self.assertEqual((summary.state, summary.progress.step, summary.progress.total), ("completed", 10, 10))
             self.assertEqual(payload["seconds_per_iter"], 0.5)

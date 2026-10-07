@@ -240,7 +240,7 @@ class EpochTests(unittest.TestCase):
 
 class ViewerTests(unittest.TestCase):
     def test_a_viewer_never_reconciles_a_runner_controlled_run(self) -> None:
-        from kura.executors import observe_run
+        from kura.executors import read_run_status as observe_run
 
         with _workspace() as (_, run_dir):
             request = runner.write_launch_request(run_dir, executor="docker")
@@ -251,6 +251,71 @@ class ViewerTests(unittest.TestCase):
             reconcile.assert_not_called()
             wake.assert_called_once()
             self.assertEqual(status["state"], "running")
+
+    def _cleared_backoff(self):
+        from kura.executors import observe
+
+        observe._last_wake.clear()
+        return observe
+
+    def test_a_view_wakes_the_runner_for_any_unfinished_controlled_run_and_only_reads(self) -> None:
+        observe = self._cleared_backoff()
+        for state, extra in (("running", {}), ("completed", {"pod_id": "pod-1"}), ("compiled", None)):
+            with _workspace() as (_, run_dir):
+                request = runner.write_launch_request(run_dir, executor="runpod")
+                runner.claim_request(request, 1)
+                if extra is None:
+                    _status(run_dir, state=state)  # claimed, launch not recorded yet
+                else:
+                    _launched(run_dir, request, state=state, **extra)
+                before = (run_dir / "status.json").read_text(encoding="utf-8")
+                observe._last_wake.clear()
+                with patch("kura.executors.observe.reconcile_docker") as docker, \
+                        patch("kura.executors.observe.reconcile_runpod") as pod, patch("kura.runner.ensure_runner") as wake:
+                    observe.read_run_status(run_dir)
+                docker.assert_not_called()
+                pod.assert_not_called()
+                wake.assert_called_once()
+                self.assertEqual((run_dir / "status.json").read_text(encoding="utf-8"), before)
+
+    def test_a_view_of_a_run_outside_the_runner_neither_observes_nor_wakes(self) -> None:
+        observe = self._cleared_backoff()
+        with _workspace() as (_, run_dir):
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "docker"}), encoding="utf-8")
+            _status(run_dir, state="running", last_realization="realizations/r1.json")
+            with patch("kura.executors.observe.reconcile_docker") as docker, patch("kura.runner.ensure_runner") as wake:
+                self.assertEqual(observe.read_run_status(run_dir)["state"], "running")
+            docker.assert_not_called()
+            wake.assert_not_called()
+
+    def test_status_says_who_follows_the_run(self) -> None:
+        import argparse
+        import io
+
+        from kura.cli import cmd_run_status
+
+        self._cleared_backoff()
+        with _workspace() as (root, run_dir):
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "docker"}), encoding="utf-8")
+            _status(run_dir, state="running", last_realization="realizations/r1.json")
+            for controlled in (False, True):
+                if controlled:
+                    request = runner.write_launch_request(run_dir, executor="docker")
+                    runner.claim_request(request, 1)
+                    _launched(run_dir, request, state="running")
+                stdout = io.StringIO()
+                with patch("kura.cli._run_path", return_value=run_dir), patch("kura.runner.ensure_runner", return_value=False), \
+                        patch("kura.runner.stopped_on_purpose", return_value=True), patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+                summary = json.loads(stdout.getvalue())["summary"]
+                self.assertTrue(summary["status_updated_at"])
+                self.assertIsNone(summary["last_observed_at"])
+                if controlled:
+                    self.assertIn("kura runner start", summary["runner"])
+                    self.assertNotIn("observe_now", summary)
+                else:
+                    self.assertIn("kura run reconcile example", summary["observe_now"])
+                    self.assertNotIn("runner", summary)
 
 
 class StopAndQueueTests(unittest.TestCase):

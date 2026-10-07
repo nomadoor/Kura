@@ -346,65 +346,27 @@ class MonitorProjectionTests(unittest.TestCase):
 
             self.assertEqual(summaries[0].outputs_path, run_dir / "samples" / "images")
 
-    def test_collect_run_summaries_observes_and_persists_finished_local_docker_state(self) -> None:
+    def test_collect_run_summaries_reads_without_observing_the_container(self) -> None:
+        # Viewers never reconcile (run-records ADR, decision 7); they show what was recorded.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            run_dir = root / "runs" / "docker-finished"
+            run_dir = root / "runs" / "docker-running"
             (run_dir / "realizations").mkdir(parents=True)
-            (root / "index.jsonl").write_text(json.dumps({"id": "docker-finished"}) + "\n", encoding="utf-8")
-            (run_dir / "run.yaml").write_text(
-                "\n".join(
-                    [
-                        "id: docker-finished",
-                        "type: train",
-                        "backend: {name: ai-toolkit}",
-                        "compute: {executor: docker}",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}),
-                encoding="utf-8",
-            )
-            (run_dir / "realizations" / "r1.json").write_text(
-                json.dumps({"id": "r1", "executor": "docker", "state": "running", "container": {"id": "container-1"}}),
-                encoding="utf-8",
-            )
-            result = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0, "FinishedAt": "2026-06-29T01:02:03Z"}', "")
-
-            with patch("kura.executors.docker.subprocess.run", return_value=result) as run:
-                summary = collect_run_summaries(root)[0]
-
-            run.assert_called_once_with(["docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2.0)
-            self.assertEqual(summary.state, "completed")
-            self.assertEqual(summary.exit_code, 0)
-            self.assertIsNotNone(summary.ended)
-            persisted = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual(persisted["state"], "completed")
-            self.assertEqual(persisted["ended"], "2026-06-29T01:02:03Z")
-
-    def test_collect_run_summaries_ignores_timed_out_docker_overlay(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_dir = root / "runs" / "docker-timeout"
-            (run_dir / "realizations").mkdir(parents=True)
-            (root / "index.jsonl").write_text(json.dumps({"id": "docker-timeout"}) + "\n", encoding="utf-8")
-            (run_dir / "run.yaml").write_text("id: docker-timeout\ntype: train\ncompute: {executor: docker}\n", encoding="utf-8")
-            (run_dir / "status.json").write_text(
-                json.dumps({"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}),
-                encoding="utf-8",
-            )
+            (root / "index.jsonl").write_text(json.dumps({"id": "docker-running"}) + "\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: docker-running\ntype: train\ncompute: {executor: docker}\n", encoding="utf-8")
+            status = {"state": "running", "container_id": "container-1", "last_realization": "realizations/r1.json"}
+            (run_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
             (run_dir / "realizations" / "r1.json").write_text(
                 json.dumps({"id": "r1", "executor": "docker", "state": "running", "container": {"id": "container-1"}}),
                 encoding="utf-8",
             )
 
-            with patch("kura.executors.docker.subprocess.run", side_effect=subprocess.TimeoutExpired(["docker"], 2)) as run:
+            with patch("kura.executors.docker.subprocess.run") as run:
                 summary = collect_run_summaries(root)[0]
 
-            run.assert_called_once_with(["docker", "inspect", "--format", "{{json .State}}", "container-1"], text=True, capture_output=True, check=False, timeout=2.0)
+            run.assert_not_called()
             self.assertEqual(summary.state, "running")
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), status)
 
     def test_collect_run_summaries_uses_materialized_ai_toolkit_progress_and_stdout_losses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
