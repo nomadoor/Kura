@@ -1771,18 +1771,64 @@ echo "[kura] unattended completion: the Pod deletes itself in ${{kura_wait}}s un
 """.strip()
 
 
+# Where the Pod keeps its lease deadline, in seconds since the epoch.
+LEASE_DEADLINE_PATH = "/tmp/kura-lease-deadline"
+
+
+def record_lease_deadline(run_dir: Path, deadline_epoch: int, *, reason: str, previous_epoch: int | None = None) -> Path:
+    """Record the Pod's lease deadline in the run, so a follower can compare it with the training left."""
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    reference = status.get("last_realization")
+    realization_id = Path(reference).stem if isinstance(reference, str) else "unrecorded"
+    stamp = datetime.now().astimezone()
+    path = run_dir / "realizations" / f"{realization_id}.lease-{stamp.strftime('%Y%m%d-%H%M%S-%f')}.json"
+    atomic_write_json(path, record("lease", {
+        "realization_id": realization_id, "at": stamp.isoformat(), "reason": reason, "deadline_epoch": deadline_epoch,
+        "deadline": datetime.fromtimestamp(deadline_epoch).astimezone().isoformat(),
+        **({"previous_deadline_epoch": previous_epoch} if previous_epoch is not None else {}),
+    }))
+    return path
+
+
+def latest_lease_deadline(run_dir: Path, realization_id: str) -> int | None:
+    """The lease deadline last recorded for this realization, in seconds since the epoch."""
+    found = sorted((run_dir / "realizations").glob(f"{realization_id}.lease-*.json"))
+    for path in reversed(found):
+        try:
+            recorded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        value = recorded.get("deadline_epoch") if recorded.get("kind") == "lease" else None
+        if isinstance(value, int):
+            return value
+    return None
+
+
 def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
     """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
     if max_lease_sec <= 0:
         return ""
     pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
+    deadline_file = shlex.quote(LEASE_DEADLINE_PATH)
+    # The deadline lives in a file, so `kura run lease` can move it; an unreadable
+    # file falls back to the deadline set here.
     return f"""
 {POD_SELF_DELETE_FUNCTION}
+kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
+# A guard started again on the same Pod never moves a deadline already set.
+[ -s {deadline_file} ] || {{ echo "$kura_lease_initial" > {deadline_file}.tmp && mv {deadline_file}.tmp {deadline_file}; }}
 (
+  set +e
   {pod_export}
-  sleep {int(max_lease_sec)}
+  while :; do
+    kura_lease_deadline=$(cat {deadline_file} 2>/dev/null)
+    # Anything but a plausible epoch (digits, at most 11 of them) falls back to the armed deadline.
+    case "$kura_lease_deadline" in ''|*[!0-9]*|????????????*) kura_lease_deadline=$kura_lease_initial ;; esac
+    [ "$(date +%s)" -ge "$kura_lease_deadline" ] && break
+    sleep 30
+  done
   mkdir -p "$(dirname {shlex.quote(log_path)})" || true
-  echo "[kura] maximum lease of {int(max_lease_sec)}s expired; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
+  echo "[kura] the maximum lease ended; deleting the Pod" >> {shlex.quote(log_path)} 2>&1 || true
   kura_pod_self_delete {shlex.quote(log_path)} || true
 ) </dev/null >/dev/null 2>&1 &
 """.strip()
@@ -2101,7 +2147,7 @@ def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600, unattended_wait_sec: int | None = None) -> int:
+def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600, unattended_wait_sec: int | None = None, notify_channels: Any = None) -> int:
     prepared_upload = _prepare_remote_upload(run_dir)
     status = prepared_upload["status"]
     realization = prepared_upload["realization"]
@@ -2122,6 +2168,8 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     lease_pod_id = status.get("pod_id")
     _start_runpod_session_lease_guard({**details, "pod_id": lease_pod_id if isinstance(lease_pod_id, str) else ""},
                                       workspace=workspace, run_id=run_id, max_lease_sec=max_lease_sec)
+    if max_lease_sec > 0:
+        record_lease_deadline(run_dir, int(time.time()) + max_lease_sec, reason="armed")
     record_launch_phase(run_dir, realization_id, "ssh_ready", container_started_at=details.get("container_started_at"))
     _start_ssh_master(details)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace
@@ -2228,10 +2276,63 @@ echo $!
         _mutate_run_status(run_dir, mutate)
     except (OSError, json.JSONDecodeError):
         pass
-    return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_id, realization_id=realization_id, job_timeout_sec=job_timeout_sec)
+    return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_id, realization_id=realization_id, job_timeout_sec=job_timeout_sec, notify_channels=notify_channels)
 
 
-def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, realization_id: str, job_timeout_sec: int | None) -> int:
+# Time collection needs after training: the download and the Pod's deletion.
+LEASE_MARGIN_SEC = 15 * 60
+# The longest lease one change may set; longer ones are extended again later.
+MAX_LEASE_CHANGE_SEC = 7 * 24 * 3600
+
+
+def _training_left_sec(run_dir: Path) -> float | None:
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    step, total, per_step = status.get("last_step"), status.get("total_steps"), status.get("seconds_per_iter")
+    if isinstance(step, int) and isinstance(total, int) and isinstance(per_step, (int, float)) and total > step:
+        return (total - step) * float(per_step)
+    return None
+
+
+def lease_shortfall(run_dir: Path, realization_id: str, *, now: float | None = None) -> dict[str, Any] | None:
+    """The training time left and the lease left, when training plus collection would outlast the lease."""
+    training_left = _training_left_sec(run_dir)
+    deadline = latest_lease_deadline(run_dir, realization_id)
+    if training_left is None or not deadline:
+        return None
+    now = time.time() if now is None else now
+    if now + training_left + LEASE_MARGIN_SEC <= deadline:
+        return None
+    return {"training_left_sec": training_left, "lease_left_sec": deadline - now, "deadline_epoch": deadline}
+
+
+def _warn_if_lease_short(run_dir: Path, realization_id: str, run_id: str, notify_channels: Any) -> None:
+    """Warn once per deadline when the lease looks too short; Kura never extends it itself."""
+    shortfall = lease_shortfall(run_dir, realization_id)
+    if shortfall is None:
+        return
+    marker = run_dir / "realizations" / f"{realization_id}.leasewarning-{shortfall['deadline_epoch']}.json"
+    if marker.exists():
+        return
+    suggested_hours = int((shortfall["training_left_sec"] + LEASE_MARGIN_SEC) // 3600) + 2
+    message = (
+        f"training needs about {_format_remaining(shortfall['training_left_sec'])} more, but the Pod's lease ends in "
+        f"{_format_remaining(shortfall['lease_left_sec'])}; extend it with `kura run lease {run_id} {suggested_hours}h`, "
+        "or the Pod is deleted before training finishes"
+    )
+    atomic_write_json(marker, record("lease_warning", {"realization_id": realization_id, "at": datetime.now().astimezone().isoformat(), "message": message, **shortfall}))
+    print(f"[kura] warning: {message}", file=sys.stderr, flush=True)
+    from kura.notifications import notify
+
+    try:
+        notify(notify_channels, subject=f"Kura run lease too short: {run_id}", body=message, priority="4")
+    except Exception as exc:  # a notification never fails the run
+        print(f"[kura] notification failed: {exc}", file=sys.stderr)
+
+
+def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, realization_id: str, job_timeout_sec: int | None, notify_channels: Any = None) -> int:
     """Follow a started remote job until its exit record appears; return its exit code."""
     deadline = time.monotonic() + job_timeout_sec if job_timeout_sec and job_timeout_sec > 0 else None
     # The Pod bills until the controller notices the job ended, so the cheap
@@ -2249,6 +2350,7 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
         if now >= next_sync:
             _sync_runpod_remote_stdout(run_dir, details, workspace=workspace, run_id=run_id, timeout_sec=30)
             _try_sync_runpod_checkpoints(run_dir, details, workspace=workspace, run_id=run_id)
+            _warn_if_lease_short(run_dir, realization_id, run_id, notify_channels)
             next_sync = now + sync_interval_sec
         if now >= next_exit_check:
             exit_record = _read_runpod_remote_exit(details, workspace=workspace, run_id=run_id, timeout_sec=30)
@@ -2263,7 +2365,7 @@ def _follow_runpod_job(run_dir: Path, details: dict[str, Any], *, workspace: str
         sleep_checking_stop(2)
 
 
-def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None) -> int:
+def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, notify_channels: Any = None) -> int:
     """Pick up a remote job an earlier controller started, and follow it to its exit.
 
     The job keeps running on the Pod when the controller that started it
@@ -2277,7 +2379,7 @@ def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeou
     _start_ssh_master(details)
     if realization_id:
         record_launch_phase(run_dir, realization_id, "controller_reattached")
-    return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_dir.name, realization_id=realization_id, job_timeout_sec=job_timeout_sec)
+    return _follow_runpod_job(run_dir, details, workspace=workspace, run_id=run_dir.name, realization_id=realization_id, job_timeout_sec=job_timeout_sec, notify_channels=notify_channels)
 
 
 def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
@@ -2302,3 +2404,77 @@ def _remote_path_size(details: dict[str, Any], path: str, *, timeout_sec: int = 
         return int(result.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
         return None
+
+
+def _format_remaining(seconds: float) -> str:
+    seconds = max(int(seconds), 0)
+    hours, rest = divmod(seconds, 3600)
+    return f"{hours}h {rest // 60:02d}m"
+
+
+def change_runpod_lease(run_dir: Path, duration_sec: int, *, yes: bool, input_stream: Any = None) -> int:
+    """Move a running Pod's lease deadline to `duration_sec` from now, after the user confirms."""
+    if duration_sec <= 0:
+        raise ValueError("the new lease must be longer than zero; use `kura run stop` to end the Pod now")
+    if duration_sec > MAX_LEASE_CHANGE_SEC:
+        raise ValueError(f"a lease longer than {MAX_LEASE_CHANGE_SEC // 3600}h is refused; set a shorter one and extend it again later if needed")
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    reference = status.get("last_realization")
+    realization = json.loads((run_dir / reference).read_text(encoding="utf-8")) if isinstance(reference, str) else {}
+    pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else None
+    if realization.get("executor") != "runpod" or not isinstance(status.get("pod_id"), str) or pod is None:
+        raise ValueError("this run has no RunPod Pod to change the lease of")
+    if status.get("pod_stopped_at") or status.get("pod_missing_at"):
+        raise ValueError("this run's Pod is already stopped")
+    if realization.get("purpose") == "comfyui-render":
+        # A render session Pod also carries a fixed timer set when it was created, which this cannot move.
+        raise ValueError("a render Pod's lease cannot be changed yet; its creation-time timer still ends it")
+    details = _runpod_ssh_details(run_dir, timeout_sec=120, interval_sec=5)
+    path = shlex.quote(LEASE_DEADLINE_PATH)
+    # The Pod's clock decides when the guard fires, so deadlines are computed there.
+    read = subprocess.run([*_ssh_base(details), f"date +%s; cat {path} 2>/dev/null || true"], text=True, capture_output=True, check=False, timeout=60)
+    if read.returncode:
+        raise ValueError(_redact_secret_text(read.stderr.strip() or f"SSH to the Pod failed with exit code {read.returncode}"))
+    lines = read.stdout.split()
+    now = int(lines[0]) if lines and lines[0].isdigit() else int(time.time())
+    current = int(lines[1]) if len(lines) > 1 and lines[1].isdigit() else None
+    new = now + duration_sec
+    price = pod.get("cost_per_h")
+    print(f"Pod {status['pod_id']}: the lease now ends "
+          + (f"in {_format_remaining(current - now)} ({datetime.fromtimestamp(current).astimezone():%Y-%m-%d %H:%M})" if current else "at an unknown time (the Pod predates changeable leases)")
+          + f"; it would end in {_format_remaining(duration_sec)} ({datetime.fromtimestamp(new).astimezone():%Y-%m-%d %H:%M})."
+          + (f" Hourly price: ${price:.3f}." if isinstance(price, (int, float)) else ""), file=sys.stderr)
+    if current is None:
+        raise ValueError("this Pod's lease cannot be changed; it was created before Kura kept the deadline in a file")
+    training = _training_left_sec(run_dir)
+    if training is not None and new < now + training + LEASE_MARGIN_SEC:
+        print(f"note: training needs about {_format_remaining(training)} more, so this lease ends before it finishes", file=sys.stderr)
+    if not yes:
+        stream = input_stream or sys.stdin
+        if not stream.isatty():
+            raise ValueError("changing the lease changes what the Pod may bill; confirm in a terminal, or pass --yes only on the user's instruction")
+        print("Change the lease? [y/N] ", end="", file=sys.stderr, flush=True)
+        if stream.readline().strip().lower() != "y":
+            print("the lease is unchanged", file=sys.stderr)
+            return 1
+    write = subprocess.run(
+        [*_ssh_base(details), f"new=$(( $(date +%s) + {int(duration_sec)} )); echo $new > {path}.tmp && mv {path}.tmp {path} && cat {path}"],
+        text=True, capture_output=True, check=False, timeout=60,
+    )
+    kept = write.stdout.strip()
+    if write.returncode or not kept.isdigit():
+        raise ValueError(_redact_secret_text(write.stderr.strip() or "the Pod did not keep the new lease"))
+    new = int(kept)
+    record_lease_deadline(run_dir, new, reason="changed by kura run lease", previous_epoch=current)
+    print(f"the Pod now deletes itself at {datetime.fromtimestamp(new).astimezone():%Y-%m-%d %H:%M} at the latest", file=sys.stderr)
+    return 0
+
+
+def cmd_run_lease(args: argparse.Namespace) -> int:
+    from kura.run_commands.plan import _parse_duration_seconds
+
+    try:
+        return change_runpod_lease(_run_path(args.run_id), _parse_duration_seconds(args.duration), yes=bool(args.yes))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"cannot change the lease: {_safe_error(exc)}", file=sys.stderr)
+        return 1

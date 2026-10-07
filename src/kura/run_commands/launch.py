@@ -117,7 +117,7 @@ def _run_remote_locked(
             # Pod-side timers kept running, so only following and collecting remain.
             launched = True
             print(f"run {run_id} is already running on its Pod; following it and collecting its outputs", file=sys.stderr)
-            exit_code = follow_running_runpod_job(run_dir, ssh_timeout_sec=upload_timeout, job_timeout_sec=job_timeout)
+            exit_code = follow_running_runpod_job(run_dir, ssh_timeout_sec=upload_timeout, job_timeout_sec=job_timeout, notify_channels=notify_channels)
         else:
             stage_code = stage_run(run_id, executor="runpod")
             if stage_code:
@@ -145,6 +145,7 @@ def _run_remote_locked(
                 remote_notify="ntfy" in _notification_channels(notify_channels),
                 max_lease_sec=max_lease_sec,
                 unattended_wait_sec=unattended_wait_sec,
+                notify_channels=notify_channels,
             )
         realization_id = _latest_realization_id(run_dir)
         if realization_id:
