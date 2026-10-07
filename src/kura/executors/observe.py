@@ -23,6 +23,32 @@ def _runpod_config(run_dir: Path, config: dict[str, Any] | None) -> dict[str, An
     return runpod if isinstance(runpod, dict) else {}
 
 
+def read_run_status(run_dir: Path) -> dict[str, Any]:
+    """Return the run's status as recorded, for commands and views that only show runs.
+
+    Viewers never reconcile (run-records ADR, decision 7): the job runner
+    observes the runs it controls, and `kura run reconcile` or the command
+    following a run observes the rest. A viewer only wakes a runner that is gone.
+    """
+    run_dir = Path(run_dir)
+    snapshot = _load_status(run_dir)
+    if snapshot.get("state") in OBSERVABLE_STATES:
+        try:
+            if isinstance(_realization(run_dir, snapshot).get("controlled_by"), dict):
+                _wake_runner(run_dir)
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+    return snapshot
+
+
+def _realization(run_dir: Path, status: dict[str, Any]) -> dict[str, Any]:
+    reference = status.get("last_realization")
+    if not isinstance(reference, str):
+        return {}
+    value = json.loads((run_dir / reference).read_text(encoding="utf-8"))
+    return value if isinstance(value, dict) else {}
+
+
 def observe_run(
     run_dir: Path,
     *,
@@ -30,6 +56,9 @@ def observe_run(
     timeout: float = 2.0,
 ) -> dict[str, Any]:
     """Return status, refreshing it from the executor when observable.
+
+    Only a command that is about to act on the run (launch, stage) uses this;
+    commands and views that only show runs use `read_run_status`.
 
     A missing or malformed status snapshot remains a caller-visible error.
     Failures after that snapshot is loaded are observation failures and fall

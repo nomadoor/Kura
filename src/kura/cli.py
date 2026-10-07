@@ -31,7 +31,8 @@ from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
-from kura.executors import _redact_secret_text, observe_run, reconcile_docker, reconcile_runpod
+from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
+from kura.executors.common import OBSERVABLE_STATES
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
@@ -601,13 +602,15 @@ STATUS_SUMMARY_OUTPUTS = 20
 def cmd_run_status(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
-        status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
+        status = read_run_status(run_dir)
         realization_ref = status.get("last_realization")
         if isinstance(realization_ref, str) and (run_dir / realization_ref).is_file():
             status["latest_realization"] = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
         observation_ref = status.get("last_observation")
         if isinstance(observation_ref, str) and (run_dir / observation_ref).is_file():
             status["latest_observation"] = json.loads((run_dir / observation_ref).read_text(encoding="utf-8"))
+        latest_realization = status.get("latest_realization") if isinstance(status.get("latest_realization"), dict) else {}
+        runner_controlled = isinstance(latest_realization.get("controlled_by"), dict)
         outputs = status.get("outputs") if isinstance(status.get("outputs"), list) else []
         summary = {
             "state": status.get("state"),
@@ -615,7 +618,11 @@ def cmd_run_status(args: argparse.Namespace) -> int:
             "pod_id": status.get("pod_id"),
             "downloaded_run": status.get("downloaded_run"),
             "outputs": outputs[:STATUS_SUMMARY_OUTPUTS],
+            # This command only reads; it says how fresh what it read is (run-records ADR, decision 7).
+            "last_observed_at": (status.get("latest_observation") or {}).get("observed_at"),
         }
+        if status.get("state") in OBSERVABLE_STATES and not runner_controlled:
+            summary["observe_now"] = f"no job runner follows this run; `kura run reconcile {args.run_id}` observes it now"
         if len(outputs) > STATUS_SUMMARY_OUTPUTS:
             summary["outputs_shown"] = f"{STATUS_SUMMARY_OUTPUTS} of {len(outputs)}; every output is listed under outputs below"
         # The summary leads so a reader that stops early has read what matters.
@@ -1401,7 +1408,7 @@ def cmd_index_rebuild(_: argparse.Namespace) -> int:
     for run_file in sorted((root / "runs").glob("*/run.yaml")):
         try:
             run = _load_yaml(run_file)
-            status = observe_run(run_file.parent, config=_workspace_config().get("runpod", {}))
+            status = read_run_status(run_file.parent)
             entry = {"id": run.get("id"), "type": run.get("type", "train"), "experiment": run.get("experiment"), "created": run.get("created"), "state": status.get("state")}
             if run.get("type") == "render": entry["inputs"] = {"train_run": run.get("inputs", {}).get("train_run")}
             entries.append(entry)

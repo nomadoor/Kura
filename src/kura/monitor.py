@@ -17,7 +17,7 @@ from typing import Any, Iterable
 import yaml
 
 from kura.backends import get_backend
-from kura.executors import ACTIVE_STATES, observe_run
+from kura.executors import ACTIVE_STATES, read_run_status
 from kura.executors.common import is_realization_record
 from kura.run_envelope import common_recipe, run_executor
 
@@ -313,7 +313,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     manifest = _read_mapping(run_dir / "resolved" / "manifest.lock.yaml")
     config = manifest or run
     status_path = run_dir / "status.json"
-    status = observe_run(run_dir) if status_path.is_file() else {}
+    status = read_run_status(run_dir) if status_path.is_file() else {}
     realization = _latest_realization(run_dir, status)
     metrics_paths = _artifact_candidates(run_dir, status, "metrics/metrics.jsonl")
     stdout_paths = _artifact_candidates(run_dir, status, "logs/stdout.log")

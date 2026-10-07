@@ -10,19 +10,19 @@ Use this skill for the monitoring TUI.
 ## Non-negotiables
 
 - Monitor/TUI does not derive lifecycle state or step progress.
-- Monitor/watch triggers the state layer's `observe_run()`, then displays its
-  materialized status. External inspect/API observation and status persistence
-  remain owned by that state layer.
+- Monitor/watch reads the materialized status through the state layer's
+  `read_run_status()`, which never observes or writes; it only wakes a job
+  runner that is gone. External inspect/API observation and status persistence
+  belong to the job runner and to `kura run reconcile`.
 - Monitor/TUI must not directly call Docker or provider APIs, and must not call
   launch, compile, or stop paths.
-- The monitor never launches or controls runs and starts no background service. Only the job runner (`kura runner`, `docs/adr/files-only-state-and-job-runner.md`) controls launched runs. Today the monitor observes a running run through `observe_run()`, which can reconcile and write `status.json`; once the runner ships, the monitor only reads materialized status and shows when each run was last observed, never observing or persisting anything (`docs/adr/run-records-and-external-effects.md`).
+- The monitor never launches or controls runs and starts no background service. Only the job runner (`kura runner`, `docs/adr/files-only-state-and-job-runner.md`) controls launched runs. The monitor only reads materialized status and shows how old it is (the STALE marker with the last local update), never observing or persisting anything (`docs/adr/run-records-and-external-effects.md`).
 - UI-owned side effects are limited to opening file manager/browser links and
-  copying to the clipboard. Run-state side effects belong only to
-  `observe_run()`.
+  copying to the clipboard. The monitor has no run-state side effects.
 
 ## Data sources
 
-Project status comes from the result of `observe_run()` plus these existing
+Project status comes from the result of `read_run_status()` plus these existing
 files:
 
 - `index.jsonl`
