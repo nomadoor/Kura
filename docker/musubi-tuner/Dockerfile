@@ -1,5 +1,9 @@
-ARG PYTORCH_BASE=pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+ARG PYTORCH_BASE=pytorch/pytorch:2.9.1-cuda13.0-cudnn9-runtime
 FROM ${PYTORCH_BASE}
+
+# The CUDA version the image runs; Kura records it with the pinned digest.
+ARG KURA_CUDA=13.0
+LABEL io.kura.cuda="${KURA_CUDA}"
 
 ARG MUSUBI_TUNER_REF=v0.3.5
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,6 +24,9 @@ RUN python /tmp/patch_flux2_diffusers_vae.py \
     && rm /tmp/patch_flux2_diffusers_vae.py
 
 COPY docker/ai-toolkit/kura_runpod_object_job.py /opt/kura_runpod_object_job.py
+# Installing the trainer must not replace the base image's torch build.
+RUN python -c "import sys, torch; cuda = torch.version.cuda or ''; sys.exit(0 if cuda.startswith('${KURA_CUDA}') else 'torch ' + torch.__version__ + ' uses CUDA ' + cuda + ', expected ${KURA_CUDA}')"
+
 WORKDIR /workspace
 
 CMD ["sleep", "infinity"]
