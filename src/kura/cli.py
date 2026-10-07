@@ -599,6 +599,13 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
 STATUS_SUMMARY_OUTPUTS = 20
 
 
+def _modified_at(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat()
+    except OSError:
+        return None
+
+
 def cmd_run_status(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
@@ -609,8 +616,10 @@ def cmd_run_status(args: argparse.Namespace) -> int:
         observation_ref = status.get("last_observation")
         if isinstance(observation_ref, str) and (run_dir / observation_ref).is_file():
             status["latest_observation"] = json.loads((run_dir / observation_ref).read_text(encoding="utf-8"))
+        from kura import runner
+
         latest_realization = status.get("latest_realization") if isinstance(status.get("latest_realization"), dict) else {}
-        runner_controlled = isinstance(latest_realization.get("controlled_by"), dict)
+        runner_controlled = isinstance(latest_realization.get("controlled_by"), dict) or runner.controlling_request(run_dir) is not None
         outputs = status.get("outputs") if isinstance(status.get("outputs"), list) else []
         summary = {
             "state": status.get("state"),
@@ -619,10 +628,20 @@ def cmd_run_status(args: argparse.Namespace) -> int:
             "downloaded_run": status.get("downloaded_run"),
             "outputs": outputs[:STATUS_SUMMARY_OUTPUTS],
             # This command only reads; it says how fresh what it read is (run-records ADR, decision 7).
+            # Observations are recorded when the state changes; the status file changes with progress too.
             "last_observed_at": (status.get("latest_observation") or {}).get("observed_at"),
+            "status_updated_at": _modified_at(run_dir / "status.json"),
         }
-        if status.get("state") in OBSERVABLE_STATES and not runner_controlled:
-            summary["observe_now"] = f"no job runner follows this run; `kura run reconcile {args.run_id}` observes it now"
+        if runner.run_unfinished(run_dir):
+            workspace = run_dir.parent.parent
+            if runner.runner_alive(workspace):
+                summary["runner"] = "following this run"
+            elif runner.stopped_on_purpose(workspace):
+                summary["runner"] = "stopped on purpose; `kura runner start` follows this run again"
+            else:
+                summary["runner"] = "not running; this command asked one to start, check again with `kura runner status`"
+        elif status.get("state") in OBSERVABLE_STATES | {"launching", "queued"} and not runner_controlled:
+            summary["observe_now"] = f"this run is not under the job runner; `kura run reconcile {args.run_id}` observes it now"
         if len(outputs) > STATUS_SUMMARY_OUTPUTS:
             summary["outputs_shown"] = f"{STATUS_SUMMARY_OUTPUTS} of {len(outputs)}; every output is listed under outputs below"
         # The summary leads so a reader that stops early has read what matters.
