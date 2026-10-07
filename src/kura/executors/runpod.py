@@ -30,7 +30,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, missing
-from kura.executors.common import CONTAINER_WORKSPACE, TERMINAL_STATES, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import CONTAINER_WORKSPACE, CREATE_INTENT_SUFFIX, TERMINAL_STATES, settle_status_from_realization, unresolved_create_intents, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 
 
@@ -478,9 +478,6 @@ def _is_runpod_transient_error(exc: ValueError) -> bool:
     return "runpod api is unreachable" in text or any(f"({code})" in text for code in (429, 500, 502, 503, 504))
 
 
-CREATE_INTENT_SUFFIX = ".create-intent.json"
-
-
 def _create_outcome_uncertain(exc: ValueError) -> bool:
     """Whether a failed create may still have created a Pod.
 
@@ -492,17 +489,6 @@ def _create_outcome_uncertain(exc: ValueError) -> bool:
     text = str(exc).lower()
     # A reply that arrived but cannot be read says nothing about the create either.
     return any(marker in text for marker in ("runpod api is unreachable", "invalid json", "unexpected response", "did not contain"))
-
-
-def unresolved_create_intents(run_dir: Path) -> list[Path]:
-    """Create intents with no realization yet: Pods that may exist unrecorded."""
-    directory = run_dir / "realizations"
-    if not directory.is_dir():
-        return []
-    return sorted(
-        path for path in directory.glob(f"*{CREATE_INTENT_SUFFIX}")
-        if not (directory / f"{path.name[: -len(CREATE_INTENT_SUFFIX)]}.json").exists()
-    )
 
 
 def unstopped_recovered_pod(run_dir: Path) -> str | None:
@@ -608,7 +594,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     its id, so `kura run stop` deletes it; finding none records the launch as
     failed. Returns one line per settled intent for the user.
     """
-    intents = unresolved_create_intents(run_dir)
+    intents = unresolved_create_intents(run_dir, "runpod")
     if not intents:
         return []
     settings = _runpod_settings(config)
@@ -619,6 +605,10 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     for intent_path in intents:
         intent = json.loads(intent_path.read_text(encoding="utf-8"))
         realization_id = intent_path.name[: -len(CREATE_INTENT_SUFFIX)]
+        if (intent_path.parent / f"{realization_id}.json").exists():
+            settle_status_from_realization(run_dir, intent_path.parent / f"{realization_id}.json")
+            lines.append(f"the launch recorded {realization_id}.json but stopped before status followed it; status now does")
+            continue
         pod_name = intent.get("pod_name") if isinstance(intent.get("pod_name"), str) else f"kura-{run_dir.name}-{realization_id}"
         pods = _discover_pods(api_key, pod_name)
         at = _now()

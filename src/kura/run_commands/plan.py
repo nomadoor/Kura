@@ -1664,8 +1664,8 @@ def stop_run(run_id: str) -> int:
         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
         if unresolved_create_intents(run_dir):
             raise ValueError(
-                f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` "
-                "first, which finds the Pod by name so this command can delete it"
+                f"a launch of this run stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` "
+                "first, which finds it by name so this command can stop it"
             )
         realization_ref = status.get("last_realization")
         if not isinstance(realization_ref, str):

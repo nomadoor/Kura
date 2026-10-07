@@ -431,13 +431,15 @@ def launch_run(
     try:
         if unresolved_create_intents(run_dir):
             raise ValueError(
-                f"an earlier launch stopped before recording whether its Pod was created; run `kura run reconcile {run_id}` first"
+                f"an earlier launch stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` first"
             )
         if (recovered := unstopped_recovered_pod(run_dir)) is not None:
             raise ValueError(f"Pod {recovered} from an earlier launch may still be billing; run `kura run stop {run_id}` before launching again")
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run already has a running realization; reconcile or stop it first")
+        if status.get("state") == "launching":
+            raise ValueError(f"a launch of this run is in progress or stopped midway; if none is running, run `kura run reconcile {run_id}`")
         allowed_states = ("compiled", "failed", "interrupted", "unknown", "launch_failed")
         stale_capacity_wait = status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict)
         if status.get("state") not in allowed_states and not stale_capacity_wait:
