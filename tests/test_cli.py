@@ -3355,8 +3355,9 @@ class RunPodLiveSyncTests(unittest.TestCase):
                 first.start()
                 self.assertTrue(first_remote_call.wait(timeout=1))
                 second.start()
-                first.join(timeout=1)
-                second.join(timeout=1)
+                # Windows file locks wait in steps of about a second, so the second sync needs time.
+                first.join(timeout=10)
+                second.join(timeout=10)
 
             self.assertEqual(results, [True, True])
             self.assertEqual(observed_offsets, [0, 9])
