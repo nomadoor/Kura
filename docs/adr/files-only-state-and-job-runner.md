@@ -121,7 +121,8 @@ shipped files never touches it.
 itself. For each claimed request it starts one child process that runs the
 existing launch and follow code for that run, and writes its own output to
 that run's logs. A child that dies is replaced by one that follows the run from its
-records; a child never launches again. A child holds its run's controller
+records: it follows the recorded container or Pod and never calls the launch
+path again. A child holds its run's controller
 lock for its whole life, so a runner that replaces a dead one never starts a
 second follower beside a child that outlived it; the new follower waits for
 that lock. The runner starts children with the
