@@ -1641,6 +1641,19 @@ def main() -> None:
     check_artifacts.add_argument("paths", nargs="+")
     check_artifacts.set_defaults(func=cmd_check_artifacts)
 
+    runner_parser = sub.add_parser("runner", help="The job runner that keeps launched runs going when your session ends")
+    runner_sub = runner_parser.add_subparsers(dest="runner_command", required=True, metavar="{status,start,stop}")
+    runner_sub.add_parser("status", help="Show whether a runner is running, its epoch and version, and requests it cannot take").set_defaults(func=cmd_runner_status)
+    runner_sub.add_parser("start", help="Start the runner by hand; launching commands start it on their own").set_defaults(func=cmd_runner_start)
+    runner_sub.add_parser("stop", help="Stop the runner; containers keep running and the next runner follows them").set_defaults(func=cmd_runner_stop)
+    # Started by Kura itself: the runner, and one follower per launch.
+    serve_parser = runner_sub.add_parser("_serve")
+    serve_parser.set_defaults(func=cmd_runner_serve)
+    work_parser = runner_sub.add_parser("_work")
+    work_parser.add_argument("run_id")
+    work_parser.add_argument("request")
+    work_parser.set_defaults(func=cmd_runner_work)
+
     secrets_parser = sub.add_parser("secrets", help="Store the API keys Kura uses, outside every workspace")
     secrets_sub = secrets_parser.add_subparsers(dest="secrets_command", required=True)
     secrets_set = secrets_sub.add_parser("set", help="Store one secret with hidden input in your own terminal; `kura doctor secrets` shows which are set")
@@ -1697,6 +1710,50 @@ def main() -> None:
     if args.func is not cmd_init:
         _refresh_managed_files()
     raise SystemExit(args.func(args))
+
+
+def cmd_runner_status(_: argparse.Namespace) -> int:
+    from kura import runner
+
+    root = _workspace()
+    info = runner.runner_info(root) or {}
+    print(json.dumps({
+        "running": runner.runner_alive(root),
+        "stopped_on_purpose": runner.stopped_on_purpose(root),
+        "epoch": info.get("epoch"), "pid": info.get("pid"), "kura_version": info.get("kura_version"),
+        "started_at": info.get("started_at"),
+        "requests_for_another_version": runner.foreign_requests(root),
+        "log": str(runner.runner_dir(root).relative_to(root) / "runner.log"),
+    }, indent=2))
+    return 0
+
+
+def cmd_runner_start(_: argparse.Namespace) -> int:
+    from kura import runner
+
+    started = runner.ensure_runner(_workspace(), launching=True)
+    print("runner started" if started else "a runner is already running")
+    return 0
+
+
+def cmd_runner_stop(_: argparse.Namespace) -> int:
+    from kura import runner
+
+    runner.stop_runner(_workspace())
+    print("runner stopped; containers keep running, and `kura runner start` or the next launch follows them again")
+    return 0
+
+
+def cmd_runner_serve(_: argparse.Namespace) -> int:
+    from kura import runner
+
+    return runner.serve(_workspace())
+
+
+def cmd_runner_work(args: argparse.Namespace) -> int:
+    from kura import runner
+
+    return runner.work(_workspace(), args.run_id, args.request)
 
 
 def _refresh_managed_files() -> None:

@@ -326,6 +326,8 @@ def execute_run(
             unattended_wait=unattended_wait,
             reattach=reattach,
         )
+    if executor == "docker" and locked.get("type", "train") != "render":
+        return _launch_docker_through_runner(run_id, image=image, follow=True, notify_channels=notify_channels)
     if executor == "docker":
         return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
     print(f"cannot execute run: unsupported compiled executor {executor!r}", file=sys.stderr)
@@ -380,7 +382,10 @@ def launch_run(
     yes: bool = False,
     max_lease: Any = None,
     unattended_wait: str | None = None,
+    check_only: bool = False,
+    controlled_by: dict[str, Any] | None = None,
 ) -> int:
+    """Launch a compiled run; `check_only` runs every check a Docker launch makes and stops before it."""
     run_dir = _run_path(run_id)
     try:
         locked = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
@@ -476,7 +481,7 @@ def launch_run(
         print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     try:
-        if not dry_run and input_preflight is not None:
+        if not dry_run and not check_only and input_preflight is not None:
             append_run_event(run_dir, input_preflight)
         config = _workspace_config()
         backend_name = locked.get("backend", {}).get("name") if isinstance(locked.get("backend"), dict) else None
@@ -497,6 +502,8 @@ def launch_run(
                 raise ValueError("docker.mounts must be a list")
             if not dry_run:
                 _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config, enforce_model_download_safety=False)
+            if check_only:
+                return 0
             local_image = image or selected["reference"]
             if continuation is not None and continuation.get("mode") == "resume":
                 selected_identity = env_lock.get("selected_image_identity") if isinstance(env_lock, dict) else None
@@ -515,6 +522,7 @@ def launch_run(
                 workspace_target=workspace_target,
                 dry_run=dry_run,
                 min_free_gb=_configured_gib(docker.get("min_free_gb"), default=100) if isinstance(docker, dict) else 100,
+                controlled_by=controlled_by,
             )
             if wait and not dry_run:
                 return _wait_for_docker_run(run_dir)
@@ -564,7 +572,73 @@ def launch_run(
     return 0
 
 
+def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: bool, relaunch: bool = False, notify_channels: Any = None) -> int:
+    """Hand a local Docker training run to the job runner, then follow it or return.
+
+    A launch request is written only when the run has none in progress; run
+    again, this follows the launch in progress and only reports a finished one.
+    """
+    from kura import runner
+
+    workspace = _workspace()
+    run_dir = _run_path(run_id)
+    request = runner.latest_request(run_dir)
+    in_progress = request is not None and runner.request_outcome(request) is None and (
+        request in runner.pending_requests(run_dir) or runner.run_unfinished(run_dir)
+    )
+    if request is not None and not in_progress and not relaunch:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        outcome = runner.request_outcome(request)
+        if outcome is not None:
+            print(f"the last launch request was not launched: {outcome.get('error') or outcome.get('kind')}; "
+                  f"start a new launch with `kura run launch {run_id}`", file=sys.stderr)
+            return 1
+        print(format_run_completion(workspace, run_dir, status))
+        return runner.EXIT_FOR_STATE.get(str(status.get("state")), 2)
+    if not in_progress:
+        if launch_run(run_id, executor="docker", dry_run=False, image=image, check_only=True):
+            return 1
+        missing = runner.env_only_secrets()
+        if missing:
+            print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
+                  "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
+        try:
+            request = runner.write_launch_request(run_dir, executor="docker", image=image, notify=notify_channels)
+        except (OSError, ValueError) as exc:
+            print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        print(f"launch request {request.name} written; the job runner launches it", file=sys.stderr)
+    runner.ensure_runner(workspace, launching=True)
+    if not follow:
+        # A runner that was just exiting can miss the request; watch until one claims it.
+        if not runner.await_claim(workspace, run_dir, request):
+            print(f"no runner took launch request {request.name}; see .kura/runner/runner.log and run `kura runner start`", file=sys.stderr)
+            return 1
+        print(f"the run continues without this command; follow it with `kura run execute {run_id}`", file=sys.stderr)
+        return 0
+    print("following the run; interrupting this command does not stop the run (`kura run stop` does)", file=sys.stderr)
+    try:
+        code = runner.follow(workspace, run_dir, request)
+    except KeyboardInterrupt:
+        print(f"\nstopped following; the run continues. Follow it again with `kura run execute {run_id}`", file=sys.stderr)
+        return 130
+    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    print(format_run_completion(workspace, run_dir, status))
+    return code
+
+
 def cmd_run_launch(args: argparse.Namespace) -> int:
+    if args.executor == "docker" and not args.dry_run:
+        try:
+            run_type = _load_yaml(_run_path(args.run_id) / "resolved" / "manifest.lock.yaml").get("type", "train")
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"cannot launch run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
+            return 1
+        if run_type != "render":
+            return _launch_docker_through_runner(
+                args.run_id, image=getattr(args, "image", None), follow=bool(getattr(args, "wait", False)), relaunch=True,
+                notify_channels=getattr(args, "notify", None),
+            )
     return launch_run(
         args.run_id,
         executor=args.executor,

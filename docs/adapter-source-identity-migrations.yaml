@@ -8,6 +8,54 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: runpod-executor-job-runner-2026-10-07
+    executor: runpod
+    reason: The shared executor module gains the job runner's finish predicate, epoch fencing of
+      status writes (a runner follower with an older epoch than the status stops; command-line
+      writers, and every writer when no runner exists, write as before), and a viewer that does not reconcile
+      runner-controlled runs. Local Docker training now launches through the runner; RunPod launches
+      keep their in-process path and make the same requests, transfers, training, collection,
+      publication, and Pod stop as before.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 26900612047d6031a88244c9594d3ffa9b1b9a626dda9952502483eeb1820761
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: c9d5c3d78e4397e3110c2a0c4bddbdad50427ef5aa5fd4b56d326d6784e7174a
   - id: runpod-executor-remote-job-and-progress-2026-10-07
     executor: runpod
     reason: Starting the remote job now writes `<rid>.remote-job-intent.json` first and

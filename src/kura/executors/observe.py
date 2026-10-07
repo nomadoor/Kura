@@ -47,6 +47,11 @@ def observe_run(
         realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
         if not isinstance(realization, dict):
             return snapshot
+        if isinstance(realization.get("controlled_by"), dict):
+            # The job runner owns this run's records; a viewer only reads them
+            # and wakes a runner that is gone (run-records ADR, decision 7).
+            _wake_runner(run_dir)
+            return snapshot
         if realization.get("executor") == "runpod":
             return reconcile_runpod(
                 run_dir,
@@ -58,3 +63,26 @@ def observe_run(
         return reconcile_docker(run_dir, timeout=timeout, blocking=False, source="automatic")
     except (_OperationBusy, OSError, ValueError, json.JSONDecodeError, yaml.YAMLError):
         return snapshot
+
+
+_last_wake: dict[str, float] = {}
+WAKE_BACKOFF_SEC = 30.0
+
+
+def _wake_runner(run_dir: Path) -> None:
+    """Start a runner for an unfinished runner-controlled run, at most once per backoff window."""
+    import time
+
+    from kura import runner
+
+    workspace = run_dir.parent.parent
+    key = str(workspace)
+    now = time.monotonic()
+    try:
+        if not runner.run_unfinished(run_dir) or now - _last_wake.get(key, -WAKE_BACKOFF_SEC) < WAKE_BACKOFF_SEC:
+            return
+        # Back off only after an attempt, so finished runs never use up the window.
+        _last_wake[key] = now
+        runner.ensure_runner(workspace)
+    except (OSError, ValueError):
+        pass

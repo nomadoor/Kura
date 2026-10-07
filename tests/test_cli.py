@@ -6834,11 +6834,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             (run_dir / "resolved" / "manifest.lock.yaml").write_text("compute: {executor: docker}\n", encoding="utf-8")
             with (
                 patch("kura.run_commands.launch._run_path", return_value=run_dir),
-                patch("kura.run_commands.launch.launch_run", return_value=0) as launch,
+                patch("kura.run_commands.launch._launch_docker_through_runner", return_value=0) as through_runner,
             ):
                 self.assertEqual(execute_run("example"), 0)
 
-        launch.assert_called_once_with("example", executor="docker", dry_run=False, image=None, notify_channels=None, wait=True)
+        # Local training goes through the job runner, and the command follows it.
+        through_runner.assert_called_once_with("example", image=None, follow=True, notify_channels=None)
 
     def test_execute_run_uses_compiled_runpod_executor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

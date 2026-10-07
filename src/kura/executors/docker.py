@@ -415,7 +415,7 @@ def docker_command(
     return command, runtime_env, name
 
 
-def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, min_free_gb: int = MIN_FREE_SPACE_GIB) -> tuple[list[str], str | None]:
+def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, min_free_gb: int = MIN_FREE_SPACE_GIB, controlled_by: dict[str, Any] | None = None) -> tuple[list[str], str | None]:
     """Start a detached Docker realization; completion is recovered by reconcile."""
     realization_id = _realization_id()
     mount_workspace = True
@@ -463,6 +463,8 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "local_image": image, "image_id": image_id,
         **({"adapter_source": spec["adapter_source"]} if isinstance(spec.get("adapter_source"), dict) else {}),
         "image_identity": image_reference_identity(image, image_id),
+        # A runner launch names the request it came from, so a new runner knows it controls the run.
+        **({"controlled_by": controlled_by} if controlled_by else {}),
         "container": {"id": None, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command,
         "workspace_mount": ({"source": str(workspace.resolve()), "target": workspace_target} if mount_workspace else None),

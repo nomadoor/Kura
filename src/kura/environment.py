@@ -38,6 +38,8 @@ USER_VARIABLES: tuple[UserVariable, ...] = (
 INTERNAL_VARIABLES = frozenset({
     "KURA_EXIT_CODE", "KURA_REMOTE_NOTIFY_NTFY", "KURA_RUNPOD_UPLOAD_CODE", "KURA_RUN_ID", "KURA_WORKSPACE",
     "TMPDIR", "WSL_DISTRO_NAME",
+    # Set by the job runner for its followers, so their status writes carry its epoch.
+    "KURA_RUNNER_EPOCH",
     # Cache locations `kura doctor disk` reports when the host sets them.
     "KURA_CACHE_DIR", "HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE", "TORCH_HOME", "XDG_CACHE_HOME",
 })
