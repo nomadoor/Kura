@@ -33,7 +33,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
-from kura.fsio import atomic_write_json
+from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
@@ -772,7 +772,16 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 shutil.rmtree(staging)
             if backup is not None and backup.exists() and not downloaded_run.exists():
                 os.replace(backup, downloaded_run)
-        _mutate_run_status(run_dir, lambda status: status.__setitem__("terminal_download", terminal_download))
+        def record_terminal_download(status: dict[str, Any]) -> None:
+            realization_id = _status_realization_id(status)
+            (run_dir / "realizations").mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+            atomic_write_json(run_dir / "realizations" / f"{realization_id}.terminal-download-{stamp}.json",
+                              record("terminal_download", {"realization_id": realization_id,
+                                                           "at": datetime.now().astimezone().isoformat(), **terminal_download}))
+            status["terminal_download"] = terminal_download
+
+        _mutate_run_status(run_dir, record_terminal_download)
         append_run_event(
             run_dir,
             {
@@ -1170,18 +1179,58 @@ def _pull_remote_output_items(
     return pulled
 
 
-def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]], *, emit_event: bool = True) -> None:
+def _status_realization_id(status: dict[str, Any]) -> str:
+    reference = status.get("last_realization")
+    return Path(reference).stem if isinstance(reference, str) else "unrecorded"
+
+
+def _record_sync_error(run_dir: Path, status: dict[str, Any], key: str, error: str | None) -> None:
+    """Set or clear a sync error in status, recording each change first (called inside a status mutation)."""
+    if status.get(key) == error or (error is None and key not in status):
+        return
+    realization_id = _status_realization_id(status)
+    stamp = datetime.now().astimezone()
+    kind = "sync_error" if error else "sync_recovered"
+    (run_dir / "realizations").mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        run_dir / "realizations" / f"{realization_id}.{kind.replace('_', '-')}-{stamp.strftime('%Y%m%d-%H%M%S-%f')}.json",
+        record(kind, {"realization_id": realization_id, "at": stamp.isoformat(), "status_key": key, **({"error": error} if error else {})}),
+    )
+    if error:
+        status[key] = error
+    else:
+        status.pop(key, None)
+
+
+def mirrored_outputs_path(run_dir: Path, realization_id: str) -> Path:
+    return run_dir / "realizations" / f"{realization_id}.outputs-mirrored.jsonl"
+
+
+def _record_pulled_outputs(run_dir: Path, pulled: list[dict[str, Any]], *, emit_event: bool = True, record_copies: bool = True) -> None:
+    """Merge pulled checkpoints into status; `record_copies` records each copy first.
+
+    The copy loop records every checkpoint as it lands; the batch merge after it
+    passes `record_copies=False`, so a copy is recorded once.
+    """
     def mutate(status: dict[str, Any]) -> None:
-        status.pop("checkpoint_sync_error", None)
+        _record_sync_error(run_dir, status, "checkpoint_sync_error", None)
         if not pulled:
             return
+        # Each checkpoint copied is recorded before status lists it; skipped ones were recorded when copied.
+        realization_id = _status_realization_id(status)
+        log = mirrored_outputs_path(run_dir, realization_id)
+        for item in pulled if record_copies else []:
+            if not item.get("skipped"):
+                log.parent.mkdir(parents=True, exist_ok=True)
+                line = record("output_mirrored", {"realization_id": realization_id, "at": datetime.now().astimezone().isoformat(), **item})
+                append_line_durably(log, json.dumps(line, ensure_ascii=False) + "\n")
         previous = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
         merged = {item.get("name"): item for item in previous if isinstance(item, dict) and isinstance(item.get("name"), str)}
         for item in pulled:
             if isinstance(item.get("name"), str):
                 merged[item["name"]] = item
         status["mirrored_outputs"] = list(merged.values())
-        status["mirrored_outputs_synced_at"] = datetime.now().astimezone().isoformat()
+        status.pop("mirrored_outputs_synced_at", None)
 
     _mutate_run_status(run_dir, mutate)
     copied = [item for item in pulled if not item.get("skipped")]
@@ -1194,7 +1243,7 @@ def _record_pulled_training_states(run_dir: Path, manifests: list[dict[str, Any]
 
     def mutate(status: dict[str, Any]) -> None:
         nonlocal changed
-        status.pop("training_state_sync_error", None)
+        _record_sync_error(run_dir, status, "training_state_sync_error", None)
         if not manifests:
             return
         recoverable = [
@@ -1212,7 +1261,7 @@ def _record_pulled_training_states(run_dir: Path, manifests: list[dict[str, Any]
             return
         changed = True
         status["recoverable_training_states"] = recoverable
-        status["training_states_synced_at"] = datetime.now().astimezone().isoformat()
+        status.pop("training_states_synced_at", None)
 
     _mutate_run_status(run_dir, mutate)
     if changed:
@@ -1254,7 +1303,7 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
             # Newly published files were recorded immediately so partial
             # success survives a later transfer failure. Merge skipped items
             # and clear stale errors without emitting the same event twice.
-            _record_pulled_outputs(run_dir, pulled, emit_event=False)
+            _record_pulled_outputs(run_dir, pulled, emit_event=False, record_copies=False)
             if _directory_training_state_sync_enabled(run_dir):
                 try:
                     state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id)
@@ -1265,7 +1314,7 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
                     try:
                         _mutate_run_status(
                             run_dir,
-                            lambda status: status.__setitem__("training_state_sync_error", state_error),
+                            lambda status: _record_sync_error(run_dir, status, "training_state_sync_error", state_error),
                         )
                     except (OSError, json.JSONDecodeError):
                         pass
@@ -1278,7 +1327,7 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
         try:
             _mutate_run_status(
                 run_dir,
-                lambda status: status.__setitem__("checkpoint_sync_error", error_message),
+                lambda status: _record_sync_error(run_dir, status, "checkpoint_sync_error", error_message),
             )
         except (OSError, json.JSONDecodeError):
             pass
@@ -1298,7 +1347,7 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
             raise ValueError("no matching remote .safetensors outputs found")
         with _run_operation_lock(run_dir, "checkpoint-pull"):
             pulled = _pull_remote_output_items(run_dir, details, workspace=workspace, items=selected, force=args.force)
-            _record_pulled_outputs(run_dir, pulled, emit_event=False)
+            _record_pulled_outputs(run_dir, pulled, emit_event=False, record_copies=False)
         print(json.dumps({"run_id": args.run_id, "destination": str(run_dir / "outputs"), "pulled": pulled}, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
@@ -1551,17 +1600,42 @@ def _sync_runpod_remote_stdout(run_dir: Path, details: dict[str, Any], *, worksp
         return False
 
 
+REMOTE_LOG_CURSOR = "logs/stdout.remote-cursor.json"
+
+
+def _remote_log_offset(run_dir: Path) -> tuple[int, str] | None:
+    """How many bytes of the current Pod's stdout.log are already here, and that Pod's realization.
+
+    The cursor names its realization, so a relaunch on a new Pod starts from the
+    beginning of the new log. None when the run cannot be read.
+    """
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    realization_id = _status_realization_id(status)
+    try:
+        cursor = json.loads((run_dir / REMOTE_LOG_CURSOR).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # A run synced before the cursor had its own file kept it in status.
+        cursor = {"realization_id": realization_id, "remote_bytes": status.get("remote_log_bytes")}
+    except (OSError, json.JSONDecodeError):
+        cursor = {}
+    if not isinstance(cursor, dict) or cursor.get("realization_id") != realization_id:
+        # A new Pod's log starts empty. A relaunch on a Network Volume appends to the old
+        # file instead, and reading it again from the start repeats text rather than losing it.
+        return 0, realization_id
+    offset = cursor.get("remote_bytes")
+    return (offset if isinstance(offset, int) and offset >= 0 else 0), realization_id
+
+
 def _sync_runpod_remote_stdout_unlocked(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> bool:
     """Perform one remote-log sync while the per-run log lock is held."""
 
-    status_path = run_dir / "status.json"
-    try:
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    cursor = _remote_log_offset(run_dir)
+    if cursor is None:
         return False
-    offset = status.get("remote_log_bytes")
-    if not isinstance(offset, int) or offset < 0:
-        offset = 0
+    offset, cursor_realization = cursor
     remote_log = f"{workspace.rstrip('/')}/runs/{run_id}/logs/stdout.log"
     marker = "__KURA_LOG_SIZE__:"
     script = f"""
@@ -1605,9 +1679,13 @@ fi
         log_path.parent.mkdir(exist_ok=True)
         with log_path.open("ab") as handle:
             handle.write(payload)
+    # The cursor is this sync's own bookkeeping, not a fact about the run, so it stays out of status.
+    atomic_write_json(run_dir / REMOTE_LOG_CURSOR, {"realization_id": cursor_realization, "remote_bytes": remote_size,
+                                                    "synced_at": datetime.now().astimezone().isoformat()})
+
     def mutate(current: dict[str, Any]) -> None:
-        current["remote_log_bytes"] = remote_size
-        current["remote_log_synced_at"] = datetime.now().astimezone().isoformat()
+        current.pop("remote_log_bytes", None)
+        current.pop("remote_log_synced_at", None)
         _materialize_stdout_progress(run_dir, current, state=str(current.get("state") or "running"))
 
     try:
