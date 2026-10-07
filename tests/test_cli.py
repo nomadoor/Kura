@@ -8185,7 +8185,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "remote lease guard setup timed out"):
                 _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
 
-    def test_runpod_comfyui_lease_guard_starts_before_model_prepare(self) -> None:
+    def test_runpod_comfyui_start_prepares_models_before_the_server(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
         with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")) as run:
             _start_runpod_comfyui(
@@ -8196,12 +8196,12 @@ class RunPodLifecycleTests(unittest.TestCase):
                 registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
                 lora_remote_name=None,
                 lora_remote_path=None,
-                max_lease_sec=60,
             )
         script = run.call_args.args[0][-1]
         self.assertIn("trap cleanup EXIT", script)
         self.assertIn('rm -f "$secret_file"', script)
-        self.assertLess(script.index("runpodctl pod delete"), script.index("kura_comfy_prepare.py"))
+        # The Pod's own deadline-file guard bounds it; no second, fixed timer.
+        self.assertNotIn("runpodctl", script)
         self.assertLess(script.index("kura_comfy_prepare.py"), script.index("nohup python main.py"))
 
     def test_runpod_comfyui_start_failure_reports_ssh_error(self) -> None:
@@ -8216,7 +8216,6 @@ class RunPodLifecycleTests(unittest.TestCase):
                     registry_remote="/workspace/runs/render-1/resolved/comfyui_model_registry.json",
                     lora_remote_name=None,
                     lora_remote_path=None,
-                    max_lease_sec=0,
                 )
 
     def test_runpod_scp_is_non_interactive_and_bounded(self) -> None:

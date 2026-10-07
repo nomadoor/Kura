@@ -713,13 +713,14 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
         except ValueError as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1
-        if launch_render_runpod(run_id, dry_run=False, image=runpod.get("image"), yes=bool(runpod.get("yes")),
-                                max_lease_sec=max_lease_sec, check_only=True, prepared=prepared):
-            return 1
+        # Said before the confirmation, so nobody confirms a launch the runner cannot carry out.
         missing = runner.env_only_secrets()
         if missing:
             print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
                   "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
+        if launch_render_runpod(run_id, dry_run=False, image=runpod.get("image"), yes=bool(runpod.get("yes")),
+                                max_lease_sec=max_lease_sec, check_only=True, prepared=prepared):
+            return 1
         try:
             request = runner.write_launch_request(run_dir, executor="render-runpod", notify=notify_channels, extra={
                 "options": {"max_lease_sec": max_lease_sec},
@@ -799,6 +800,11 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
         except ValueError as exc:
             print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
             return 1
+        # Said before the confirmation, so nobody confirms a launch the runner cannot carry out.
+        missing = runner.env_only_secrets()
+        if missing:
+            print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
+                  "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
         prepared: dict[str, Any] = {}
         code = launch_run(
             run_id, executor="runpod", dry_run=False, image=options.get("image"), check_only=True, yes=yes,
@@ -810,10 +816,6 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
             return code
         if str(options.get("wait_for_capacity") or "0") not in ("0", "0s"):
             print("  The runner may wait for capacity; prices can change before the Pod is created.", file=sys.stderr)
-        missing = runner.env_only_secrets()
-        if missing:
-            print("warning: " + ", ".join(missing) + " is set only in this shell; the runner reads secrets from Kura's "
-                  "secrets files, so this launch will not see it. Run `kura secrets set <NAME>` to keep it.", file=sys.stderr)
         try:
             request = runner.write_launch_request(run_dir, executor="runpod", image=options.get("image"), notify=options.get("notify_channels"), extra={
                 "options": {key: value for key, value in options.items() if value is not None},

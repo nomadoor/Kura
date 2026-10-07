@@ -1514,12 +1514,12 @@ def _wait_http_ready(endpoint: str, *, timeout_sec: int = 180) -> None:
             return
         except (OSError, urllib.error.URLError) as exc:
             last_error = _safe_error(exc)
-        time.sleep(2)
+        sleep_checking_stop(2)
     raise ValueError(f"ComfyUI endpoint did not become ready before timeout: {last_error}")
 
 
 def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = 12 * 3600) -> None:
-    """Start the Pod-side lease fuse before any render setup or uploads."""
+    """Start the Pod-side lease fuse over SSH; it never moves a deadline the Pod already set."""
 
     if max_lease_sec <= 0:
         return

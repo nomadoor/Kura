@@ -686,6 +686,7 @@ def _work_render_local(workspace: Path, run_dir: Path, request: Path) -> int:
             _record_render_interrupted(workspace, run_dir, request, status)
         elif realization is None or realization.get("controlled_by", {}).get("request") != request.name:
             _record_request_outcome(request, ".not-launched.json", "not_launched", error="the runner stopped before the render began; launch it again")
+        _acknowledge_stop(run_dir, request)
         return 0
     if _sibling(request, ".stop.json").exists():
         _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
@@ -748,6 +749,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
             _record_request_outcome(request, ".not-launched.json", "not_launched", error="the runner stopped before the render began; launch it again")
         elif not run_finished(status):
             _record_render_interrupted(workspace, run_dir, request, status, executor="runpod")
+        _acknowledge_stop(run_dir, request)
         return 0
     if _sibling(request, ".stop.json").exists():
         _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
@@ -772,10 +774,15 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     realization = _realization(run_dir, status.get("last_realization"))
     if realization is None or realization.get("controlled_by", {}).get("request") != request.name:
         _record_request_outcome(request, ".launch-failed.json", "launch_failed", error=f"the render did not start; see runs/{run_dir.name}/logs/runner.log")
+    _acknowledge_stop(run_dir, request)
+    return 0
+
+
+def _acknowledge_stop(run_dir: Path, request: Path) -> None:
+    """A render that has ended carried out any stop asked of it; `kura run stop` waits for this record."""
     if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
         _record_request_outcome(request, ".stop-done.json", "stop_done")
         _log(f"{run_dir.name}: render stopped on request")
-    return 0
 
 
 def _delete_render_pod(workspace: Path, run_dir: Path, details: dict[str, Any]) -> bool:
@@ -1009,7 +1016,8 @@ def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, au
     from kura.notifications import notify
 
     state = status.get("state")
-    noun = "render" if str(_request_executor(request)).startswith("render-") else "run"
+    # A RunPod render notifies from its own launch, so only a local render reaches here as a render.
+    noun = "render" if _request_executor(request) == "render-local" else "run"
     try:
         notify(channels or None, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.", priority="3")
     except Exception as exc:  # a notification never fails the run

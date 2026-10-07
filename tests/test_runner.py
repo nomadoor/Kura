@@ -803,6 +803,17 @@ class RunPodRenderTests(unittest.TestCase):
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
             self.assertFalse(runner.run_unfinished(run_dir))
 
+    def test_a_stop_asked_of_a_dead_follower_is_acknowledged_once_the_pod_is_gone(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _render_runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            runner._first_attempt(request)
+            _runpod_launched(run_dir, request, state="running", pod_stopped_at="t")
+            runner.write_stop_request(run_dir)
+            with patch("kura.render.write_realization"):
+                self.assertEqual(runner.work(root, "example", request.name), 0)
+            self.assertTrue(runner.stop_done(run_dir))
+
     def test_a_pod_that_could_not_be_deleted_is_tried_again(self) -> None:
         with _workspace() as (root, run_dir):
             request = _render_runpod_request(run_dir)
@@ -853,6 +864,13 @@ class RunPodSessionLeaseTests(unittest.TestCase):
                                          yes=True, max_lease_sec=3600, controlled_by={"request": "r.launch.json"})
             script = captured["body"]["dockerStartCmd"][-1]
             self.assertIn(runpod.LEASE_DEADLINE_PATH, script)
+            # Armed before SSH is installed, so a stalled setup is still bounded; and it parses under sh.
+            self.assertLess(script.index(runpod.LEASE_DEADLINE_PATH), script.index("openssh-server"))
+            import shutil
+            import subprocess
+
+            if shutil.which("sh"):
+                self.assertEqual(subprocess.run(["sh", "-n", "-c", script], capture_output=True).returncode, 0)
             self.assertNotIn('sleep "$KURA_MAX_LEASE_SEC"', script)
             realization = json.loads(next(p for p in (run_dir / "realizations").glob("*.json") if "." not in p.stem).read_text(encoding="utf-8"))
             self.assertEqual((realization["lease_guard"], realization["controlled_by"]), ("deadline_file", {"request": "r.launch.json"}))
@@ -927,3 +945,48 @@ class RunPodRenderLaunchTests(unittest.TestCase):
             session.assert_not_called()
             self.assertEqual(confirm.call_args.kwargs["max_lease_sec"], 7200)
             self.assertEqual((prepared["remote_image"], prepared["runpod_config"]["gpu_type_ids"]), ("remote/comfy", ["A"]))
+
+    def test_a_stop_during_pod_setup_deletes_the_pod(self) -> None:
+        from kura.executors.common import StopRequested
+        from kura.run_commands import render_runpod
+
+        with _workspace() as (root, _):
+            run_dir = self._render(root)
+
+            def session(**kwargs):
+                _status(run_dir, state="running", pod_id="pod-1", last_realization="realizations/r1.json")
+
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(render_runpod, "launch_runpod_session", side_effect=session), \
+                        patch.object(render_runpod, "_runpod_ssh_details", return_value={"ip": "h", "port": 22, "key": "k"}), \
+                        patch.object(render_runpod, "_start_runpod_session_lease_guard"), \
+                        patch.object(render_runpod, "_record_session_lease"), \
+                        patch.object(render_runpod, "_sync_runpod_remote_stdout"), \
+                        patch.object(render_runpod, "check_stop", side_effect=StopRequested()), \
+                        patch.object(render_runpod.subprocess, "run") as remote, \
+                        patch.object(render_runpod, "stop_runpod") as stop, patch("sys.stderr", io.StringIO()):
+                    code = render_runpod.launch_render_runpod("example", dry_run=False, yes=True, runpod_config_override={"gpu_type_ids": ["A"]})
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 130)
+            remote.assert_not_called()  # nothing was uploaded after the stop
+            stop.assert_called_once()
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
+
+    def test_a_declined_confirmation_sends_no_notification(self) -> None:
+        from kura.run_commands import render_runpod
+
+        with _workspace() as (root, _):
+            self._render(root)
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch.object(render_runpod, "confirm_runpod_billing", side_effect=ValueError("RunPod launch cancelled")), \
+                        patch.object(render_runpod, "_notify") as notify, patch("sys.stderr", io.StringIO()):
+                    code = render_runpod.launch_render_runpod("example", dry_run=False, check_only=True)
+            finally:
+                os.chdir(previous)
+            self.assertEqual(code, 1)
+            notify.assert_not_called()

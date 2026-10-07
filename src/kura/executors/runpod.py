@@ -1522,10 +1522,12 @@ def launch_runpod_session(
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name, max_lease_sec=max_lease_sec)
+    # The lease is armed first, so a Pod whose SSH setup stalls is still bounded.
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 touch "$KURA_LOG_PATH"
+'''.strip() + "\n" + _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path) + "\n" + r'''
 if ! command -v sshd >/dev/null 2>&1; then
   apt-get update >> "$KURA_LOG_PATH" 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
@@ -1537,7 +1539,6 @@ if [ -n "${PUBLIC_KEY:-}" ]; then
   chmod 600 /root/.ssh/authorized_keys
 fi
 /usr/sbin/sshd >> "$KURA_LOG_PATH" 2>&1 || true
-'''.strip() + "\n" + _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path) + "\n" + r'''
 echo "Kura RunPod session is ready for controller" >> "$KURA_LOG_PATH"
 sleep infinity
 '''.strip()

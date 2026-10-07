@@ -11,7 +11,7 @@ records:
   - id: runpod-executor-render-runner-2026-10-08
     executor: runpod
     reason: The lease guard's shell moved into the executor module, and a render session Pod keeps its
-      maximum lease in the same deadline file from its start, so `kura run lease` can move it. RunPod
+      maximum lease in the same deadline file, armed first thing at its start, so `kura run lease` can move it. RunPod
       renders launch from the job runner after the command confirmed billing. Training launches,
       transfers, collection, publication, and Pod stops are unchanged.
     behavior_changed: false
@@ -53,7 +53,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: cbacd3ce2e54aceca3d5b727f62e1fc888a1a540d98eb2b2cac051acddc33f08
+      value: 537d9d6b91f763b9db7a4620ea660c1221af1d6c3b12dd742a7ab54175719155
   - id: runpod-executor-local-render-runner-2026-10-08
     executor: runpod
     reason: The shared launch module routes renders by their own executor (a RunPod render no longer
