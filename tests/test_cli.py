@@ -6425,7 +6425,7 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
     def test_max_lease_guard_deletes_the_pod_with_the_same_self_delete(self) -> None:
         guard = _runpod_lease_guard_shell(max_lease_sec=3600, pod_id="pod-7", log_path="/workspace/runs/example/logs/stdout.log")
         self.assertIn("kura_pod_self_delete", guard)
-        self.assertIn("sleep 3600", guard)
+        self.assertIn("kura_lease_initial=$(( $(date +%s) + 3600 ))", guard)
         self.assertEqual(_runpod_lease_guard_shell(max_lease_sec=0, pod_id="pod-7", log_path="/x"), "")
         result = subprocess.run(["bash", "-n"], input=guard, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -8006,7 +8006,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
             self.assertNotIn("hf-secret", argv_text)
-            self.assertIn("sleep 43200", argv_text)
+            self.assertIn("kura_lease_initial=$(( $(date +%s) + 43200 ))", argv_text)
             self.assertIn("RUNPOD_POD_ID=pod-1", argv_text)
             self.assertIn("kura_pod_self_delete", argv_text)
             input_text = "\n".join(str(call[1].get("input") or "") for call in calls)
@@ -8164,7 +8164,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             _start_runpod_session_lease_guard(details, workspace="/workspace", run_id="render-1", max_lease_sec=60)
         command = run.call_args.args[0]
         command_text = "\n".join(map(str, command))
-        self.assertIn("sleep 60", command_text)
+        self.assertIn("kura_lease_initial=$(( $(date +%s) + 60 ))", command_text)
         self.assertIn("kura_pod_self_delete", command_text)
         self.assertNotIn("runpodctl pod delete", command_text)
         self.assertIn("pod-1", command_text)

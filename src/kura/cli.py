@@ -46,6 +46,7 @@ from kura.run_envelope import backend_config, resume_intent, run_executor, train
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
+from kura.run_commands.runpod_ssh import cmd_run_lease
 from kura.run_commands import _runpod_secret_env_payload
 from kura.run_commands import _select_remote_outputs
 from kura.run_commands import _sync_runpod_remote_stdout
@@ -1579,6 +1580,11 @@ def main() -> None:
     prune.add_argument("--docker-volumes", action="store_true", help="Also prune Docker volumes labeled io.kura.managed=true")
     prune.add_argument("--yes", action="store_true")
     prune.set_defaults(func=cmd_run_prune)
+    lease = run_sub.add_parser("lease", help="Set how long a running RunPod Pod may live from now; shows the change and asks first")
+    lease.add_argument("run_id")
+    lease.add_argument("duration", help="For example 18h: the Pod deletes itself this long from now at the latest")
+    lease.add_argument("--yes", action="store_true", help="Confirm without a prompt; use only on the user's instruction")
+    lease.set_defaults(func=cmd_run_lease)
     launch = run_sub.add_parser("launch", help="Launch a compiled run locally or on RunPod")
     launch.add_argument("run_id")
     launch.add_argument("--executor", default="docker", choices=("docker", "runpod"))

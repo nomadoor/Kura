@@ -41,6 +41,11 @@ stop Pod
   immediate-launch default.
 - `--hold-for 30m`: normal post-download review window.
 - `--max-lease 12h`: the Pod deletes itself this long after Kura first reaches it, whatever the local controller does.
+  If Kura warns that training looks longer than the lease, tell the user the
+  estimate and ask before running `kura run lease <run-id> <duration>`, which
+  shows the change and its price; a longer lease is a billing decision, and
+  Kura never extends it on its own. It applies to training Pods; a render
+  Pod's lease cannot be changed yet.
 - `--unattended-wait auto`: after training, if the outputs were not collected,
   the Pod deletes itself after the longer of 2 hours and the job time
   (from remote job start, including model download). Collecting the outputs marks the
