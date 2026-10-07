@@ -76,6 +76,11 @@ stop Pod
   knowledge. Inspect current availability and price before selecting one.
   After that choice, compile the run and inspect the compiled resource plan
   before approval.
+- Kura places a Pod only on hosts whose driver supports the image's CUDA
+  version, and the stock and price it shows already apply that filter. Do not
+  add a CUDA setting. An image Kura does not know gets only hosts with the
+  newest CUDA Kura has seen; the plan warns, and fewer GPUs is the expected
+  effect.
 - If a run explicitly sets `compute.gpu`, treat it as part of the user's run
   intent and use it before workspace-level candidates.
 - Run `kura run plan` once while the RunPod run is still a draft so current

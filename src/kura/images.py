@@ -27,6 +27,21 @@ BUILD_SOURCES: dict[str, tuple[str, str]] = {
     "comfyui": ("COMFYUI_REF", "0f42ba51463174fb255f2c4605ae0e0b441fe6d7"),
 }
 
+# The CUDA version each image Kura has pinned was built with, by digest, so a
+# run compiled against an earlier image keeps that image's requirement. Add the
+# new digest here whenever an image is re-pinned.
+IMAGE_CUDA_VERSIONS: dict[str, str] = {
+    "sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a": "13.0",
+    "sha256:de5d31f26dde97a45457b4fed243f1c5778d3e398f6bbe85b4ff4d74d1a5c211": "12.8",
+    "sha256:a3b2cee58a00807c1a1f897f086869821d8dad20b1a090baf96c157772cb8901": "12.8",
+    "sha256:4607399fc1b9bcde0ea416ba43eb28069eafb1b80a1914e9906762dba8d24f5a": "12.8",
+}
+
+# The newest CUDA version seen on RunPod hosts (2026-10-07). A newer driver
+# runs an older image, so an image whose version Kura does not know asks for
+# this one: it finds fewer hosts, but none whose driver is older than Kura saw.
+NEWEST_KNOWN_CUDA = "13.2"
+
 # The tag a development build gets on the local Docker host.
 DEVELOPMENT_TAG = "kura-{name}:dev"
 
@@ -47,6 +62,19 @@ def effective_image(config: dict[str, Any], name: str) -> dict[str, str]:
     if not isinstance(override, str) or not override.strip():
         raise ValueError(f"images.{name} must name an image; delete the line to use the pinned image")
     return {"name": name, "reference": override.strip(), "origin": "override"}
+
+
+def image_cuda_version(reference: str) -> str | None:
+    """The CUDA version an image was built with, when Kura recorded it."""
+
+    _, separator, digest = reference.partition("@")
+    return IMAGE_CUDA_VERSIONS.get(digest) if separator else None
+
+
+def runpod_min_cuda_version(reference: str) -> str:
+    """The oldest host CUDA version that runs this image; the newest known when Kura does not know it."""
+
+    return image_cuda_version(reference) or NEWEST_KNOWN_CUDA
 
 
 def is_mutable(reference: str) -> bool:

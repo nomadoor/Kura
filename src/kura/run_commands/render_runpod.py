@@ -20,6 +20,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
+from kura.images import image_cuda_version, runpod_min_cuda_version
 from kura.run_commands.common import _effective_image, _safe_error
 from kura.run_commands.plan import stop_run
 from kura.run_commands.runpod_ssh import _free_local_port, _runpod_secret_env_payload, _runpod_ssh_details, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
@@ -50,12 +51,14 @@ def _format_duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
-def _render_runpod_billing_plan(runpod_config: dict[str, Any], *, max_lease_sec: int) -> dict[str, Any]:
+def _render_runpod_billing_plan(runpod_config: dict[str, Any], *, max_lease_sec: int, image: str) -> dict[str, Any]:
     gpu_type_ids = runpod_config.get("gpu_type_ids")
     if not isinstance(gpu_type_ids, list) or not all(isinstance(item, str) and item for item in gpu_type_ids):
         raise ValueError("runpod.gpu_type_ids must be configured before showing a RunPod render plan")
-    measurement = runpod_gpu_availability(runpod_config, gpu_type_ids)
+    min_cuda_version = runpod_min_cuda_version(image)
+    measurement = runpod_gpu_availability(runpod_config, gpu_type_ids, min_cuda_version=min_cuda_version)
     return {
+        "host_cuda": f"{min_cuda_version} or newer" + ("" if image_cuda_version(image) else " (Kura does not know this image's CUDA version)"),
         "gpu_count": measurement.get("gpu_count", runpod_config.get("gpu_count", 1)),
         "gpu_candidates": measurement.get("candidates", []),
         "price_status": measurement.get("status", "unavailable"),
@@ -290,7 +293,7 @@ def launch_render_runpod(
             ]
             plan["input_image_bytes"] = sum(int(item["bytes"]) for item in images)
         if dry_run:
-            plan["billing"] = _render_runpod_billing_plan(runpod_config, max_lease_sec=max_lease_sec)
+            plan["billing"] = _render_runpod_billing_plan(runpod_config, max_lease_sec=max_lease_sec, image=remote_image)
             print(json.dumps(plan, ensure_ascii=False, indent=2))
             return 0
         if unresolved_create_intents(run_dir):

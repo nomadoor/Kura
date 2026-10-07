@@ -26,7 +26,7 @@ from kura.dataset_handoff import (
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.executors.runpod import unresolved_create_intents
-from kura.images import launch_image, launch_image_warnings
+from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -165,11 +165,16 @@ def _runpod_planning_gpus(compute: dict[str, Any], config: dict[str, Any]) -> tu
     return selected_ids, candidates
 
 
-def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any] | None:
+def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_dir: Path | None = None) -> dict[str, Any] | None:
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     executor = run_executor(run)
     if executor != "runpod":
         return None
+    try:
+        image_reference = _plan_launch_image(run, config, run_dir)["reference"]
+    except ValueError:
+        image_reference = ""
+    min_cuda_version = runpod_min_cuda_version(image_reference)
     selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
     capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
     mode = capacity.get("mode", "immediate")
@@ -182,7 +187,7 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any]) -> dic
     runpod_config.setdefault("gpu_type_ids", gpu_type_ids)
     if gpu_type_ids:
         try:
-            measurement = runpod_gpu_availability(runpod_config, gpu_type_ids)
+            measurement = runpod_gpu_availability(runpod_config, gpu_type_ids, min_cuda_version=min_cuda_version)
         except ValueError as exc:
             measurement = {"status": "unavailable", "reason": _safe_error(exc), "candidates": []}
     else:
@@ -693,8 +698,8 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
     ]
 
 
-def _image_preflight_report(run: dict[str, Any], workspace_config: dict[str, Any], run_dir: Path | None = None) -> list[dict[str, Any]]:
-    """Name the image a launch will use, the same way launch chooses it."""
+def _plan_launch_image(run: dict[str, Any], workspace_config: dict[str, Any], run_dir: Path | None) -> dict[str, Any]:
+    """The image a launch will use, chosen the same way launch chooses it."""
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     env_lock: Any = {}
     if run_dir is not None and (run_dir / "resolved" / "env.lock").is_file():
@@ -702,8 +707,13 @@ def _image_preflight_report(run: dict[str, Any], workspace_config: dict[str, Any
             env_lock = _load_yaml(run_dir / "resolved" / "env.lock")
         except (OSError, ValueError, yaml.YAMLError):
             env_lock = {}
+    return launch_image(workspace_config, get_backend(backend.get("name")).image_name, env_lock)
+
+
+def _image_preflight_report(run: dict[str, Any], workspace_config: dict[str, Any], run_dir: Path | None = None) -> list[dict[str, Any]]:
+    """Name the image a launch will use, and for RunPod the hosts it can run on."""
     try:
-        image = launch_image(workspace_config, get_backend(backend.get("name")).image_name, env_lock)
+        image = _plan_launch_image(run, workspace_config, run_dir)
     except ValueError as exc:
         return [_preflight_record("image", "error", str(exc), "workspace.yaml")]
     origin = {"pinned": "pinned by Kura", "override": "workspace.yaml override"}.get(image["origin"], "frozen at compile")
@@ -711,6 +721,17 @@ def _image_preflight_report(run: dict[str, Any], workspace_config: dict[str, Any
         origin += ", frozen at compile"
     records = [_preflight_record("image", "info", f"{image['reference']} ({origin})", "workspace.yaml")]
     records.extend(_preflight_record("image", "warning", warning, "workspace.yaml") for warning in launch_image_warnings(image))
+    if run_executor(run) == "runpod":
+        cuda = image_cuda_version(image["reference"])
+        if cuda:
+            records.append(_preflight_record("image", "info", f"built for CUDA {cuda}; RunPod hosts must support CUDA {cuda} or newer", "workspace.yaml"))
+        else:
+            newest = runpod_min_cuda_version(image["reference"])
+            records.append(_preflight_record(
+                "image", "warning",
+                f"Kura does not know this image's CUDA version, so RunPod uses only hosts supporting CUDA {newest}, which may find fewer GPUs",
+                "workspace.yaml",
+            ))
     return records
 
 
@@ -1191,7 +1212,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "recipe": {key: value for key, value in plan_recipe.items() if value is not None},
         "sampling": sampling_payload,
         "resources": resources,
-        "runpod_capacity": _runpod_capacity_payload(run, workspace_config),
+        "runpod_capacity": _runpod_capacity_payload(run, workspace_config, run_dir),
         "model_downloads": download_estimate,
         "disk_cache": _disk_cache_estimate(run),
         "preflight": preflight,

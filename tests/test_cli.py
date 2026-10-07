@@ -41,8 +41,9 @@ from kura.executors.docker import _docker_timestamp
 from kura.run_commands.experiment import format_run_completion
 import kura.run_commands.runpod_ssh as runpod_ssh_module
 from kura.media_types import frozen_suffixes
-from kura.executors.runpod import _confirm_runpod_launch, RunPodAPIError, _is_runpod_capacity_error, _runpod_request
+from kura.executors.runpod import _confirm_runpod_launch, RunPodAPIError, _is_runpod_capacity_error, _runpod_graphql_create_input, _runpod_request
 from kura.fsio import FileLockBusy, file_lock
+from kura.images import NEWEST_KNOWN_CUDA, PINNED_IMAGES
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
@@ -1579,6 +1580,20 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(payload["measurement"]["candidates"], [])
         self.assertIn("runpod.cloud_types", payload["measurement"]["reason"])
         self.assertEqual(payload["immediate_candidates"], [])
+
+    def test_runpod_capacity_plan_measures_hosts_for_the_compiled_image(self) -> None:
+        run = {"backend": {"name": "sd-scripts"}, "compute": {"executor": "runpod", "gpu": ["NVIDIA A40"]}}
+        override = {"runpod": {}, "images": {"sd-scripts": "example/sd@sha256:" + "5" * 64}}
+        unavailable = {"status": "unavailable", "reason": "test", "candidates": []}
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "env.lock").write_text(yaml.safe_dump({"selected_image": PINNED_IMAGES["sd-scripts"], "image_origin": "pinned"}), encoding="utf-8")
+            with patch("kura.run_commands.plan.runpod_gpu_availability", return_value=unavailable) as measure:
+                _runpod_capacity_payload(run, override, run_dir)
+                _runpod_capacity_payload(run, override)
+        self.assertEqual(measure.call_args_list[0].kwargs["min_cuda_version"], "12.8")
+        self.assertEqual(measure.call_args_list[1].kwargs["min_cuda_version"], NEWEST_KNOWN_CUDA)
 
     def test_run_plan_prints_musubi_download_estimates_and_cache_hits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6880,7 +6895,9 @@ class RunPodLifecycleTests(unittest.TestCase):
 
         config = {"gpu_type_ids": ["NVIDIA RTX A5000"], "gpu_count": 1, "cloud_types": ["COMMUNITY", "SECURE"]}
         with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod.urlopen", return_value=Response()) as urlopen:
-            result = runpod_gpu_availability(config, ["NVIDIA RTX A5000"])
+            result = runpod_gpu_availability(config, ["NVIDIA RTX A5000"], min_cuda_version="12.8")
+        query = json.loads(urlopen.call_args.args[0].data)["query"]
+        self.assertEqual(query.count('minCudaVersion: "12.8"'), 2)
 
         self.assertEqual(result["status"], "ok")
         clouds = result["candidates"][0]["clouds"]
@@ -7081,6 +7098,15 @@ class RunPodLifecycleTests(unittest.TestCase):
                     )
             availability.assert_not_called()
             request.assert_not_called()
+
+    def test_launch_runpod_session_asks_for_hosts_that_run_the_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run_dir(Path(directory))
+            stdout = io.StringIO()
+            with patch("sys.stdout", stdout), patch("kura.executors.runpod._runpod_request") as request:
+                launch_runpod_session(run_dir=run_dir, image=PINNED_IMAGES["comfyui"], config=self._config(), purpose="comfyui-render", dry_run=True)
+            request.assert_not_called()
+            self.assertEqual(json.loads(stdout.getvalue())["runpod_create_request"]["minCudaVersion"], "12.8")
 
     def test_launch_runpod_session_non_tty_requires_yes_before_any_runpod_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7304,6 +7330,9 @@ class RunPodLifecycleTests(unittest.TestCase):
                      }) as request:
                     launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
             payload = request.call_args.args[3]
+            # An image Kura does not know asks for the newest CUDA Kura has seen.
+            self.assertEqual(payload["minCudaVersion"], NEWEST_KNOWN_CUDA)
+            self.assertEqual(_runpod_graphql_create_input({**payload, "gpuTypeIds": ["NVIDIA A40"]})["minCudaVersion"], NEWEST_KNOWN_CUDA)
             self.assertEqual(payload["dataCenterIds"], ["US-GA-1"])
             self.assertEqual(payload["countryCodes"], ["US"])
             self.assertNotIn("dataCenterPriority", payload)

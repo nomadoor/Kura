@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
+from kura.images import runpod_min_cuda_version
 from kura.install_source import kura_provenance
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
@@ -110,6 +111,7 @@ def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
         ("supportPublicIp", "supportPublicIp"),
         ("volumeMountPath", "volumeMountPath"),
         ("networkVolumeId", "networkVolumeId"),
+        ("minCudaVersion", "minCudaVersion"),
     ):
         if payload.get(source) is not None:
             result[target] = payload[source]
@@ -182,20 +184,24 @@ def _runpod_request(method: str, path: str, api_key: str, payload: dict[str, Any
     raise ValueError(f"unsupported RunPod API operation: {method} {path}")
 
 
-def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str]) -> dict[str, Any]:
-    """Measure current RunPod stock and price for an ordered GPU candidate list."""
+def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, min_cuda_version: str | None = None) -> dict[str, Any]:
+    """Measure current RunPod stock and price for an ordered GPU candidate list.
+
+    `min_cuda_version` limits the measurement to hosts a Pod for the image could land on.
+    """
 
     settings = _runpod_settings(config)
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
         return {"status": "unavailable", "reason": missing(settings["api_key_env"], "needed to list RunPod GPUs"), "candidates": []}
     aliases: list[str] = []
+    cuda_filter = f", minCudaVersion: {json.dumps(min_cuda_version)}" if min_cuda_version else ""
     for index, gpu_type_id in enumerate(gpu_type_ids):
         cloud_fields = []
         for cloud_type in settings["cloud_types"]:
             secure = "true" if cloud_type == "SECURE" else "false"
             cloud_fields.append(
-                f'{cloud_type.lower()}: lowestPrice(input: {{gpuCount: {settings["gpu_count"]}, secureCloud: {secure}}}) '
+                f'{cloud_type.lower()}: lowestPrice(input: {{gpuCount: {settings["gpu_count"]}, secureCloud: {secure}{cuda_filter}}}) '
                 "{ stockStatus uninterruptablePrice availableGpuCounts }"
             )
         aliases.append(
@@ -278,6 +284,7 @@ def _confirm_runpod_launch(
     max_lease_sec: int | None,
     wait_for_capacity_sec: int = 0,
     unattended_wait: str | None = None,
+    min_cuda_version: str | None = None,
 ) -> dict[str, Any]:
     """Require one authorization before a billable Pod-creation attempt sequence."""
 
@@ -288,7 +295,7 @@ def _confirm_runpod_launch(
             "use --yes only when the user has explicitly instructed this billed launch"
         )
 
-    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"])
+    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=min_cuda_version)
     candidates = measurement.get("candidates") if measurement.get("status") == "ok" else None
     measured_by_id = {
         candidate.get("gpu_type_id"): candidate
@@ -312,6 +319,8 @@ def _confirm_runpod_launch(
         reason = measurement.get("reason")
         if isinstance(reason, str) and reason:
             print(f"  Price lookup: {_redact_secret_text(reason)}", file=sys.stderr)
+    if min_cuda_version:
+        print(f"  Host CUDA: {min_cuda_version} or newer", file=sys.stderr)
     print(f"  Maximum lease: {_format_lease_limit(max_lease_sec)}", file=sys.stderr)
     if unattended_wait:
         print(f"  Unattended wait: {unattended_wait}", file=sys.stderr)
@@ -1155,6 +1164,8 @@ sleep infinity
         "containerDiskInGb": settings["container_disk_gb"],
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"], "env": runtime_env,
+        # A template supplies its own image, whose CUDA version Kura does not know.
+        "minCudaVersion": runpod_min_cuda_version("" if settings.get("template_id") else image),
     }
     if settings.get("support_public_ip") is not None:
         request_body["supportPublicIp"] = bool(settings["support_public_ip"])
@@ -1192,6 +1203,7 @@ sleep infinity
         max_lease_sec=max_lease_sec,
         wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait,
+        min_cuda_version=request_body["minCudaVersion"],
     )
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
@@ -1215,7 +1227,7 @@ sleep infinity
                 measurement = confirmation_measurement
                 confirmation_measurement = None
                 if measurement is None:
-                    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"])
+                    measurement = runpod_gpu_availability(config, settings["gpu_type_ids"], min_cuda_version=request_body["minCudaVersion"])
                 if measurement.get("status") == "ok":
                     for candidate in measurement.get("candidates", []):
                         if not isinstance(candidate, dict) or not isinstance(candidate.get("gpu_type_id"), str):
@@ -1465,6 +1477,7 @@ sleep infinity
         "env": runtime_env,
         "dockerStartCmd": ["sh", "-lc", POD_SELF_DELETE_FUNCTION + "\n" + ssh_script],
         "imageName": image,
+        "minCudaVersion": runpod_min_cuda_version(image),
     }
     if settings.get("support_public_ip") is not None:
         request_body["supportPublicIp"] = bool(settings["support_public_ip"])
@@ -1485,7 +1498,7 @@ sleep infinity
     api_key = os.environ.get(settings["api_key_env"])
     if not api_key:
         raise MissingSecret(settings["api_key_env"], "needed to launch a RunPod session")
-    _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec)
+    _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec, min_cuda_version=request_body["minCudaVersion"])
     pod: dict[str, Any] | None = None
     used_request: dict[str, Any] | None = None
     launch_errors: list[dict[str, str]] = []

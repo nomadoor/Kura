@@ -12,7 +12,7 @@ from unittest.mock import patch
 import yaml
 
 from kura.cli import cmd_image_build, cmd_image_publish, cmd_init, cmd_run_status, cmd_workspace_migrate
-from kura.images import PINNED_IMAGES, effective_image, launch_image, launch_image_warnings, mutable_override_warning
+from kura.images import IMAGE_CUDA_VERSIONS, NEWEST_KNOWN_CUDA, PINNED_IMAGES, effective_image, image_cuda_version, runpod_min_cuda_version, launch_image, launch_image_warnings, mutable_override_warning
 from kura.run_commands.plan import _image_preflight_report
 from kura.workspace import WORKSPACE_SCHEMA_VERSION, migrate_workspace_config, require_workspace
 
@@ -68,6 +68,40 @@ class PinnedImageTests(unittest.TestCase):
         self.assertIsNone(mutable_override_warning(effective_image({}, "comfyui")))
         self.assertIsNone(mutable_override_warning(effective_image({"images": {"comfyui": "x@sha256:" + "0" * 64}}, "comfyui")))
         self.assertIn("mutable tag", mutable_override_warning(effective_image({"images": {"comfyui": "x:dev"}}, "comfyui")))
+
+
+class ImageCudaTests(unittest.TestCase):
+    def test_every_pinned_image_records_its_cuda_version(self) -> None:
+        def version(value: str) -> tuple[int, ...]:
+            return tuple(int(part) for part in value.split("."))
+
+        for reference in PINNED_IMAGES.values():
+            self.assertIsNotNone(image_cuda_version(reference))
+        for value in IMAGE_CUDA_VERSIONS.values():
+            self.assertLessEqual(version(value), version(NEWEST_KNOWN_CUDA))
+
+    def test_hosts_must_support_the_image_cuda_or_newer(self) -> None:
+        self.assertEqual(runpod_min_cuda_version(PINNED_IMAGES["sd-scripts"]), "12.8")
+        self.assertEqual(runpod_min_cuda_version(PINNED_IMAGES["ai-toolkit"]), "13.0")
+        # The digest identifies the image, whatever repository names it.
+        digest = PINNED_IMAGES["comfyui"].partition("@")[2]
+        self.assertEqual(runpod_min_cuda_version("mirror/comfy@" + digest), "12.8")
+
+    def test_an_unknown_image_asks_for_the_newest_known_cuda(self) -> None:
+        for reference in ("example/sd:test", "example/sd@sha256:" + "2" * 64, "localhost:5000/x@sha256:" + "4" * 64, ""):
+            self.assertIsNone(image_cuda_version(reference))
+            self.assertEqual(runpod_min_cuda_version(reference), NEWEST_KNOWN_CUDA)
+
+    def test_the_runpod_plan_names_the_host_cuda_requirement(self) -> None:
+        run = {"backend": {"name": "sd-scripts"}, "compute": {"executor": "runpod"}}
+        facts = [record["fact"] for record in _image_preflight_report(run, {}, None)]
+        self.assertIn("RunPod hosts must support CUDA 12.8 or newer", "\n".join(facts))
+        override = {"images": {"sd-scripts": "example/sd@sha256:" + "3" * 64}}
+        records = _image_preflight_report(run, override, None)
+        self.assertIn("does not know this image's CUDA version", records[-1]["fact"])
+        self.assertEqual(records[-1]["severity"], "warning")
+        local = _image_preflight_report({"backend": {"name": "sd-scripts"}}, {}, None)
+        self.assertNotIn("CUDA", "\n".join(record["fact"] for record in local))
 
 
 class LaunchImageTests(unittest.TestCase):
