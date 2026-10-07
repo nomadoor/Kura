@@ -172,6 +172,11 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
         return None
     try:
         image_reference = _plan_launch_image(run, config, run_dir)["reference"]
+        # Launch keeps a template only for adapters that accept one, and a template brings its own image.
+        runpod_settings = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
+        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+        if runpod_settings.get("template_id") and get_backend(backend.get("name")).runpod_template_compatible:
+            image_reference = ""
     except ValueError:
         image_reference = ""
     min_cuda_version = runpod_min_cuda_version(image_reference)

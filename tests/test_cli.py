@@ -22,6 +22,7 @@ import unittest
 import json
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import yaml
@@ -1592,6 +1593,14 @@ class RunPlanTests(unittest.TestCase):
             with patch("kura.run_commands.plan.runpod_gpu_availability", return_value=unavailable) as measure:
                 _runpod_capacity_payload(run, override, run_dir)
                 _runpod_capacity_payload(run, override)
+        self.assertEqual(measure.call_args_list[0].kwargs["min_cuda_version"], "12.8")
+        self.assertEqual(measure.call_args_list[1].kwargs["min_cuda_version"], NEWEST_KNOWN_CUDA)
+        templated = {"runpod": {"template_id": "tpl"}}
+        with patch("kura.run_commands.plan.runpod_gpu_availability", return_value=unavailable) as measure:
+            _runpod_capacity_payload(run, templated)
+            with patch("kura.run_commands.plan.get_backend", return_value=SimpleNamespace(image_name="sd-scripts", runpod_template_compatible=True)):
+                _runpod_capacity_payload(run, templated)
+        # Launch drops the template for adapters that do not accept one, and keeps the image's filter.
         self.assertEqual(measure.call_args_list[0].kwargs["min_cuda_version"], "12.8")
         self.assertEqual(measure.call_args_list[1].kwargs["min_cuda_version"], NEWEST_KNOWN_CUDA)
 
