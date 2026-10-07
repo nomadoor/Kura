@@ -65,7 +65,12 @@ installation, external acquisition, or any run-state change.
 6. Show the evaluation review required by `lora-evaluation`, including complete
    prompts and expected case/image count, and obtain approval before launch.
 7. Run a dry-run, then launch the approved local render. For RunPod, follow its
-   separate billed approval procedure.
+   separate billed approval procedure. A local render runs under Kura's job
+   runner: if the command or the session ends, run `kura run execute <run-id>`
+   to follow it again. A render cut short keeps its images and is never
+   continued; finishing it means a new render run. Kura checks the user's
+   ComfyUI before it starts, so an unreachable or different ComfyUI leaves the
+   run compiled.
 8. Verify `status.json`, the completed realization, raw image count, and
    `samples/images.jsonl` case/checkpoint provenance.
 9. If requested, build presentation artifacts only from the completed source

@@ -602,6 +602,8 @@ def work(workspace: Path, run_id: str, request_name: str, *, sleep: Callable[[fl
 def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callable[[float], None], poll_sec: float) -> int:
     if _request_executor(request) == "runpod":
         return _work_runpod(workspace, run_dir, request)
+    if _request_executor(request) == "render-local":
+        return _work_render_local(workspace, run_dir, request)
     return _work_docker(workspace, run_dir, request, sleep=sleep, poll_sec=poll_sec)
 
 
@@ -663,6 +665,63 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             _notify_finished(run_dir, request, status)
             return 0
         sleep(poll_sec)
+
+
+# Render followers ---------------------------------------------------------------------
+
+def _work_render_local(workspace: Path, run_dir: Path, request: Path) -> int:
+    """Render once against the user's ComfyUI; a render cut short is recorded, never continued."""
+    import http.client
+
+    from kura.executors.common import StopRequested, set_stop_check
+    from kura.render import launch_render, remove_leftover_stages
+
+    if not _first_attempt(request):
+        status = _status(run_dir)
+        realization = _realization(run_dir, status.get("last_realization"))
+        if status.get("state") == "running":
+            # An earlier follower died mid-render: keep its images, remove its staged files.
+            _record_render_interrupted(workspace, run_dir, request, status)
+        elif realization is None or realization.get("controlled_by", {}).get("request") != request.name:
+            _record_request_outcome(request, ".not-launched.json", "not_launched", error="the runner stopped before the render began; launch it again")
+        return 0
+    if _sibling(request, ".stop.json").exists():
+        _record_request_outcome(request, ".not-launched.json", "not_launched", error="stopped by `kura run stop` before it launched")
+        return 0
+    controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}
+    set_stop_check(lambda: _sibling(request, ".stop.json").exists())
+    try:
+        launch_render(workspace, run_dir, executor_name="local", controlled_by=controlled_by)
+    except StopRequested:
+        _record_request_outcome(request, ".stop-done.json", "stop_done")
+        _log(f"{run_dir.name}: render stopped on request")
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        _record_request_outcome(request, ".launch-failed.json", "launch_failed", error=str(exc))
+        _notify_text(_read_json(request), f"Kura render failed: {run_dir.name}",
+                     f"Render {run_dir.name} could not start: {exc}. The run is still compiled; launch it again once ComfyUI is ready.",
+                     auto=True)
+        return 0
+    finally:
+        set_stop_check(None)
+        remove_leftover_stages(workspace, run_dir)
+    _notify_finished(run_dir, request, _status(run_dir), auto=True)
+    return 0
+
+
+def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, status: dict[str, Any]) -> None:
+    from kura.executors.common import _mutate_run_status
+    from kura.render import remove_leftover_stages, write_realization
+
+    at = _now()
+    _mutate_run_status(run_dir, lambda latest: latest.update({"state": "interrupted", "ended": at, "exit_code": None, "current_case_id": None}))
+    write_realization(run_dir, controlled_by={"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0)}, executor="local", generator="comfyui", state="interrupted",
+                      completed_case_count=status.get("last_step"), case_count=status.get("total_steps"),
+                      error="the runner's follower stopped mid-render; images written so far are kept")
+    removed = remove_leftover_stages(workspace, run_dir)
+    _log(f"{run_dir.name}: render interrupted; removed {len(removed)} staged file(s)")
+    _notify_text(_read_json(request), f"Kura render interrupted: {run_dir.name}",
+                 f"Render {run_dir.name} stopped mid-way; images written so far are kept. Create a new render run to finish it.",
+                 auto=True)
 
 
 # RunPod followers ---------------------------------------------------------------------
@@ -805,7 +864,7 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
 
     status = _status(run_dir)
     if run_finished(status) and not _pod_left_running(status):
-        _notify_finished(run_dir, request, status)
+        # The RunPod controller already notified completion with the request's channels.
         return 0
     failures_path = _sibling(request, ".failures.json")
     failures = int(_read_json(failures_path).get("count", 0)) + 1
@@ -842,14 +901,15 @@ def _stop_runpod_on_request(workspace: Path, run_dir: Path, request: Path) -> No
     _log(f"{run_dir.name}: stopped on request")
 
 
-def _notify_text(details: dict[str, Any], subject: str, body: str) -> None:
+def _notify_text(details: dict[str, Any], subject: str, body: str, *, auto: bool = False) -> None:
+    """Notify on the request's channels; `auto` lets Kura's defaults apply when none were named."""
     channels = details.get("notify") or (details.get("options") or {}).get("notify_channels")
-    if not channels:
+    if not channels and not auto:
         return
     from kura.notifications import notify
 
     try:
-        notify(channels, subject=subject, body=body, priority="4")
+        notify(channels or None, subject=subject, body=body, priority="4")
     except Exception as exc:  # a notification never fails the run
         _log(f"notification failed: {exc}")
 
@@ -867,15 +927,17 @@ def _carry_out_stop(run_dir: Path, request: Path) -> None:
     _log(f"{run_dir.name}: stopped on request")
 
 
-def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any]) -> None:
+def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, auto: bool = False) -> None:
+    """Notify once that a run finished; `auto` lets Kura's default channels apply, as renders always did."""
     channels = _read_json(request).get("notify")
-    if not channels:
+    if not channels and not auto:
         return
     from kura.notifications import notify
 
     state = status.get("state")
+    noun = "render" if _request_executor(request) == "render-local" else "run"
     try:
-        notify(channels, subject=f"Kura run {state}: {run_dir.name}", body=f"Run {run_dir.name} finished as {state}.", priority="3")
+        notify(channels or None, subject=f"Kura {noun} {state}: {run_dir.name}", body=f"{noun.capitalize()} {run_dir.name} finished as {state}.", priority="3")
     except Exception as exc:  # a notification never fails the run
         _log(f"{run_dir.name}: notification failed: {exc}")
 

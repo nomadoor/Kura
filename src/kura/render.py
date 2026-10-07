@@ -811,6 +811,42 @@ def _dynamically_patched_model_inputs(frozen: dict[str, Any]) -> set[tuple[str, 
     return ignored
 
 
+STAGE_KINDS = (
+    ("lora_dir", "lora_stage_subdir", "lora_stage_cleanup"),
+    ("model_patches_dir", "model_patch_stage_subdir", "model_patch_stage_cleanup"),
+    ("input_dir", "input_stage_subdir", "input_stage_cleanup"),
+)
+
+
+def remove_leftover_stages(workspace: Path, run_dir: Path) -> list[str]:
+    """Remove files a killed render of this run left in ComfyUI's folders.
+
+    Staged names always start with the run id, so only this run's files match;
+    a stage kind set to `keep` is left alone.
+    """
+    try:
+        frozen = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    if not isinstance(frozen, dict):
+        return []
+    comfyui = frozen.get("comfyui") if isinstance(frozen.get("comfyui"), dict) else {}
+    removed = []
+    for dir_key, subdir_key, cleanup_key in STAGE_KINDS:
+        if str(comfyui.get(cleanup_key) or "remove_after_render").strip().lower() == "keep":
+            continue
+        base = _workspace_path(workspace, comfyui.get(dir_key))
+        subdir = str(comfyui.get(subdir_key) or "Kura_tmp").strip("/\\")
+        if base is None or not subdir or Path(subdir).is_absolute() or ".." in Path(subdir).parts:
+            continue
+        # Run ids end in a random hex suffix (`<time>_<slug>_<hex>`), so `<id>-` never starts another run's id.
+        for path in sorted((base / subdir).glob(f"{run_dir.name}-*")):
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+                removed.append(str(path))
+    return removed
+
+
 def _freeze_comfyui_config(comfyui: Any, *, include_remote: bool) -> dict[str, Any]:
     if not isinstance(comfyui, dict):
         return {}
@@ -1212,8 +1248,23 @@ class ComfyUIClient:
             if isinstance(outputs, dict):
                 images = [image for output in outputs.values() if isinstance(output, dict) for image in output.get("images", [])]
                 return [image for image in images if isinstance(image, dict)]
-            time.sleep(1)
+            from kura.executors.common import sleep_checking_stop
+
+            sleep_checking_stop(1)
         raise TimeoutError(f"ComfyUI prompt timed out after {self.timeout} seconds: {prompt_id}")
+
+    def cancel(self, prompt_id: str) -> None:
+        """Withdraw Kura's own prompt: delete it if queued, interrupt it only if it is the one running.
+
+        The queue belongs to the user; nothing else in it is touched.
+        """
+        self._json("/queue", {"delete": [prompt_id]})
+        queue = self._json("/queue")
+        running = queue.get("queue_running") if isinstance(queue, dict) else None
+        if isinstance(running, list) and any(isinstance(item, list) and len(item) > 1 and item[1] == prompt_id for item in running):
+            # A server that knows prompt_id interrupts only this prompt, so one
+            # that started after the queue read is left alone.
+            self._json("/interrupt", {"prompt_id": prompt_id})
 
     def download(self, image: dict[str, Any]) -> bytes:
         query = urllib.parse.urlencode({key: image.get(key, "") for key in ("filename", "subfolder", "type")})
@@ -1414,6 +1465,8 @@ def launch_render(
     image_name_overrides: dict[str, str] | None = None,
     executor_name: str | None = None,
     manage_lora_stage: bool = True,
+    controlled_by: dict[str, Any] | None = None,
+    check_only: bool = False,
 ) -> int:
     manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
     workflow_used_path = run_dir / "resolved" / "workflow_used.json"
@@ -1563,34 +1616,39 @@ def launch_render(
     if not isinstance(endpoint, str) or not endpoint:
         raise ValueError("render generator endpoint is empty")
     client = ComfyUIClient(endpoint, int(frozen.get("render", {}).get("timeout_sec", 600)))
+    # The user's ComfyUI is checked before the run is marked running, so a stopped
+    # or different ComfyUI leaves the run compiled and launchable again.
+    if resolved_executor == "local" and hasattr(client, "object_info"):
+        object_info = client.object_info()
+        expected_identity = frozen.get("comfyui_endpoint_identity")
+        observed_identity = endpoint_fingerprint(object_info)
+        if not isinstance(expected_identity, dict) or not expected_identity.get("sha256"):
+            raise ValueError(
+                "local ComfyUI endpoint identity was not verified at compile time; verify the intended endpoint is reachable, then compile again"
+            )
+        if expected_identity.get("sha256") != observed_identity.get("sha256"):
+            raise ValueError(
+                "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
+                f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
+            )
+        _, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
+        if missing:
+            labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
+            raise ValueError(
+                "ComfyUI endpoint cannot see workflow-required models: " + labels + ". "
+                "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
+            )
+    if check_only:
+        return 0
     stdout_log = run_dir / "logs" / "stdout.log"
     stdout_log.parent.mkdir(parents=True, exist_ok=True)
     stdout_log.write_text(f"render endpoint: {endpoint}\n", encoding="utf-8")
     status(run_dir, state="running", started=now(), ended=None, exit_code=None, last_step=0, total_steps=len(cases), current_case_id=None)
     active_runtime_case: dict[str, Any] | None = None
+    queued_prompt_id: str | None = None
     generated = 0
     completed_cases = 0
     try:
-        if resolved_executor == "local" and hasattr(client, "object_info"):
-            object_info = client.object_info()
-            expected_identity = frozen.get("comfyui_endpoint_identity")
-            observed_identity = endpoint_fingerprint(object_info)
-            if not isinstance(expected_identity, dict) or not expected_identity.get("sha256"):
-                raise ValueError(
-                    "local ComfyUI endpoint identity was not verified at compile time; verify the intended endpoint is reachable, then compile again"
-                )
-            if expected_identity.get("sha256") != observed_identity.get("sha256"):
-                raise ValueError(
-                    "ComfyUI endpoint identity changed after compile; create and compile a new render run after verifying the intended endpoint. "
-                    f"expected={expected_identity.get('sha256')} observed={observed_identity.get('sha256')} endpoint={_redact_url_userinfo(endpoint)}"
-                )
-            _, missing = visible_model_refs(workflow, object_info, ignored_inputs=_dynamically_patched_model_inputs(frozen))
-            if missing:
-                labels = ", ".join(f"{item['class_type']}.{item['input']}={item['name']}" for item in missing)
-                raise ValueError(
-                    "ComfyUI endpoint cannot see workflow-required models: " + labels + ". "
-                    "Verify comfyui.endpoint and the user's ComfyUI model paths. Local render never downloads models."
-                )
         for lora_stage in lora_stages.values():
             _materialize_visible(lora_stage, lambda plan: _ensure_lora_stage_visible(client, endpoint, plan))
         for model_patch_stage in model_patch_stages.values():
@@ -1620,15 +1678,20 @@ def launch_render(
                     applied_values[name] = lora_name
                 elif name == "model_patch":
                     applied_values[name] = model_patch_name
+            from kura.executors.common import check_stop
+
+            check_stop()
             status(run_dir, current_case_id=case["id"])
             event(run_dir, {"event": "render_case_started", "timestamp": now(), "case_id": case["id"], "index": case["index"], "total": len(cases)})
             prompt_id = client.queue(patched)
+            queued_prompt_id = prompt_id
             with stdout_log.open("a", encoding="utf-8") as handle:
                 if isinstance(inputs.get("promptset"), dict):
                     handle.write(f"queued {case.get('source_id', case['id'])} seed={values.get('seed')} prompt_id={prompt_id}\n")
                 else:
                     handle.write(f"queued case={case['id']} index={case['index']}/{len(cases)} prompt_id={prompt_id}\n")
             images = client.wait(prompt_id)
+            queued_prompt_id = None
             if not images:
                 raise RuntimeError(f"ComfyUI completed without returning any images (case {case['id']!r})")
             for image_index, image in enumerate(images):
@@ -1649,9 +1712,25 @@ def launch_render(
         if generated == 0:
             raise RuntimeError("ComfyUI completed without returning any images")
         status(run_dir, state="completed", ended=now(), exit_code=0, last_step=len(cases), total_steps=len(cases), current_case_id=None)
-        write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, image_count=generated)
+        write_realization(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="completed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, image_count=generated)
         event(run_dir, {"event": "render_completed", "timestamp": now(), "count": generated})
         return 0
+    except KeyboardInterrupt:
+        # Ctrl-C, or a stop request reaching a runner follower: images already written stay,
+        # Kura's own prompt is withdrawn, and the render is not continued later.
+        if queued_prompt_id is not None:
+            try:
+                client.cancel(queued_prompt_id)
+            except Exception as cancel_exc:
+                _append_runtime_warning(stdout_log, f"could not withdraw prompt {queued_prompt_id}: {type(cancel_exc).__name__}: {cancel_exc}")
+        interrupted_at = now()
+        try:
+            status(run_dir, state="interrupted", ended=interrupted_at, exit_code=None, last_step=completed_cases, total_steps=len(cases), current_case_id=None)
+            write_realization(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="interrupted", workflow_fixed=list(workflow_fixed), endpoint=endpoint, case_count=len(cases), completed_case_count=completed_cases, generated_image_count=generated)
+            event(run_dir, {"event": "render_interrupted", "timestamp": interrupted_at, "completed_case_count": completed_cases, "image_count": generated})
+        except Exception as record_exc:
+            _append_runtime_warning(stdout_log, f"failed to record the interruption: {type(record_exc).__name__}: {record_exc}")
+        raise
     except Exception as exc:
         failed_case_id = active_runtime_case["case"]["id"] if active_runtime_case is not None else None
         failed_at = now()
@@ -1673,7 +1752,7 @@ def launch_render(
                     f"{type(fallback_exc).__name__}: {fallback_exc}",
                 )
         try:
-            write_realization(run_dir, train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
+            write_realization(run_dir, **({"controlled_by": controlled_by} if controlled_by else {}), train_run=train_run, executor=resolved_executor, generator="comfyui", state="failed", workflow_fixed=list(workflow_fixed), endpoint=endpoint, workflow_digest=inputs.get("workflow", {}).get("digest"), cases_digest=source_digest, **legacy_digest_details, **_runtime_checkpoint_provenance(runtime_cases), case_count=len(cases), completed_case_count=completed_cases, failed_case_id=failed_case_id, generated_image_count=generated, error=str(exc))
         except Exception as realization_exc:
             _append_runtime_warning(
                 stdout_log,

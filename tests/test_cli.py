@@ -2039,7 +2039,7 @@ class RenderNotificationTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.run_commands.launch.launch_render", return_value=0) as launch, patch("kura.run_commands.launch._notify") as notify, patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                    code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="local", dry_run=False, notify="ntfy"))
+                    code = launch_run("render-1", executor="local", dry_run=False, notify_channels="ntfy")
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)

@@ -1669,6 +1669,10 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
         if runner.pending_requests(run_dir) and runner.cancel_pending(workspace, run_dir):
             print("the launch request had not started; it is recorded as not launched", file=sys.stderr)
             return 0
+        if runner.run_unfinished(run_dir) and not runner.runner_alive(workspace):
+            print("no runner is following this run; run `kura runner start`, which records a render cut short "
+                  "as interrupted and resumes following the rest, then stop it again if needed", file=sys.stderr)
+            return 1
         return None
     path = runner.write_stop_request(run_dir)
     if path is None:

@@ -92,9 +92,10 @@ class ComfyUIModelPatchTests(unittest.TestCase):
                 def object_info(self) -> dict[str, object]:
                     return {"KSampler": {}, "SmokeOnlyNode": {}}
 
-            with patch("kura.render.ComfyUIClient", DifferentClient):
-                self.assertEqual(launch_render(workspace, run_dir), 1)
-            self.assertIn("endpoint identity changed after compile", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+            with patch("kura.render.ComfyUIClient", DifferentClient), self.assertRaisesRegex(ValueError, "endpoint identity changed after compile"):
+                launch_render(workspace, run_dir)
+            # Refused before the run was marked running, so it stays launchable.
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "compiled")
 
     def test_local_launch_rejects_manifest_compiled_without_endpoint_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -127,9 +128,9 @@ class ComfyUIModelPatchTests(unittest.TestCase):
                 def object_info(self) -> dict[str, object]:
                     return {"KSampler": {}}
 
-            with patch("kura.render.ComfyUIClient", Client):
-                self.assertEqual(launch_render(workspace, run_dir), 1)
-            self.assertIn("identity was not verified at compile time", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+            with patch("kura.render.ComfyUIClient", Client), self.assertRaisesRegex(ValueError, "identity was not verified at compile time"):
+                launch_render(workspace, run_dir)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "compiled")
 
     def test_model_patch_loader_is_discovered_and_resolved(self) -> None:
         workflow = {"4": {"class_type": "ModelPatchLoader", "inputs": {"name": "control.safetensors"}}}
