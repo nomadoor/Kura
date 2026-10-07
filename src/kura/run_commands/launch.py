@@ -608,7 +608,8 @@ def _launch_docker_through_runner(run_id: str, *, image: str | None, follow: boo
             print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
             return 1
         print(f"launch request {request.name} written; the job runner launches it", file=sys.stderr)
-    runner.ensure_runner(workspace, launching=True)
+    if runner.ensure_runner(workspace, launching=True):
+        runner.await_runner(workspace)
     if not follow:
         # A runner that was just exiting can miss the request; watch until one claims it.
         if not runner.await_claim(workspace, run_dir, request):

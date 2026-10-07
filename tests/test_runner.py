@@ -262,9 +262,11 @@ class StopAndQueueTests(unittest.TestCase):
             runner.write_stop_request(run_dir)
             states = iter([{"state": "running"}, {"state": "failed", "publication_state": "not-required"}])
             with patch("kura.executors.docker.stop_docker") as stop, \
-                 patch("kura.executors.docker.reconcile_docker", side_effect=lambda *_a, **_k: next(states)):
+                 patch("kura.executors.docker.reconcile_docker", side_effect=lambda *_a, **_k: next(states)) as reconcile:
                 self.assertEqual(runner.work(root, "example", request.name, sleep=lambda _: None), 0)
             stop.assert_called_once()
+            # Polling never records an observation unless the container's state changed.
+            self.assertEqual({call.kwargs.get("source") for call in reconcile.call_args_list}, {"automatic"})
             self.assertTrue(runner.stop_done(run_dir))
 
     def test_a_stop_before_launch_cancels_the_request(self) -> None:

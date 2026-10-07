@@ -138,6 +138,17 @@ def _spawn_runner(workspace: Path) -> subprocess.Popen:
         log.close()
 
 
+def await_runner(workspace: Path, *, timeout_sec: float = 15.0, sleep: Callable[[float], None] = time.sleep,
+                 clock: Callable[[], float] = time.monotonic) -> bool:
+    """Wait until a runner just started holds the lock, so a follower does not mistake a slow start for a death."""
+    deadline = clock() + timeout_sec
+    while clock() < deadline:
+        if runner_alive(workspace):
+            return True
+        sleep(0.2)
+    return runner_alive(workspace)
+
+
 def ensure_runner(workspace: Path, *, launching: bool = False, spawn: Callable[[Path], Any] = _spawn_runner) -> bool:
     """Start a runner unless one holds the lock; returns whether one was started.
 
@@ -617,7 +628,8 @@ def _work_locked(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             _carry_out_stop(run_dir, request)
         try:
-            status = reconcile_docker(run_dir)
+            # Automatic observations are recorded only when the container's state changes.
+            status = reconcile_docker(run_dir, source="automatic")
             failures = 0
         except (OSError, ValueError) as exc:
             failures += 1
@@ -698,7 +710,8 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
                 return 2
             restarts += 1
             print("the runner is not running; starting it again", file=out)
-            ensure(workspace)
+            if ensure(workspace):
+                await_runner(workspace, sleep=sleep)
         sleep(poll_sec)
 
 
