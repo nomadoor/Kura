@@ -13,14 +13,18 @@ out and not compared.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from kura.executors.common import TERMINAL_STATES
 
 COVERED_FIELDS = (
     "state", "started", "ended", "exit_code", "last_realization", "last_observation",
     "pod_id", "container_id", "container_name", "pod_stopped_at", "pod_missing_at",
 )
-TERMINAL = frozenset({"completed", "failed", "stopped", "interrupted", "unknown", "launch_failed", "recovery_required"})
+# The writers' own definition, so an observation after `recovery_required` is applied as they apply it.
+TERMINAL = TERMINAL_STATES
 
 
 def _read(path: Path) -> dict[str, Any] | None:
@@ -60,12 +64,27 @@ def project_status(run_dir: Path) -> dict[str, Any]:
     """The covered status fields as the run's records imply them."""
     directory = run_dir / "realizations"
     rid = _latest_launch_id(directory) if directory.is_dir() else None
+    manifest = run_dir / "resolved" / "manifest.lock.yaml"
     if rid is None:
-        rendering = _render_in_progress(run_dir)
+        rendering, _ = _render_in_progress(run_dir)
         if rendering is not None:
             return rendering
-        return {"state": "compiled" if (run_dir / "resolved" / "manifest.lock.yaml").is_file() else "draft"}
+        return {"state": "compiled" if manifest.is_file() else "draft"}
     realization = _read(directory / f"{rid}.json")
+    launched_mtime = _mtime(directory / f"{rid}.json") or _mtime(directory / f"{rid}.create-intent.json") or _mtime(directory / f"{rid}.capacity-wait.jsonl")
+    rendering, render_started = _render_in_progress(run_dir)
+    if rendering is not None and (launched_mtime is None or (render_started or 0) >= launched_mtime):
+        # A render started after the latest launch record: a local render (no realization until it
+        # ends) or a RunPod render on its session Pod.
+        if realization is not None and realization.get("generator") != "comfyui":
+            rendering["last_realization"] = f"realizations/{rid}.json"
+            pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
+            if isinstance(pod.get("id"), str):
+                rendering["pod_id"] = pod["id"]
+        return rendering
+    if launched_mtime is not None and (_mtime(manifest) or 0) > launched_mtime:
+        # Compiled again after the last launch, ready for the next one.
+        return {"state": "compiled"}
     if realization is None:
         return _project_unlaunched(directory, rid)
     projected: dict[str, Any] = {"last_realization": f"realizations/{rid}.json", "state": realization.get("state")}
@@ -84,16 +103,33 @@ def project_status(run_dir: Path) -> dict[str, Any]:
         _apply(projected, kind, value, path, run_dir)
         if kind == "observation" and realization.get("executor") == "docker" and projected.get("state") == "completed":
             projected["state"] = _docker_publication_state(directory, rid, run_dir)
-    _apply_download(projected, run_dir)
+    if _apply_download(projected, run_dir) and projected.get("state") == "completed" and _publication_outcome(directory, rid) == "recovery_required":
+        projected["state"] = "recovery_required"
     return projected
 
 
-def _render_in_progress(run_dir: Path) -> dict[str, Any] | None:
-    """A local render has no realization until it ends; its events say it runs."""
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def _publication_outcome(directory: Path, rid: str) -> str | None:
+    """The newest publication record decides: published, or blocked and needing a person."""
+    candidates = [(_mtime(path) or 0, "recovery_required") for path in directory.glob(f"{rid}.publication-attempt-*.json")]
+    published = _mtime(directory / f"{rid}.publication.json")
+    if published is not None:
+        candidates.append((published, "completed"))
+    return max(candidates)[1] if candidates else None
+
+
+def _render_in_progress(run_dir: Path) -> tuple[dict[str, Any] | None, float | None]:
+    """A render has no realization of its own until it ends; its events say it runs, and since when."""
     try:
         lines = (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()
     except OSError:
-        return None
+        return None, None
     for line in reversed(lines):
         try:
             event = json.loads(line)
@@ -101,18 +137,21 @@ def _render_in_progress(run_dir: Path) -> dict[str, Any] | None:
             continue
         name = event.get("event") if isinstance(event, dict) else None
         if name == "render_started":
-            return {"state": "running", "started": event.get("timestamp"), "ended": None, "exit_code": None}
+            try:
+                started = datetime.fromisoformat(str(event.get("timestamp"))).timestamp()
+            except ValueError:
+                started = None
+            return {"state": "running", "started": event.get("timestamp"), "ended": None, "exit_code": None}, started
         if name in ("render_completed", "render_failed", "render_interrupted"):
-            return None
-    return None
+            return None, None
+    return None, None
 
 
 def _docker_publication_state(directory: Path, rid: str, run_dir: Path) -> str:
     """A completed Docker trainer is completed only once its outputs are published."""
-    if (directory / f"{rid}.publication.json").is_file():
-        return "completed"
-    if any(directory.glob(f"{rid}.publication-attempt-*.json")):
-        return "recovery_required"
+    outcome = _publication_outcome(directory, rid)
+    if outcome is not None:
+        return outcome
     try:
         from kura.artifact_publication import output_contract
 
@@ -167,14 +206,15 @@ def _apply(projected: dict[str, Any], kind: str, value: dict[str, Any], path: Pa
             projected["exit_code"] = None
 
 
-def _apply_download(projected: dict[str, Any], run_dir: Path) -> None:
+def _apply_download(projected: dict[str, Any], run_dir: Path) -> bool:
     """A RunPod run whose terminal snapshot is downloaded ends with the Pod's exit record."""
     exits = sorted((run_dir / "downloads" / run_dir.name / "realizations").glob("remote-exit-*.json"))
     exit_record = _read(exits[-1]) if exits else None
     if exit_record is None or not isinstance(exit_record.get("exit_code"), int):
-        return
+        return False
     code = exit_record["exit_code"]
     projected.update({"state": "completed" if code == 0 else "failed", "exit_code": code, "ended": exit_record.get("timestamp")})
+    return True
 
 
 def shadow_differences(run_dir: Path, written: dict[str, Any]) -> dict[str, Any]:

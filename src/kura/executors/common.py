@@ -496,6 +496,17 @@ def _mutate_run_status(run_dir: Path, mutate: Callable[[dict[str, Any]], None], 
         return redacted
 
 
+def _last_shadow_differences(log: Path) -> Any:
+    try:
+        with log.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 64 * 1024))
+            lines = handle.read().decode("utf-8", errors="replace").splitlines()
+        return json.loads(lines[-1]).get("differences") if lines else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def _shadow_projection(run_dir: Path, written: dict[str, Any]) -> None:
     """Compare the written status with the one its records imply, and log any difference.
 
@@ -508,9 +519,10 @@ def _shadow_projection(run_dir: Path, written: dict[str, Any]) -> None:
         from kura.status_projection import shadow_differences
 
         differences = shadow_differences(run_dir, written)
-        if differences:
+        log = run_dir / "logs" / "status-shadow.jsonl"
+        if differences and _last_shadow_differences(log) != json.loads(json.dumps(differences, default=str)):
+            # A difference that persists is logged once, not on every progress write.
             line = json.dumps({"at": _now(), "differences": differences}, ensure_ascii=False, default=str) + "\n"
-            log = run_dir / "logs" / "status-shadow.jsonl"
             log.parent.mkdir(parents=True, exist_ok=True)
             with log.open("a", encoding="utf-8") as handle:
                 handle.write(line)

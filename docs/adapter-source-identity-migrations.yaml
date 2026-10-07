@@ -52,7 +52,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 30f917aabe6e277805a89435430ede997524bd7087f787b6ba436a9e6e5317f9
+      value: 04cbdc703df486738dd657dc4d07914a1a4da9c6a175fff098baf8b6cb655af5
   - id: runpod-executor-sync-records-2026-10-08
     executor: runpod
     reason: Mirrored checkpoints, sync errors and their recovery, and the terminal download are recorded
