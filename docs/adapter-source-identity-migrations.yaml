@@ -12,8 +12,9 @@ records:
     executor: runpod
     reason: The create-intent file suffix and the listing of unresolved intents move from the RunPod
       executor into the shared executor module, so Docker launches can record intents too; the RunPod
-      resolver now settles only RunPod intents. A launch of a run whose status is still `launching`
-      is refused with reconcile guidance. A RunPod launch makes the same requests and writes the same
+      resolver now settles only RunPod intents, and a launch that recorded its realization but stopped
+      before status followed it is settled from that record without another lookup. A launch of a run
+      whose status is still `launching` is refused with reconcile guidance. A RunPod launch makes the same requests and writes the same
       records as before.
     behavior_changed: false
     evidence_ids:
@@ -54,7 +55,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 1b6529f02a3c534fd6887d2edb7b77d8111fe60cd65512f32ba49f05d4dfda05
+      value: 1de6614fc672d9525d2bcea8cc298b3198e5f27b4bae896296d92a96bfe0cf5f
   - id: runpod-executor-host-cuda-filter-2026-10-07
     executor: runpod
     reason: Pod creation and the GPU stock query now send minCudaVersion, the image's recorded CUDA

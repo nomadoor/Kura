@@ -168,5 +168,44 @@ class DockerCreateIntentTests(unittest.TestCase):
             self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
 
 
+    def test_a_launch_that_stopped_before_status_followed_its_realization_is_settled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _run(root)
+
+            from kura.executors.common import _mutate_run_status as real_mutate
+
+            calls = []
+
+            def die_on_second_status_write(*args, **kwargs):
+                # The intent's status write happens; the process dies before the started one.
+                calls.append(1)
+                if len(calls) == 1:
+                    return real_mutate(*args, **kwargs)
+                raise KeyboardInterrupt
+
+            with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-9\n", "")), \
+                 patch("kura.executors.docker._mutate_run_status", side_effect=die_on_second_status_write), \
+                 self.assertRaises(KeyboardInterrupt):
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            self.assertEqual(_status(run_dir)["state"], "launching")
+            self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
+            with _docker([]) as docker:
+                lines = resolve_docker_create_intents(run_dir)
+            self.assertEqual(docker, [])  # settled from the record, nothing looked up or started
+            self.assertIn("status now does", lines[0])
+            self.assertEqual((_status(run_dir)["state"], _status(run_dir)["container_id"]), ("running", "container-9"))
+            self.assertEqual(unresolved_create_intents(run_dir), [])
+
+    def test_a_second_launch_that_passed_the_checks_does_not_start_another_container(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _run(root)
+            with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            with _docker([]) as docker, self.assertRaisesRegex(ValueError, "started first"):
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            self.assertEqual([command[:2] for command in docker], [])
+
 if __name__ == "__main__":
     unittest.main()

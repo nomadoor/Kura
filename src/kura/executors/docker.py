@@ -24,6 +24,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
     CREATE_INTENT_SUFFIX,
+    settle_status_from_realization,
     _event_exists,
     unresolved_create_intents,
     dataset_input_drift_warning,
@@ -471,6 +472,10 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         "platform": platform.platform(), "host": platform.node(), **kura_provenance(), "preflight": preflight,
     }
     with file_lock(run_dir / ".locks" / DOCKER_LAUNCH_LOCK, blocking=False):
+        # Another launch may have passed the same checks and finished before this one took the lock.
+        current = _load_status(run_dir)
+        if current.get("state") in ("launching", "running") or unresolved_create_intents(run_dir):
+            raise ValueError(f"another launch of {run_dir.name} started first; follow it instead of starting a second container")
         _write_container_create_intent(run_dir, realization_id, name, draft)
         try:
             result = subprocess.run(command, text=True, capture_output=True, check=False)
@@ -590,6 +595,11 @@ def resolve_docker_create_intents(run_dir: Path) -> list[str]:
     """
     lines = []
     for intent_path in unresolved_create_intents(run_dir, "docker"):
+        realization_path = intent_path.with_name(intent_path.name[: -len(CREATE_INTENT_SUFFIX)] + ".json")
+        if realization_path.exists():
+            settle_status_from_realization(run_dir, realization_path)
+            lines.append(f"the launch recorded {realization_path.name} but stopped before status followed it; status now does")
+            continue
         intent = json.loads(intent_path.read_text(encoding="utf-8"))
         draft = intent.get("realization")
         if not isinstance(draft, dict) or not isinstance(draft.get("id"), str):

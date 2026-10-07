@@ -78,15 +78,45 @@ CREATE_INTENT_SUFFIX = ".create-intent.json"
 
 
 def unresolved_create_intents(run_dir: Path, executor: str | None = None) -> list[Path]:
-    """Create intents with no realization yet: Pods or containers that may exist unrecorded."""
+    """Create intents whose outcome is not settled: Pods or containers that may exist unrecorded.
+
+    An intent is settled once its realization exists and status follows it. A
+    launch that stopped between writing the realization and updating status
+    leaves the run `launching`; that intent still counts, and is settled from
+    the realization without looking for anything again.
+    """
     directory = run_dir / "realizations"
     if not directory.is_dir():
         return []
-    intents = sorted(
-        path for path in directory.glob(f"*{CREATE_INTENT_SUFFIX}")
-        if not (directory / f"{path.name[: -len(CREATE_INTENT_SUFFIX)]}.json").exists()
-    )
+    try:
+        status = _load_status(run_dir)
+    except (OSError, json.JSONDecodeError):
+        status = {}
+    intents = []
+    for path in sorted(directory.glob(f"*{CREATE_INTENT_SUFFIX}")):
+        realization = directory / f"{path.name[: -len(CREATE_INTENT_SUFFIX)]}.json"
+        if not realization.exists() or (
+            status.get("state") == "launching" and status.get("last_realization") != f"realizations/{realization.name}"
+        ):
+            intents.append(path)
     return intents if executor is None else [path for path in intents if create_intent_executor(path) == executor]
+
+
+def settle_status_from_realization(run_dir: Path, realization_path: Path) -> dict[str, Any]:
+    """Bring status up to a realization a launch wrote just before it stopped."""
+    realization = json.loads(realization_path.read_text(encoding="utf-8"))
+    container = realization.get("container") if isinstance(realization.get("container"), dict) else {}
+    pod = realization.get("pod") if isinstance(realization.get("pod"), dict) else {}
+
+    def mutate(latest: dict[str, Any]) -> None:
+        latest.update({"state": realization.get("state"), "last_realization": f"realizations/{realization_path.name}",
+                       "started": realization.get("launched_at"), "ended": realization.get("attempted_at"), "exit_code": None})
+        if container.get("id"):
+            latest.update({"container_id": container["id"], "container_name": container.get("name")})
+        if pod.get("id"):
+            latest["pod_id"] = pod["id"]
+
+    return _mutate_run_status(run_dir, mutate)
 
 
 def create_intent_executor(path: Path) -> str:
