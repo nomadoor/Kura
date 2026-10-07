@@ -70,6 +70,13 @@ class LeaseChangeTests(unittest.TestCase):
         with _run() as run_dir, _pod(""), self.assertRaisesRegex(ValueError, "cannot be changed"):
             change_runpod_lease(run_dir, 3600, yes=True)
 
+    def test_a_render_pod_is_refused_because_its_creation_timer_would_still_end_it(self) -> None:
+        with _run() as run_dir:
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "runpod", "purpose": "comfyui-render", "pod": {"id": "pod-1"}}), encoding="utf-8")
+            with patch.object(runpod_ssh, "_runpod_ssh_details") as ssh, self.assertRaisesRegex(ValueError, "render Pod"):
+                change_runpod_lease(run_dir, 3600, yes=True)
+            ssh.assert_not_called()
+
     def test_a_stopped_pod_is_refused(self) -> None:
         with _run(pod_stopped_at="t") as run_dir, self.assertRaisesRegex(ValueError, "already stopped"):
             change_runpod_lease(run_dir, 3600, yes=True)

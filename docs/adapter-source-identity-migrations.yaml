@@ -54,7 +54,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 1e3ccc8fa3bf67d44134b2e837bd75caad5aad014298f04c730a30045ff7a420
+      value: aeb777ee7128945f306cb682e7949ff393a4b9853a72a62234c3434ba13c9da3
   - id: runpod-executor-through-job-runner-2026-10-07
     executor: runpod
     reason: RunPod training launches go through the job runner. The writer confirms billing and records

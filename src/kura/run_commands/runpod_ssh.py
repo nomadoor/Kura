@@ -2426,6 +2426,9 @@ def change_runpod_lease(run_dir: Path, duration_sec: int, *, yes: bool, input_st
         raise ValueError("this run has no RunPod Pod to change the lease of")
     if status.get("pod_stopped_at") or status.get("pod_missing_at"):
         raise ValueError("this run's Pod is already stopped")
+    if realization.get("purpose") == "comfyui-render":
+        # A render session Pod also carries a fixed timer set when it was created, which this cannot move.
+        raise ValueError("a render Pod's lease cannot be changed yet; its creation-time timer still ends it")
     details = _runpod_ssh_details(run_dir, timeout_sec=120, interval_sec=5)
     path = shlex.quote(LEASE_DEADLINE_PATH)
     # The Pod's clock decides when the guard fires, so deadlines are computed there.
