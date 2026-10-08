@@ -39,6 +39,27 @@ class DatasetInspectTests(unittest.TestCase):
         self.assertEqual(report["captions"]["first_tokens_top3"][0]["token"], "myaku")
         self.assertEqual(report["captions"]["trigger_word"]["caption_count"], 2)
 
+    def test_a_missing_caption_file_is_one_finding_and_an_empty_inline_caption_defers_to_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "rows"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("id: rows\n", encoding="utf-8")
+            for stem in ("a", "b"):
+                (dataset / f"{stem}.png").write_bytes(png_bytes(512, 512))
+            (dataset / "b.caption").write_text("red suit", encoding="utf-8")
+            records = [
+                {"id": "a", "path": "a.png", "caption_path": "a.caption"},
+                {"id": "b", "path": "b.png", "caption": "", "caption_path": "b.caption"},
+            ]
+            (dataset / "items.jsonl").write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
+
+            report = inspect_dataset("rows", workspace=root)
+
+        self.assertEqual(report["observations"]["captions_missing"], 1)
+        findings = [item for item in report["structural_findings"] if item.get("sample") == "a"]
+        self.assertEqual(len(findings), 1, findings)
+
     def test_inspect_reports_v2_typed_inputs_and_caption_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

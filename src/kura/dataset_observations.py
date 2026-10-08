@@ -193,7 +193,7 @@ def _sample_from_record(
             conditions[role] = {"path": _relative(root, path), "size": _size_list(path)}
     caption = item.get("caption") if isinstance(item.get("caption"), str) else None
     caption_path = _record_path(root, item.get("caption_path"), sample_id, "caption", issues) if isinstance(item.get("caption_path"), str) else caption_files.get(stem)
-    if caption is None and caption_path is not None:
+    if not caption and caption_path is not None:
         caption = _caption_file_text(root, caption_path, sample_id, issues)
     if target is None:
         issues.append({"code": "missing_target", "sample": sample_id})
@@ -285,6 +285,8 @@ def _caption_file_text(root: Path, path: Path, sample_id: str, issues: list[dict
     """A caption file's text; an unreadable file is a finding, not a caption."""
     try:
         return path.read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        return None  # already reported as a missing file where the path was resolved
     except (OSError, UnicodeDecodeError):
         issues.append({"code": "unreadable_caption", "sample": sample_id, "path": _relative(root, path)})
         return None
