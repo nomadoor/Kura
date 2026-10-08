@@ -376,8 +376,9 @@ def docker_command(
     command = [
         "docker", "run", "-d", "--init", "--stop-timeout", "30", "--name", name,
         # Docker's default /dev/shm is 64 MiB; PyTorch data loaders pass whole images
-        # through it. Sharing the host's IPC namespace gives the size a RunPod Pod has.
-        "--ipc=host",
+        # through it. This is only a ceiling (tmpfs uses what is written), and the
+        # container keeps its own IPC namespace.
+        "--shm-size", "16g",
         "--label", "io.kura.managed=true",
         "--label", f"io.kura.run_id={run_dir.name}",
         "--label", f"io.kura.realization_id={realization_id}",

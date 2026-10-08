@@ -46,11 +46,12 @@ if __name__ == "__main__":
 
 
 class SharedMemoryTests(unittest.TestCase):
-    def test_a_local_training_container_shares_the_host_ipc_namespace(self) -> None:
+    def test_a_local_training_container_has_room_in_dev_shm(self) -> None:
         # Docker gives a container 64 MiB of /dev/shm; PyTorch data-loader workers pass
         # whole images through it and fail at real resolutions. RunPod Pods already have more.
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             argv, _, _ = docker_command(workspace, workspace / "runs" / "r", {"cwd": "/opt", "argv": ["x"], "env": {}}, "image", [], True, "r1")
-        self.assertIn("--ipc=host", argv)
-        self.assertLess(argv.index("--ipc=host"), argv.index("image"))
+        self.assertEqual(argv[argv.index("--shm-size") + 1], "16g")
+        self.assertLess(argv.index("--shm-size"), argv.index("image"))
+        self.assertNotIn("--ipc=host", argv)
