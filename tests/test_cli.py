@@ -1073,9 +1073,10 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             managed = payload["docker_storage"]["kura_managed"]
-            self.assertEqual(managed["containers"][0]["Names"], "kura-old")
-            self.assertEqual(managed["stopped_containers"][0]["ID"], "abc")
-            self.assertEqual(managed["volumes"][0]["Name"], "kura-cache")
+            # Counts and the command that acts on them; `kura run prune` lists the containers.
+            self.assertEqual((managed["containers"], managed["stopped_containers"], managed["volumes"]), (1, 1, 1))
+            self.assertIn("kura run prune --help", managed["prune"])
+            self.assertNotIn("--yes", managed["prune"])  # prune with --yes also removes old runs
 
     def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1406,6 +1407,27 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                 self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
             finally:
                 os.chdir(previous)
+
+    def test_run_status_names_the_realization_instead_of_printing_its_launch_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            launch = {"id": "r1", "docker_command": ["--flag"] * 5000, "backend_command": {"argv": ["x"] * 5000}}
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps(launch), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["last_realization"], "realizations/r1.json")
+            self.assertNotIn("latest_realization", payload)
+            self.assertLess(len(stdout.getvalue()), 4000)
 
     def test_doctor_workspace_reports_resolved_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

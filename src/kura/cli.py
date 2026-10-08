@@ -30,7 +30,7 @@ from kura.dataset_inspect import format_dataset_inspect, inspect_dataset, resolv
 from kura.dataset_handoff import freeze_dataset_handoff
 from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
-from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
+from kura.doctor import _docker_storage_summary, kura_docker_volumes, stopped_kura_containers, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
 from kura.executors.common import OBSERVABLE_STATES, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
@@ -607,15 +607,17 @@ def cmd_run_status(args: argparse.Namespace) -> int:
     try:
         run_dir = _run_path(args.run_id)
         status = read_run_status(run_dir)
+        # The realization holds the full launch command (tens of KB); status names its file instead.
         realization_ref = status.get("last_realization")
+        latest_realization: dict[str, Any] = {}
         if isinstance(realization_ref, str) and (run_dir / realization_ref).is_file():
-            status["latest_realization"] = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+            loaded = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
+            latest_realization = loaded if isinstance(loaded, dict) else {}
         observation_ref = status.get("last_observation")
         if isinstance(observation_ref, str) and (run_dir / observation_ref).is_file():
             status["latest_observation"] = json.loads((run_dir / observation_ref).read_text(encoding="utf-8"))
         from kura import runner
 
-        latest_realization = status.get("latest_realization") if isinstance(status.get("latest_realization"), dict) else {}
         runner_controlled = isinstance(latest_realization.get("controlled_by"), dict) or runner.controlling_request(run_dir) is not None
         outputs = status.get("outputs") if isinstance(status.get("outputs"), list) else []
         summary = {
@@ -697,36 +699,6 @@ def cmd_run_reconcile(args: argparse.Namespace) -> int:
         print(f"cannot reconcile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0
-
-
-def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
-    if result.returncode != 0:
-        return []
-    items: list[dict[str, Any]] = []
-    for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(item, dict):
-            items.append(item)
-    return items
-
-
-def _kura_stopped_docker_containers() -> list[dict[str, Any]]:
-    containers = _docker_json_lines(["docker", "ps", "-a", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
-    return [
-        item
-        for item in containers
-        if not str(item.get("State") or item.get("Status") or "").lower().startswith(("running", "up"))
-    ]
-
-
-def _kura_docker_volumes() -> list[dict[str, Any]]:
-    return _docker_json_lines(["docker", "volume", "ls", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
 
 
 def _docker_image_exists(name: str) -> bool:
@@ -1199,7 +1171,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
 
     docker_actions: dict[str, Any] = {"containers": [], "volumes": []}
     if getattr(args, "docker_containers", False):
-        containers = _kura_stopped_docker_containers()
+        containers = stopped_kura_containers()
         docker_actions["containers"] = [
             {"id": item.get("ID"), "name": item.get("Names"), "state": item.get("State"), "status": item.get("Status")}
             for item in containers
@@ -1213,7 +1185,7 @@ def cmd_run_prune(args: argparse.Namespace) -> int:
                     print(f"cannot prune Docker containers: {message}", file=sys.stderr)
                     return 1
     if getattr(args, "docker_volumes", False):
-        volumes = _kura_docker_volumes()
+        volumes = kura_docker_volumes()
         docker_actions["volumes"] = [{"name": item.get("Name"), "driver": item.get("Driver")} for item in volumes]
         if args.yes and volumes:
             names = [str(item.get("Name")) for item in volumes if item.get("Name")]
