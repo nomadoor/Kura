@@ -76,6 +76,27 @@ def record_publication_failure(run_dir: Path, realization_id: str, error: str) -
     return path.relative_to(run_dir).as_posix()
 
 
+def existing_publication(run_dir: Path, realization_id: str) -> tuple[str, list[str]] | None:
+    """The publication already made for this realization, if status says so and its manifest is there.
+
+    A published run is not published again: Docker re-observing a finished
+    container and RunPod collecting a snapshot again both reuse it.
+    """
+    manifest_ref = f"realizations/{realization_id}.publication.json"
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        manifest = json.loads((run_dir / manifest_ref).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not (
+        isinstance(status, dict) and status.get("last_realization") == f"realizations/{realization_id}.json"
+        and status.get("publication_state") == "completed" and status.get("publication_manifest") == manifest_ref
+    ):
+        return None
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    return manifest_ref, [item["path"] for item in files or [] if isinstance(item, dict) and isinstance(item.get("path"), str)]
+
+
 def record_unverified_publication(run_dir: Path, realization_id: str, outputs: list[str]) -> str:
     """Record that a run with no output contract completed with these outputs, unverified.
 

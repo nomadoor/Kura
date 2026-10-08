@@ -31,7 +31,7 @@ from kura.executors.runpod import project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
-from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication
+from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
 from kura.fsio import append_line_durably, atomic_write_json
@@ -590,7 +590,9 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     if contract is not None:
                         if realization_id is None:
                             raise ValueError("cannot publish downloaded outputs without a realization")
-                        publication_manifest, outputs = publish_outputs(
+                        # A run collected again keeps the publication it has, as on Docker.
+                        reused = existing_publication(run_dir, realization_id)
+                        publication_manifest, outputs = reused if reused is not None else publish_outputs(
                             run_dir, realization_id, contract, candidate_paths=outputs
                         )
                 except (OSError, ValueError) as exc:
