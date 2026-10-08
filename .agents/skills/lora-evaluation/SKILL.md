@@ -100,6 +100,11 @@ existing manifest mechanism without core interpretation. Use the schema in
 `references/knowledge-schema.md`. Keep category as an extensible string and
 record knowledge absence explicitly.
 
+Rendered samples are user images: open them only when `workspace.yaml` sets
+`agents.view_images: true`, and stop at the first one your own service's policy
+does not let you handle (the `AGENTS.md` "User images" rule). Without
+permission, the user judges the images and you record their judgment.
+
 After review, append observations and limitations to `notes.md`. Never erase a
 failed or confounded evaluation; mark what evidence it can and cannot support.
 Contact sheets and XY plots are presentation-only derivatives of existing

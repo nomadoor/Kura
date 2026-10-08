@@ -153,6 +153,26 @@ command reports a missing secret, tell the user to run `kura secrets set
 set, without values. If the user pastes a secret into the chat anyway, do not
 repeat it; suggest they revoke it and set a new one with `kura secrets set`.
 
+## User images
+
+Do not open user images unless this workspace allows it. Dataset images,
+rendered samples, render inputs, and any other image under `datasets/` or
+`runs/` are user images; they may be private or adult content, and opening one
+sends it to the service that runs you. The workspace allows it only when
+`workspace.yaml` sets `agents.view_images: true`; a missing key means no.
+
+Without permission, work from what Kura reports without opening the image:
+dimensions, counts, file sizes, hashes, caption presence, and duplicates
+(`kura dataset inspect`, `kura dataset validate`). That catches the careless
+mistakes; judging the content is the user's. When a task needs the content,
+such as writing captions or judging samples, ask the user to set
+`agents.view_images: true` or to do that part themselves.
+
+With permission, stop at the first image your own service's usage policy does
+not let you handle: do not open more, and tell the user why. This protects the
+user's account, not a rule about what may be trained; an agent whose service
+allows such images can continue.
+
 ## Which skill to read first
 
 - `dataset-prep` — before creating or editing a dataset, captions, or trigger

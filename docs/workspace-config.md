@@ -66,6 +66,12 @@ digest moves only after compatibility checks.
 | `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch | `100` |
 | `docker.build_cache_limit_gb` | Docker build cache limit checked before local Docker launch | `30` |
 
+## Agents
+
+| Key | Purpose | Default |
+| --- | --- | --- |
+| `agents.view_images` | Whether agents may open user images (datasets, samples, render inputs) in this workspace, for example to write captions or judge samples. Even when true, an agent stops at the first image its own service's policy does not allow (`docs/adr/agents-and-user-images.md`) | `false` |
+
 ## Job runner
 
 | Key | Purpose | Default |

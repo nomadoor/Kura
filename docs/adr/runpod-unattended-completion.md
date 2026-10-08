@@ -48,7 +48,13 @@ loses little, while losing a 24-hour run is severe.
 - A controller that starts collecting marks the Pod, so the timer waits for an
   in-progress download instead of deleting the Pod under it.
 
-**Optional relay storage, to be added later**
+**Optional relay storage: not adopted (2026-10-08)**
+
+The job runner (`files-only-state-and-job-runner.md`) collects outputs when the
+command that launched a run is gone, and the Pod waits at least two hours for
+it, so only a PC that stays off longer loses outputs; the user accepts that.
+The relay below was weighed against that remaining case and found too complex
+for its return. The original design is kept for reference:
 
 - When it is enabled, the Pod uploads its outputs to a relay destination
   after training and deletes itself immediately.
