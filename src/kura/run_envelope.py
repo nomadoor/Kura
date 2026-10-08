@@ -39,6 +39,9 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
     """Refuse a key no Kura code reads, naming the likely intended key or saying it is retired."""
     from kura.workspace import closest_key
 
+    # Every problem in one message, so an old draft is fixed in one edit.
+    problems: list[str] = []
+
     def check(level: str, value: Any) -> None:
         if not isinstance(value, dict):
             return
@@ -47,10 +50,11 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
             if key in TRAIN_RUN_SCHEMA[level]:
                 continue
             if path in RETIRED_TRAIN_RUN_KEYS:
-                raise ValueError(f"run.yaml {path} is no longer used; remove it")
+                problems.append(f"{path} is no longer used; remove it")
+                continue
             suggestion = closest_key(str(key), TRAIN_RUN_SCHEMA[level])
-            hint = f"; did you mean {suggestion!r}?" if suggestion else ""
-            raise ValueError(f"run.yaml {path} is not a training run setting{hint}")
+            hint = f" (did you mean {suggestion!r}?)" if suggestion else ""
+            problems.append(f"{path} is not a training run setting{hint}")
 
     check("", run)
     for level in ("backend", "model", "compute", "sampling", "safety"):
@@ -61,6 +65,8 @@ def validate_train_run_fields(run: dict[str, Any]) -> None:
     datasets = run.get("datasets")
     for item in datasets if isinstance(datasets, list) else []:
         check("datasets[]", item)
+    if problems:
+        raise ValueError("run.yaml: " + "; ".join(problems))
 
 
 def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:

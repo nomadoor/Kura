@@ -43,7 +43,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
+from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -113,6 +113,11 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
         raise ValueError("training run schema_version must be 2")
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
+    # Removed spellings keep their own messages; any other unknown key is named before
+    # checks that would otherwise report its intended key as missing.
+    common_recipe(run)
+    backend_config(run, backend_name)
+    validate_train_run_fields(run)
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
@@ -128,7 +133,6 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
         raise ValueError("Resume runs require recovery.training_state.enabled: true")
     validate_backend_config(run)
     validated_recipe(run, required=native.get("command") is None)
-    validate_train_run_fields(run)
     adapter = get_backend(backend_name)
     if adapter.project_dataset is None and adapter.validate_dataset is not None:
         adapter.validate_dataset(run, _workspace())

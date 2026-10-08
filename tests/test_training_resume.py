@@ -2219,6 +2219,12 @@ class ResumeRunTests(unittest.TestCase):
             self.assertEqual(derived["continuation"]["source"]["artifact_id"], manifest["id"])
             self.assertRegex(derived["continuation"]["source"]["manifest_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(derived["continuation"]["source"]["observed_step"], 2000)
+            # The source was frozen by an older Kura (created_by, backend.version, sampling.prompts);
+            # the derived run is authored now, so it carries only keys compile accepts.
+            from kura.run_envelope import validate_train_run_fields
+
+            validate_train_run_fields(derived)
+            self.assertNotIn("created_by", derived)
 
     def test_runpod_stage_contains_only_selected_resume_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

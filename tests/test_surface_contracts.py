@@ -194,8 +194,14 @@ class SurfaceContractTests(unittest.TestCase):
     def test_train_run_names_the_fix_for_a_misspelling_and_for_a_retired_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "did you mean 'digest'"):
             validate_train_run_fields({"datasets": [{"id": "tiny", "digets": "sha256:x"}]})
-        with self.assertRaisesRegex(ValueError, "created_by is no longer used; remove it"):
-            validate_train_run_fields({"created_by": "human"})
+        with self.assertRaisesRegex(ValueError, "created_by is no longer used; remove it.*backend.version is no longer used"):
+            validate_train_run_fields({"created_by": "human", "backend": {"version": None}})
+
+    def test_compile_names_a_misspelled_key_before_reporting_its_intended_key_missing(self) -> None:
+        from kura.cli import _validate_train_compile_intent
+
+        with self.assertRaisesRegex(ValueError, "did you mean 'model'"):
+            _validate_train_compile_intent({"schema_version": 2, "backend": {"name": "ai-toolkit"}, "modle": {"base": "x"}})
 
     def test_every_key_kura_writes_into_a_new_or_resumed_run_is_declared(self) -> None:
         from kura.cli import cmd_run_new
