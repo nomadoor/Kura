@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from kura.executors.common import RELAUNCHABLE_STATES
 from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
@@ -1760,7 +1761,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")
-        if status.get("state") not in ("compiled", "failed", "interrupted", "unknown", "launch_failed"):
+        if status.get("state") not in RELAUNCHABLE_STATES:
             raise ValueError("run must be compiled before staging")
         dataset_ids = [item.get("id") for item in _run_datasets(locked)]
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]

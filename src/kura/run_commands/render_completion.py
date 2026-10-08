@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from kura.executors.common import EXIT_CODE_FOR_STATE
 from kura.training_artifacts import checkpoint_step
 from kura.run_commands.experiment import _format_duration
 
@@ -114,8 +115,8 @@ def format_render_completion(workspace: Path, run_dir: Path, *, exit_code: int |
     frozen = _mapping(run_dir / "resolved" / "manifest.lock.yaml")
     records = _image_records(run_dir / "samples" / "images.jsonl")
     state = str(status.get("state") or "unknown")
-    if exit_code is not None and state not in {"completed", "failed", "interrupted"}:
-        state = "completed" if exit_code == 0 else "interrupted" if exit_code == 130 else "failed"
+    if exit_code is not None and state not in EXIT_CODE_FOR_STATE:
+        state = next((name for name, code in EXIT_CODE_FOR_STATE.items() if code == exit_code), "failed")
     code = status.get("exit_code") if status.get("exit_code") is not None else exit_code
     duration = _format_duration(status.get("started"), status.get("ended"))
     headline = f"{state}  exit {code if code is not None else '-'}"
