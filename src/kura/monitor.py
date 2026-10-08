@@ -1051,6 +1051,22 @@ def _format_progress(progress: RunProgress) -> str:
     return rendered
 
 
+def progress_line(summary: RunSummary) -> str:
+    """One plain line for a followed run: state, steps, speed, and loss, or what it is doing before its first step."""
+    parts = [summary.state or "unknown"]
+    progress = _format_progress(summary.progress)
+    if progress != "unknown":
+        parts.append(progress)
+    speed = _format_seconds_per_iter(summary.progress)
+    if speed != "-":
+        parts.append(speed)
+    if summary.latest_loss is not None:
+        parts.append(f"loss {summary.latest_loss:.4g}")
+    elif summary.activity and summary.progress.step in (None, 0):
+        parts.append(summary.activity)
+    return " · ".join(parts)
+
+
 def _format_seconds_per_iter(progress: RunProgress) -> str:
     value = progress.seconds_per_iter
     if value is None:
