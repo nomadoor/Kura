@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import struct
 import tempfile
@@ -821,3 +822,22 @@ class SdScriptsBackendTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnimaTrainingStateLocationTests(unittest.TestCase):
+    def test_training_states_move_to_outputs_after_the_trainer_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native, outputs = root / "native", root / "outputs"
+            for name in ("vivi-step00000100-state", "vivi-state", "other-step00000100-state"):
+                (native / name).mkdir(parents=True)
+                (native / name / "train_state.json").write_text("{}", encoding="utf-8")
+            (native / "vivi.safetensors").write_bytes(b"x")
+            namespace = {"__name__": "__test__"}
+            exec(script_source("sd_scripts_publish_anima.py"), namespace)
+            with patch("sys.stdout", io.StringIO()):
+                namespace["move_training_states"](native, outputs, "vivi")
+            self.assertEqual(sorted(path.name for path in outputs.iterdir()), ["vivi-state", "vivi-step00000100-state"])
+            self.assertTrue((outputs / "vivi-step00000100-state" / "train_state.json").is_file())
+            # Another run's name and the native weights stay where they are.
+            self.assertEqual(sorted(path.name for path in native.iterdir()), ["other-step00000100-state", "vivi.safetensors"])
