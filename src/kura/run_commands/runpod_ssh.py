@@ -25,6 +25,7 @@ from typing import Any
 
 import yaml
 
+from kura.secrets import declared_secret
 from kura.container_scripts import script_source
 from kura.executors.runpod import project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
@@ -1793,7 +1794,7 @@ def _try_observe_runpod_remote_exit(run_dir: Path, *, ssh_timeout_sec: int = 10)
 
 def _runpod_secret_env_payload(*, remote_notify: bool = False) -> str | None:
     lines: list[str] = []
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    hf_token = declared_secret("HF_TOKEN")
     if hf_token:
         quoted = shlex.quote(hf_token)
         lines.extend([

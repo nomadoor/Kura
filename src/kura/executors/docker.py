@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from kura.secrets import declared_secret
 from kura.install_source import kura_provenance
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication
 from kura.dataset_handoff import (
@@ -391,8 +392,9 @@ def docker_command(
     runtime_env.setdefault("HOME", "/tmp/kura-home")
     runtime_env.setdefault("HF_HOME", f"{workspace_target.rstrip('/')}/cache/huggingface")
     runtime_env.setdefault("HF_HUB_CACHE", f"{runtime_env['HF_HOME'].rstrip('/')}/hub")
-    if os.environ.get("HF_TOKEN"):
-        runtime_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+    hf_token = declared_secret("HF_TOKEN")
+    if hf_token:
+        runtime_env["HF_TOKEN"] = hf_token
     write_roots = validated_write_roots(spec, workspace_path=workspace_target)
     for key, value in sorted(runtime_env.items()):
         if _is_secret(key):
