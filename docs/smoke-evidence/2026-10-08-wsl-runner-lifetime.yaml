@@ -1,0 +1,22 @@
+schema_version: 1
+campaign: does a background process in WSL2 keep running after every Windows-side window closes?
+observed_at: '2026-10-08'
+purpose: M3 S6, the job runner's lifetime on a Windows PC (files-only-state-and-job-runner.md, Consequences)
+host:
+  windows: owner's working PC
+  wsl: 2.7.14 (WSL2), default Ubuntu distribution, no systemd, no .wslconfig overrides
+  docker_desktop: running (left open on purpose; local Docker training needs it)
+procedure:
+  - in WSL, `nohup sh -c 'while :; do date >> ~/wsl-alive.log; sleep 30; done' &`
+  - close every terminal, VS Code window, and the Claude app that uses WSL
+  - wait more than 15 minutes, open WSL again, read the log
+result:
+  first_line: Thu Oct  8 12:35:04 JST 2026
+  last_line: Thu Oct  8 12:54:34 JST 2026
+  lines: 40
+  largest_gap_seconds: 30
+finding: The distribution kept running for about 20 minutes with no Windows-side window open, so a
+  detached `kura runner` survives the session that started it on this setup.
+not_covered:
+  - Docker Desktop stopped (a RunPod-only user may not run it); WSL may then stop the idle distribution.
+  - Windows sleep, hibernation, sign-out, or restart, which end WSL regardless.
