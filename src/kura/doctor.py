@@ -89,7 +89,8 @@ def _docker_managed_resources() -> dict[str, Any]:
     summary: dict[str, Any] = {"containers": len(containers), "stopped_containers": len(stopped), "volumes": len(volumes)}
     if stopped:
         # Docker's own prune touches only stopped containers with Kura's label, never run files.
-        summary["remove_stopped"] = "docker container prune --filter label=io.kura.managed=true"
+        # It changes Docker state, so it is the user's to run, not an agent's.
+        summary["remove_stopped"] = "ask the user to run: docker container prune --filter label=io.kura.managed=true"
     return summary
 
 
