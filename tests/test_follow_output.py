@@ -12,12 +12,13 @@ from kura import runner
 from kura.fsio import file_lock
 
 
-def _follow(run_dir: Path, states: list[dict], *, log: str) -> str:
+def _follow(run_dir: Path, states: list[dict], *, log: str = "", earlier: str = "") -> str:
+    """Follow a run whose log holds `earlier` from a previous attempt and gains `log` while it is followed."""
     root = run_dir.parent.parent
     (run_dir / "logs").mkdir(parents=True)
     (run_dir / "realizations").mkdir()
     (run_dir / "run.yaml").write_text("id: example\ntype: train\nrecipe: {steps: 200}\n", encoding="utf-8")
-    (run_dir / "logs" / "stdout.log").write_text(log, encoding="utf-8")
+    (run_dir / "logs" / "stdout.log").write_text(earlier, encoding="utf-8")
     request = runner.write_launch_request(run_dir, executor="docker")
     runner.claim_request(request, 1)
     (run_dir / "realizations" / "r1.json").write_text(json.dumps({"controlled_by": {"request": request.name, "epoch": 1}}), encoding="utf-8")
@@ -32,6 +33,9 @@ def _follow(run_dir: Path, states: list[dict], *, log: str) -> str:
     def sleep(seconds: float) -> None:
         clock["now"] += 31
         polls["n"] += 1
+        if polls["n"] == 1:
+            with (run_dir / "logs" / "stdout.log").open("a", encoding="utf-8") as handle:
+                handle.write(log)
         show(min(polls["n"], len(states) - 1))
 
     out = io.StringIO()
@@ -64,6 +68,15 @@ class FollowOutputTests(unittest.TestCase):
         self.assertNotIn("line 100\n", text)
         self.assertIn("logs/stdout.log", text)
 
+
+    def test_a_failure_before_any_new_output_does_not_show_an_earlier_attempts_log(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            text = _follow(run_dir, [
+                {"state": "launching"},
+                {"state": "launch_failed", "publication_state": "not-required"},
+            ], earlier="RuntimeError: from the previous attempt\n")
+        self.assertNotIn("previous attempt", text)
 
 if __name__ == "__main__":
     unittest.main()
