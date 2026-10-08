@@ -8,6 +8,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -280,13 +281,13 @@ def docker_daemon_problem() -> str | None:
     Every command that needs the daemon asks this one question, so `kura init`,
     the doctor, and a launch never disagree about it.
     """
+    if not shutil.which("docker"):
+        return "the docker command was not found on PATH"
     try:
         # Outside the workspace: a docker helper that outlives the timeout
         # would otherwise hold the directory open on Windows.
         info = subprocess.run(["docker", "info"], text=True, capture_output=True, check=False,
-                              timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=Path.home())
-    except FileNotFoundError:
-        return "the docker command was not found on PATH"
+                              timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=tempfile.gettempdir())
     except subprocess.TimeoutExpired:
         return f"`docker info` did not answer within {DOCKER_INFO_TIMEOUT_SEC} seconds; Docker may still be starting"
     except OSError as exc:

@@ -466,7 +466,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
                 checks["gpu_available"] = gpu_probe.returncode == 0
                 if gpu_probe.returncode:
                     # What the probe said is the only evidence of why; a later probe may pass.
-                    diagnostics["gpu_probe_error"] = _redact_secret_text((gpu_probe.stderr or gpu_probe.stdout).strip()[-2000:])
+                    diagnostics["gpu_probe_error"] = _redact_secret_text((gpu_probe.stderr or gpu_probe.stdout).strip())[-2000:]
                 runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", image, "/opt/kura-runtime.json"], capture=True)
                 if runtime_result.returncode == 0:
                     try:

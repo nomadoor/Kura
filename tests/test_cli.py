@@ -1067,7 +1067,7 @@ class DoctorDockerTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
                     self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
             finally:
                 os.chdir(previous)
@@ -1092,7 +1092,7 @@ class DoctorDockerTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                with patch("kura.doctor.shutil.which", return_value="/usr/bin/docker"), patch("kura.doctor.docker_daemon_problem", return_value=None), patch("kura.doctor._docker_run", side_effect=fake_docker_run), patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
                     self.assertEqual(cmd_doctor_docker(argparse.Namespace()), 0)
             finally:
                 os.chdir(previous)
