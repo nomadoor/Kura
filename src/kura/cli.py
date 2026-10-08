@@ -1481,14 +1481,25 @@ def main() -> None:
     inspect.add_argument("--json", action="store_true", help="Print machine-readable inspection facts")
     inspect.set_defaults(func=cmd_dataset_inspect)
 
-    run = sub.add_parser("run", help="Create, launch, monitor, and clean up training runs")
+    run = sub.add_parser(
+        "run", help="Create, launch, monitor, and clean up training runs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "A training run, in order:\n"
+            "  kura run new          create runs/<run-id>/run.yaml\n"
+            "  (edit run.yaml)       datasets, model, recipe\n"
+            "  kura run compile      freeze run.yaml into resolved/\n"
+            "  kura run plan         show the user what will run, and get approval\n"
+            "  kura run execute      launch, follow to the end, and collect the outputs"
+        ),
+    )
     run_sub = run.add_subparsers(dest="run_command", required=True)
     new = run_sub.add_parser("new", help="Create a train run")
-    new.add_argument("--experiment", required=True)
-    new.add_argument("--slug", required=True)
-    new.add_argument("--backend", default="ai-toolkit", choices=backend_names())
-    new.add_argument("--executor", default="docker", choices=("docker", "runpod"))
-    new.add_argument("--gpu")
+    new.add_argument("--experiment", required=True, help="Name that groups runs answering one question (e.g. vivi-sdxl); its runs are listed together")
+    new.add_argument("--slug", required=True, help="A few words for this run; the run ID becomes <date>-<time>_<slug>_<4 hex>")
+    new.add_argument("--backend", default="ai-toolkit", choices=backend_names(), help="Trainer (default ai-toolkit); `kura run capabilities <backend>` lists its settings")
+    new.add_argument("--executor", default="docker", choices=("docker", "runpod"), help="Where it trains: local Docker (default) or RunPod")
+    new.add_argument("--gpu", help="RunPod GPU type ID to request (e.g. \"NVIDIA GeForce RTX 4090\"); `kura run plan` shows its stock and price. Only for --executor runpod")
     new.set_defaults(func=cmd_run_new)
     resume = run_sub.add_parser("resume", help="Create a derived run from durable training state")
     resume.add_argument("source_run")
