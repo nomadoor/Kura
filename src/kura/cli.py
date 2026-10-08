@@ -220,10 +220,10 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     run = {
         "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
-        "created": timestamp.isoformat(), "created_by": "human", "parent_run": None, "intent": "",
+        "created": timestamp.isoformat(), "parent_run": None, "intent": "",
         "backend": {"name": args.backend, "version": None, "adapter_version": 1, "config": {}},
         "model": {"base": "", "revision": None},
-        "datasets": [{"id": "", "digest": None, "role": None}],
+        "datasets": [{"id": ""}],
         "recipe": {"steps": None, "seed": None},
         "compute": {
             "executor": args.executor,
@@ -318,7 +318,6 @@ def _create_resume_derived_run(
         {
             "id": run_id,
             "created": timestamp.isoformat(),
-            "created_by": "human",
             "parent_run": source_id,
         }
     )
@@ -424,7 +423,7 @@ def cmd_render_new(args: argparse.Namespace) -> int:
         print("slug must contain letters or numbers", file=sys.stderr); return 1
     timestamp = _now(); run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "created_by": "human", "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
+    run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
     atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")
