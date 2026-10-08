@@ -22,8 +22,7 @@ to report.
 
 **A development session** (only when the user explicitly asks to change Kura
 itself: code, tests, docs, skills, or release work) follows the rest of this
-file. Repository workflow configuration is in `docs/agents/`, and Kura's
-canonical terms in `CONTEXT.md`.
+file. Kura's canonical terms are in `CONTEXT.md`.
 
 ## What Kura is
 
@@ -61,11 +60,13 @@ every executor, backend, and command calls it. Before writing a condition, look
 for the place that already decides it. A second copy always drifts, because a
 fix lands in only one of them.
 
-**3. Design before code for anything that crosses a boundary.** A change that
-touches more than one executor, backend, or record format starts from a short
-written design: what decides it, where, and what existing behavior changes. New
-owner decisions about behavior, naming, information architecture, or design
-rules go into an ADR first (criteria in `docs/adr/README.md`).
+**3. Design before code.** A decision is any condition that chooses behavior
+from an input. Any change to what Kura does, a one-line fix inside an owner
+function included, starts from a short written design the maintainer approves
+(see "How a change is made"). Only a change that leaves behavior the same needs
+none: wording, typos, comments, pins, generated mirrors. New maintainer
+decisions about behavior, naming, information architecture, or design rules go
+into an ADR first (criteria in `docs/adr/README.md`).
 
 **4. Tests first, and across executors.** A behavior change or bug fix starts
 with a test that fails for the right reason. When the behavior exists on Docker
@@ -122,6 +123,41 @@ from the shipped docs alone, and reports where it stumbled.
 - Make Kura refuse something a user may reasonably decide, unless it is an
   irreversible accident.
 
+## How a change is made
+
+The unit of work is one design: one decision, or a set that must change
+together. Each design gets one branch and one pull request. This section
+replaces any delegation given earlier in a conversation or in memory.
+
+1. **Name the decisions.** Say which decisions the change touches and find
+   every place that makes them today (search the code, not your memory).
+2. **Write the design.** Five to fifteen lines: what decides it, the owner
+   function, the copies that go away, the behavior that changes, and the tests
+   that show it. If it needs more, split it, or it needs an ADR. Show it to the
+   maintainer and wait. Until it is approved, do not implement it; write other
+   designs or stop, and never take silence for approval. An approved design is
+   permission to commit, push, and open its pull request. A contributor posts
+   the design as an issue or as the first section of a draft pull request and
+   starts once the maintainer approves it there.
+3. **Implement on its branch.** Tests first, across executors (principle 4).
+   When review or testing finds another copy of the same decision, add it to
+   the written design and fix it on this branch, not in a follow-up pull
+   request; if that changes behavior the maintainer did not approve, show the
+   updated design again before pushing. A different decision gets its own
+   design.
+4. **Review before the pull request.** Run the release gate. For a change to
+   behavior or records, also give a reviewer with none of your context the
+   design and the whole branch diff (principle 6), and fix what it finds on
+   the same branch.
+5. **Open one pull request**, ready for review. Its body states the design,
+   `Owner:` (the function), `Copies removed:` (or none), `Behavior changed:`,
+   validation, and risks. CodeRabbit reviews it there. The maintainer merges.
+
+A change with no design (step 2's exceptions) still goes on a branch and into a
+pull request; pushing it needs the maintainer's go-ahead. Findings from an
+audit or an acceptance test are grouped by the decision they touch before
+anything is fixed; each group follows the steps above.
+
 ## Working in this checkout
 
 ```sh
@@ -132,7 +168,7 @@ git log --oneline -5
 - Use `uv` for Python commands. Identify the relevant tests before editing.
 - Stage the paths you changed by name. Never `git add -A`, `git add .`,
   `git stash`, `git reset --hard`, or `git checkout .`: they sweep up or discard
-  the owner's uncommitted work, such as a local `.claude/settings.json`.
+  the maintainer's uncommitted work, such as a local `.claude/settings.json`.
 - Answer a question before editing anything. When a request conflicts with a
   rule here, say so and confirm before overriding it.
 - Never run these unless the user asks for that run: real smokes, model
@@ -151,11 +187,12 @@ then run `uv run python scripts/sync_agent_skills.py --write`.
 
 Skills for development: `kura-core` for run records, paths, and surfaces;
 `training-backends` for adapter work; `backend-upgrade-audit` for pinned trainer
-updates; `monitor-tui` for the monitor; `release-check` before a push or
-handoff. Add a usage skill only when the change touches its domain.
+updates; `monitor-tui` for the monitor; `release-check` before a pull request or
+a milestone. Add a usage skill only when the change touches its domain.
+Repository language and branch names are in `docs/agents/workflow.md`.
 Workspace configuration keys are in `docs/workspace-config.md`.
 
-Validation: focused tests first, then before a push
+Validation: focused tests first, then before a pull request
 
 ```sh
 uv run python scripts/check_release.py
