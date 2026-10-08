@@ -29,7 +29,8 @@ class RunTemplateTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertNotIn("created_by", run)  # nothing reads it, and an agent is not a human
-        self.assertEqual(run["datasets"], [{"id": ""}])  # compile fills the digest; role is optional
+        self.assertEqual(run["datasets"], [{"id": ""}])
+        self.assertNotIn("version", run["backend"])  # nothing reads it  # compile fills the digest; role is optional
 
 
 if __name__ == "__main__":

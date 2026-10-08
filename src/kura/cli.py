@@ -221,7 +221,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     run = {
         "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
         "created": timestamp.isoformat(), "parent_run": None, "intent": "",
-        "backend": {"name": args.backend, "version": None, "adapter_version": 1, "config": {}},
+        "backend": {"name": args.backend, "adapter_version": 1, "config": {}},
         "model": {"base": "", "revision": None},
         "datasets": [{"id": ""}],
         "recipe": {"steps": None, "seed": None},
