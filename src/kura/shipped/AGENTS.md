@@ -8,6 +8,22 @@ changes, so do not edit it; put your own material in `knowledge/`.
 These rules apply to every task. Rules for one kind of task live in its skill;
 read the skill named at the end of this file before that task.
 
+## A first training run
+
+1. Check the machine: `kura doctor docker` for a local run, `kura doctor runpod`
+   for RunPod.
+2. Prepare the dataset (`dataset-prep`): `kura dataset draft`, then
+   `kura dataset validate` and `kura dataset inspect`.
+3. `kura run new --experiment <name> --slug <words>`, then fill in
+   `runs/<run-id>/run.yaml` (`training-parameter-planning`;
+   `kura run capabilities <backend>` lists what `backend.config` accepts).
+4. `kura run compile <run-id>`, then `kura run plan <run-id>`: show the plan to
+   the user and get approval.
+5. `kura run execute <run-id>`, stay with it until it returns, and report from
+   `kura run status <run-id>` and the run's outputs.
+
+The rules below say why each step is there.
+
 ## Working here
 
 - Work through the `kura` CLI and the files in this workspace.
