@@ -22,6 +22,24 @@ that command reads.
 - Keep role/digest visible for paired/control datasets.
 - Do not add repeats/weights unless explicitly intended.
 
+## Starting from a folder of images
+
+1. Put the images in `datasets/<id>/` (or `datasets/<id>/images/`), each with
+   a caption file of the same name ending in `.txt` or `.caption`.
+2. Write `datasets/<id>/dataset.yaml`:
+
+   ```yaml
+   id: <id>                 # must match the directory name
+   items_schema_version: 2
+   trigger_word: <word>     # optional; inspect counts it in the captions
+   ```
+
+3. `kura dataset draft <id> --write` writes `dataset.v2.candidate.yaml` and
+   `items.v2.candidate.jsonl` beside them and never replaces an authored file.
+   Check that each row pairs the right image and caption, then rename them to
+   `dataset.yaml` and `items.jsonl`.
+4. `kura dataset validate <id>`, then `kura dataset inspect <id>`.
+
 ## Caption edits
 
 - Make caption transformations deterministic and reviewable.
