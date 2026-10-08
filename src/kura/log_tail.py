@@ -30,6 +30,11 @@ def _count_lines(path: Path, end: int) -> int:
     return count + (0 if last == b"\n" else 1)
 
 
+def line_count(path: Path) -> int:
+    """How many lines the file holds now (an unfinished last line counts)."""
+    return _count_lines(path, path.stat().st_size)
+
+
 def _fit(text: str, budget: int) -> str:
     """The end of `text` within `budget` UTF-8 bytes, cut at a character boundary."""
     data = text.encode("utf-8")

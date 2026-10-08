@@ -1021,19 +1021,30 @@ def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, au
 EXIT_FOR_STATE = EXIT_CODE_FOR_STATE
 
 
+# A followed run's progress line is printed at most this often, and when its state changes.
+PROGRESS_EVERY_SEC = 30
+# How much of the log a run that did not complete shows when following ends.
+FAILED_LOG_LINES = 40
+
+
 def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2.0, sleep: Callable[[float], None] = time.sleep,
-           out: Any = None, ensure: Callable[..., bool] = ensure_runner) -> int:
+           out: Any = None, ensure: Callable[..., bool] = ensure_runner, clock: Callable[[], float] = time.monotonic) -> int:
     """Follow a runner-controlled run read-only until it is finished; return its exit code.
 
     Finished means the run's status is finished and no follower still holds the
-    run, so the post-run steps of the same reconcile are done too.
+    run, so the post-run steps of the same reconcile are done too. The trainer's
+    own output stays in logs/stdout.log; following prints a progress line, and
+    the end of the log when the run did not complete.
     """
     out = out or sys.stderr
     restarts = 0
     queued_said = False
     quiet_said = False
-    log_path = run_dir / "logs" / "stdout.log"
-    offset = log_path.stat().st_size if log_path.exists() else 0
+    said_state: Any = None
+    said_line: str | None = None
+    said_at = float("-inf")
+    # The log keeps earlier attempts; only what this attempt adds is shown if it fails.
+    log_start_line = _log_line_count(run_dir / "logs" / "stdout.log")
     # The follower's own messages (capacity wait, transfer, download, stop) are part of what the user sees.
     runner_log = run_dir / "logs" / "runner.log"
     runner_offset = runner_log.stat().st_size if runner_log.exists() else 0
@@ -1043,7 +1054,6 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
         if outcome is not None:
             print(f"the runner did not launch this run: {outcome.get('error') or outcome.get('kind')}", file=out)
             return 1
-        offset = _stream_log(log_path, offset)
         runner_offset = _stream_log(runner_log, runner_offset)
         if not queued_said and request in pending_requests(run_dir) and runner_alive(workspace) and local_slots_full(workspace):
             queued_said = True
@@ -1054,12 +1064,22 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
         if quiet and not quiet_said:
             print(quiet, file=out)
         quiet_said = quiet is not None
+        if status.get("state") != said_state or clock() - said_at >= PROGRESS_EVERY_SEC:
+            from kura.monitor import collect_run_summary, progress_line
+
+            line = progress_line(collect_run_summary(workspace, run_dir.name, loss_tail=1))
+            if line != said_line:
+                print(line, file=out)
+                said_line = line
+            said_state, said_at = status.get("state"), clock()
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
         if launched and run_finished(status) and (not _held(run_dir) or (held_for_review and status.get("downloaded_run"))):
             if _held(run_dir):
                 print("outputs are collected; the Pod is held for review, then the runner deletes it", file=out)
             state = str(status.get("state"))
+            if state != "completed":
+                _print_log_end(run_dir, out, after_line=log_start_line)
             return EXIT_FOR_STATE.get(state, 2)
         if not runner_alive(workspace) and (not launched or not run_finished(status)):
             if stopped_on_purpose(workspace):
@@ -1073,6 +1093,30 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             if ensure(workspace):
                 await_runner(workspace, sleep=sleep)
         sleep(poll_sec)
+
+
+def _log_line_count(path: Path) -> int:
+    from kura.log_tail import line_count
+
+    try:
+        return line_count(path)
+    except OSError:
+        return 0
+
+
+def _print_log_end(run_dir: Path, out: Any, *, after_line: int) -> None:
+    from kura.log_tail import tail
+
+    log_path = run_dir / "logs" / "stdout.log"
+    try:
+        lines, first, total, _ = tail(log_path, max_lines=FAILED_LOG_LINES)
+    except OSError:
+        return
+    skip = max(0, after_line + 1 - first)
+    lines, first = lines[skip:], first + skip
+    if lines:
+        print(f"last lines of runs/{run_dir.name}/logs/stdout.log ({first}-{total} of {total}):", file=out)
+        print("\n".join(lines), file=out)
 
 
 def await_claim(workspace: Path, run_dir: Path, request: Path, *, timeout_sec: float = 30.0, poll_sec: float = 0.5,
