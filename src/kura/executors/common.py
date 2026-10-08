@@ -12,9 +12,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import yaml
+
 from kura.secrets import is_secret_name
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import record, without_record_fields
+from kura.run_envelope import common_recipe
 from kura.training_artifacts import is_training_state_output
 
 
@@ -682,7 +685,54 @@ def _record_progress(run_dir: Path, status: dict[str, Any]) -> None:
 
 
 def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
+    _apply_stdout_progress(run_dir, status, state=state)
+    if state == "completed" and status.get("publication_state") != "completed":
+        outputs_dir = run_dir / "outputs"
+        if outputs_dir.is_dir():
+            outputs = [
+                str(path.relative_to(run_dir))
+                for path in sorted(outputs_dir.rglob("*"))
+                if path.is_file()
+                and not path.is_symlink()
+                and not is_training_state_output(path.relative_to(outputs_dir))
+            ]
+            if outputs:
+                status["outputs"] = outputs
+
+
+def _configured_final_step(run_dir: Path) -> tuple[int | None, int | None]:
+    """The step a finished run ends at by its frozen recipe (the Resume target, else the recipe's
+    steps) and, for a Resume, the source step it started from."""
+    try:
+        run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None, None
+    if not isinstance(run, dict):
+        return None, None
+    continuation = run.get("continuation") if isinstance(run.get("continuation"), dict) else {}
+    resume = continuation.get("mode") == "resume"
+    target = continuation.get("target_step") if resume else None
+    source = continuation.get("source") if resume and isinstance(continuation.get("source"), dict) else {}
+    source_step = source.get("observed_step") if isinstance(source.get("observed_step"), int) else None
+    if not isinstance(target, int):
+        try:
+            target = common_recipe(run).get("steps")
+        except ValueError:
+            return None, None
+    valid = isinstance(target, int) and not isinstance(target, bool) and target > 0
+    return (target if valid else None), source_step
+
+
+def _apply_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
+    """Set the step counts in status, as every executor does: from the trainer's log, and for a
+    completed run whose log never said, from its frozen recipe."""
     step, total, seconds_per_iter = _stdout_progress(run_dir)
+    if state == "completed" and total is None:
+        total, configured_source = _configured_final_step(run_dir)
+        step = total if step is None else step
+        if isinstance(total, int) and isinstance(configured_source, int) and not (run_dir / "resolved" / "training-state-source.lock.json").is_file():
+            # A Resume whose source lock is absent still reports the steps this run added.
+            status["current_run_step"] = status["current_run_total_steps"] = total - configured_source
     resume_lock: dict[str, Any] = {}
     lock_path = run_dir / "resolved" / "training-state-source.lock.json"
     if lock_path.is_file():
@@ -726,15 +776,3 @@ def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state
     if seconds_per_iter is not None:
         status["seconds_per_iter"] = seconds_per_iter
     _record_progress(run_dir, status)
-    if state == "completed" and status.get("publication_state") != "completed":
-        outputs_dir = run_dir / "outputs"
-        if outputs_dir.is_dir():
-            outputs = [
-                str(path.relative_to(run_dir))
-                for path in sorted(outputs_dir.rglob("*"))
-                if path.is_file()
-                and not path.is_symlink()
-                and not is_training_state_output(path.relative_to(outputs_dir))
-            ]
-            if outputs:
-                status["outputs"] = outputs

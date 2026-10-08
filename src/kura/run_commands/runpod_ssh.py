@@ -40,7 +40,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events
+from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state
@@ -620,18 +620,6 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 for path in sorted(recovery_root.rglob("*"))
                 if path.is_file()
             ] if recovery_root.is_dir() else []
-            steps: int | None = None
-            if exit_code == 0:
-                continuation = manifest.get("continuation") if isinstance(manifest.get("continuation"), dict) else {}
-                configured_steps = continuation.get("target_step") if continuation.get("mode") == "resume" else None
-                if not isinstance(configured_steps, int):
-                    try:
-                        configured_steps = common_recipe(manifest).get("steps")
-                    except ValueError:
-                        configured_steps = None
-                if isinstance(configured_steps, int) and configured_steps > 0:
-                    steps = configured_steps
-
             realization_ref = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("last_realization")
             input_postflight = (
                 project_runpod_dataset_handoff(run_dir, downloaded_run, Path(realization_ref).stem)
@@ -674,15 +662,8 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                         }
                         for item in published_states
                     ]
-                if steps is not None:
-                    status["last_step"] = steps
-                    status["total_steps"] = steps
-                    if continuation.get("mode") == "resume" and isinstance(continuation.get("source"), dict):
-                        source_step = continuation["source"].get("observed_step")
-                        if isinstance(source_step, int):
-                            status["current_run_step"] = steps - source_step
-                            status["current_run_total_steps"] = steps - source_step
-                    _record_progress(run_dir, status)
+                # The same step rule as Docker: the trainer's log, else the frozen recipe.
+                _apply_stdout_progress(run_dir, status, state="completed" if exit_code == 0 else "failed")
 
             _mutate_run_status(run_dir, mutate)
             return True, recovery_artifacts
