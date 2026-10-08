@@ -43,7 +43,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
-from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state
+from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, MISSING_STATE_PUBLICATION_ERROR, MISSING_STATE_SYNC_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -455,6 +455,19 @@ def cmd_run_upload(args: argparse.Namespace) -> int:
         return 1
 
 
+# `kura run download` collected the snapshot, but the run needs a person (its outputs or its
+# training state could not count as published). Collecting again cannot change that.
+DOWNLOAD_NEEDS_PERSON = 3
+
+
+def _collected_exit_code(run_dir: Path) -> int:
+    try:
+        state = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("state")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return 0
+    return DOWNLOAD_NEEDS_PERSON if state == "recovery_required" else 0
+
+
 def download_run(run_id: str, *, force: bool = False) -> int:
     try:
         run_dir = _run_path(run_id)
@@ -563,16 +576,15 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 except ValueError:
                     published_states = []
             state_sync_error: str | None = None
-            if state_capture_required and not published_states:
-                if exit_code == 0:
-                    # A completed trainer must leave a durable state; keep the Pod.
-                    raise ValueError(
-                        "downloaded run snapshot has no valid training-state artifact; "
-                        "keep the Pod until recovery files are inspected or downloaded"
-                    )
-                # A failed trainer may never have written state. The snapshot
-                # already holds everything the Pod had, so holding the Pod
-                # would only bill; record the gap as Docker does.
+            # Reasons a completed run's outputs cannot count as published. The snapshot holds
+            # everything the Pod had, so collecting again cannot change them: the run is
+            # recorded as needing a person, as on Docker, and the Pod is not kept for it.
+            blocked: list[str] = []
+            if state_capture_required and not published_states and exit_code == 0:
+                state_sync_error = MISSING_STATE_SYNC_ERROR
+                blocked.append(MISSING_STATE_PUBLICATION_ERROR)
+            elif state_capture_required and not published_states:
+                # A failed trainer may never have written state; record the gap as Docker does.
                 state_sync_error = (
                     "remote run failed and its downloaded snapshot has no valid training-state artifact; "
                     "inspect the backend state output before relying on Resume"
@@ -596,24 +608,8 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                             run_dir, realization_id, contract, candidate_paths=outputs
                         )
                 except (OSError, ValueError) as exc:
-                    error = _safe_error(exc)
-                    attempt = record_publication_failure(run_dir, realization_id, error) if realization_id else None
-
-                    def record_blocked(current: dict[str, Any]) -> None:
-                        current.update({
-                            "state": "recovery_required", "execution_state": "completed",
-                            "exit_code": exit_code, "ended": remote_exit.get("timestamp"),
-                            "publication_state": "blocked", "publication_error": error,
-                            "recovery_required": True,
-                            "remote_state": "completed", "remote_exit_code": exit_code,
-                            "remote_exit": str(exits[-1].relative_to(run_dir)),
-                            "remote_ended": remote_exit.get("timestamp"),
-                        })
-                        if attempt:
-                            current["last_publication_attempt"] = attempt
-
-                    _mutate_run_status(run_dir, record_blocked)
-                    raise
+                    blocked.insert(0, _safe_error(exc))
+            attempt = record_publication_failure(run_dir, realization_id, "; ".join(blocked)) if blocked and realization_id else None
             recovery_root = downloaded_run / "recovery"
             recovery_artifacts = [
                 str(path.relative_to(run_dir))
@@ -664,6 +660,11 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     ]
                 # The same step rule as Docker: the trainer's log, else the frozen recipe.
                 _apply_stdout_progress(run_dir, status, state="completed" if exit_code == 0 else "failed")
+                if blocked:
+                    status.update({"state": "recovery_required", "publication_state": "blocked",
+                                   "publication_error": "; ".join(blocked), "recovery_required": True})
+                    if attempt:
+                        status["last_publication_attempt"] = attempt
 
             _mutate_run_status(run_dir, mutate)
             return True, recovery_artifacts
@@ -673,7 +674,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             if materialized:
                 record_recovery_download(recovery_artifacts)
                 print(json.dumps(json.loads((run_dir / "status.json").read_text(encoding="utf-8")), indent=2))
-                return 0
+                return _collected_exit_code(run_dir)
             raise ValueError("downloaded run snapshot is missing remote-exit; use --force to retry or inspect the Pod before stopping it")
         if not shutil.which("runpodctl"):
             raise ValueError("runpodctl is not installed locally; install it before downloading")
@@ -789,7 +790,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
         )
         record_recovery_download(recovery_artifacts)
         _mark_runpod_outputs_collected(details, run_id)
-        return 0
+        return _collected_exit_code(run_dir)
     except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print(f"cannot download run outputs: {_safe_error(exc)}", file=sys.stderr)
         if collecting_on is not None:
@@ -2405,8 +2406,8 @@ def follow_running_runpod_job(run_dir: Path, *, ssh_timeout_sec: int, job_timeou
 def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
     for _ in range(attempts):
         code = download_run(run_id, force=True)
-        if code == 0:
-            return 0
+        if code in (0, DOWNLOAD_NEEDS_PERSON):
+            return code
         sleep_checking_stop(interval_sec)
     return 1
 

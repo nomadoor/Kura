@@ -1860,7 +1860,9 @@ class ResumeRunTests(unittest.TestCase):
             for item in artifact["files"]:
                 self.assertTrue(reusable[f"{state_root}/{item['path']}"].samefile(payload / item["path"]))
 
-    def test_runpod_download_refuses_terminal_snapshot_without_required_state(self) -> None:
+    def test_runpod_download_records_a_completed_run_without_required_state_as_docker_does(self) -> None:
+        # The snapshot holds everything the Pod had, so collecting again cannot find the state:
+        # the run is recorded as needing a person at once, and the Pod is not kept for it.
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1873,6 +1875,7 @@ class ResumeRunTests(unittest.TestCase):
                 json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": 0}), encoding="utf-8"
             )
             (run_dir / "resolved").mkdir(parents=True)
+            (run_dir / "realizations").mkdir()
             manifest = {
                 "id": "source",
                 "type": "train",
@@ -1881,14 +1884,21 @@ class ResumeRunTests(unittest.TestCase):
                 "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
-            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+            (run_dir / "realizations" / "launch.json").write_text(json.dumps({"id": "launch", "executor": "runpod"}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1", "last_realization": "realizations/launch.json"}), encoding="utf-8")
             os.chdir(root)
             try:
-                self.assertEqual(_download_run_unlocked("source"), 1)
+                with patch("sys.stderr", io.StringIO()):
+                    self.assertEqual(_download_run_unlocked("source"), 3)  # collected; needs a person
             finally:
                 os.chdir(previous)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual(status["state"], "running")
+            # The same fields test_completed_local_process_records_missing_required_training_state asserts for Docker.
+            self.assertEqual(status["state"], "recovery_required")
+            self.assertEqual(status["execution_state"], "completed")
+            self.assertEqual(status["publication_state"], "blocked")
+            self.assertIn("no valid training-state artifact", status["training_state_sync_error"])
+            self.assertTrue(list((run_dir / "realizations").glob("launch.publication-attempt-*.json")))
 
     def test_runpod_download_never_holds_a_run_whose_backend_saves_no_usable_state(self) -> None:
         # sd-scripts Anima declares training state unsupported: Docker never required it, and RunPod must not either.

@@ -594,6 +594,14 @@ def checkpoint_step(name: str) -> int | None:
     return int(step_form or underscore_form)
 
 
+# What every executor records when a finished run that must leave training state left none.
+MISSING_STATE_PUBLICATION_ERROR = "required training-state artifact is not published"
+MISSING_STATE_SYNC_ERROR = (
+    "the run's terminal snapshot has no valid training-state artifact; "
+    "inspect the backend state output before relying on Resume"
+)
+
+
 def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None, *, frozen: bool = False) -> bool:
     """The one rule for whether Kura manages a run's training state.
 

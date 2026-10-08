@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import yaml
 
+from kura.run_commands.runpod_ssh import DOWNLOAD_NEEDS_PERSON
 from kura.backends.ai_toolkit import command_ai_toolkit
 from kura.executors.docker import reconcile_docker
 from kura.executors import docker as docker_executor
@@ -505,7 +506,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
                 code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
             finally:
                 os.chdir(previous)
-            self.assertEqual(code, 1)
+            self.assertEqual(code, DOWNLOAD_NEEDS_PERSON)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "recovery_required")
             self.assertEqual(status["execution_state"], "completed")
@@ -632,7 +633,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
                 code = cmd_run_download(argparse.Namespace(run_id="example", force=False))
             finally:
                 os.chdir(previous)
-            self.assertEqual(code, 1)
+            self.assertEqual(code, DOWNLOAD_NEEDS_PERSON)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "recovery_required")
             self.assertEqual(status["execution_state"], "completed")
