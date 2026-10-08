@@ -33,18 +33,17 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
     records = _load_items_jsonl(dataset_path / "items.jsonl")
     images = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_IMAGE_SUFFIXES]
     videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_VIDEO_SUFFIXES]
-    captions = [_caption_text(item) for item in records]
     trigger_word = metadata.get("trigger_word") if isinstance(metadata.get("trigger_word"), str) else None
     from kura.dataset_observations import observe_dataset
 
     observation = observe_dataset(dataset_path)
     manifest_v2 = metadata.get("items_schema_version") == 2
     observed_samples = observation.get("samples") if isinstance(observation.get("samples"), list) else []
-    if manifest_v2:
-        captions = [
-            sample.get("caption") if isinstance(sample.get("caption"), str) else ""
-            for sample in observed_samples if isinstance(sample, dict)
-        ]
+    # The observation owns what each sample's caption is, for every dataset layout.
+    captions = [
+        sample.get("caption") if isinstance(sample.get("caption"), str) else ""
+        for sample in observed_samples if isinstance(sample, dict)
+    ]
 
     return {
         "dataset": {
@@ -94,7 +93,6 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
     lines.append(f"  resolution.max: {_format_pair(resolution.get('max'))}")
     captions = report.get("captions") if isinstance(report.get("captions"), dict) else {}
     lines.append(f"  captions.total: {captions.get('total')}")
-    lines.append(f"  captions.empty: {captions.get('empty')}")
     lines.append(f"  captions.duplicate_exact_rate: {captions.get('duplicate_exact_rate')}")
     top = captions.get("first_tokens_top3")
     if isinstance(top, list):
@@ -202,11 +200,6 @@ def _v2_target_count(samples: list[Any], suffixes: frozenset[str]) -> int:
     )
 
 
-def _caption_text(item: dict[str, Any]) -> str:
-    value = item.get("caption")
-    return value if isinstance(value, str) else ""
-
-
 def _caption_summary(captions: list[str], *, trigger_word: str | None) -> dict[str, Any]:
     stripped = [caption.strip() for caption in captions]
     non_empty = [caption for caption in stripped if caption]
@@ -230,7 +223,6 @@ def _caption_summary(captions: list[str], *, trigger_word: str | None) -> dict[s
         trigger = {"declared": False, "value": None}
     return {
         "total": total,
-        "empty": sum(1 for caption in stripped if not caption),
         "duplicate_exact_count": duplicate_exact_count,
         "duplicate_exact_rate": round(duplicate_exact_count / len(non_empty), 6) if non_empty else 0,
         "first_tokens_top3": top,
