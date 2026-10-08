@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from kura.training_artifacts import checkpoint_step
 from kura.executors.common import format_launch_phases, format_seconds, launch_phases
 from kura.run_envelope import run_executor
 
@@ -33,7 +34,6 @@ _FACT_ORDER = (
     "gpu",
     "datasets",
 )
-_STEP_RE = re.compile(r"(?:^|[-_])step0*([0-9]+)(?:[-_.]|$)", re.IGNORECASE)
 
 
 def _load_mapping(path: Path) -> dict[str, Any] | None:
@@ -266,8 +266,8 @@ def _output_lines(outputs: Any) -> list[str]:
     if not paths:
         return ["produced   0 outputs"]
     checkpoints = [path for path in paths if path.suffix.lower() == ".safetensors"]
-    steps = sorted({int(match.group(1)) for path in checkpoints if (match := _STEP_RE.search(path.name))})
-    final = [path.name for path in checkpoints if _STEP_RE.search(path.name) is None]
+    steps = sorted({step for path in checkpoints if (step := checkpoint_step(path.name)) is not None})
+    final = [path.name for path in checkpoints if checkpoint_step(path.name) is None]
     if checkpoints:
         detail = f"{len(checkpoints)} checkpoint{'s' if len(checkpoints) != 1 else ''}"
         if steps:
