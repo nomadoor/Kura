@@ -1073,9 +1073,10 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             managed = payload["docker_storage"]["kura_managed"]
-            self.assertEqual(managed["containers"][0]["Names"], "kura-old")
-            self.assertEqual(managed["stopped_containers"][0]["ID"], "abc")
-            self.assertEqual(managed["volumes"][0]["Name"], "kura-cache")
+            # Counts, and a command that removes only Kura's stopped containers.
+            self.assertEqual((managed["containers"], managed["stopped_containers"], managed["volumes"]), (1, 1, 1))
+            # Not `kura run prune`: with --yes it also removes old runs.
+            self.assertEqual(managed["remove_stopped"], "docker container prune --filter label=io.kura.managed=true")
 
     def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1406,6 +1407,27 @@ class WorkspaceDiscoveryTests(unittest.TestCase):
                 self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
             finally:
                 os.chdir(previous)
+
+    def test_run_status_names_the_realization_instead_of_printing_its_launch_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            launch = {"id": "r1", "docker_command": ["--flag"] * 5000, "backend_command": {"argv": ["x"] * 5000}}
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps(launch), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                    self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+            finally:
+                os.chdir(previous)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["last_realization"], "realizations/r1.json")
+            self.assertNotIn("latest_realization", payload)
+            self.assertLess(len(stdout.getvalue()), 4000)
 
     def test_doctor_workspace_reports_resolved_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -5862,7 +5884,7 @@ class DockerLifecycleTests(unittest.TestCase):
                         pass
             phases = launch_phases(run_dir, "r1")
         self.assertEqual([item["phase"] for item in phases], ["container_started", "container_exited"])
-        self.assertEqual(format_launch_phases(phases), "job 3m 40s")
+        self.assertEqual(format_launch_phases(phases), "model download + training 3m 40s")
 
     def test_reconcile_docker_merges_observation_into_latest_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6208,7 +6230,7 @@ class LaunchPhaseTests(unittest.TestCase):
             ]:
                 record_launch_phase(run_dir, "r1", phase, at=at)
             summary = format_launch_phases(launch_phases(run_dir, "r1"))
-        self.assertEqual(summary, "startup 4m 34s · upload 22s · job 1m 40s · download 40s")
+        self.assertEqual(summary, "startup 4m 34s · upload 22s · model download + training 1m 40s · download 40s")
 
     def test_launch_phase_write_failure_only_warns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6301,7 +6323,7 @@ class LaunchPhaseTests(unittest.TestCase):
             record_launch_phase(run_dir, "r1", "container_started", at="2026-10-01T03:00:15+00:00")
             record_launch_phase(run_dir, "r1", "container_exited", at="2026-10-01T03:01:00+00:00")
             text = format_run_completion(root, run_dir, {"state": "completed", "exit_code": 0, "last_realization": "realizations/r1.json"})
-        self.assertIn("time       startup 15s · job 45s", text)
+        self.assertIn("time       startup 15s · model download + training 45s", text)
 
     def test_docker_timestamps_normalize_to_parseable_values(self) -> None:
         self.assertEqual(_docker_timestamp("2026-10-01T03:45:40.123456789Z"), "2026-10-01T03:45:40.123456+00:00")
