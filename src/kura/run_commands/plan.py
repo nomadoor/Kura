@@ -41,7 +41,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state
+from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state, training_state_managed
 
 
 NOT_SET = "(not set)"
@@ -1127,9 +1127,13 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "keep_generations": state_policy["keep_generations"],
         "cadence_steps": state_cadence,
         "capability": state_capability,
+        # The answer that decides what happens: the trainer saves state, and a finished run must leave it.
+        "saved": training_state_managed(run, frozen=source == manifest),
         "warning": (
             "disabled: crash or Pod-loss Resume is unavailable"
             if not state_policy["enabled"]
+            else "not saved: Kura cannot resume this architecture and mode, so the trainer saves no state"
+            if state_capability == "unsupported"
             else "single generation: no fallback if the newest state is corrupt"
             if state_policy["keep_generations"] == 1
             else None
@@ -1335,6 +1339,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         _append_kv(lines, "keep", training_state.get("keep_generations"))
         _append_kv(lines, "cadence", training_state.get("cadence_steps"))
         _append_kv(lines, "capability", training_state.get("capability"))
+        _append_kv(lines, "saved", "yes" if training_state.get("saved") else "no")
         if training_state.get("warning"):
             _append_kv(lines, "warning", training_state.get("warning"))
 

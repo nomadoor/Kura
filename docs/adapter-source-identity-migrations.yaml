@@ -49,11 +49,142 @@ records:
     previous:
       kind: source-tree-sha256
       scope: executor-v1
+      value: 52f0aa920b8fc45536440e981dcf85b3ed1fdd15c0ffc33d7b0e044b8ea3f1d1
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 7a8efdfbf8b276c6e2fe379c0d46d7251374b05e99a94c23b0a6333c712f06ad
+  - id: runpod-executor-shared-training-state-rule-2026-10-08
+    executor: runpod
+    reason: >-
+      RunPod collection and the mid-run state sync decide whether a run must leave training state with
+      the same shared rule as Docker (training_state_capture_required), instead of a RunPod copy that
+      ignored a backend's unsupported capability and a manifest compiled before managed state. The Anima
+      native-output state lookup added the same day is removed again. Launch, transfer, and Pod stops are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
       value: 5052251b4330b17926cb831ab275f36c095efa0aedb31cab57310024147311b2
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 3d5a8334c1138b8ae342c15a7bccf22214361535ee8b8279296a2c964541b4dd
+      value: 52f0aa920b8fc45536440e981dcf85b3ed1fdd15c0ffc33d7b0e044b8ea3f1d1
+  - id: shared-training-state-rule-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      The shared training_state_managed rule now decides whether the AI-Toolkit command wraps the trainer
+      in the state runner (the same condition as before: policy enabled and capability not
+      unsupported); commands and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 92ee169eafb37ef312bf5557577aa620259a5f5533b93fc3532862dbd482f1b8
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 80186f2692a830b46a6484bfe41d81b76d02f6820793557d11aee988b06ad250
+  - id: shared-training-state-rule-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      The shared training_state_managed rule now decides whether Musubi adds its state flags; Musubi
+      declares no unsupported capability, so every command is unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: b40e2d68ff60173fad0b70d39068e0584b889e98d31877c0f9be2d8d8f5acd7d
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 19131d7149fd304e323cfdc64bdc09069784a58ceae446bf0189fdb142ea592d
+  - id: shared-training-state-rule-sd-scripts-2026-10-08
+    backend: sd-scripts
+    reason: >-
+      The shared training_state_managed rule now decides the state flags: Anima LoRA and LLLite, which
+      Kura declares it cannot resume, no longer save trainer state that nothing could use; their
+      training, published adapters, and every SD 1.5, SDXL, and FLUX.1 command are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 7d8293f130fb821c90a18c7e6f50c8119c7bd1a0ce9e103aaef8ee5469276f3f
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4489b587b067f4b85015273abc19c6ad4165357fbd040dbf5536d44fb234a834
   - id: runpod-executor-snapshot-accepted-record-2026-10-08
     executor: runpod
     reason: An accepted terminal snapshot is recorded in realizations/<rid>.snapshot-accepted.json before

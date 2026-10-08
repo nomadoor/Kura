@@ -23,6 +23,7 @@ from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_fl
 from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
+from kura.training_artifacts import training_state_managed
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
 
@@ -139,7 +140,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         target_index = train.index("--max_train_steps") + 1
         train[target_index] = str(additional_steps)
     policy = training_state_policy(run)
-    if policy["enabled"]:
+    if training_state_managed(run, training_state_contract_musubi(run)):
         epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
         configured_epoch_flags = sorted(arg.split("=", 1)[0] for arg in _extra_args(override) if arg.split("=", 1)[0] in epoch_flags)
         if configured_epoch_flags:

@@ -579,13 +579,34 @@ def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:
     return adapter.training_state(run)
 
 
+def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None, *, frozen: bool = False) -> bool:
+    """The one rule for whether Kura manages a run's training state.
+
+    The run asks for it (`recovery.training_state.enabled`), Kura builds its
+    command (a custom `backend.config.command` has no state contract), and the
+    backend can restore state for this architecture and mode. Backends save
+    state only then, and every executor requires a completed run to leave state
+    only then. A backend building its own command passes its contract; others
+    look it up. `frozen` marks a compiled manifest: compile always freezes
+    `recovery`, so one without it was compiled before Kura managed state.
+    """
+    if frozen and not isinstance(run.get("recovery"), dict):
+        return False
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+    if config.get("command") is not None:
+        return False
+    if not training_state_policy(run)["enabled"]:
+        return False
+    contract = training_state_contract(run) if contract is None else contract
+    return contract.get("capability") != "unsupported"
+
+
 def training_state_capture_required(run_dir: Path) -> bool:
     """Return whether a completed run is expected to publish recoverable state."""
 
     run, _, _ = _published_run_context(run_dir)
-    if not training_state_policy(run)["enabled"]:
-        return False
-    return training_state_contract(run).get("capability") != "unsupported"
+    return training_state_managed(run, frozen=True)
 
 
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -628,9 +649,9 @@ def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any
 def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: Path, observed_step: int) -> dict[str, Any] | None:
     run, status, runtime_identity = _published_run_context(run_dir)
     policy = training_state_policy(run)
-    if not policy["enabled"]:
-        return None
     contract = training_state_contract(run)
+    if not training_state_managed(run, contract):
+        return None
     native_format = contract["native_format"]
     required = contract["required_files"]
     restoration = contract["restoration_contract"]
@@ -712,11 +733,10 @@ def publish_completed_training_states(
     """Publish structurally complete step-state directories already on local disk."""
 
     run, _, _ = _published_run_context(run_dir)
-    policy = training_state_policy(run)
-    if not policy["enabled"]:
+    contract = training_state_contract(run)
+    if not training_state_managed(run, contract):
         return []
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    contract = training_state_contract(run)
     config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
     continuation = resume_intent(run)
     output_name = str((run.get("id") if continuation is not None else config.get("output_name")) or run.get("id") or run_dir.name)

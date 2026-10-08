@@ -105,8 +105,11 @@ later requires an explicit native-retention and disk-safety decision.
 The CLI proposes the compatible recoverable state with the greatest logical
 step. A user may select an older state. Run creation freezes the chosen artifact
 ID and full manifest digest; a later checkpoint cannot change it.
-An adapter contract marked `unsupported` may still describe captured state for
-diagnostics, but the CLI refuses to create a Resume run from it.
+An adapter contract marked `unsupported` saves no state at all (2026-10-08): the
+trainer is not asked to save it, no executor requires a finished run to leave
+it, and the CLI refuses to create a Resume run. Whether state is managed is one
+rule (`training_artifacts.training_state_managed`): the run asks for it and the
+backend can restore it for that architecture and mode.
 
 Durable state lives in a protected file-backed artifact store rather than being
 owned only by the source run directory. Derived references are discoverable

@@ -43,7 +43,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
-from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_contract, training_state_retention_floor, verify_training_state
+from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state
 from kura.runtime_io import validated_write_roots
 
 
@@ -544,19 +544,20 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             if not isinstance(exit_code, int):
                 return False, []
             output_dir = downloaded_run / "outputs"
-            state_capture_required = _directory_training_state_sync_enabled(run_dir)
+            # The same rule the Docker executor applies (training_artifacts); an unreadable
+            # run is held to it as Docker holds it.
+            try:
+                state_capture_required = training_state_capture_required(run_dir)
+            except (OSError, ValueError):
+                state_capture_required = (run_dir / "resolved" / "manifest.lock.yaml").is_file()
             published_states = (
-                publish_completed_training_states(
-                    run_dir.parent.parent,
-                    downloaded_run,
-                    allow_final_state=exit_code == 0,
-                )
-                if backend_name in {"ai-toolkit", "musubi-tuner", "sd-scripts"}
-                and output_dir.is_dir()
-                and any(output_dir.glob("*-state"))
+                publish_completed_training_states(run_dir.parent.parent, downloaded_run, allow_final_state=exit_code == 0)
+                if state_capture_required and output_dir.is_dir() and any(output_dir.glob("*-state"))
                 else []
             )
             if state_capture_required and not published_states:
+                # Docker keeps every state the trainer wrote on local disk; on RunPod the states
+                # mirrored during training were published then, and stand in the same way.
                 try:
                     published_states = [select_training_state(run_dir.parent.parent, run_id)]
                 except ValueError:
@@ -973,8 +974,6 @@ PY
 
 def _runpod_remote_training_states(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
-    # sd-scripts Anima LoRA trains into a native directory and moves its state to outputs only after it exits.
-    remote_native = f"{workspace.rstrip('/')}/runs/{run_id}/cache/sd-scripts/native-output"
     script = f"""
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 python - <<'PY'
@@ -983,13 +982,9 @@ import json
 import os
 import re
 
+directory = {remote_outputs!r}
 items = []
-seen = set()
-state_dirs = sorted(glob.glob(os.path.join({remote_outputs!r}, "*-step*-state"))) + sorted(glob.glob(os.path.join({remote_native!r}, "*-step*-state")))
-for state_dir in state_dirs:
-    if os.path.basename(state_dir) in seen:
-        continue
-    seen.add(os.path.basename(state_dir))
+for state_dir in sorted(glob.glob(os.path.join(directory, "*-step*-state"))):
     if not os.path.isdir(state_dir) or os.path.islink(state_dir):
         continue
     name = os.path.basename(state_dir)
@@ -1294,24 +1289,6 @@ def _record_pulled_training_states(run_dir: Path, manifests: list[dict[str, Any]
         )
 
 
-def _directory_training_state_sync_enabled(run_dir: Path) -> bool:
-    manifest_path = run_dir / "resolved" / "manifest.lock.yaml"
-    try:
-        run = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
-        return False
-    if not isinstance(run, dict):
-        return False
-    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    recovery = run.get("recovery")
-    return (
-        isinstance(recovery, dict)
-        and "training_state" in recovery
-        and backend.get("name") in {"ai-toolkit", "musubi-tuner", "sd-scripts"}
-        and training_state_policy(run)["enabled"]
-    )
-
-
 def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, workspace: str, run_id: str) -> bool:
     """Best-effort checkpoint mirror used by the normal RunPod lifecycle."""
 
@@ -1323,7 +1300,11 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
             # success survives a later transfer failure. Merge skipped items
             # and clear stale errors without emitting the same event twice.
             _record_pulled_outputs(run_dir, pulled, emit_event=False, record_copies=False)
-            if _directory_training_state_sync_enabled(run_dir):
+            try:
+                sync_states = training_state_capture_required(run_dir)
+            except (OSError, ValueError):
+                sync_states = False  # mid-run mirroring is best effort; the terminal check decides
+            if sync_states:
                 try:
                     state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id)
                     training_states = _pull_remote_training_state_items(run_dir, details, workspace=workspace, items=state_items)

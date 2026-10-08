@@ -21,6 +21,7 @@ from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.provenance import artifact_pinning
+from kura.training_artifacts import training_state_managed
 from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 
 
@@ -1472,7 +1473,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
     policy = training_state_policy(run)
     continuation = resume_intent(run)
     state_contract = training_state_contract_ai_toolkit(run)
-    if policy["enabled"] and state_contract.get("capability") != "unsupported":
+    if training_state_managed(run, state_contract):
         if process.get("type") != "sd_trainer" or _nested(process, "network", "type") != "lora":
             raise ValueError("AI-Toolkit training-state capture initially supports only the standard sd_trainer LoRA process")
         ema_config = process.get("ema_config") if isinstance(process.get("ema_config"), dict) else {}
@@ -1512,7 +1513,7 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         continuation = resume_intent(run)
         policy = training_state_policy(run)
         state_contract = training_state_contract_ai_toolkit(run)
-        if not policy["enabled"] or state_contract.get("capability") == "unsupported":
+        if not training_state_managed(run, state_contract):
             if continuation is not None:
                 limitations = state_contract.get("restoration_contract", {}).get("limitations") or []
                 detail = "; ".join(limitations) if limitations else "training-state capture is disabled"
