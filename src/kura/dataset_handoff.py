@@ -28,6 +28,22 @@ def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def handoff_was_frozen(run_dir: Path) -> bool:
+    """Whether compile froze a managed dataset handoff for this run, so its end gets an input postflight.
+
+    The input lock says so (schema 2); one that cannot be read still counts, and
+    its postflight is recorded as uncheckable. Docker and RunPod both ask here.
+    """
+    lock_path = run_dir / "resolved" / "dataset-input.lock.json"
+    if not lock_path.is_file():
+        return False
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    return isinstance(lock, dict) and lock.get("schema_version") == 2
+
+
 def _safe_workspace_relative(value: Any, *, context: str) -> str:
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         raise ValueError(f"{context} must be a nonempty workspace-relative POSIX path")
