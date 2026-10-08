@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from kura.secrets import is_secret_name
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import record, without_record_fields
 from kura.training_artifacts import is_training_state_output
@@ -411,7 +412,27 @@ def append_run_event(run_dir: Path, event: dict[str, Any], *, best_effort: bool 
 
 
 def _is_secret(name: str) -> bool:
-    return any(part in name.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY"))
+    return is_secret_name(name)
+
+
+def kura_container_env(*, workspace_path: str, run_id: str, realization_id: str | None = None) -> dict[str, str]:
+    """The variables Kura owns inside every container it starts, on every executor.
+
+    They override a command's own env: the Hugging Face cache must stay in the
+    workspace, and Kura's scripts read the run's identity from them.
+    """
+    root = workspace_path.rstrip("/")
+    env = {
+        "KURA_LOG_PATH": f"{root}/runs/{run_id}/logs/stdout.log",
+        "PYTHONUNBUFFERED": "1",
+        "HF_HOME": f"{root}/cache/huggingface",
+        "HF_HUB_CACHE": f"{root}/cache/huggingface/hub",
+        "KURA_WORKSPACE": root,
+        "KURA_RUN_ID": run_id,
+    }
+    if realization_id is not None:
+        env["KURA_REALIZATION_ID"] = realization_id
+    return env
 
 
 def _secret_values() -> list[str]:

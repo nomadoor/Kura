@@ -23,6 +23,7 @@ from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_fl
 from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
+from kura.secrets import is_secret_name
 from kura.training_artifacts import training_state_managed
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
@@ -502,7 +503,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Musubi Tuner command must provide string cwd and argv values")
         if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
             raise ValueError("Musubi Tuner command env must be a string-to-string mapping")
-        if any(any(part in key.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY")) for key in env):
+        if any(is_secret_name(key) for key in env):
             raise ValueError("Musubi Tuner command env must not contain secrets; use the process environment instead")
         return {"cwd": cwd, "argv": argv, "env": env}
 

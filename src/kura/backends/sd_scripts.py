@@ -17,6 +17,7 @@ from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.secrets import is_secret_name
 from kura.training_artifacts import training_state_managed
 from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
 
@@ -79,7 +80,6 @@ ENTRYPOINTS = {
     ("anima", "controlnet_lllite"): "anima_train_control_net_lllite.py",
 }
 NETWORK_MODULES = {"sd15": "networks.lora", "sdxl": "networks.lora", "flux1": "networks.lora_flux", "anima": "networks.lora_anima"}
-SECRET_FRAGMENTS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY")
 OWNED_FLAGS = {
     "--dataset_config", "--pretrained_model_name_or_path", "--clip_l", "--t5xxl", "--ae", "--qwen3", "--vae",
     "--llm_adapter_path", "--t5_tokenizer_path", "--network_module", "--network_dim", "--network_alpha",
@@ -215,7 +215,7 @@ def _explicit_command(run: dict[str, Any], command: Any) -> dict[str, Any]:
         raise ValueError("sd-scripts command must provide non-empty string cwd and argv values")
     if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError("sd-scripts command env must be a string-to-string mapping")
-    if any(any(fragment in key.upper() for fragment in SECRET_FRAGMENTS) for key in env):
+    if any(is_secret_name(key) for key in env):
         raise ValueError("sd-scripts command env must not contain secrets; use the process environment instead")
     return {"cwd": cwd, "argv": list(argv), "env": dict(env)}
 
@@ -224,7 +224,7 @@ def _validate_native_env(native: dict[str, Any]) -> dict[str, str]:
     env = native.get("env", {})
     if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError("sd-scripts env must be a string-to-string mapping")
-    if any(any(fragment in key.upper() for fragment in SECRET_FRAGMENTS) for key in env):
+    if any(is_secret_name(key) for key in env):
         raise ValueError("sd-scripts env must not contain secrets; use the process environment instead")
     return dict(env)
 
