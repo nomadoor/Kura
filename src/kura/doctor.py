@@ -64,35 +64,33 @@ def _docker_json_lines(command: list[str]) -> list[dict[str, Any]]:
     return items
 
 
-def _docker_managed_resources() -> dict[str, Any]:
-    containers = _docker_json_lines(
-        [
-            "docker",
-            "ps",
-            "-a",
-            "--filter",
-            "label=io.kura.managed=true",
-            "--format",
-            "{{json .}}",
-        ]
-    )
-    volumes = _docker_json_lines(
-        [
-            "docker",
-            "volume",
-            "ls",
-            "--filter",
-            "label=io.kura.managed=true",
-            "--format",
-            "{{json .}}",
-        ]
-    )
-    stopped = [
+def kura_docker_containers() -> list[dict[str, Any]]:
+    return _docker_json_lines(["docker", "ps", "-a", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
+
+
+def stopped_kura_containers(containers: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Kura's containers that are no longer running: what `kura run prune --docker-containers` removes."""
+    return [
         item
-        for item in containers
+        for item in (kura_docker_containers() if containers is None else containers)
         if not str(item.get("State") or item.get("Status") or "").lower().startswith(("running", "up"))
     ]
-    return {"containers": containers, "stopped_containers": stopped, "volumes": volumes}
+
+
+def kura_docker_volumes() -> list[dict[str, Any]]:
+    return _docker_json_lines(["docker", "volume", "ls", "--filter", "label=io.kura.managed=true", "--format", "{{json .}}"])
+
+
+def _docker_managed_resources() -> dict[str, Any]:
+    containers = kura_docker_containers()
+    stopped = stopped_kura_containers(containers)
+    volumes = kura_docker_volumes()
+    # Counts only: a workspace that has run for a while has hundreds of these.
+    summary: dict[str, Any] = {"containers": len(containers), "stopped_containers": len(stopped), "volumes": len(volumes)}
+    if stopped:
+        # Docker's own prune touches only stopped containers with Kura's label, never run files.
+        summary["remove_stopped"] = "docker container prune --filter label=io.kura.managed=true"
+    return summary
 
 
 def _bytes_from_docker_size(value: Any) -> int | None:
