@@ -159,7 +159,10 @@ def _run_remote_locked(
                 record_launch_phase(run_dir, realization_id, "download_finished")
             safe_to_stop = True
             hold_for_sec = 0
-            status_now = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            try:
+                status_now = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                status_now = {"state": "recovery_required"}
             print(format_run_completion(_workspace(), run_dir, status_now))
             _notify(notify_channels, subject=f"Kura run needs attention: {run_id}",
                     body=f"Run {run_id} finished, but {status_now.get('publication_error') or 'its outputs could not be published'}. "

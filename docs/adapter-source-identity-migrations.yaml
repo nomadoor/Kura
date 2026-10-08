@@ -55,7 +55,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: e5722c6848c6cda17160bf573735f0ad32228a4af649ddb1bc4f79b0a7eddc8e
+      value: 2b962ac1ea2e8ec4ff7c11316f6865a9b3cfb2ed42e914b4b14489fee5365eee
   - id: one-handoff-gate-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-

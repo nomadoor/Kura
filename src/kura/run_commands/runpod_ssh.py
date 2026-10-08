@@ -589,7 +589,12 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     "remote run failed and its downloaded snapshot has no valid training-state artifact; "
                     "inspect the backend state output before relying on Resume"
                 )
-            outputs = materialize_primary_outputs(output_dir)
+            try:
+                outputs = materialize_primary_outputs(output_dir)
+            except ValueError as exc:
+                # A collision in the snapshot is in its content; collecting again repeats it.
+                outputs = []
+                blocked.append(_safe_error(exc))
             publication_manifest: str | None = None
             contract: dict[str, Any] | None = None
             realization_id: str | None = None
@@ -608,7 +613,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                             run_dir, realization_id, contract, candidate_paths=outputs
                         )
                 except (OSError, ValueError) as exc:
-                    blocked.insert(0, _safe_error(exc))
+                    blocked.append(_safe_error(exc))
             attempt = record_publication_failure(run_dir, realization_id, "; ".join(blocked)) if blocked and realization_id else None
             recovery_root = downloaded_run / "recovery"
             recovery_artifacts = [
