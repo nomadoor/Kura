@@ -409,9 +409,9 @@ def build_run_fields(smoke_id: str, smoke: Smoke, *, gpu: str | None = None) -> 
         config["dataset_options"] = json.loads(json.dumps(smoke.dataset_options))
     return {
         "intent": f"Real one-step {smoke.backend} smoke of {smoke.architecture} through the manifest-v2 handoff ({smoke_id}). Not a quality run.",
-        "backend": {"name": smoke.backend, "version": None, "adapter_version": 1, "config": config},
+        "backend": {"name": smoke.backend, "adapter_version": 1, "config": config},
         "model": {"base": smoke.model_base, "revision": None},
-        "datasets": [{"id": smoke.dataset, "digest": None, "role": None}],
+        "datasets": [{"id": smoke.dataset}],
         "recipe": {"steps": 1, "seed": 1},
         "compute": {
             "executor": smoke.executor,

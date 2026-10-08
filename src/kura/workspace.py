@@ -182,7 +182,8 @@ _WORKSPACE_ALIASES = {
 }
 
 
-def _closest_workspace_key(name: str, accepted: set[str]) -> str | None:
+def closest_key(name: str, accepted: set[str] | frozenset[str]) -> str | None:
+    """The declared sibling an unknown key most likely meant; None when nothing is close."""
     from difflib import get_close_matches
 
     # Candidates are restricted to sibling keys in the same schema node, so a
@@ -244,7 +245,7 @@ def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str
         for name in unknown:
             alias = _WORKSPACE_ALIASES.get(name) if isinstance(name, str) else None
             alias_applies = bool(alias) and (not path or alias.rsplit(".", 1)[0] == path)
-            suggestion = alias if alias_applies else _closest_workspace_key(name, set(fields)) if isinstance(name, str) else None
+            suggestion = alias if alias_applies else closest_key(name, set(fields)) if isinstance(name, str) else None
             display = suggestion if not path else suggestion.split(".")[-1] if suggestion else None
             details.append(f"{name!r}; use {display!r}" if display else repr(name))
         label = "section(s)" if not path else "key(s)"

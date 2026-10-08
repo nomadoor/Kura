@@ -13,6 +13,74 @@ CONTINUATION_FIELDS = frozenset({"mode", "source", "additional_steps", "to_step"
 CONTINUATION_SOURCE_FIELDS = frozenset({"artifact_id", "manifest_sha256", "observed_step", "recipe_sha256"})
 RESTORATION_FIELDS = frozenset({"level", "restored", "not_restored", "limitations", "scheduler_behavior"})
 
+# Every key a training run.yaml may hold, by level ("" is the top). `recipe`, `recovery`,
+# `continuation`, and `backend.config` are closed by their own readers.
+TRAIN_RUN_SCHEMA: dict[str, frozenset[str]] = {
+    "": frozenset({
+        "schema_version", "id", "type", "experiment", "created", "intent", "parent_run",
+        "backend", "model", "datasets", "recipe", "compute", "sampling", "safety", "recovery", "continuation",
+    }),
+    "backend": frozenset({"name", "config", "adapter_version"}),
+    "model": frozenset({"base", "revision"}),
+    "datasets[]": frozenset({"id", "digest", "role", "path"}),
+    "compute": frozenset({"executor", "provider", "gpu", "capacity"}),
+    "compute.capacity": frozenset({"mode", "timeout", "poll_interval"}),
+    "sampling": frozenset({"cadence_steps"}),
+    "safety": frozenset({
+        "allow_many_checkpoints", "allow_large_model_downloads", "large_model_download_gb", "allow_unknown_disk_cache",
+        "checkpoint_estimate_gb", "allow_runpod_disk_risk", "max_run_disk_gb", "allow_storage_risk",
+    }),
+}
+# Keys older Kura versions wrote that nothing reads now; `kura run resume` drops them from what it copies.
+RETIRED_TRAIN_RUN_KEYS = frozenset({"created_by", "backend.version", "sampling.prompts"})
+
+
+def validate_train_run_fields(run: dict[str, Any]) -> None:
+    """Refuse a key no Kura code reads, naming the likely intended key or saying it is retired."""
+    from kura.workspace import closest_key
+
+    # Every problem in one message, so an old draft is fixed in one edit.
+    problems: list[str] = []
+
+    def check(level: str, value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        for key in value:
+            path = f"{level}.{key}" if level else str(key)
+            if key in TRAIN_RUN_SCHEMA[level]:
+                continue
+            if path in RETIRED_TRAIN_RUN_KEYS:
+                problems.append(f"{path} is no longer used; remove it")
+                continue
+            suggestion = closest_key(str(key), TRAIN_RUN_SCHEMA[level])
+            hint = f" (did you mean {suggestion!r}?)" if suggestion else ""
+            problems.append(f"{path} is not a training run setting{hint}")
+
+    check("", run)
+    for level in ("backend", "model", "compute", "sampling", "safety"):
+        check(level, run.get(level))
+    compute = run.get("compute")
+    if isinstance(compute, dict):
+        check("compute.capacity", compute.get("capacity"))
+    datasets = run.get("datasets")
+    for item in datasets if isinstance(datasets, list) else []:
+        check("datasets[]", item)
+    if problems:
+        raise ValueError("run.yaml: " + "; ".join(problems))
+
+
+def without_retired_train_run_keys(run: dict[str, Any]) -> dict[str, Any]:
+    """A copy of the run without the keys older Kura versions wrote and nothing reads."""
+    from copy import deepcopy
+
+    copied = deepcopy(run)
+    for path in RETIRED_TRAIN_RUN_KEYS:
+        parent, _, key = path.rpartition(".")
+        holder = copied.get(parent) if parent else copied
+        if isinstance(holder, dict):
+            holder.pop(key, None)
+    return copied
+
 
 def backend_name(run: dict[str, Any]) -> str | None:
     backend = run.get("backend")
