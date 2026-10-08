@@ -30,7 +30,7 @@ from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, missing
-from kura.executors.common import PROGRESS_FIELDS, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 
@@ -679,31 +679,11 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
 def _runpod_training_env(
     spec_env: dict[str, str], *, workspace_path: str, run_id: str, realization_id: str,
 ) -> dict[str, str]:
-    log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
-    runtime_env = dict(spec_env)
-    runtime_env.update({
-        "KURA_LOG_PATH": log_path,
-        "PYTHONUNBUFFERED": "1",
-        "HF_HOME": f"{workspace_path}/cache/huggingface",
-        "HF_HUB_CACHE": f"{workspace_path}/cache/huggingface/hub",
-        "KURA_WORKSPACE": workspace_path,
-        "KURA_RUN_ID": run_id,
-        "KURA_REALIZATION_ID": realization_id,
-    })
-    return runtime_env
+    return {**spec_env, **kura_container_env(workspace_path=workspace_path, run_id=run_id, realization_id=realization_id)}
 
 
 def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = 12 * 3600) -> dict[str, str]:
-    log_path = f"{workspace_path}/runs/{run_id}/logs/stdout.log"
-    return {
-        "KURA_LOG_PATH": log_path,
-        "PYTHONUNBUFFERED": "1",
-        "HF_HOME": f"{workspace_path}/cache/huggingface",
-        "HF_HUB_CACHE": f"{workspace_path}/cache/huggingface/hub",
-        "KURA_WORKSPACE": workspace_path,
-        "KURA_RUN_ID": run_id,
-        "KURA_MAX_LEASE_SEC": str(max_lease_sec),
-    }
+    return {**kura_container_env(workspace_path=workspace_path, run_id=run_id), "KURA_MAX_LEASE_SEC": str(max_lease_sec)}
 
 
 def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:

@@ -25,6 +25,7 @@ from kura.dataset_handoff import (
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
 from kura.executors.common import (
+    kura_container_env,
     CREATE_INTENT_SUFFIX,
     PROGRESS_FIELDS,
     settle_status_from_realization,
@@ -372,10 +373,7 @@ def docker_command(
     spec_secret_keys = [key for key in runtime_env if _is_secret(key)]
     if spec_secret_keys:
         raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
-    runtime_env["KURA_LOG_PATH"] = log_path
-    runtime_env["KURA_WORKSPACE"] = workspace_target.rstrip("/")
-    runtime_env["KURA_RUN_ID"] = run_dir.name
-    runtime_env["KURA_REALIZATION_ID"] = realization_id
+    runtime_env.update(kura_container_env(workspace_path=workspace_target, run_id=run_dir.name, realization_id=realization_id))
     runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(
         workspace_mount_mappings(
             workspace,
@@ -386,12 +384,8 @@ def docker_command(
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    # Container output is redirected to a mounted file; force Python progress
-    # messages through immediately instead of waiting for its file buffer.
-    runtime_env.setdefault("PYTHONUNBUFFERED", "1")
+    # The container runs as the host user, whose home does not exist in the image.
     runtime_env.setdefault("HOME", "/tmp/kura-home")
-    runtime_env.setdefault("HF_HOME", f"{workspace_target.rstrip('/')}/cache/huggingface")
-    runtime_env.setdefault("HF_HUB_CACHE", f"{runtime_env['HF_HOME'].rstrip('/')}/hub")
     hf_token = declared_secret("HF_TOKEN")
     if hf_token:
         runtime_env["HF_TOKEN"] = hf_token

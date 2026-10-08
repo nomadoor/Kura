@@ -77,6 +77,15 @@ def load_secrets() -> None:
             _loaded_from[name] = source
 
 
+# A variable whose name contains one of these holds a secret: it is never written into a
+# command, a log, or a record. Every check of a name uses this one list.
+SECRET_NAME_PARTS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY")
+
+
+def is_secret_name(name: str) -> bool:
+    return any(part in name.upper() for part in SECRET_NAME_PARTS)
+
+
 def declared_secret(name: str) -> str | None:
     """A declared variable's value from the environment, under its own name or any declared alias.
 
