@@ -1,0 +1,37 @@
+schema_version: 1
+campaign: does zstd layer compression shorten the RunPod image pull?
+observed_at: '2026-10-08'
+harness: kura run launch --executor runpod --wait --yes (zstd runs with --image)
+common_recipe:
+  backend: sd-scripts
+  model: stabilityai/stable-diffusion-xl-base-1.0
+  dataset: real-smoke-image
+  optimizer_steps: 1
+  gpu: NVIDIA RTX A5000 (secure, $0.27/h)
+  purpose: launch timing only; no LoRA quality claim
+images:
+  gzip: nomadoor/kura-sd-scripts@sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+  zstd: nomadoor/kura-sd-scripts@sha256:dfba2eae2ab86c5c13f6e9ef9fe0cbbe31e863c8b37298e990e4109b92e88749
+  same_config_digest: sha256:29e8ebddf9bdca17 (the zstd image is the pinned image recompressed by
+    `docker buildx build --output type=image,compression=zstd,force-compression=true` from `FROM <pinned image>`)
+  compressed_size_gb: {gzip: 4.68, zstd: 3.99}
+# Seconds from the Pod create request; runs alternated gzip, zstd, gzip, zstd.
+runs:
+  - {run_id: 20261008-0938_sdxl-gzip-1_d17e, image: gzip, ssh_ready: 166, remote_job_started: 174, remote_exit_observed: 226, pod_stopped: 244}
+  - {run_id: 20261008-0938_sdxl-zstd-2_c670, image: zstd, ssh_ready: 40, remote_job_started: 48, remote_exit_observed: 99, pod_stopped: 117}
+  - {run_id: 20261008-0938_sdxl-gzip-3_1f32, image: gzip, ssh_ready: 33, remote_job_started: 42, remote_exit_observed: 93, pod_stopped: 111}
+  - {run_id: 20261008-0938_sdxl-zstd-4_3218, image: zstd, ssh_ready: 149, remote_job_started: 157, remote_exit_observed: 209, pod_stopped: 235}
+earlier_runs_ssh_ready_seconds:
+  older images (2026-10-01/02, 16 runs): 106-270
+  pinned sd-scripts image (2026-10-07 runner smoke): 65
+findings:
+  - The host decides the startup: ssh_ready ranged 33-166 s for the same image, and both
+    compressions saw a fast and a slow host. No difference attributable to zstd is visible.
+  - Every Kura image already contains sshd, so the Pod start script installs nothing; the wait
+    before SSH is RunPod pulling and starting the container.
+  - After SSH, the job starts within about 8 s, the 6.9 GB SDXL base downloads and one step
+    trains within about 52 s, and collection plus Pod deletion take about 18 s.
+decision: Kura keeps gzip images. Recompressing would change every pinned digest (and the evidence
+  bound to them) without a measured gain. A smaller image is the remaining lever, and it needs an
+  ADR because it means installing packages at container start.
+cost_usd_estimate: 0.07
