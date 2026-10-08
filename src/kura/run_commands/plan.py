@@ -1767,16 +1767,7 @@ def cmd_run_stop(args: argparse.Namespace) -> int:
 
 
 def cmd_run_logs(args: argparse.Namespace) -> int:
-    try:
-        status = json.loads((_run_path(args.run_id) / "status.json").read_text(encoding="utf-8"))
-        realization_ref = status.get("last_realization")
-        if isinstance(realization_ref, str):
-            realization = json.loads((_run_path(args.run_id) / realization_ref).read_text(encoding="utf-8"))
-            if realization.get("executor") == "runpod":
-                print(f"RunPod logs live in the remote workspace at {realization.get('logs_path')}; use the configured transfer method to fetch them. The RunPod console is diagnostic only.", file=sys.stderr)
-                return 1
-    except (OSError, json.JSONDecodeError):
-        pass
+    # A RunPod run's controller appends the remote log here as the run goes, so every executor reads the same file.
     path = _run_path(args.run_id) / "logs" / "stdout.log"
     if not path.exists():
         print(f"no run log exists yet: {path}", file=sys.stderr)

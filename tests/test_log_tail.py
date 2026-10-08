@@ -120,5 +120,32 @@ class LogTailTests(unittest.TestCase):
             self.assertIn("the log is empty", _show(path))
 
 
+
+class RunLogsCommandTests(unittest.TestCase):
+    def test_a_runpod_run_shows_its_synced_log_as_a_local_run_does(self) -> None:
+        # The RunPod controller appends the remote log to logs/stdout.log while the run goes.
+        import argparse
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from unittest.mock import patch
+
+        from kura.run_commands.plan import cmd_run_logs
+
+        for executor in ("docker", "runpod"):
+            with self.subTest(executor=executor), tempfile.TemporaryDirectory() as directory:
+                run_dir = Path(directory) / "runs" / "example"
+                (run_dir / "logs").mkdir(parents=True)
+                (run_dir / "realizations").mkdir()
+                (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": executor}), encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"last_realization": "realizations/r1.json"}), encoding="utf-8")
+                (run_dir / "logs" / "stdout.log").write_text("steps: 3/50\n", encoding="utf-8")
+                out = io.StringIO()
+                with patch("kura.run_commands.plan._run_path", return_value=run_dir), contextlib.redirect_stdout(out):
+                    self.assertEqual(cmd_run_logs(argparse.Namespace(run_id="example", follow=False)), 0)
+                self.assertIn("steps: 3/50", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
