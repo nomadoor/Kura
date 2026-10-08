@@ -39,5 +39,20 @@ class ProgressParityTests(unittest.TestCase):
                 self.assertEqual((status.get("last_step"), status.get("total_steps")), (10, 10))
 
 
+    def test_speed_comes_only_from_training_progress_lines(self) -> None:
+        # Model downloads and latent caching print their own it/s; they are not training speed.
+        from kura.executors.common import _stdout_progress
+
+        download = "model.safetensors:  45%|####5     | 6.3G/14.0G [01:02<01:10, 110MB/s]\nFetching 17 files:  47%|####7     | 8/17 [00:05<00:01,  1.51it/s]\n"
+        training = "steps:  52%|#####2    | 26/50 [00:40<00:30,  1.20s/it, avr_loss=0.08]\n"
+        caching = "caching latents: 100%|##########| 3/3 [00:02<00:00,  8.11it/s]\n"
+        for label, stdout, expected in (
+            ("download only", download, None),
+            ("training, then caching", training + caching, 1.20),
+        ):
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                run_dir = _run(directory, stdout)
+                self.assertEqual(_stdout_progress(run_dir)[2], expected)
+
 if __name__ == "__main__":
     unittest.main()

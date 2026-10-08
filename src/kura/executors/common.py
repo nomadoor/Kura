@@ -667,11 +667,16 @@ def _stdout_progress(run_dir: Path) -> tuple[int | None, int | None, float | Non
     # Scan those records independently so a large tail cannot turn the
     # non-greedy progress patterns into a quadratic search.
     for line in re.split(r"[\r\n]+", text):
+        training_line = False
         for pattern in (AI_TOOLKIT_PROGRESS_RE, MUSUBI_PROGRESS_RE):
             match = pattern.search(line)
             if match:
                 step = int(match.group("step"))
                 total = int(match.group("total"))
+                training_line = True
+        if not training_line:
+            # Model downloads and latent caching print their own speeds; only a training step's counts.
+            continue
         for match in ITERATION_SPEED_RE.finditer(line):
             value = float(match.group("value"))
             if value <= 0:
