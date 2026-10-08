@@ -74,6 +74,11 @@ def image_cuda_version(reference: str) -> str | None:
     return IMAGE_CUDA_VERSIONS.get(digest) if separator else None
 
 
+def runpod_min_cuda_for(runpod_settings: dict[str, Any], image: str) -> str:
+    """The CUDA floor of a RunPod launch: a template brings its own image, so it sets none."""
+    return runpod_min_cuda_version("" if runpod_settings.get("template_id") else image)
+
+
 def runpod_min_cuda_version(reference: str) -> str:
     """The oldest host CUDA version that runs this image; the newest known when Kura does not know it."""
 

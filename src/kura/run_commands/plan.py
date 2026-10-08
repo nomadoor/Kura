@@ -27,7 +27,7 @@ from kura.dataset_handoff import (
 )
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.executors.runpod import unresolved_create_intents
-from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
+from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version, runpod_min_cuda_for
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
 from kura.paths import to_workspace_relative
@@ -38,7 +38,7 @@ from kura.workspace import run_path as _run_path
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path
+from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types, runpod_settings_for_adapter
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state, training_state_managed
@@ -147,11 +147,9 @@ def _adapter_display(run: dict[str, Any]) -> dict[str, Any]:
 
 
 def _runpod_requested_gpus(compute: dict[str, Any], config: dict[str, Any]) -> Any:
-    gpu = compute.get("gpu") if isinstance(compute, dict) else None
-    if isinstance(gpu, str) and gpu and gpu.lower() not in {"true", "false", "gpu", "cpu"}:
-        return [gpu]
-    if isinstance(gpu, list) and all(isinstance(item, str) and item for item in gpu):
-        return list(gpu)
+    requested = requested_gpu_types(compute)
+    if requested is not None:
+        return requested
     runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
     configured = runpod.get("gpu_type_ids") if isinstance(runpod, dict) else None
     return configured if isinstance(configured, list) else NOT_SET
@@ -173,14 +171,12 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
         return None
     try:
         image_reference = _plan_launch_image(run, config, run_dir)["reference"]
-        # Launch keeps a template only for adapters that accept one, and a template brings its own image.
-        runpod_settings = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
         backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-        if runpod_settings.get("template_id") and get_backend(backend.get("name")).runpod_template_compatible:
-            image_reference = ""
+        adapter = get_backend(backend.get("name"))
+        # The settings the launch will use: a template only for adapters that accept one.
+        min_cuda_version = runpod_min_cuda_for(runpod_settings_for_adapter(config.get("runpod"), adapter, adapter.image_name), image_reference)
     except ValueError:
-        image_reference = ""
-    min_cuda_version = runpod_min_cuda_version(image_reference)
+        min_cuda_version = runpod_min_cuda_version("")
     selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
     capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
     mode = capacity.get("mode", "immediate")
