@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -56,6 +57,34 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 
 
 OBSERVABLE_STATES = frozenset({"running"})
+
+
+# A trainer prints progress at least every few minutes; this long without a new line is worth a look.
+LOG_SILENCE_NOTICE_SEC = 15 * 60
+
+
+def log_silence_seconds(run_dir: Path, *, now: float | None = None) -> float | None:
+    """How long a running run's log has gone without a new line; None when the run is not running or has no log.
+
+    The RunPod controller appends only new remote output, so the local log's age
+    is the trainer's silence on both executors (or a sync that stopped reaching it).
+    """
+    try:
+        state = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("state")
+        modified = (run_dir / "logs" / "stdout.log").stat().st_mtime
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    if state not in OBSERVABLE_STATES:
+        return None
+    return max(0.0, (time.time() if now is None else now) - modified)
+
+
+def log_silence_notice(seconds: float | None) -> str | None:
+    """What to tell a reader about a silent log, once it has been silent long enough to matter."""
+    if seconds is None or seconds < LOG_SILENCE_NOTICE_SEC:
+        return None
+    return (f"no new trainer output for {int(seconds // 60)} minutes; the trainer may be hung or in a long silent step. "
+            "Read the end of logs/stdout.log, then stop the run with `kura run stop` if it is stuck.")
 
 
 # Nothing more happens to a run in these on its own; an observation or a stop never overwrites them.
