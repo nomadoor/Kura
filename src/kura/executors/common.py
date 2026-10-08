@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 import yaml
 
-from kura.secrets import is_secret_name
+from kura.secrets import is_secret_name, secret_values
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import record, without_record_fields
 from kura.run_envelope import common_recipe
@@ -496,30 +496,24 @@ def kura_container_env(*, workspace_path: str, run_id: str, realization_id: str 
     return env
 
 
-def _secret_values() -> list[str]:
-    values: list[str] = []
-    for key, value in os.environ.items():
-        if _is_secret(key) and value and len(value) >= 4:
-            values.append(value)
-    return sorted(set(values), key=len, reverse=True)
-
-
-def _redact_secret_text(text: str) -> str:
+def _redact_secret_text(text: str, values: list[str] | None = None) -> str:
     redacted = text
-    for value in _secret_values():
+    for value in secret_values() if values is None else values:
         redacted = redacted.replace(value, "***")
     return redacted
 
 
-def _redact_secrets(value: Any) -> Any:
+def _redact_secrets(value: Any, values: list[str] | None = None) -> Any:
+    # The secret values are looked up once per record, not once per string in it.
+    values = secret_values() if values is None else values
     if isinstance(value, dict):
-        return {key: "***" if isinstance(key, str) and _is_secret(key) and isinstance(item, str) else _redact_secrets(item) for key, item in value.items()}
+        return {key: "***" if isinstance(key, str) and _is_secret(key) and isinstance(item, str) else _redact_secrets(item, values) for key, item in value.items()}
     if isinstance(value, list):
-        return [_redact_secrets(item) for item in value]
+        return [_redact_secrets(item, values) for item in value]
     if isinstance(value, tuple):
-        return tuple(_redact_secrets(item) for item in value)
+        return tuple(_redact_secrets(item, values) for item in value)
     if isinstance(value, str):
-        return _redact_secret_text(value)
+        return _redact_secret_text(value, values)
     return value
 
 

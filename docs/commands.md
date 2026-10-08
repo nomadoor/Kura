@@ -387,7 +387,7 @@ facts compile writes itself, such as `lora_insert`.
 | Command | Purpose |
 | --- | --- |
 | `uv run kura workflow check [<path>...]` | Validate ComfyUI workflow JSON and promptset JSONL; a named `.json` must be API format unless an `_api.json` twin sits beside it. With no path, the workspace's `workflows/*.json` and `promptsets/*.jsonl` |
-| `uv run kura check secrets <path>...` | Scan exactly the named files and directories for secret-like values before sharing them; reports `path:line` without the value, skips binary and model files, refuses `.env.local` and the user secrets file, and reports an unreadable file as a finding |
+| `uv run kura check secrets <path>...` | Scan exactly the named files and directories, before sharing them, for the secret values Kura holds and for token shapes (`hf_`, `rpa_`, `Bearer`); reports `path:line` without the value, skips binary and model files, refuses `.env.local` and the user secrets file, and reports an unreadable file as a finding |
 | `uv run kura check artifacts <path>...` | List model weight files in the named files and directories |
 
 ## Workspace

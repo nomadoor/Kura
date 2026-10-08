@@ -469,7 +469,7 @@ def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
         return {}
     if not isinstance(env, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()):
         raise ValueError(f"{backend_name} command env must be a string-to-string mapping")
-    if any(any(part in key.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "API_KEY")) for key in env):
+    if any(is_secret_name(key) for key in env):
         raise ValueError(f"{backend_name} command env must not contain secrets; use the process environment instead")
     return dict(env)
 

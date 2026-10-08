@@ -1773,9 +1773,10 @@ def main() -> None:
     rebuild = index_sub.add_parser("rebuild", help="Rebuild index.jsonl from run directories")
     rebuild.set_defaults(func=cmd_index_rebuild)
     args = parser.parse_args()
-    # File checks name the files they look at and never open a secrets file;
-    # `kura secrets set` must see only the real environment.
-    if args.func not in {cmd_check_secrets, cmd_check_artifacts, cmd_workflow_check, cmd_secrets_set}:
+    # Every command but these loads the secrets into the environment. File checks other than
+    # `kura check secrets` (which looks for those values) need none, and `kura secrets set`
+    # must see only the real environment. No check ever scans a secrets file itself.
+    if args.func not in {cmd_check_artifacts, cmd_workflow_check, cmd_secrets_set}:
         _load_secrets()
     if args.func is not cmd_init:
         _refresh_managed_files()

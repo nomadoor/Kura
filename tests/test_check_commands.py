@@ -162,7 +162,30 @@ class SecretAndArtifactCommandTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(output.count("looks like a secret value"), 1, output)
 
-    def test_file_checks_never_load_env_local(self) -> None:
+    def test_the_secret_check_finds_a_stored_value_elsewhere_without_reading_its_file(self) -> None:
+        from kura import cli
+
+        value = "Kq7" + "zz81" * 4
+        # The user's own secrets file is never read by a test.
+        with _workspace() as root, patch.dict(os.environ, {}), \
+                patch("kura.secrets.user_secrets_path", return_value=root / "no-user-secrets.env"):
+            (root / ".env.local").write_text(f"HF_TOKEN={value}\n", encoding="utf-8")
+            upload = root / "upload"
+            upload.mkdir()
+            (upload / "notes.txt").write_text(f"pasted {value}\n", encoding="utf-8")
+            (upload / "README.md").write_text("model card\n", encoding="utf-8")
+            os.environ.pop("HF_TOKEN", None)
+            out = io.StringIO()
+            with patch("sys.argv", ["kura", "check", "secrets", "upload"]), patch("sys.stdout", out), patch("sys.stderr", out), \
+                    patch.object(cli, "_refresh_managed_files"):
+                with self.assertRaises(SystemExit) as caught:
+                    cli.main()
+        self.assertEqual(caught.exception.code, 1)
+        self.assertIn("upload/notes.txt:1", out.getvalue())
+        self.assertNotIn(value, out.getvalue())
+        self.assertNotIn(".env.local", out.getvalue())
+
+    def test_only_the_secret_check_loads_secrets_among_file_checks(self) -> None:
         from kura import cli
 
         for argv in (["kura", "check", "secrets", "x"], ["kura", "check", "artifacts", "x"], ["kura", "workflow", "check"], ["kura", "doctor", "workspace"]):
@@ -171,7 +194,8 @@ class SecretAndArtifactCommandTests(unittest.TestCase):
                     patch.object(cli, "cmd_workflow_check", return_value=0), patch.object(cli, "cmd_doctor_workspace", return_value=0):
                 with self.assertRaises(SystemExit):
                     cli.main()
-                self.assertEqual(load.called, argv[1] == "doctor")
+                # `kura check secrets` needs the values it looks for; it still never scans a secrets file.
+                self.assertEqual(load.called, argv[1] == "doctor" or argv[1:3] == ["check", "secrets"])
 
     def test_secret_values_are_never_printed_and_binary_or_weight_files_are_skipped(self) -> None:
         with _workspace() as root:

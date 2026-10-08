@@ -77,13 +77,37 @@ def load_secrets() -> None:
             _loaded_from[name] = source
 
 
-# A variable whose name contains one of these holds a secret: it is never written into a
-# command, a log, or a record. Every check of a name uses this one list.
-SECRET_NAME_PARTS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY")
+# A name holds a secret when its words include one of these, in order. Words are split at
+# `_`, `-`, and lower-to-upper case changes, so `TOKENIZERS_PARALLELISM` is not one and
+# `apiKey` is. Every check of a name uses this rule.
+SECRET_NAME_WORDS = (("TOKEN",), ("SECRET",), ("PASSWORD",), ("API", "KEY"), ("ACCESS", "KEY"), ("PRIVATE", "KEY"))
 
 
 def is_secret_name(name: str) -> bool:
-    return any(part in name.upper() for part in SECRET_NAME_PARTS)
+    split = re.sub(r"([A-Z])([A-Z][a-z])", r"\1_\2", re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name))
+    words = re.split(r"[^A-Za-z0-9]+", split.upper())
+    return any(
+        tuple(words[index:index + len(sequence)]) == sequence
+        for sequence in SECRET_NAME_WORDS
+        for index in range(len(words))
+    )
+
+
+# A secret value is at least this long. Shorter values under a secret-looking name are
+# settings such as HF_HUB_DISABLE_IMPLICIT_TOKEN=true; hiding them would rewrite records.
+MIN_SECRET_VALUE_LENGTH = 8
+
+
+def secret_values() -> list[str]:
+    """The values Kura holds as secrets, longest first: variables whose names hold a secret,
+    and the key names workspace.yaml chooses. Output hides them and `kura check secrets`
+    looks for them."""
+    configured = set(_configured_names())
+    values = {
+        value for name, value in os.environ.items()
+        if len(value) >= MIN_SECRET_VALUE_LENGTH and (is_secret_name(name) or name in configured)
+    }
+    return sorted(values, key=len, reverse=True)
 
 
 def declared_secret(name: str) -> str | None:
@@ -115,7 +139,7 @@ def _configured_names() -> list[str]:
     """Secret names workspace.yaml chooses: the RunPod key and the object-store keys."""
     try:
         config = yaml.safe_load((workspace() / "workspace.yaml").read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return []
     runpod = config.get("runpod") if isinstance(config, dict) else None
     if not isinstance(runpod, dict):
