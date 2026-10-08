@@ -202,6 +202,27 @@ class SurfaceContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "did you mean 'model'"):
             _validate_train_compile_intent({"schema_version": 2, "backend": {"name": "ai-toolkit"}, "modle": {"base": "x"}})
+        with self.assertRaisesRegex(ValueError, "did you mean 'schema_version'"):
+            _validate_train_compile_intent({"schema_versoin": 2, "backend": {"name": "ai-toolkit"}})
+
+    def test_compile_names_a_misspelled_backend_before_resolving_it(self) -> None:
+        from kura.cli import cmd_run_compile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("schema_version: 2\nid: example\ntype: train\nbackedn: {name: ai-toolkit}\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(cmd_run_compile(argparse.Namespace(run_id="example")), 1)
+            finally:
+                os.chdir(previous)
+        self.assertIn("did you mean 'backend'", err.getvalue())
 
     def test_every_key_kura_writes_into_a_new_or_resumed_run_is_declared(self) -> None:
         from kura.cli import cmd_run_new

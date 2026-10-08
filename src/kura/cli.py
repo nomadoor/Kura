@@ -108,16 +108,20 @@ def _run_datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _check_train_run_keys(run: dict[str, Any]) -> None:
+    """Name misspelled and retired keys first: later checks would report the intended key as missing."""
+    # Removed spellings (params, backend_overrides) keep their own messages.
+    common_recipe(run)
+    backend_config(run)
+    validate_train_run_fields(run)
+
+
 def _validate_train_compile_intent(run: dict[str, Any]) -> None:
+    _check_train_run_keys(run)
     if run.get("schema_version") != 2:
         raise ValueError("training run schema_version must be 2")
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
-    # Removed spellings keep their own messages; any other unknown key is named before
-    # checks that would otherwise report its intended key as missing.
-    common_recipe(run)
-    backend_config(run, backend_name)
-    validate_train_run_fields(run)
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     if not isinstance(model.get("base"), str) or not model.get("base").strip():
         raise ValueError("training run model.base must be set before compile")
@@ -458,6 +462,11 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
             print(f"cannot compile render: {_safe_error(exc)}", file=sys.stderr); return 1
         print(f"compiled render: {args.run_id}"); return 0
+    try:
+        _check_train_run_keys(run)
+    except ValueError as exc:
+        print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     backend = run.get("backend", {})
     try:
         adapter = get_backend(backend.get("name"))
