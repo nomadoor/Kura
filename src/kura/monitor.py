@@ -1096,7 +1096,8 @@ def _format_time_cell(summary: RunSummary) -> str:
     now = datetime.now().astimezone()
     state = (summary.state or "").lower()
     if state in ACTIVE_STATES:
-        base = summary.last_updated or summary.started or summary.created
+        # A running run's age is its quiet time, so the age and the stale label agree.
+        base = summary.quiet_since or summary.last_updated or summary.started or summary.created
         if not base:
             return "-"
         age = _duration(now - base)
