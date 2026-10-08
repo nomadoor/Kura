@@ -159,6 +159,8 @@ WORKSPACE_SCHEMA = _mapping({
     "runpod": _mapping(_RUNPOD_FIELDS),
     # The job runner starts this many local Docker training runs at once and queues the rest.
     "runner": _mapping({"local_slots": _INTEGER}),
+    # Whether agents may open user images in this workspace (ADR agents-and-user-images); absent means no.
+    "agents": _mapping({"view_images": _BOOLEAN}),
 })
 
 # Keys earlier Kura versions wrote but nothing reads any more. They are reported

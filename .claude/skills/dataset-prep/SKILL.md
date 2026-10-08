@@ -49,6 +49,10 @@ editing the dataset automatically.
 
 ## Visual review
 
+- Open dataset images only when `workspace.yaml` sets `agents.view_images:
+  true` (the `AGENTS.md` "User images" rule); otherwise every point below works
+  from file, dimension, caption, and manifest facts. With permission, stop at the
+  first image your own service's policy does not let you handle, and say so.
 - Choose the amount of visual review from the dataset's size, content, and the
   decision being made. Kura's measured facts and structural validation should
   guide that choice; visual inspection is an agent aid, not a prerequisite for

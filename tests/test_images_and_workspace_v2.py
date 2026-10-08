@@ -253,3 +253,12 @@ class DevelopmentImageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentImageSettingTests(unittest.TestCase):
+    def test_agents_view_images_is_a_boolean_workspace_setting(self) -> None:
+        from kura.workspace import validate_workspace_config
+
+        validate_workspace_config({"schema_version": WORKSPACE_SCHEMA_VERSION, "agents": {"view_images": True}})
+        with self.assertRaises(ValueError):
+            validate_workspace_config({"schema_version": WORKSPACE_SCHEMA_VERSION, "agents": {"view_images": "yes"}})
