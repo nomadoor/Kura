@@ -100,11 +100,11 @@ virtual machine instead of the owner's working machine:
 - The `kura.cmd` shim: arguments with spaces, Japanese text, and quotes; exit
   codes; UTF-8; and Ctrl-C.
 - What happens to a long `kura run execute` behind `wsl.exe` when the
-  Windows-side agent process exits. The job runner, which carries the run
-  since M3, kept running for 20 minutes after every Windows-side window
-  closed on the owner's PC with Docker Desktop running
-  (`docs/smoke-evidence/2026-10-08-wsl-runner-lifetime.yaml`); the case
-  without Docker Desktop is still open.
+  Windows-side agent process exits. A detached heartbeat in WSL kept running
+  for 20 minutes after every Windows-side window closed on the owner's PC with
+  Docker Desktop running (`docs/smoke-evidence/2026-10-08-wsl-runner-lifetime.yaml`);
+  the job runner, which carries the run since M3, is detached the same way.
+  The runner itself and the case without Docker Desktop are still open.
 - The first-run path on a Windows machine that never had WSL: `wsl --install`,
   Docker Desktop with WSL integration, then `kura doctor`.
 
