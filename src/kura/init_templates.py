@@ -102,7 +102,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"initialized workspace: {root}")
     gaps = readiness_gaps(root)
     if gaps:
-        print("still needed:")
+        print("not ready yet, for the kind of run each line names:")
         for gap in gaps:
             print(f"  - {gap}")
     else:
