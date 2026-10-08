@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
     inspect_dataset_sources,
@@ -366,7 +367,7 @@ def _hf_file_size_probe(item: dict[str, str], *, timeout_sec: int = 20) -> dict[
     quoted_filename = "/".join(urllib.parse.quote(part, safe="") for part in filename.split("/"))
     url = f"https://huggingface.co/{quoted_repo}/resolve/{quoted_revision}/{quoted_filename}"
     headers = {}
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    token = declared_secret("HF_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, method="HEAD", headers=headers)

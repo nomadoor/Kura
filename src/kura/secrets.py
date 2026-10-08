@@ -77,6 +77,21 @@ def load_secrets() -> None:
             _loaded_from[name] = source
 
 
+def declared_secret(name: str) -> str | None:
+    """A declared variable's value from the environment, under its own name or any declared alias.
+
+    Every place that sends a secret anywhere reads it here, so an alias the user
+    chose works on every executor alike.
+    """
+    for variable in USER_VARIABLES:
+        if variable.name == name:
+            for candidate in (variable.name, *variable.aliases):
+                if os.environ.get(candidate):
+                    return os.environ[candidate]
+            return None
+    raise ValueError(f"{name} is not a declared variable")
+
+
 def known_names() -> list[str]:
     """Names `kura secrets set` accepts: declared variables, aliases, and names workspace.yaml configures."""
     names = [variable.name for variable in USER_VARIABLES]
