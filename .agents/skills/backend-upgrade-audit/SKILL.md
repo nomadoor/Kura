@@ -79,9 +79,9 @@ Keep these claims distinct:
 2. **Expressible** — Kura validates and compiles the required configuration.
 3. **Image smoke** — the pinned image contains and starts the relevant code.
 4. **Real smoke** — actual weights complete at least one optimizer step and
-   materialize the expected artifact through Kura. This raises confidence but
-   is not required for every upstream-supported contract when Kura's source,
-   compile, and pinned-image evidence is complete.
+   materialize the expected artifact through Kura. Lower levels may be
+   recorded, but a family is presented to users as supported only after this
+   step ran on both local Docker and RunPod (`training-backends`).
 5. **Operationally verified** — recovery, download, and executor cleanup are
    confirmed where that scope is claimed.
 
