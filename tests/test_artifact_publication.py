@@ -45,6 +45,20 @@ class LocalOutputPublicationTests(unittest.TestCase):
         (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/launch.json"}), encoding="utf-8")
         return run_dir
 
+    def test_a_run_without_an_output_contract_records_its_unverified_publication(self) -> None:
+        from kura.status_projection import project_status
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            # A legacy run: no frozen command lock, so no outputs to verify.
+            (run_dir / "resolved" / "backend-command.lock.json").unlink()
+            (run_dir / "resolved" / "manifest.lock.yaml").unlink()
+            status = self._reconcile(run_dir)
+            self.assertEqual((status["state"], status["publication_state"]), ("completed", "legacy-unverified"))
+            recorded = json.loads((run_dir / "realizations" / "launch.publication-unverified.json").read_text(encoding="utf-8"))
+            self.assertEqual(recorded["kind"], "publication_unverified")
+            self.assertEqual(project_status(run_dir)["state"], "completed")
+
     def _reconcile(self, run_dir: Path) -> dict[str, object]:
         observed = subprocess.CompletedProcess([], 0, '{"Running": false, "ExitCode": 0}', "")
         with patch("kura.executors.docker.subprocess.run", return_value=observed):

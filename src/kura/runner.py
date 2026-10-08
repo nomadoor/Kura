@@ -740,7 +740,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         return 0
     if not _first_attempt(request):
         # An earlier follower died: its Pod holds nothing worth keeping, so it goes, and the render is not continued.
-        if not _delete_render_pod(workspace, run_dir, details):
+        if not _delete_pod(workspace, run_dir, details, why="the render ended"):
             return 1
         status = _status(run_dir)
         realization = _realization(run_dir, status.get("last_realization"))
@@ -767,7 +767,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     finally:
         set_stop_check(None)
     # A create cut short leaves an intent; the Pod it may have made is found by name and deleted.
-    if not _delete_render_pod(workspace, run_dir, details):
+    if not _delete_pod(workspace, run_dir, details, why="the render ended"):
         return 1
     status = _status(run_dir)
     realization = _realization(run_dir, status.get("last_realization"))
@@ -782,26 +782,6 @@ def _acknowledge_stop(run_dir: Path, request: Path) -> None:
     if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
         _record_request_outcome(request, ".stop-done.json", "stop_done")
         _log(f"{run_dir.name}: render stopped on request")
-
-
-def _delete_render_pod(workspace: Path, run_dir: Path, details: dict[str, Any]) -> bool:
-    """Settle an unconfirmed create and delete a render Pod still running; False when RunPod could not be asked."""
-    from kura.executors.runpod import resolve_runpod_create_intents, stop_runpod, unresolved_create_intents
-
-    config = details.get("runpod_config") if isinstance(details.get("runpod_config"), dict) else _runpod_config(workspace)
-    try:
-        if unresolved_create_intents(run_dir, "runpod"):
-            with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
-                for line in resolve_runpod_create_intents(run_dir, config):
-                    _log(f"{run_dir.name}: {line}")
-        status = _status(run_dir)
-        if isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at"):
-            stop_runpod(run_dir, config)
-            _log(f"{run_dir.name}: deleted the render Pod")
-    except (OSError, ValueError) as exc:
-        _log(f"{run_dir.name}: could not delete the render Pod ({exc}); the next follower tries again")
-        return False
-    return True
 
 
 # RunPod followers ---------------------------------------------------------------------
@@ -820,10 +800,45 @@ def _runpod_config(workspace: Path) -> dict[str, Any]:
     return runpod if isinstance(runpod, dict) else {}
 
 
+def _request_runpod_config(workspace: Path, details: dict[str, Any]) -> dict[str, Any]:
+    """The RunPod settings the user confirmed with the request; workspace.yaml only for older requests."""
+    config = details.get("runpod_config")
+    return config if isinstance(config, dict) else _runpod_config(workspace)
+
+
+def _settle_unconfirmed_creates(run_dir: Path, config: dict[str, Any]) -> None:
+    """Find by name any Pod a launch cut short may have created, so it can be deleted or followed."""
+    from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
+
+    if unresolved_create_intents(run_dir, "runpod"):
+        with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
+            for line in resolve_runpod_create_intents(run_dir, config):
+                _log(f"{run_dir.name}: {line}")
+
+
+def _delete_pod(workspace: Path, run_dir: Path, details: dict[str, Any], *, why: str) -> bool:
+    """Delete the run's Pod if one still runs, after settling an unconfirmed create.
+
+    False when RunPod could not be asked; the next follower tries again.
+    """
+    from kura.executors.runpod import stop_runpod
+
+    config = _request_runpod_config(workspace, details)
+    try:
+        _settle_unconfirmed_creates(run_dir, config)
+        status = _status(run_dir)
+        if isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at"):
+            stop_runpod(run_dir, config)
+            _log(f"{run_dir.name}: deleted the Pod ({why})")
+    except (OSError, ValueError) as exc:
+        _log(f"{run_dir.name}: could not delete the Pod ({exc}); the next follower tries again")
+        return False
+    return True
+
+
 def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     """Launch or continue a confirmed RunPod launch; billing was confirmed by the writer."""
-    from kura.executors.common import StopRequested, set_stop_check, unresolved_create_intents
-    from kura.executors.runpod import resolve_runpod_create_intents
+    from kura.executors.common import StopRequested, set_stop_check
 
     details = _read_json(request)
     if not details.get("billing_confirmed_at"):
@@ -831,10 +846,7 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         return 0
     set_stop_check(lambda: _sibling(request, ".stop.json").exists())
     try:
-        if unresolved_create_intents(run_dir, "runpod"):
-            with file_lock(run_dir / ".locks" / "runpod-launch.lock", blocking=False):
-                for line in resolve_runpod_create_intents(run_dir, _runpod_config(workspace)):
-                    _log(f"{run_dir.name}: {line}")
+        _settle_unconfirmed_creates(run_dir, _request_runpod_config(workspace, details))
         realization = _realization(run_dir, _status(run_dir).get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
         try:
@@ -852,11 +864,11 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
             code = 1
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             # A stop that ended a step inside the launch (a wait, a hold) is finished here.
-            _stop_runpod_on_request(workspace, run_dir, request)
+            _stop_runpod_on_request(workspace, run_dir, request, details)
             return 0
         return _settle_runpod_attempt(run_dir, request, details, code)
     except StopRequested:
-        _stop_runpod_on_request(workspace, run_dir, request)
+        _stop_runpod_on_request(workspace, run_dir, request, details)
         return 0
     finally:
         set_stop_check(None)
@@ -886,10 +898,7 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
     if run_finished(status):
         if _pod_left_running(status):
             # Collected or never started: either way nothing on the Pod is still needed.
-            from kura.executors.runpod import stop_runpod
-
-            stop_runpod(run_dir, _runpod_config(workspace))
-            _log(f"{run_dir.name}: deleted the Pod a finished run left running")
+            return 0 if _delete_pod(workspace, run_dir, details, why="the finished run left it running") else 1
         return 0
     if not isinstance(realization.get("pod"), dict) or status.get("pod_stopped_at") or status.get("pod_missing_at"):
         # The Pod is gone or was never created; nothing is left to follow.
@@ -899,7 +908,7 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
         from kura.executors.runpod import reconcile_runpod
 
         # An explicit observation records a Pod that is gone, so it is not followed or retried.
-        current = reconcile_runpod(run_dir, _runpod_config(workspace), source="explicit")
+        current = reconcile_runpod(run_dir, _request_runpod_config(workspace, details), source="explicit")
         if current.get("pod_missing_at"):
             end_run(run_dir, "interrupted", reason="the Pod no longer exists; outputs not collected before it went are gone")
             _notify_text(details, f"Kura run interrupted: {run_dir.name}",
@@ -921,11 +930,10 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
 
 def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> int:
     from kura.executors.common import end_run
-    from kura.executors.runpod import stop_runpod
 
-    stop_runpod(run_dir, _runpod_config(workspace))
+    if not _delete_pod(workspace, run_dir, details, why="its job never started"):
+        return 1
     end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
-    _log(f"{run_dir.name}: the Pod's job never started, so the Pod was deleted")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
                  f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Launch it again with `kura run execute {run_dir.name}`.")
     return 0
@@ -954,17 +962,8 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     return 0
 
 
-def _stop_runpod_on_request(workspace: Path, run_dir: Path, request: Path) -> None:
-    from kura.executors.runpod import resolve_runpod_create_intents, stop_runpod, unresolved_create_intents
-
-    try:
-        if unresolved_create_intents(run_dir, "runpod"):
-            resolve_runpod_create_intents(run_dir, _runpod_config(workspace))
-        status = _status(run_dir)
-        if isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at"):
-            stop_runpod(run_dir, _runpod_config(workspace))
-    except (OSError, ValueError) as exc:
-        _log(f"{run_dir.name}: could not stop the Pod ({exc}); the next follower tries again")
+def _stop_runpod_on_request(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> None:
+    if not _delete_pod(workspace, run_dir, details, why="`kura run stop`"):
         return
     _record_request_outcome(request, ".stop-done.json", "stop_done")
     _log(f"{run_dir.name}: stopped on request")

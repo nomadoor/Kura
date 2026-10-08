@@ -118,9 +118,10 @@ def _mtime(path: Path) -> float | None:
 def _publication_outcome(directory: Path, rid: str) -> str | None:
     """The newest publication record decides: published, or blocked and needing a person."""
     candidates = [(_mtime(path) or 0, "recovery_required") for path in directory.glob(f"{rid}.publication-attempt-*.json")]
-    published = _mtime(directory / f"{rid}.publication.json")
-    if published is not None:
-        candidates.append((published, "completed"))
+    for name in (f"{rid}.publication.json", f"{rid}.publication-unverified.json"):
+        published = _mtime(directory / name)
+        if published is not None:
+            candidates.append((published, "completed"))
     return max(candidates)[1] if candidates else None
 
 
@@ -152,6 +153,8 @@ def _docker_publication_state(directory: Path, rid: str, run_dir: Path) -> str:
     outcome = _publication_outcome(directory, rid)
     if outcome is not None:
         return outcome
+    # Published neither way yet: the publication step is still to run. A legacy run that
+    # completed before its record was written has no record to wait for.
     try:
         from kura.artifact_publication import output_contract
 

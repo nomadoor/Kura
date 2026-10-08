@@ -557,7 +557,8 @@ class RunPodFollowerTests(unittest.TestCase):
             with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop, \
                  patch("kura.run_commands.launch._run_remote_locked") as remote:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            stop.assert_called_once()
+            # The Pod is deleted with the settings the user confirmed, not workspace.yaml.
+            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
             remote.assert_not_called()
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "interrupted")
 
@@ -575,7 +576,7 @@ class RunPodFollowerTests(unittest.TestCase):
 
             with patch("kura.executors.runpod.stop_runpod", side_effect=stopped) as stop:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            stop.assert_called_once()
+            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertFalse(runner.run_unfinished(run_dir))
 
     def test_a_job_whose_pid_file_exists_is_followed_not_deleted(self) -> None:
@@ -631,8 +632,18 @@ class RunPodFollowerTests(unittest.TestCase):
                  patch("kura.executors.runpod.reconcile_runpod", side_effect=lambda run_dir_arg, *_a, **_k: json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8"))), \
                  patch("kura.executors.runpod.stop_runpod", return_value={}) as stop:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
-            stop.assert_called_once()
+            self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertTrue(runner.stop_done(run_dir))
+
+    def test_a_pod_that_could_not_be_deleted_counts_as_a_failed_attempt(self) -> None:
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")):
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            self.assertEqual(json.loads(runner._sibling(request, ".failures.json").read_text(encoding="utf-8"))["count"], 1)
+            self.assertTrue(runner.run_unfinished(run_dir))
 
     def test_a_stop_that_ended_the_capacity_wait_is_acknowledged_not_counted_as_a_failure(self) -> None:
         with _workspace() as (root, run_dir):

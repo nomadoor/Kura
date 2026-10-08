@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.install_source import kura_provenance
-from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure
+from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication
 from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
@@ -834,6 +834,8 @@ def reconcile_docker(
                     latest["state"] = "recovery_required" if blocked else "completed"
                     latest["recovery_required"] = blocked
                     latest["publication_state"] = "blocked" if blocked else "completed" if contract else "legacy-unverified"
+                    if not blocked and not contract:
+                        record_unverified_publication(run_dir, realization["id"], list(latest.get("outputs") or []))
                     if not blocked:
                         _materialize_stdout_progress(run_dir, latest, state="completed")
                 else:
