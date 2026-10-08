@@ -1767,17 +1767,18 @@ def cmd_run_stop(args: argparse.Namespace) -> int:
 
 
 def cmd_run_logs(args: argparse.Namespace) -> int:
+    # A RunPod training run's controller mirrors the remote log into logs/stdout.log while it runs, and
+    # `kura run download` brings the whole remote log; the downloaded copy wins, as in the monitor.
+    from kura.executors import read_run_status
+    from kura.monitor import _artifact_candidates
+
+    run_dir = _run_path(args.run_id)
     try:
-        status = json.loads((_run_path(args.run_id) / "status.json").read_text(encoding="utf-8"))
-        realization_ref = status.get("last_realization")
-        if isinstance(realization_ref, str):
-            realization = json.loads((_run_path(args.run_id) / realization_ref).read_text(encoding="utf-8"))
-            if realization.get("executor") == "runpod":
-                print(f"RunPod logs live in the remote workspace at {realization.get('logs_path')}; use the configured transfer method to fetch them. The RunPod console is diagnostic only.", file=sys.stderr)
-                return 1
-    except (OSError, json.JSONDecodeError):
-        pass
-    path = _run_path(args.run_id) / "logs" / "stdout.log"
+        status = read_run_status(run_dir)
+    except (OSError, ValueError):
+        status = {}
+    candidates = [item for item in _artifact_candidates(run_dir, status, "logs/stdout.log") if item.exists()]
+    path = candidates[-1] if candidates else run_dir / "logs" / "stdout.log"
     if not path.exists():
         print(f"no run log exists yet: {path}", file=sys.stderr)
         return 1
