@@ -810,7 +810,10 @@ def reconcile_docker(
                 except (OSError, ValueError) as exc:
                     output_error = _redact_secret_text(str(exc))
             errors = [item for item in (state_error, output_error) if item]
-            if capture_required and not published and not state_error:
+            missing_state = missing_training_state_error(
+                capture_required and not published and not state_error, trainer_completed=state == "completed",
+            )
+            if missing_state:
                 errors.append(MISSING_STATE_PUBLICATION_ERROR)
             publication_attempt = record_publication_failure(run_dir, realization["id"], "; ".join(errors)) if errors else None
 
@@ -832,8 +835,8 @@ def reconcile_docker(
                     ]
                 elif state_error:
                     latest["training_state_sync_error"] = state_error
-                elif missing := missing_training_state_error(capture_required, trainer_completed=state == "completed"):
-                    latest["training_state_sync_error"] = missing
+                elif missing_state:
+                    latest["training_state_sync_error"] = missing_state
                 else:
                     latest.pop("training_state_sync_error", None)
                 if state == "completed":

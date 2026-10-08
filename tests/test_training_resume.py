@@ -2339,6 +2339,8 @@ class ResumeRunTests(unittest.TestCase):
                     status = reconcile_docker(run_dir)
                 self.assertEqual(status["state"], "failed")
                 self.assertNotIn("training_state_sync_error", status)
+                self.assertNotIn("last_publication_attempt", status)
+                self.assertEqual(status["publication_state"], "not-required")
 
     def test_both_executors_ask_one_rule_whether_missing_state_is_an_error(self) -> None:
         from kura import training_artifacts
