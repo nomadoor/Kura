@@ -51,7 +51,8 @@ No single convention for local API tokens exists. The options were:
    `kura secrets set NAME` in their own terminal and waits.
 6. **Checks.** No check ever scans a secret file. `kura check secrets` loads
    the secrets like every other command and reports a line that holds a value
-   Kura has as a secret, or a fixed token shape (`hf_…`, `rpa_…`, `Bearer …`),
+   Kura has as a secret, or a fixed token shape (`hf_…`, `rpa_…`, `Bearer …`,
+   a private key's `-----BEGIN … PRIVATE KEY-----` line),
    by `path:line` only. It does not guess from names: a secret Kura does not
    hold, pasted without a token shape, is not found.
 7. **Names and values.** `kura.secrets.is_secret_name` decides whether a name
@@ -59,7 +60,8 @@ No single convention for local API tokens exists. The options were:
    `ACCESS KEY`, `PRIVATE KEY`, split at `_`, `-`, and case changes); every
    refusal of a secret name in a configuration or command uses it.
    `kura.secrets.secret_values` decides which values are secrets: those of
-   such names and of the key names `workspace.yaml` chooses. Output redaction
+   eight or more characters under such names and under the key names
+   `workspace.yaml` chooses; a shorter value is neither hidden nor looked for. Output redaction
    and the check above use it. A value the user picks as a plain word, such as
    an ntfy topic, is not one: hiding it would rewrite matching text in every
    record.

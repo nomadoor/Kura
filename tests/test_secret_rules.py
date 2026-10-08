@@ -57,6 +57,10 @@ class SecretFileTests(unittest.TestCase):
     def test_a_token_shape_is_found_even_next_to_a_known_name(self) -> None:
         self.assertTrue(self._scan(f"HF_TOKEN={HF}"))
 
+    def test_a_pasted_private_key_is_found_by_its_header(self) -> None:
+        self.assertTrue(self._scan("-----BEGIN OPENSSH " + "PRIVATE KEY-----"))
+        self.assertEqual(self._scan("-----BEGIN PUBLIC KEY-----"), [])
+
     def test_names_and_guesses_are_not_findings(self) -> None:
         for line in ("password: correcthorse", "api_key_env: RUNPOD_API_KEY", 'hf_token = declared_secret("HF_TOKEN")'):
             with self.subTest(line=line):

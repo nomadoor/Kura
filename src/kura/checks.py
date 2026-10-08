@@ -26,6 +26,8 @@ SECRET_PATTERNS = [
     re.compile(r"hf_[A-Za-z0-9]{20,}"),
     re.compile(r"rpa_[A-Za-z0-9]{20,}", re.IGNORECASE),
     re.compile(r"Bearer\s+[A-Za-z0-9_./+=:-]{12,}", re.IGNORECASE),
+    # A pasted private key spans many lines; its header line is on one.
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 ]
 MODEL_SUFFIXES = {".safetensors", ".ckpt", ".pt", ".pth", ".gguf", ".onnx", ".bin"}
 
