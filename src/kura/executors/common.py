@@ -58,6 +58,46 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
+# A run that shows no progress this long is worth a look; status, the follower, and the monitor all say so at this age.
+QUIET_RUN_NOTICE_SEC = 15 * 60
+
+
+def run_quiet_since(run_dir: Path, status: dict[str, Any]) -> datetime | None:
+    """When a running run last showed progress; None unless it is running.
+
+    Progress is new output in its log or metrics, the launch of its current
+    realization (a relaunch starts with the previous log still in place), or a
+    launch phase it records (a RunPod upload). A status write is not progress:
+    the RunPod controller rewrites status on every sync, and appends only new
+    remote output to the local log.
+    """
+    if status.get("state") not in OBSERVABLE_STATES:
+        return None
+    paths = [run_dir / "logs" / "stdout.log", run_dir / "metrics" / "metrics.jsonl"]
+    reference = status.get("last_realization")
+    if isinstance(reference, str) and reference:
+        realization = run_dir / reference
+        paths += [realization, realization.with_name(f"{realization.stem}.phases.jsonl")]
+    times = []
+    for path in paths:
+        try:
+            times.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return datetime.fromtimestamp(max(times)).astimezone() if times else None
+
+
+def quiet_run_notice(since: datetime | None) -> str | None:
+    """What to tell a reader about a run that has shown no progress for long enough to matter."""
+    if since is None:
+        return None
+    minutes = int((datetime.now().astimezone() - since).total_seconds() // 60)
+    if minutes * 60 < QUIET_RUN_NOTICE_SEC:
+        return None
+    return (f"no new output for {minutes} minutes: the run may be hung, or in a long step that prints nothing. "
+            "Read the end of logs/stdout.log; `kura run stop` stops it if it is stuck.")
+
+
 # Nothing more happens to a run in these on its own; an observation or a stop never overwrites them.
 TERMINAL_STATES = frozenset({"completed", "failed", "stopped", "interrupted", "unknown", "launch_failed", "recovery_required"})
 
