@@ -1127,7 +1127,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "cadence_steps": state_cadence,
         "capability": state_capability,
         # The answer that decides what happens: the trainer saves state, and a finished run must leave it.
-        "saved": training_state_managed(run),
+        "saved": training_state_managed(run, frozen=source == manifest),
         "warning": (
             "disabled: crash or Pod-loss Resume is unavailable"
             if not state_policy["enabled"]

@@ -80,6 +80,19 @@ class OneRuleTests(unittest.TestCase):
                 self.assertEqual("--save_state" in argv, supported)
 
 
+class RuleEdgeTests(unittest.TestCase):
+    def test_a_custom_command_and_a_manifest_compiled_before_managed_state_keep_no_state(self) -> None:
+        custom = base_run("sdxl", "lora")
+        custom["backend"]["config"] = {"command": {"cwd": "/opt", "argv": ["python", "train.py"]}}
+        custom["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+        self.assertFalse(training_state_managed(custom))
+        legacy = base_run("sdxl", "lora")  # frozen without `recovery`
+        self.assertFalse(training_state_managed(legacy, frozen=True))
+        self.assertTrue(training_state_managed(legacy))  # authored run.yaml: the policy default applies
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertFalse(training_state_capture_required(_compiled(directory, legacy)))
+
+
 class EveryBackendTests(unittest.TestCase):
     def test_every_backend_saves_state_exactly_when_a_finished_run_must_leave_it(self) -> None:
         from kura.backends import get_backend

@@ -579,16 +579,23 @@ def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:
     return adapter.training_state(run)
 
 
-def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None) -> bool:
+def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None, *, frozen: bool = False) -> bool:
     """The one rule for whether Kura manages a run's training state.
 
-    The run asks for it (`recovery.training_state.enabled`) and the backend can
-    restore it for this architecture and mode. Backends save state only then,
-    and every executor requires a completed run to leave state only then. A
-    backend building its own command passes its contract; others look it up.
-    A frozen manifest compiled before Kura managed state (no `recovery`) is
-    handled by `training_state_capture_required`; its trainer saved none.
+    The run asks for it (`recovery.training_state.enabled`), Kura builds its
+    command (a custom `backend.config.command` has no state contract), and the
+    backend can restore state for this architecture and mode. Backends save
+    state only then, and every executor requires a completed run to leave state
+    only then. A backend building its own command passes its contract; others
+    look it up. `frozen` marks a compiled manifest: compile always freezes
+    `recovery`, so one without it was compiled before Kura managed state.
     """
+    if frozen and not isinstance(run.get("recovery"), dict):
+        return False
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+    if config.get("command") is not None:
+        return False
     if not training_state_policy(run)["enabled"]:
         return False
     contract = training_state_contract(run) if contract is None else contract
@@ -599,11 +606,7 @@ def training_state_capture_required(run_dir: Path) -> bool:
     """Return whether a completed run is expected to publish recoverable state."""
 
     run, _, _ = _published_run_context(run_dir)
-    if not isinstance(run.get("recovery"), dict):
-        # Compile always freezes `recovery`; a manifest without it was compiled before
-        # Kura managed training state, and its trainer was never asked to save any.
-        return False
-    return training_state_managed(run)
+    return training_state_managed(run, frozen=True)
 
 
 def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
