@@ -635,6 +635,15 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             )
 
             def mutate(status: dict[str, Any]) -> None:
+                # The record that the downloaded snapshot was accepted comes first; a snapshot
+                # refused below stays on disk but never counts as the run's end.
+                accepted_id = _status_realization_id(status)
+                (run_dir / "realizations").mkdir(parents=True, exist_ok=True)
+                atomic_write_json(run_dir / "realizations" / f"{accepted_id}.snapshot-accepted.json", record("snapshot_accepted", {
+                    "realization_id": accepted_id, "at": datetime.now().astimezone().isoformat(),
+                    "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)),
+                    "exit_code": exit_code,
+                }))
                 if input_postflight is not None:
                     status["dataset_input_postflight"] = input_postflight
                 status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
