@@ -563,12 +563,15 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
     kura_managed = [item for item in requirements if item.get("acquisition") == "kura"]
     backend_managed = [item for item in requirements if item.get("acquisition") == "backend"]
     if backend_managed and not kura_managed:
-        roles = ", ".join(str(item.get("role") or "model") for item in backend_managed)
+        sources = ", ".join(str(item.get("runtime_reference") or item.get("role") or "model") for item in backend_managed)
         return [
             _preflight_record(
                 "model-acquisition",
                 "info",
-                f"backend resolves {roles} at runtime; controller download size is not measured",
+                f"the trainer downloads {sources} itself before the first step, "
+                + ("on every run, while the Pod bills: each Pod starts with an empty cache"
+                   if executor == "runpod" else "unless the Hugging Face cache local runs mount already holds it")
+                + "; Kura cannot know the size in advance",
                 "run.yaml",
             )
         ]
