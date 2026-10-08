@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from kura.dataset_handoff import handoff_was_frozen
 from kura.secrets import declared_secret
 from kura.install_source import kura_provenance
 from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
@@ -94,7 +95,7 @@ def _finalize_dataset_handoff(
 ) -> dict[str, Any] | None:
     """Record terminal input evidence once, then remove only the disposable view."""
     lock_path = run_dir / "resolved" / "dataset-input.lock.json"
-    if not lock_path.is_file():
+    if not handoff_was_frozen(run_dir):
         return None
     current = _load_status(run_dir)
     if current.get("last_realization") != realization_ref:
@@ -103,8 +104,6 @@ def _finalize_dataset_handoff(
     lock_error: str | None = None
     try:
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
-        if not isinstance(lock, dict) or lock.get("schema_version") != 2:
-            return None
     except (OSError, json.JSONDecodeError) as exc:
         lock = None
         lock_error = _redact_secret_text(str(exc))
