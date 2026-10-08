@@ -17,6 +17,7 @@ from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.training_artifacts import training_state_managed
 from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
 
 
@@ -332,7 +333,7 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
                 raise ValueError(f"sd-scripts {key} must be a positive integer")
             args.extend([f"--{key}", str(value)])
     policy = training_state_policy(run)
-    if policy["enabled"]:
+    if training_state_managed(run, training_state_contract_sd_scripts(run)):
         epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
         configured_epoch_flags = sorted(arg.split("=", 1)[0] for arg in _extra_args(native) if arg.split("=", 1)[0] in epoch_flags)
         if configured_epoch_flags:
@@ -442,7 +443,7 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     native_training_argv = _base_training_args(run, native, paths, train_output, output_name)
     training_argv = ["accelerate", "launch", "--num_cpu_threads_per_process", "1"]
     state_contract = training_state_contract_sd_scripts(run)
-    if training_state_policy(run)["enabled"] and state_contract.get("capability") != "unsupported":
+    if training_state_managed(run, state_contract):
         runner_spec = {"entrypoint": native_training_argv[0], "argv": native_training_argv[1:]}
         training_argv.extend(
             [
@@ -515,8 +516,7 @@ def compile_sd_scripts(run: dict[str, Any], destination: Path) -> dict[str, Any]
         projection=projection,
     )
     atomic_write_yaml(destination / "model-bundle.lock.yaml", sd_scripts_model_lock(run))
-    state_contract = training_state_contract_sd_scripts(run)
-    if training_state_policy(run)["enabled"] and state_contract.get("capability") != "unsupported":
+    if training_state_managed(run, training_state_contract_sd_scripts(run)):
         atomic_write_text(destination / "state-runner.py", script_source("sd_scripts_state.py") + "\n")
     command = command_sd_scripts(run)
     atomic_write_json(destination / "command.json", command)
