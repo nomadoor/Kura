@@ -342,7 +342,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         ended = None
     outputs_path = _outputs_path(run_dir, status)
     quiet_since = run_quiet_since(run_dir, status)
-    is_stale = bool(quiet_since and (datetime.now().astimezone() - quiet_since).total_seconds() > stale_after)
+    is_stale = bool(quiet_since and (datetime.now().astimezone() - quiet_since).total_seconds() >= QUIET_RUN_NOTICE_SEC)
     capacity_wait_raw = status.get("capacity_wait") if isinstance(status.get("capacity_wait"), dict) else {}
     capacity_wait = _capacity_wait_info(capacity_wait_raw) if state == "queued" and capacity_wait_raw else None
     if capacity_wait:

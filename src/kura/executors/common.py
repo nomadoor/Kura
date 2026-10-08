@@ -58,23 +58,26 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
-# A run that shows no progress this long is worth a look; the monitor marks it stale at the same age.
+# A run that shows no progress this long is worth a look; status, the follower, and the monitor all say so at this age.
 QUIET_RUN_NOTICE_SEC = 15 * 60
 
 
 def run_quiet_since(run_dir: Path, status: dict[str, Any]) -> datetime | None:
     """When a running run last showed progress; None unless it is running.
 
-    Progress is new output in its log or metrics, or the launch of its current
-    realization (a relaunch starts with the previous log still in place). A
-    status write is not progress: the RunPod controller rewrites status on every
-    sync, and the controller appends only new remote output to the local log.
+    Progress is new output in its log or metrics, the launch of its current
+    realization (a relaunch starts with the previous log still in place), or a
+    launch phase it records (a RunPod upload). A status write is not progress:
+    the RunPod controller rewrites status on every sync, and appends only new
+    remote output to the local log.
     """
     if status.get("state") not in OBSERVABLE_STATES:
         return None
     paths = [run_dir / "logs" / "stdout.log", run_dir / "metrics" / "metrics.jsonl"]
-    if isinstance(status.get("last_realization"), str):
-        paths.append(run_dir / status["last_realization"])
+    reference = status.get("last_realization")
+    if isinstance(reference, str) and reference:
+        realization = run_dir / reference
+        paths += [realization, realization.with_name(f"{realization.stem}.phases.jsonl")]
     times = []
     for path in paths:
         try:

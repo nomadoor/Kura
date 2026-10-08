@@ -52,7 +52,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 093f4f6cb42a117e58e9e884adb7c31d07150a3803bde1b1c7000bf1fcd9e7c1
+      value: 88f02163bf38bb404482743e2fd8c257186efe64e48b3c42b08b02b853c59799
   - id: runpod-executor-missing-state-recorded-2026-10-08
     executor: runpod
     reason: >-

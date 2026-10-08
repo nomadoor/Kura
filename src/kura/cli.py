@@ -1490,7 +1490,7 @@ def main() -> None:
 
     monitor = sub.add_parser("monitor", help="Open the run monitor TUI")
     monitor.add_argument("--interval", type=float, default=2.0)
-    monitor.add_argument("--stale-after", type=float, default=90.0)
+    monitor.add_argument("--stale-after", type=float, default=90.0, help="seconds a GPU-capacity wait may go without a probe before it is marked stale")
     monitor.add_argument("--limit", type=int, default=30)
     monitor.add_argument("--all", action="store_true", help="Show draft runs in the monitor")
     monitor.set_defaults(func=cmd_monitor)

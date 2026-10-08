@@ -74,6 +74,26 @@ class QuietRunTests(unittest.TestCase):
             self.assertTrue(summary.is_stale)
             self.assertEqual(_staleness_label(summary), " stale")
 
+    def test_the_monitor_and_status_agree_on_a_short_quiet_spell(self) -> None:
+        from kura.monitor import collect_run_summary
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _running(directory, quiet_sec=3 * 60)
+            self.assertFalse(collect_run_summary(run_dir.parent.parent, "example").is_stale)
+            self.assertNotIn("quiet", _status_summary(run_dir))
+
+    def test_a_recorded_launch_phase_is_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _running(directory, quiet_sec=20 * 60, executor="runpod")
+            (run_dir / "realizations" / "r1.phases.jsonl").write_text('{"phase": "upload_started"}\n', encoding="utf-8")
+            self.assertNotIn("quiet", _status_summary(run_dir))
+
+    def test_an_empty_realization_reference_is_not_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = _running(directory, quiet_sec=20 * 60)
+            (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": ""}), encoding="utf-8")
+            self.assertIn("quiet", _status_summary(run_dir))
+
     def test_following_says_once_that_the_run_has_gone_quiet(self) -> None:
         from kura import runner
         from kura.fsio import file_lock
