@@ -22,7 +22,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
-from kura.images import runpod_min_cuda_version
+from kura.images import runpod_min_cuda_version, runpod_min_cuda_for
 from kura.install_source import kura_provenance
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
@@ -576,7 +576,7 @@ def confirm_runpod_billing(
     writer's, never the runner's.
     """
     settings = _runpod_settings(config)
-    min_cuda = runpod_min_cuda_version("" if settings.get("template_id") else image)
+    min_cuda = runpod_min_cuda_for(settings, image)
     return _confirm_runpod_launch(
         config, settings, yes=yes, max_lease_sec=max_lease_sec, wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait, min_cuda_version=min_cuda,
@@ -1162,7 +1162,7 @@ sleep infinity
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"], "env": runtime_env,
         # A template supplies its own image, whose CUDA version Kura does not know.
-        "minCudaVersion": runpod_min_cuda_version("" if settings.get("template_id") else image),
+        "minCudaVersion": runpod_min_cuda_for(settings, image),
     }
     if settings.get("support_public_ip") is not None:
         request_body["supportPublicIp"] = bool(settings["support_public_ip"])

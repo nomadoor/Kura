@@ -22,7 +22,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.images import image_cuda_version, runpod_min_cuda_version
-from kura.run_commands.common import _effective_image, _safe_error
+from kura.run_commands.common import _effective_image, _safe_error, requested_gpu_types
 from kura.executors.runpod import LEASE_DEADLINE_PATH
 from kura.run_commands.runpod_ssh import record_lease_deadline
 from kura.run_commands.runpod_ssh import _free_local_port, _runpod_secret_env_payload, _runpod_ssh_details, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
@@ -264,9 +264,9 @@ def launch_render_runpod(
         if image:
             remote_image = image
         compute = frozen.get("compute") if isinstance(frozen.get("compute"), dict) else {}
-        gpu_override = compute.get("gpu") if isinstance(compute, dict) else None
-        if isinstance(gpu_override, str) and gpu_override and gpu_override.lower() not in {"true", "false", "gpu", "cpu"}:
-            runpod_config["gpu_type_ids"] = [gpu_override]
+        requested = requested_gpu_types(compute)
+        if requested is not None:
+            runpod_config["gpu_type_ids"] = requested
             runpod_config["gpu_type_priority"] = "custom"
         model_specs = frozen.get("comfyui_models")
         model_registry = frozen.get("comfyui_model_registry")

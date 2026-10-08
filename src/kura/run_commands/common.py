@@ -21,6 +21,36 @@ def _effective_image(name: str) -> dict[str, str]:
     return effective_image(_workspace_config(), name)
 
 
+def requested_gpu_types(compute: Any) -> list[str] | None:
+    """The GPU types a run names in `compute.gpu` (one or a list); None when it names none.
+
+    Training launches, render launches, and the plan all read the choice here.
+    """
+    gpu = compute.get("gpu") if isinstance(compute, dict) else None
+    if isinstance(gpu, str) and gpu and gpu.lower() not in {"true", "false", "gpu", "cpu"}:
+        return [gpu]
+    if isinstance(gpu, list) and gpu and all(isinstance(item, str) and item for item in gpu):
+        return list(gpu)
+    return None
+
+
+def runpod_settings_for_adapter(source: Any, adapter: Any, image_name: str) -> dict[str, Any]:
+    """The workspace's RunPod settings as a launch of this adapter uses them.
+
+    A template is kept only for an adapter that accepts one; otherwise the
+    adapter's ports apply. The plan and the launch both start from here.
+    """
+    settings = dict(source) if isinstance(source, dict) else {}
+    if not adapter.runpod_template_compatible:
+        settings.pop("template_id", None)
+        backend_ports = settings.get("backend_ports")
+        if isinstance(backend_ports, dict) and isinstance(backend_ports.get(image_name), list):
+            settings["ports"] = backend_ports[image_name]
+        else:
+            settings["ports"] = list(adapter.default_ports)
+    return settings
+
+
 def _backend_image_name(backend_name: Any) -> str:
     return get_backend(backend_name).image_name
 
