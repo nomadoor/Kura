@@ -115,10 +115,14 @@ stop Pod
   maximum lease, obtain user approval, then record and compile the approved
   executor change.
 - Do not stop a disposable Pod until remote exit and local download are confirmed.
-  A completed trainer must also leave a durable training state, or the Pod is
-  kept for recovery. A failed trainer whose downloaded snapshot has no state
-  completes as failed with `training_state_sync_error`, because the snapshot
-  already holds everything the Pod had.
+  When the run's training state is managed (`kura run plan` shows
+  `saved: yes`: recovery is enabled and the backend can resume this
+  architecture and mode), a completed trainer must also leave a durable
+  training state, or the Pod is kept for recovery, and a failed trainer whose
+  downloaded snapshot has no state completes as failed with
+  `training_state_sync_error`, because the snapshot already holds everything
+  the Pod had. A run whose state is not managed saves none and is never held
+  for it, on Docker and RunPod alike.
 - The SSH job exports the frozen command's `env` (Kura's own variables win);
   an SSH session does not inherit the Pod's create-time environment.
 - Terminal finalization reuses only checkpoints recorded by the periodic mirror
