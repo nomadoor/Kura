@@ -28,7 +28,7 @@ from kura.workspace import run_path as _run_path
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.images import launch_image
-from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error
+from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error, requested_gpu_types, runpod_settings_for_adapter
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
@@ -574,27 +574,15 @@ def launch_run(
         else:
             if wait:
                 raise ValueError("run launch --wait is only supported for local Docker runs; use `kura run remote` for RunPod")
-            source_runpod_config = config.get("runpod", {})
-            runpod_config = dict(source_runpod_config) if isinstance(source_runpod_config, dict) else {}
+            runpod_config = runpod_settings_for_adapter(config.get("runpod", {}), adapter, image_name)
             if continuation is not None and continuation.get("mode") == "resume" and not selected["frozen"]:
                 raise ValueError("Resume remote runtime has no compile-time frozen image; recompile the run")
             remote_image = selected["reference"]
-            if not adapter.runpod_template_compatible:
-                runpod_config.pop("template_id", None)
-                backend_ports = runpod_config.get("backend_ports")
-                if isinstance(backend_ports, dict) and isinstance(backend_ports.get(image_name), list):
-                    runpod_config["ports"] = backend_ports[image_name]
-                else:
-                    runpod_config["ports"] = list(adapter.default_ports)
             if image:
                 remote_image = image
-            compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
-            gpu_override = compute.get("gpu") if isinstance(compute, dict) else None
-            if isinstance(gpu_override, str) and gpu_override and gpu_override.lower() not in {"true", "false", "gpu", "cpu"}:
-                runpod_config["gpu_type_ids"] = [gpu_override]
-                runpod_config["gpu_type_priority"] = "custom"
-            elif isinstance(gpu_override, list) and all(isinstance(item, str) and item for item in gpu_override):
-                runpod_config["gpu_type_ids"] = list(gpu_override)
+            requested = requested_gpu_types(locked.get("compute"))
+            if requested is not None:
+                runpod_config["gpu_type_ids"] = requested
                 runpod_config["gpu_type_priority"] = "custom"
             if runpod_config_override is not None:
                 # A runner launch uses the settings the user confirmed, not workspace.yaml as it is now.
