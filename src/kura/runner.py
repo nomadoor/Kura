@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, log_silence_notice, log_silence_seconds
+from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -1031,7 +1031,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     out = out or sys.stderr
     restarts = 0
     queued_said = False
-    silence_said = False
+    quiet_said = False
     log_path = run_dir / "logs" / "stdout.log"
     offset = log_path.stat().st_size if log_path.exists() else 0
     # The follower's own messages (capacity wait, transfer, download, stop) are part of what the user sees.
@@ -1048,12 +1048,12 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
         if not queued_said and request in pending_requests(run_dir) and runner_alive(workspace) and local_slots_full(workspace):
             queued_said = True
             print("waiting for a free local slot: another local training run is using it (`runner.local_slots`)", file=out)
-        # Said once per silence; a log that moves again resets it.
-        silence = log_silence_notice(log_silence_seconds(run_dir))
-        if silence and not silence_said:
-            print(silence, file=out)
-        silence_said = silence is not None
         status = _status(run_dir)
+        # Said once per quiet spell; progress resets it.
+        quiet = quiet_run_notice(run_quiet_since(run_dir, status))
+        if quiet and not quiet_said:
+            print(quiet, file=out)
+        quiet_said = quiet is not None
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
         if launched and run_finished(status) and (not _held(run_dir) or (held_for_review and status.get("downloaded_run"))):

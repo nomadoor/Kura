@@ -19,7 +19,7 @@ import yaml
 from kura.training_artifacts import checkpoint_step
 from kura.backends import get_backend
 from kura.executors import ACTIVE_STATES, read_run_status
-from kura.executors.common import UNSUCCESSFUL_STATES, is_realization_record
+from kura.executors.common import QUIET_RUN_NOTICE_SEC, UNSUCCESSFUL_STATES, is_realization_record, run_quiet_since
 from kura.run_envelope import common_recipe, run_executor
 
 
@@ -114,6 +114,7 @@ class RunSummary:
     executor_info: ExecutorInfo = field(default_factory=ExecutorInfo)
     capacity_wait: CapacityWaitInfo | None = None
     is_stale: bool = False
+    quiet_since: datetime | None = None
     activity: str | None = None
     resume_source_run: str | None = None
     resume_artifact_id: str | None = None
@@ -340,7 +341,8 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
     if state in ACTIVE_STATES:
         ended = None
     outputs_path = _outputs_path(run_dir, status)
-    is_stale = bool(state == "running" and last_updated and (datetime.now().astimezone() - last_updated).total_seconds() > stale_after)
+    quiet_since = run_quiet_since(run_dir, status)
+    is_stale = bool(quiet_since and (datetime.now().astimezone() - quiet_since).total_seconds() > stale_after)
     capacity_wait_raw = status.get("capacity_wait") if isinstance(status.get("capacity_wait"), dict) else {}
     capacity_wait = _capacity_wait_info(capacity_wait_raw) if state == "queued" and capacity_wait_raw else None
     if capacity_wait:
@@ -381,6 +383,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         executor_info=_executor_info(executor, config, status, realization, run_dir),
         capacity_wait=capacity_wait,
         is_stale=is_stale,
+        quiet_since=quiet_since,
         activity=_capacity_wait_activity(capacity_wait, stale=is_stale) if capacity_wait else stdout_activity,
         resume_source_run=_string(config.get("parent_run")) if resume_source else None,
         resume_artifact_id=_string(resume_source.get("artifact_id")),
@@ -1276,7 +1279,7 @@ def _loss_style(values: tuple[float, ...]) -> str:
 
 def _staleness_label(summary: RunSummary) -> str:
     stale = _staleness_seconds(summary)
-    if stale >= 900:
+    if stale >= QUIET_RUN_NOTICE_SEC:
         return " stale"
     if stale >= 300:
         return " slow"
@@ -1285,7 +1288,7 @@ def _staleness_label(summary: RunSummary) -> str:
 
 def _staleness_style(summary: RunSummary) -> str:
     stale = _staleness_seconds(summary)
-    if stale >= 900:
+    if stale >= QUIET_RUN_NOTICE_SEC:
         return "red"
     if stale >= 300:
         return "yellow"
@@ -1293,9 +1296,9 @@ def _staleness_style(summary: RunSummary) -> str:
 
 
 def _staleness_seconds(summary: RunSummary) -> int:
-    if (summary.state or "").lower() != "running" or not summary.last_updated:
+    if not summary.quiet_since:
         return 0
-    return max(int((datetime.now().astimezone() - summary.last_updated).total_seconds()), 0)
+    return max(int((datetime.now().astimezone() - summary.quiet_since).total_seconds()), 0)
 
 
 def _config_width(terminal_width: int) -> int:

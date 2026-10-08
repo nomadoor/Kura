@@ -8,7 +8,6 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -59,32 +58,41 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
-# A trainer prints progress at least every few minutes; this long without a new line is worth a look.
-LOG_SILENCE_NOTICE_SEC = 15 * 60
+# A run that shows no progress this long is worth a look; the monitor marks it stale at the same age.
+QUIET_RUN_NOTICE_SEC = 15 * 60
 
 
-def log_silence_seconds(run_dir: Path, *, now: float | None = None) -> float | None:
-    """How long a running run's log has gone without a new line; None when the run is not running or has no log.
+def run_quiet_since(run_dir: Path, status: dict[str, Any]) -> datetime | None:
+    """When a running run last showed progress; None unless it is running.
 
-    The RunPod controller appends only new remote output, so the local log's age
-    is the trainer's silence on both executors (or a sync that stopped reaching it).
+    Progress is new output in its log or metrics, or the launch of its current
+    realization (a relaunch starts with the previous log still in place). A
+    status write is not progress: the RunPod controller rewrites status on every
+    sync, and the controller appends only new remote output to the local log.
     """
-    try:
-        state = json.loads((run_dir / "status.json").read_text(encoding="utf-8")).get("state")
-        modified = (run_dir / "logs" / "stdout.log").stat().st_mtime
-    except (OSError, json.JSONDecodeError, AttributeError):
+    if status.get("state") not in OBSERVABLE_STATES:
         return None
-    if state not in OBSERVABLE_STATES:
-        return None
-    return max(0.0, (time.time() if now is None else now) - modified)
+    paths = [run_dir / "logs" / "stdout.log", run_dir / "metrics" / "metrics.jsonl"]
+    if isinstance(status.get("last_realization"), str):
+        paths.append(run_dir / status["last_realization"])
+    times = []
+    for path in paths:
+        try:
+            times.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return datetime.fromtimestamp(max(times)).astimezone() if times else None
 
 
-def log_silence_notice(seconds: float | None) -> str | None:
-    """What to tell a reader about a silent log, once it has been silent long enough to matter."""
-    if seconds is None or seconds < LOG_SILENCE_NOTICE_SEC:
+def quiet_run_notice(since: datetime | None) -> str | None:
+    """What to tell a reader about a run that has shown no progress for long enough to matter."""
+    if since is None:
         return None
-    return (f"no new trainer output for {int(seconds // 60)} minutes; the trainer may be hung or in a long silent step. "
-            "Read the end of logs/stdout.log, then stop the run with `kura run stop` if it is stuck.")
+    minutes = int((datetime.now().astimezone() - since).total_seconds() // 60)
+    if minutes * 60 < QUIET_RUN_NOTICE_SEC:
+        return None
+    return (f"no new output for {minutes} minutes: the run may be hung, or in a long step that prints nothing. "
+            "Read the end of logs/stdout.log; `kura run stop` stops it if it is stuck.")
 
 
 # Nothing more happens to a run in these on its own; an observation or a stop never overwrites them.
