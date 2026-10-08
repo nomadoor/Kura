@@ -40,8 +40,8 @@ class RunStateVocabularyTests(unittest.TestCase):
             for match in literal.finditer(path.read_text(encoding="utf-8")):
                 names = re.findall(r"\"([a-z_]+)\"", match.group(1))
                 if len(names) >= 2 and set(names) <= RUN_STATES and len(set(names) & {"completed", "failed", "interrupted", "compiled", "running", "launch_failed"}) >= 2:
-                    if local.get(str(path.relative_to(SRC))) != names:
-                        offenders.append(f"{path.relative_to(SRC)}: {names}")
+                    if local.get(path.relative_to(SRC).as_posix()) != names:
+                        offenders.append(f"{path.relative_to(SRC).as_posix()}: {names}")
         self.assertEqual(offenders, [])
 
 
