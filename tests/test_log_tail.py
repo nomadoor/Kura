@@ -146,6 +146,28 @@ class RunLogsCommandTests(unittest.TestCase):
                     self.assertEqual(cmd_run_logs(argparse.Namespace(run_id="example", follow=False)), 0)
                 self.assertIn("steps: 3/50", out.getvalue())
 
+    def test_a_downloaded_run_shows_the_complete_downloaded_log(self) -> None:
+        import argparse
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from unittest.mock import patch
+
+        from kura.run_commands.plan import cmd_run_logs
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "logs").mkdir(parents=True)
+            (run_dir / "downloads" / "example" / "logs").mkdir(parents=True)
+            (run_dir / "logs" / "stdout.log").write_text("steps: 3/50\n", encoding="utf-8")
+            (run_dir / "downloads" / "example" / "logs" / "stdout.log").write_text("steps: 3/50\nsteps: 50/50\n", encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"state": "completed", "downloaded_run": "downloads/example"}), encoding="utf-8")
+            out = io.StringIO()
+            with patch("kura.run_commands.plan._run_path", return_value=run_dir), contextlib.redirect_stdout(out):
+                self.assertEqual(cmd_run_logs(argparse.Namespace(run_id="example", follow=False)), 0)
+        self.assertIn("steps: 50/50", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
