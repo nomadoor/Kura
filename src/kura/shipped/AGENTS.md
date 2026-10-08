@@ -92,12 +92,13 @@ the answer.
 
 Before launching, run `kura run plan <run-id>` and show the output to the user.
 Do not reconstruct launch settings from memory. Launch only after explicit
-approval; if anything changes afterward, record it in `run.yaml`, recompile,
-and show the plan again. Do not silently change batch, resolution, precision,
-or other quality, memory, or cost trade-offs. When a run does not fit its
-hardware, diagnose from evidence (OOM logs, stalled startup, doctor output),
-record the accepted change in `run.yaml` before recompiling and launching a new
-realization, and never silently retry with changed settings.
+approval. A compiled run never changes: if anything changes afterward, start a
+new run from its settings with `kura run new --from <run-id>`, make the change
+in the new `run.yaml`, compile it, and show its plan again. Do not silently
+change batch, resolution, precision, or other quality, memory, or cost
+trade-offs. When a run does not fit its hardware, diagnose from evidence (OOM
+logs, stalled startup, doctor output), make the accepted change in a new run
+the same way, and never silently retry with changed settings.
 
 Starting a run is not finishing the request. Unless the user asks to start and
 detach, run `kura run execute <run-id>` through the agent host's tracked

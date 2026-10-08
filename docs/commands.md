@@ -42,6 +42,7 @@ for the complete, authoritative, up-to-date list of commands and options.
 | Command | Purpose |
 | --- | --- |
 | `uv run kura run new --experiment <name> --slug <slug> [--backend ai-toolkit\|musubi-tuner\|sd-scripts] [--executor docker\|runpod] [--gpu <name>]` | Create a train run |
+| `uv run kura run new --from <run-id> --slug <slug> [--experiment <name>]` | Create a train run from another training run's `run.yaml`; a compiled run never changes, so a change starts here |
 | `uv run kura run capabilities <backend> [--json]` | Show the `backend.config` fields that backend accepts, including reviewed nested fields and their types/ranges, selector applicability, unverified escape hatches, and unsupported concepts |
 | `uv run kura run plan <run-id>` | Show training settings, Resources facts, model download estimates, and warnings that will be launched |
 | `uv run kura run resume <source-run> --additional-steps <N>` | Create a derived draft from the latest valid training state and continue the same logical session for `N` optimizer updates |
