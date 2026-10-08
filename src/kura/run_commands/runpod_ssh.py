@@ -43,7 +43,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
-from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, MISSING_STATE_PUBLICATION_ERROR, MISSING_STATE_SYNC_ERROR
+from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -575,20 +575,13 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     published_states = [select_training_state(run_dir.parent.parent, run_id)]
                 except ValueError:
                     published_states = []
-            state_sync_error: str | None = None
             # Reasons a completed run's outputs cannot count as published. The snapshot holds
             # everything the Pod had, so collecting again cannot change them: the run is
             # recorded as needing a person, as on Docker, and the Pod is not kept for it.
             blocked: list[str] = []
-            if state_capture_required and not published_states and exit_code == 0:
-                state_sync_error = MISSING_STATE_SYNC_ERROR
+            state_sync_error = missing_training_state_error(state_capture_required and not published_states, trainer_completed=exit_code == 0)
+            if state_sync_error:
                 blocked.append(MISSING_STATE_PUBLICATION_ERROR)
-            elif state_capture_required and not published_states:
-                # A failed trainer may never have written state; record the gap as Docker does.
-                state_sync_error = (
-                    "remote run failed and its downloaded snapshot has no valid training-state artifact; "
-                    "inspect the backend state output before relying on Resume"
-                )
             try:
                 outputs = materialize_primary_outputs(output_dir)
             except ValueError as exc:
