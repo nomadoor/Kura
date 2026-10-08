@@ -77,13 +77,32 @@ def load_secrets() -> None:
             _loaded_from[name] = source
 
 
-# A variable whose name contains one of these holds a secret: it is never written into a
-# command, a log, or a record. Every check of a name uses this one list.
-SECRET_NAME_PARTS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY")
+# A name holds a secret when its words include one of these, in order. Words are split at
+# `_`, `-`, and lower-to-upper case changes, so `TOKENIZERS_PARALLELISM` is not one and
+# `apiKey` is. Every check of a name uses this rule.
+SECRET_NAME_WORDS = (("TOKEN",), ("SECRET",), ("PASSWORD",), ("API", "KEY"), ("ACCESS", "KEY"), ("PRIVATE", "KEY"))
 
 
 def is_secret_name(name: str) -> bool:
-    return any(part in name.upper() for part in SECRET_NAME_PARTS)
+    words = re.split(r"[^A-Za-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).upper())
+    return any(
+        tuple(words[index:index + len(sequence)]) == sequence
+        for sequence in SECRET_NAME_WORDS
+        for index in range(len(words))
+    )
+
+
+def secret_values() -> list[str]:
+    """The values Kura holds as secrets, longest first: variables whose names hold a secret,
+    declared credentials such as the ntfy topic, and the key names workspace.yaml chooses.
+    Output hides them and `kura check secrets` looks for them."""
+    configured = set(_configured_names())
+    credentials = {variable.name for variable in USER_VARIABLES if variable.credential}
+    values = {
+        value for name, value in os.environ.items()
+        if value and len(value) >= 4 and (is_secret_name(name) or name in credentials or name in configured)
+    }
+    return sorted(values, key=len, reverse=True)
 
 
 def declared_secret(name: str) -> str | None:

@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 import yaml
 
-from kura.secrets import is_secret_name
+from kura.secrets import is_secret_name, secret_values
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import record, without_record_fields
 from kura.run_envelope import common_recipe
@@ -496,17 +496,9 @@ def kura_container_env(*, workspace_path: str, run_id: str, realization_id: str 
     return env
 
 
-def _secret_values() -> list[str]:
-    values: list[str] = []
-    for key, value in os.environ.items():
-        if _is_secret(key) and value and len(value) >= 4:
-            values.append(value)
-    return sorted(set(values), key=len, reverse=True)
-
-
 def _redact_secret_text(text: str) -> str:
     redacted = text
-    for value in _secret_values():
+    for value in secret_values():
         redacted = redacted.replace(value, "***")
     return redacted
 

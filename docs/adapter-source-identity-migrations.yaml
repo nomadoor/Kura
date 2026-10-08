@@ -8,6 +8,111 @@ description: >-
   tree. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: secrets-names-values-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      Secret names are matched as whole words and secret values come from one owner; a command
+      that compiled before compiles to the same spec unless its env held a newly refused secret
+      name.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: faa1fd818558c824b334416b24c2b0f43d93eb2f08fde53754005d0da30887c1
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 6b9c5789311e07397de1925d004087b8b3c3d039b08bde894c4abd83cd9f2ecf
+  - id: secrets-names-values-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      Secret names are matched as whole words and secret values come from one owner; a command
+      that compiled before compiles to the same spec unless its env held a newly refused secret
+      name.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 585d85d8f677c33be8beba380ee3983f0c220dfdc12115cc67e803e491e4b0f6
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 75273c5fcc6e69dec9991e657b23a5b5fb2af6e1be8525da73e56c65be4d82e7
+  - id: runpod-executor-secrets-names-values-2026-10-08
+    executor: runpod
+    reason: >-
+      Secret names are matched as whole words and secret values come from one owner; a command
+      that compiled before compiles to the same spec unless its env held a newly refused secret
+      name.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 01cf312c3a6431165259bf4d605a1905c3ede32225d77f7c33ca2a9fcd44e83e
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 3b0332ee3ee6e5c05557fb4e806f1b1ba1f49e23303eceb69a20453730582544
   - id: runpod-executor-training-speed-2026-10-08
     executor: runpod
     reason: >-

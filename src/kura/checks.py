@@ -14,31 +14,21 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from kura.render import is_safe_component
-from kura.secrets import is_secret_file
+from kura.secrets import is_secret_file, secret_values
 
 # A workspace may keep secrets here; no check ever opens it, nor the user secrets file.
 NEVER_READ = {".env.local"}
 
 SECRET_SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".lock"}
+# Token shapes that are secrets wherever they appear. Beyond these, a file leaks a secret
+# when it holds a value Kura has as one (`kura.secrets.secret_values`); names are not guessed.
 SECRET_PATTERNS = [
     re.compile(r"hf_[A-Za-z0-9]{20,}"),
     re.compile(r"rpa_[A-Za-z0-9]{20,}", re.IGNORECASE),
-    re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"),
     re.compile(r"Bearer\s+[A-Za-z0-9_./+=:-]{12,}", re.IGNORECASE),
 ]
-SECRET_ALLOW_HINTS = {
-    "your-app-password",
-    "send-to@example.com",
-    "your-address@gmail.com",
-    "KURA_NTFY_TOPIC",
-    "KURA_NTFY_TOKEN",
-    "RUNPOD_API_KEY",
-    "HF_TOKEN",
-    "HUGGINGFACE_HUB_TOKEN",
-    "api_key_env",
-    "os.environ.get",
-    "token-example",
-}
+# Shorter values are too likely to appear by chance to report.
+MIN_KNOWN_SECRET_LENGTH = 8
 MODEL_SUFFIXES = {".safetensors", ".ckpt", ".pt", ".pth", ".gguf", ".onnx", ".bin"}
 
 
@@ -97,6 +87,7 @@ def secret_findings(files: Iterable[Path], root: Path) -> list[str]:
     """
 
     findings: list[str] = []
+    known = [value for value in secret_values() if len(value) >= MIN_KNOWN_SECRET_LENGTH]
     for path in files:
         suffix = path.suffix.lower()
         if never_read(path) or suffix in SECRET_SKIP_SUFFIXES or suffix in MODEL_SUFFIXES:
@@ -108,9 +99,7 @@ def secret_findings(files: Iterable[Path], root: Path) -> list[str]:
                     continue
             with path.open(encoding="utf-8") as handle:
                 for lineno, line in enumerate(handle, 1):
-                    if any(hint in line for hint in SECRET_ALLOW_HINTS):
-                        continue
-                    if any(pattern.search(line) for pattern in SECRET_PATTERNS):
+                    if any(pattern.search(line) for pattern in SECRET_PATTERNS) or any(value in line for value in known):
                         findings.append(f"{shown}:{lineno}: looks like a secret value")
         except UnicodeDecodeError:
             continue

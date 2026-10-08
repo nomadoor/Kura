@@ -23,6 +23,7 @@ from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
+from kura.secrets import is_secret_name
 from kura.executors.docker import docker_daemon_problem
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks
@@ -677,7 +678,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         "network_volumes_empty": None,
         "images_pinned": True,
     }
-    diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "api_key_env": api_key_env, "config": {key: value for key, value in config.items() if "key" not in key.lower() and "secret" not in key.lower()}}
+    diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "api_key_env": api_key_env, "config": {key: value for key, value in config.items() if not is_secret_name(key)}}
     images = [effective_image(workspace_config, name) for name in image_names()]
     mutable_images = {image["name"]: image["reference"] for image in images if mutable_override_warning(image)}
     checks["images_pinned"] = not mutable_images
