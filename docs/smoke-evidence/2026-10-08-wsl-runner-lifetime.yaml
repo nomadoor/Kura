@@ -15,8 +15,11 @@ result:
   last_line: Thu Oct  8 12:54:34 JST 2026
   lines: 40
   largest_gap_seconds: 30
-finding: The distribution kept running for about 20 minutes with no Windows-side window open, so a
-  detached `kura runner` survives the session that started it on this setup.
+finding: A detached heartbeat process kept running for about 20 minutes with no Windows-side window
+  open, so the distribution was not stopped. `kura runner` is detached the same way (a new session,
+  no terminal, `nohup`-like), so it is expected to survive the session that started it; the runner
+  itself was not observed in this test.
 not_covered:
+  - `kura runner` itself (only a generic heartbeat was observed).
   - Docker Desktop stopped (a RunPod-only user may not run it); WSL may then stop the idle distribution.
   - Windows sleep, hibernation, sign-out, or restart, which end WSL regardless.

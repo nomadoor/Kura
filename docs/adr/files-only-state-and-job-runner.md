@@ -215,7 +215,9 @@ the user (`loginctl enable-linger`).
   the new version and reconciles. A writer that finds a runner of another
   version says so before writing its request; the user can run
   `kura runner stop`, which is safe, and the next start runs the new version.
-- On the owner's PC the runner kept running after every Windows-side window
-  closed, with Docker Desktop running (2026-10-08,
-  `docs/smoke-evidence/2026-10-08-wsl-runner-lifetime.yaml`). Without Docker
-  Desktop, and across Windows sleep or sign-out, it is not verified.
+- On the owner's PC a detached heartbeat in WSL kept running after every
+  Windows-side window closed, with Docker Desktop running (2026-10-08,
+  `docs/smoke-evidence/2026-10-08-wsl-runner-lifetime.yaml`). The runner is
+  detached the same way, so it is expected to survive too; the runner itself,
+  the case without Docker Desktop, and Windows sleep or sign-out are not
+  verified.
