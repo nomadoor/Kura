@@ -103,7 +103,7 @@ def project_status(run_dir: Path) -> dict[str, Any]:
         _apply(projected, kind, value, path, run_dir)
         if kind == "observation" and realization.get("executor") == "docker" and projected.get("state") == "completed":
             projected["state"] = _docker_publication_state(directory, rid, run_dir)
-    if _apply_download(projected, run_dir) and projected.get("state") == "completed" and _publication_outcome(directory, rid) == "recovery_required":
+    if _apply_download(projected, run_dir, directory, rid) and projected.get("state") == "completed" and _publication_outcome(directory, rid) == "recovery_required":
         projected["state"] = "recovery_required"
     return projected
 
@@ -209,8 +209,15 @@ def _apply(projected: dict[str, Any], kind: str, value: dict[str, Any], path: Pa
             projected["exit_code"] = None
 
 
-def _apply_download(projected: dict[str, Any], run_dir: Path) -> bool:
-    """A RunPod run whose terminal snapshot is downloaded ends with the Pod's exit record."""
+def _apply_download(projected: dict[str, Any], run_dir: Path, directory: Path, rid: str) -> bool:
+    """A RunPod run whose terminal snapshot was accepted ends with the Pod's exit record.
+
+    A snapshot left on disk after it was refused (no training state, say) does not
+    end the run; one whose publication was then blocked does, as needing a person.
+    """
+    accepted = (directory / f"{rid}.snapshot-accepted.json").is_file()
+    if not accepted and not any(directory.glob(f"{rid}.publication-attempt-*.json")):
+        return False
     exits = sorted((run_dir / "downloads" / run_dir.name / "realizations").glob("remote-exit-*.json"))
     exit_record = _read(exits[-1]) if exits else None
     if exit_record is None or not isinstance(exit_record.get("exit_code"), int):

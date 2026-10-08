@@ -52,6 +52,9 @@ class ProjectionTests(_RunCase):
         rid = "20261008-000000-000001"
         _write(self.realizations / f"{rid}.json", {"executor": "runpod", "state": "running", "launched_at": "t0", "pod": {"id": "pod-1"}})
         _write(self.run_dir / "downloads" / "example" / "realizations" / "remote-exit-1.json", {"exit_code": 0, "timestamp": "t3"})
+        # A snapshot on disk that was refused (no training state, say) does not end the run.
+        self.assertEqual(project_status(self.run_dir)["state"], "running")
+        _write(self.realizations / f"{rid}.snapshot-accepted.json", {"kind": "snapshot_accepted"})
         self.assertEqual({key: project_status(self.run_dir)[key] for key in ("state", "exit_code", "ended")}, {"state": "completed", "exit_code": 0, "ended": "t3"})
 
     def test_a_docker_run_is_completed_only_once_published(self) -> None:
