@@ -10,10 +10,10 @@ from typing import Any
 
 import yaml
 
+from kura.training_artifacts import checkpoint_step
 from kura.run_commands.experiment import _format_duration
 
 
-_STEP_RE = re.compile(r"(?:^|[-_])step0*([0-9]+)(?:[-_.]|$)", re.IGNORECASE)
 
 
 def _mapping(path: Path) -> dict[str, Any]:
@@ -66,9 +66,9 @@ def _checkpoint_label(workspace: Path, frozen: dict[str, Any], records: list[dic
     if isinstance(path_value, str) and path_value:
         name = Path(path_value).name
         pieces.append(name)
-        match = _STEP_RE.search(name)
-        if match:
-            pieces.append(f"step {int(match.group(1))}")
+        step = checkpoint_step(name)
+        if step is not None:
+            pieces.append(f"step {step}")
         elif isinstance(train_run, str) and train_run:
             train_status = _json_mapping(workspace / "runs" / train_run / "status.json")
             outputs = train_status.get("outputs") if isinstance(train_status.get("outputs"), list) else []

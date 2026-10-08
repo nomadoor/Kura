@@ -579,6 +579,21 @@ def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:
     return adapter.training_state(run)
 
 
+# The step a backend writes into a checkpoint name: `-step00000100` (sd-scripts, Musubi
+# Tuner) or `_000000500` (AI-Toolkit). Final weights carry none. A name of the second
+# form that ends in four or more digits of its own is read as a step too.
+_CHECKPOINT_STEP = re.compile(r"(?:(?:^|[-_])step0*(\d+)|_(\d{4,}))(?=\.safetensors$|[-_.]|$)", re.IGNORECASE)
+
+
+def checkpoint_step(name: str) -> int | None:
+    """The training step in a checkpoint or state directory name, for every backend; None for final weights."""
+    matches = _CHECKPOINT_STEP.findall(name)
+    if not matches:
+        return None
+    step_form, underscore_form = matches[-1]
+    return int(step_form or underscore_form)
+
+
 def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None, *, frozen: bool = False) -> bool:
     """The one rule for whether Kura manages a run's training state.
 

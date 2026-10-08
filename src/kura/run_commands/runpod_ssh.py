@@ -43,7 +43,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
-from kura.training_artifacts import is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state
+from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state
 from kura.runtime_io import validated_write_roots
 
 
@@ -833,18 +833,11 @@ def _runpod_workspace_for_run(run_dir: Path) -> str:
     return "/workspace"
 
 
-def _checkpoint_step(name: str) -> int | None:
-    matches = re.findall(r"(?:step|_)(\d{4,})(?=\.safetensors$|[-_.])", name)
-    if not matches:
-        return None
-    return int(matches[-1])
-
-
 def _select_remote_outputs(items: list[dict[str, Any]], *, step: int | None = None, since_step: int | None = None, all_outputs: bool = False) -> list[dict[str, Any]]:
     candidates = [item for item in items if isinstance(item.get("name"), str)]
     for item in candidates:
         if not isinstance(item.get("step"), int):
-            item["step"] = _checkpoint_step(str(item["name"]))
+            item["step"] = checkpoint_step(str(item["name"]))
     if step is not None:
         return [item for item in candidates if item.get("step") == step]
     if since_step is not None:
