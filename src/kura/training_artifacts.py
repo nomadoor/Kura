@@ -586,6 +586,8 @@ def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None 
     restore it for this architecture and mode. Backends save state only then,
     and every executor requires a completed run to leave state only then. A
     backend building its own command passes its contract; others look it up.
+    A frozen manifest compiled before Kura managed state (no `recovery`) is
+    handled by `training_state_capture_required`; its trainer saved none.
     """
     if not training_state_policy(run)["enabled"]:
         return False

@@ -1890,6 +1890,40 @@ class ResumeRunTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "running")
 
+    def test_runpod_download_never_holds_a_run_whose_backend_saves_no_usable_state(self) -> None:
+        # sd-scripts Anima declares training state unsupported: Docker never required it, and RunPod must not either.
+        from tests.test_sd_scripts_backend import base_run
+
+        for architecture, mode in (("anima", "lora"), ("anima", "controlnet_lllite")):
+            for exit_code in (0, 1):
+                with self.subTest(architecture=architecture, mode=mode, exit_code=exit_code):
+                    previous = Path.cwd()
+                    with tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+                        run_dir = root / "runs" / "source"
+                        downloaded = run_dir / "downloads" / "source"
+                        (downloaded / "outputs").mkdir(parents=True)
+                        (downloaded / "realizations").mkdir()
+                        (downloaded / "realizations" / "remote-exit-20260101.json").write_text(
+                            json.dumps({"timestamp": "2026-01-01T00:00:00+00:00", "exit_code": exit_code}), encoding="utf-8"
+                        )
+                        (run_dir / "resolved").mkdir(parents=True)
+                        manifest = {**base_run(architecture, mode), "id": "source", "type": "train",
+                                    "recovery": {"training_state": {"enabled": True, "keep_generations": 2}}}
+                        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+                        (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
+                        os.chdir(root)
+                        stderr = io.StringIO()
+                        try:
+                            with patch("sys.stderr", stderr):
+                                _download_run_unlocked("source")
+                        finally:
+                            os.chdir(previous)
+                        self.assertNotIn("no valid training-state artifact", stderr.getvalue())
+                        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+                        self.assertNotIn("training_state_sync_error", status)
+
     def test_runpod_download_of_a_failed_run_without_state_completes_and_records_the_gap(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:

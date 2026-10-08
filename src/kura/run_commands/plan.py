@@ -1338,6 +1338,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         _append_kv(lines, "keep", training_state.get("keep_generations"))
         _append_kv(lines, "cadence", training_state.get("cadence_steps"))
         _append_kv(lines, "capability", training_state.get("capability"))
+        _append_kv(lines, "saved", "yes" if training_state.get("saved") else "no")
         if training_state.get("warning"):
             _append_kv(lines, "warning", training_state.get("warning"))
 
