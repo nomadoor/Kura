@@ -230,6 +230,9 @@ def cmd_run_new(args: argparse.Namespace) -> int:
         if any(getattr(args, name, None) is not None for name in ("backend", "executor", "gpu")):
             print("--from copies the source's backend and compute; change them in the new run.yaml instead", file=sys.stderr)
             return 1
+        if Path(source_id).name != source_id:
+            print("--from must name a run under runs/ by its ID", file=sys.stderr)
+            return 1
         try:
             source_run = _load_yaml(_run_path(source_id) / "run.yaml")
         except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -480,10 +483,14 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     if current_status.get("state") != "draft":
+        start_over = (
+            f"start a new training run from its settings with `kura run new --from {args.run_id} --slug <words>` and make the change there"
+            if run.get("type", "train") == "train"
+            else "create a new render run with `kura render new` and make the change there"
+        )
         print(
-            f"cannot compile run: {args.run_id} is already compiled and never changes; start a new run from its settings with "
-            f"`kura run new --from {args.run_id} --slug <words>`, make the change there, and remove this one with "
-            f"`kura run discard {args.run_id}` if it was never launched",
+            f"cannot compile run: {args.run_id} is already compiled and never changes; {start_over}. "
+            f"If it was never launched, `kura run discard {args.run_id}` previews removing it.",
             file=sys.stderr,
         )
         return 1

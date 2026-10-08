@@ -64,5 +64,38 @@ class RunTemplateTests(unittest.TestCase):
         self.assertNotEqual(copied["created"], run["created"])
         self.assertNotIn("created_by", copied)
 
+    def test_a_compiled_render_is_pointed_at_render_new(self) -> None:
+        from kura.cli import cmd_run_compile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            run_dir = root / "runs" / "render-1"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text("schema_version: 1\nid: render-1\ntype: render\n", encoding="utf-8")
+            (run_dir / "status.json").write_text('{"state": "compiled"}', encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stderr", new_callable=io.StringIO) as said:
+                    self.assertEqual(cmd_run_compile(argparse.Namespace(run_id="render-1")), 1)
+            finally:
+                os.chdir(previous)
+        self.assertIn("kura render new", said.getvalue())
+        self.assertNotIn("--from", said.getvalue())
+
+    def test_from_names_only_a_run_under_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("sys.stderr", new_callable=io.StringIO) as said, patch("sys.stdout", new_callable=io.StringIO):
+                    self.assertEqual(cmd_run_new(argparse.Namespace(experiment=None, slug="x", backend=None, executor=None, gpu=None, source="../elsewhere")), 1)
+            finally:
+                os.chdir(previous)
+        self.assertIn("by its ID", said.getvalue())
+
 if __name__ == "__main__":
     unittest.main()
