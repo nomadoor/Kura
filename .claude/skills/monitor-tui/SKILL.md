@@ -16,7 +16,7 @@ Use this skill for the monitoring TUI.
   belong to the job runner and to `kura run reconcile`.
 - Monitor/TUI must not directly call Docker or provider APIs, and must not call
   launch, compile, or stop paths.
-- The monitor never launches or controls runs and starts no background service. Only the job runner (`kura runner`, `docs/adr/files-only-state-and-job-runner.md`) controls launched runs. The monitor only reads materialized status and shows how old it is (the STALE marker with the last local update), never observing or persisting anything (`docs/adr/run-records-and-external-effects.md`).
+- The monitor never launches or controls runs and starts no background service. Only the job runner (`kura runner`, `docs/adr/files-only-state-and-job-runner.md`) controls launched runs. The monitor only reads materialized status and shows how long a running run has gone without new output (the STALE marker, from `executors.common.run_quiet_since`), never observing or persisting anything (`docs/adr/run-records-and-external-effects.md`).
 - UI-owned side effects are limited to opening file manager/browser links and
   copying to the clipboard. The monitor has no run-state side effects.
 

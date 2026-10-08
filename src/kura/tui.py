@@ -701,7 +701,7 @@ class DetailPane(VerticalScroll):
             return
         self.mount(Static(_run_headline(summary)))
         if summary.is_stale:
-            stale_text = f"WAIT STALE · last capacity probe {_age(summary.capacity_wait.last_attempt_at)}" if summary.capacity_wait else f"STALE · last local update {_age(summary.last_updated)}"
+            stale_text = f"WAIT STALE · last capacity probe {_age(summary.capacity_wait.last_attempt_at)}" if summary.capacity_wait else f"STALE · last output {_age(summary.quiet_since)}"
             self.mount(Static(Text(stale_text, style=f"bold {STALE}")))
         self.mount(Static("", classes="section-gap"))
         self.mount(Static(_progress_text(summary)))
