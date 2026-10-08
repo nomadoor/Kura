@@ -26,6 +26,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Static
 
+from kura.executors.common import UNSUCCESSFUL_STATES
 from kura.monitor import ACTIVE_STATES, DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline
 
 
@@ -1342,7 +1343,7 @@ def _status_bar(summaries: list[RunSummary], *, workspace: Path | None = None, w
         "waiting": sum(item.capacity_wait is not None for item in summaries),
         "queued": sum(item.state in {"queued", "staged", "launching"} and item.capacity_wait is None for item in summaries),
         "done": sum(item.state == "completed" for item in summaries),
-        "failed": sum(item.state in {"failed", "launch_failed", "interrupted"} for item in summaries),
+        "failed": sum(item.state in UNSUCCESSFUL_STATES for item in summaries),
     }
     left = Text.assemble(("▸ kura", f"bold {ACCENT}"), ("   "), (str(counts["running"]), f"bold {RUN}"), (" running   ", RUN), (str(counts["waiting"]), f"bold {QUEUE}"), (" waiting   ", QUEUE), (str(counts["queued"]), f"bold {QUEUE}"), (" queued   ", QUEUE), (str(counts["done"]), f"bold {DONE}"), (" done   ", DONE), (str(counts["failed"]), f"bold {FAIL}"), (" failed", FAIL))
     if workspace is not None:

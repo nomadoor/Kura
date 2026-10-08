@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished
+from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -1013,7 +1013,7 @@ def _notify_finished(run_dir: Path, request: Path, status: dict[str, Any], *, au
 
 # Following from a command -----------------------------------------------------------
 
-EXIT_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1}
+EXIT_FOR_STATE = EXIT_CODE_FOR_STATE
 
 
 def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2.0, sleep: Callable[[float], None] = time.sleep,

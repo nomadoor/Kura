@@ -32,7 +32,7 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
-from kura.executors.common import OBSERVABLE_STATES
+from kura.executors.common import OBSERVABLE_STATES, CLEANUP_ELIGIBLE_STATES
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
@@ -858,7 +858,7 @@ def _last_observation_container_missing(run_dir: Path, status: dict[str, Any]) -
 
 
 def _run_cleanup_candidates(workspace: Path, *, keep_last: int, delete_final_artifacts: bool) -> list[dict[str, Any]]:
-    states = {"completed", "failed", "interrupted", "launch_failed"}
+    states = CLEANUP_ELIGIBLE_STATES
     runs: list[dict[str, Any]] = []
     for run_dir in sorted((workspace / "runs").glob("*")):
         if not run_dir.is_dir():

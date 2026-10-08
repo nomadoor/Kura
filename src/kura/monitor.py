@@ -19,7 +19,7 @@ import yaml
 from kura.training_artifacts import checkpoint_step
 from kura.backends import get_backend
 from kura.executors import ACTIVE_STATES, read_run_status
-from kura.executors.common import is_realization_record
+from kura.executors.common import UNSUCCESSFUL_STATES, is_realization_record
 from kura.run_envelope import common_recipe, run_executor
 
 
@@ -1210,7 +1210,7 @@ def _summary_bar(summaries: list[RunSummary]) -> Any:
         "waiting": sum(1 for item in summaries if item.capacity_wait),
         "queued": sum(1 for item in summaries if item.state in {"queued", "staged", "launching"} and not item.capacity_wait),
         "completed": sum(1 for item in summaries if item.state == "completed"),
-        "failed": sum(1 for item in summaries if item.state in {"failed", "launch_failed", "interrupted"}),
+        "failed": sum(1 for item in summaries if item.state in UNSUCCESSFUL_STATES),
     }
     return Text.assemble(
         ("kura monitor", "bold"),

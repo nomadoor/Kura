@@ -33,7 +33,26 @@ LOW_AVAILABLE_MEMORY_BYTES = 4 * 1024**3
 RUNPOD_API_ROOT = "https://rest.runpod.io/v1"
 
 
+# Every state a run's status can hold; each set below is a decision over these.
+RUN_STATES = frozenset({
+    "draft", "compiled", "queued", "staged", "launching", "running", "publishing",
+    "completed", "failed", "interrupted", "unknown", "launch_failed", "recovery_required",
+    "stopped",  # written by older Kura versions only
+})
+
 ACTIVE_STATES = frozenset({"queued", "staged", "launching", "running"})
+
+# A run in one of these may be launched again; `recovery_required` waits for a person.
+RELAUNCHABLE_STATES = frozenset({"compiled", "failed", "interrupted", "unknown", "launch_failed"})
+
+# Finished runs whose artifacts `kura cleanup` may offer; unknown and recovery_required wait for a person.
+CLEANUP_ELIGIBLE_STATES = frozenset({"completed", "failed", "interrupted", "launch_failed"})
+
+# Runs that ended without success, counted together in run listings.
+UNSUCCESSFUL_STATES = frozenset({"failed", "launch_failed", "interrupted"})
+
+# The exit code a command reports for a run that ended in this state; any other state reports 2.
+EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interrupted": 130}
 
 
 OBSERVABLE_STATES = frozenset({"running"})
