@@ -18,7 +18,9 @@ surface you changed.
 
 An execution path (local Docker, RunPod SSH, RunPod session, ComfyUI render) is
 not done until a real smoke has run through it end to end: unit tests mock the
-executor and container seams where environment-contract bugs live. Real smokes
+executor and container seams where environment-contract bugs live. At least one
+smoke per path uses real-sized data (several images at 1024 px or more): tiny
+one-image smokes miss what only real data exercises. Real smokes
 need the owner's request, and anything that bills needs the cost shown first.
 
 Before publishing, check `git status --ignored --short` so datasets, runs,

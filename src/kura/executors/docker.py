@@ -352,6 +352,9 @@ def docker_command(
     mounts = _effective_mounts(mounts, workspace_target)
     command = [
         "docker", "run", "-d", "--init", "--stop-timeout", "30", "--name", name,
+        # Docker's default /dev/shm is 64 MiB; PyTorch data loaders pass whole images
+        # through it. Sharing the host's IPC namespace gives the size a RunPod Pod has.
+        "--ipc=host",
         "--label", "io.kura.managed=true",
         "--label", f"io.kura.run_id={run_dir.name}",
         "--label", f"io.kura.realization_id={realization_id}",
