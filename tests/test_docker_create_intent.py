@@ -220,6 +220,35 @@ class DockerCreateIntentTests(unittest.TestCase):
             self.assertEqual((stop["kind"], stop["executor"], stop["outcome"]), ("stop", "docker", "stopped"))
             self.assertEqual(stop["targets"], [{"container": "container-1", "result": "stopped"}])
 
+    def test_a_stopped_run_ends_interrupted_as_on_runpod(self) -> None:
+        from kura.status_projection import project_status
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _run(root)
+            with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            stopped = json.dumps({"Running": False, "ExitCode": 137, "FinishedAt": "2026-10-08T10:00:00Z"})
+            with _docker([subprocess.CompletedProcess([], 0, "container-1\n", ""), subprocess.CompletedProcess([], 0, stopped, "")]):
+                status = stop_docker(run_dir)
+            # `kura run stop` ends a run the same way on every executor (runpod.stop_runpod: interrupted).
+            self.assertEqual((status["state"], status["exit_code"]), ("interrupted", None))
+            self.assertEqual(project_status(run_dir)["state"], "interrupted")
+            observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
+            self.assertEqual(observation["container_exit_code"], 137)
+
+    def test_a_trainer_that_finished_before_the_stop_keeps_its_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _run(root)
+            with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+            finished = json.dumps({"Running": False, "ExitCode": 0, "FinishedAt": "2000-01-01T00:00:00.123456789Z"})
+            with _docker([subprocess.CompletedProcess([], 0, "container-1\n", ""), subprocess.CompletedProcess([], 0, finished, "")]):
+                status = stop_docker(run_dir)
+            self.assertNotEqual(status["state"], "interrupted")
+            self.assertEqual(status["exit_code"], 0)
+
     def test_a_failed_stop_is_recorded_before_the_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
