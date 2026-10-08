@@ -724,7 +724,9 @@ def reconcile_docker(
                 state = "completed" if exit_code == 0 else "failed"
                 finished_at = docker_state.get("FinishedAt")
                 if isinstance(finished_at, str) and finished_at and not finished_at.startswith("0001-"):
-                    ended = finished_at
+                    # Docker reports UTC with nanoseconds; Kura writes every time in the host's zone.
+                    parsed = _docker_timestamp(finished_at)
+                    ended = datetime.fromisoformat(parsed).astimezone().isoformat() if parsed else finished_at
                     ended_source = "docker_finished_at"
                     _record_container_times(run_dir, realization["id"], docker_state)
                 else:

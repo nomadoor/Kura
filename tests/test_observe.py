@@ -213,7 +213,10 @@ class ObserveRunTests(unittest.TestCase):
             self.assertEqual((summary.state, summary.progress.step, summary.progress.total), ("completed", 10, 10))
             self.assertEqual(payload["seconds_per_iter"], 0.5)
             self.assertEqual(summary.progress.seconds_per_iter, 0.5)
-            self.assertEqual(payload["ended"], "2026-01-01T01:02:03Z")
+            # Docker reports UTC; status keeps every time in the host's zone, as Kura writes its own.
+            from datetime import datetime, timezone
+
+            self.assertEqual(payload["ended"], datetime(2026, 1, 1, 1, 2, 3, tzinfo=timezone.utc).astimezone().isoformat())
             self.assertEqual(payload["latest_observation"]["source"], "automatic")
 
     def test_unknown_step_is_not_displayed_as_zero(self) -> None:
