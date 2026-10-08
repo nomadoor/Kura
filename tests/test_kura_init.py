@@ -93,13 +93,14 @@ class InitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             code, output = _init(["Docker is not reachable: local training needs it; RunPod training does not"])
         self.assertEqual(code, 0)
-        self.assertIn("still needed:", output)
+        # Each gap matters only for the runs it names, so the heading must not call them all required.
+        self.assertIn("not ready yet, for the kind of run each line names:", output)
         self.assertIn("Docker is not reachable", output)
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             _, output = _init([])
         self.assertIn("basic checks passed", output)
         self.assertIn("kura doctor runpod", output)
-        self.assertNotIn("still needed", output)
+        self.assertNotIn("not ready yet", output)
 
 
 class EnvironmentDeclarationTests(unittest.TestCase):
