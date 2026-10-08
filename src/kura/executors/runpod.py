@@ -24,7 +24,7 @@ import yaml
 from kura import __version__
 from kura.images import runpod_min_cuda_version, runpod_min_cuda_for
 from kura.install_source import kura_provenance
-from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
+from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff, handoff_was_frozen
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
@@ -909,7 +909,7 @@ def finalize_runpod_dataset_handoff(
     ``project_runpod_dataset_handoff`` to record as uncheckable. Returns the
     record reference and content; announcing it is the caller's separate step.
     """
-    if not (run_dir / "resolved" / "dataset-projection.lock.json").is_file():
+    if not handoff_was_frozen(run_dir):
         return None
     local = run_dir / "realizations"
     local.mkdir(exist_ok=True)
