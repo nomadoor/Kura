@@ -774,13 +774,17 @@ class RenderCasesLaunchTests(unittest.TestCase):
             self.assertEqual(realization["failed_case_id"], "b")
             self.assertEqual(realization["generated_image_count"], 2)
 
-    def test_failure_falls_back_when_normal_failed_status_update_breaks(self) -> None:
+    def test_a_failed_status_write_leaves_the_status_and_its_pod_in_place(self) -> None:
+        # The failure is recorded first; status is a projection of records. Overwriting it
+        # without the lock dropped pod_id, and a RunPod render's Pod was then never deleted.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             row = _case("broken", step=None, prompt="first", seed=1, strength=1.0, cfg=4.0)
             patches = {key: value for key, value in PATCHES.items() if key != "lora"}
             run_dir = _workspace(root, cases=[row], patches=patches)
             compile_render(root, run_dir)
+            seeded = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            (run_dir / "status.json").write_text(json.dumps({**seeded, "pod_id": "pod-1"}), encoding="utf-8")
 
             class FailingClient:
                 def __init__(self, endpoint: str, timeout: int) -> None:
@@ -793,7 +797,7 @@ class RenderCasesLaunchTests(unittest.TestCase):
 
             def status_with_broken_failed_update(path: Path, **changes: Any) -> None:
                 if changes.get("state") == "failed":
-                    raise json.JSONDecodeError("corrupt status", "", 0)
+                    raise OSError("disk full")
                 real_status(path, **changes)
 
             with (
@@ -803,11 +807,12 @@ class RenderCasesLaunchTests(unittest.TestCase):
                 self.assertEqual(launch_render(root, run_dir, endpoint_override="http://127.0.0.1:8188"), 1)
 
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual(status["state"], "failed")
-            self.assertEqual((status["last_step"], status["total_steps"]), (0, 1))
-            realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
-            self.assertEqual(realization["failed_case_id"], "broken")
-            self.assertEqual(realization["completed_case_count"], 0)
+            self.assertEqual(status["pod_id"], "pod-1")
+            self.assertNotEqual(status.get("state"), "failed")
+            self.assertIn("failed to persist render failure status", (run_dir / "logs" / "stdout.log").read_text(encoding="utf-8"))
+            [failure] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("*.json")
+                         if json.loads(path.read_text(encoding="utf-8")).get("failed_case_id") == "broken"]
+            self.assertEqual(failure["state"], "failed")
 
     def test_failure_logs_when_failed_realization_cannot_be_written(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
