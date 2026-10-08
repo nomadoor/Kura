@@ -13,7 +13,7 @@ class BackendResolvedModelTests(unittest.TestCase):
         local = _model_download_preflight_report(run, {}, executor="docker")[0]["fact"]
         remote = _model_download_preflight_report(run, {}, executor="runpod")[0]["fact"]
         self.assertIn("stabilityai/sdxl", local)
-        self.assertIn("cache already holds it", local)
+        self.assertIn("cache local runs mount already holds it", local)
         self.assertIn("on every run, while the Pod bills", remote)
 
 
