@@ -270,15 +270,37 @@ def _is_wsl() -> bool:
         return False
 
 
+# Docker Desktop can take tens of seconds to answer right after it starts.
+DOCKER_INFO_TIMEOUT_SEC = 30
+
+
+def docker_daemon_problem() -> str | None:
+    """Why the Docker daemon cannot be used now, in Docker's own words; None when it answers.
+
+    Every command that needs the daemon asks this one question, so `kura init`,
+    the doctor, and a launch never disagree about it.
+    """
+    try:
+        # Outside the workspace: a docker helper that outlives the timeout
+        # would otherwise hold the directory open on Windows.
+        info = subprocess.run(["docker", "info"], text=True, capture_output=True, check=False,
+                              timeout=DOCKER_INFO_TIMEOUT_SEC, cwd=Path.home())
+    except FileNotFoundError:
+        return "the docker command was not found on PATH"
+    except subprocess.TimeoutExpired:
+        return f"`docker info` did not answer within {DOCKER_INFO_TIMEOUT_SEC} seconds; Docker may still be starting"
+    except OSError as exc:
+        return _redact_secret_text(str(exc))
+    if info.returncode == 0:
+        return None
+    return _redact_secret_text(info.stderr.strip() or info.stdout.strip() or f"`docker info` exited with {info.returncode}")
+
+
 def docker_preflight(workspace: Path, mounts: list[dict[str, str]], *, min_free_gb: int = MIN_FREE_SPACE_GIB) -> dict[str, Any]:
     """Reject only unsafe launches; retain advisory host signals for realization truth."""
-    try:
-        daemon = subprocess.run(["docker", "info"], text=True, capture_output=True, check=False)
-    except FileNotFoundError as exc:
-        raise ValueError("docker executable was not found on PATH") from exc
-    if daemon.returncode:
+    if problem := docker_daemon_problem():
         suffix = " In WSL, start Docker Desktop and enable WSL integration for this distribution." if _is_wsl() else ""
-        raise ValueError(f"Docker daemon is unreachable.{suffix}")
+        raise ValueError(f"Docker daemon is unreachable: {problem.rstrip('.')}.{suffix}")
 
     paths = {"workspace": workspace.resolve()}
     for mount in mounts:

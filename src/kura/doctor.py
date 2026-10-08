@@ -23,6 +23,7 @@ from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
+from kura.executors.docker import docker_daemon_problem
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks
 from kura.storage import is_wsl as _is_wsl
@@ -225,10 +226,10 @@ def _docker_storage_summary() -> dict[str, Any]:
     if not docker_path:
         summary["diagnosis"] = "Docker CLI was not found on PATH."
         return summary
-    info = _docker_run(["docker", "info"], capture=True)
-    summary["daemon_reachable"] = info.returncode == 0
-    if info.returncode != 0:
-        summary["diagnosis"] = _redact_secret_text(info.stderr.strip() or info.stdout.strip() or "Docker daemon is unreachable")
+    problem = docker_daemon_problem()
+    summary["daemon_reachable"] = problem is None
+    if problem:
+        summary["diagnosis"] = problem
         return summary
     root_dir = _docker_run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture=True)
     if root_dir.returncode == 0:
@@ -433,19 +434,18 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
     if not checks["docker_command"]:
         diagnosis = "Docker CLI was not found on PATH."
     else:
-        info = _docker_run(["docker", "info"], capture=True)
-        checks["daemon_reachable"] = info.returncode == 0
-        diagnostics["docker_info_returncode"] = info.returncode
-        diagnostics["docker_info_stderr"] = info.stderr.strip()
+        problem = docker_daemon_problem()
+        checks["daemon_reachable"] = problem is None
+        diagnostics["docker_daemon_problem"] = problem
         version = _docker_run(["docker", "version"], capture=True)
         diagnostics["docker_version_returncode"] = version.returncode
         diagnostics["docker_version_stdout"] = version.stdout.strip()
         diagnostics["docker_version_stderr"] = version.stderr.strip()
         if not checks["daemon_reachable"]:
-            if _looks_like_process_permission_denial(info.stderr):
+            if _looks_like_process_permission_denial(problem):
                 diagnosis = "This process could not access the Docker daemon because the OS denied permission. The same Kura command may work outside this process's permission context. See external-access.md, shipped with Kura as .kura/reference/external-access.md."
             else:
-                diagnosis = "Docker CLI is available but the daemon is unreachable. If Docker Desktop settings look correct, restart Docker Desktop and this WSL distro; confirm the active Docker context points at the Desktop Linux engine."
+                diagnosis = f"Docker CLI is available but the daemon is unreachable ({problem}). If Docker Desktop settings look correct, restart Docker Desktop and this WSL distro; confirm the active Docker context points at the Desktop Linux engine."
         if checks["daemon_reachable"]:
             root_dir = _docker_run(["docker", "info", "--format", "{{.DockerRootDir}}"], capture=True)
             if root_dir.returncode == 0:
@@ -464,6 +464,9 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
             if present:
                 gpu_probe = _docker_run(["docker", "run", "--rm", "--gpus", "all", image, "python", "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"], capture=True)
                 checks["gpu_available"] = gpu_probe.returncode == 0
+                if gpu_probe.returncode:
+                    # What the probe said is the only evidence of why; a later probe may pass.
+                    diagnostics["gpu_probe_error"] = _redact_secret_text((gpu_probe.stderr or gpu_probe.stdout).strip()[-2000:])
                 runtime_result = _docker_run(["docker", "run", "--rm", "--entrypoint", "cat", image, "/opt/kura-runtime.json"], capture=True)
                 if runtime_result.returncode == 0:
                     try:
@@ -1033,16 +1036,8 @@ def readiness_gaps(root: Path) -> list[str]:
     if not shutil.which("docker"):
         gaps.append("Docker CLI was not found: local training needs Docker; RunPod training does not. See `kura doctor docker`.")
     else:
-        try:
-            # Outside the workspace: a docker helper that outlives the timeout
-            # would otherwise hold the directory open on Windows.
-            reachable = subprocess.run(
-                ["docker", "info"], capture_output=True, text=True, check=False, timeout=5, cwd=Path.home(),
-            ).returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            reachable = False
-        if not reachable:
-            gaps.append("The Docker daemon is not reachable: local training needs it; RunPod training does not. See `kura doctor docker`.")
+        if problem := docker_daemon_problem():
+            gaps.append(f"The Docker daemon is not reachable ({problem}): local training needs it; RunPod training does not. See `kura doctor docker`.")
     config_path = root / "workspace.yaml"
     try:
         config = yaml.safe_load(config_path.read_text(encoding="utf-8")) if config_path.is_file() else {}
