@@ -24,7 +24,7 @@ from kura.dataset_handoff import (
     remove_dataset_views,
 )
 from kura.provenance import image_reference_identity
-from kura.training_artifacts import publish_completed_training_states, training_state_capture_required
+from kura.training_artifacts import publish_completed_training_states, training_state_capture_required, MISSING_STATE_PUBLICATION_ERROR, MISSING_STATE_SYNC_ERROR
 from kura.executors.common import (
     kura_container_env,
     CREATE_INTENT_SUFFIX,
@@ -788,7 +788,7 @@ def reconcile_docker(
                     output_error = _redact_secret_text(str(exc))
             errors = [item for item in (state_error, output_error) if item]
             if capture_required and not published and not state_error:
-                errors.append("required training-state artifact is not published")
+                errors.append(MISSING_STATE_PUBLICATION_ERROR)
             publication_attempt = record_publication_failure(run_dir, realization["id"], "; ".join(errors)) if errors else None
 
             def record_publication(latest: dict[str, Any]) -> None:
@@ -810,10 +810,7 @@ def reconcile_docker(
                 elif state_error:
                     latest["training_state_sync_error"] = state_error
                 elif capture_required:
-                    latest["training_state_sync_error"] = (
-                        "terminal local run snapshot has no valid training-state artifact; "
-                        "inspect the backend state output before relying on Resume"
-                    )
+                    latest["training_state_sync_error"] = MISSING_STATE_SYNC_ERROR
                 else:
                     latest.pop("training_state_sync_error", None)
                 if state == "completed":

@@ -58,7 +58,8 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
-TERMINAL_STATES = frozenset({"completed", "failed", "stopped", "interrupted", "unknown", "launch_failed"})
+# Nothing more happens to a run in these on its own; an observation or a stop never overwrites them.
+TERMINAL_STATES = frozenset({"completed", "failed", "stopped", "interrupted", "unknown", "launch_failed", "recovery_required"})
 
 
 AI_TOOLKIT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+).*?loss:\s*(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)

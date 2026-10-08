@@ -9017,8 +9017,12 @@ class RunPodLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-            self.assertEqual(code, 1)
+            # The collision is in the snapshot itself: collected, nothing published, and a person decides.
+            self.assertEqual(code, 3)
             self.assertFalse((run_dir / "outputs" / "artifact.safetensors").exists())
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "recovery_required")
+            self.assertIn("collide", status["publication_error"])
 
     def test_run_download_preserves_modified_ai_toolkit_legacy_directory(self) -> None:
         for scenario in ("extra", "modified"):

@@ -392,10 +392,15 @@ def run_unfinished(run_dir: Path) -> bool:
 
 
 def _pod_left_running(status: dict[str, Any]) -> bool:
-    """A finished run whose Pod still bills; only a person's recovery keeps it on purpose."""
+    """A finished run whose Pod still bills.
+
+    A run that needs a person keeps its Pod only while its outputs are not
+    collected; once the snapshot is downloaded the Pod holds nothing more.
+    """
+    held_for_a_person = status.get("state") == "recovery_required" and not status.get("downloaded_run")
     return (
         isinstance(status.get("pod_id"), str) and not status.get("pod_stopped_at") and not status.get("pod_missing_at")
-        and status.get("state") != "recovery_required"
+        and not held_for_a_person
     )
 
 

@@ -34,7 +34,7 @@ from kura.run_commands.render_completion import format_render_completion
 from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
-from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job
+from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
 from kura.dataset_transfer import TransferRefused
 from kura.run_envelope import run_executor
 
@@ -151,8 +151,23 @@ def _run_remote_locked(
         if realization_id:
             record_launch_phase(run_dir, realization_id, "download_started")
         download_code = download_with_retries(run_id, download_attempts, download_interval)
-        if download_code:
+        if download_code not in (0, DOWNLOAD_NEEDS_PERSON):
             raise ValueError("download did not complete before timeout")
+        if download_code == DOWNLOAD_NEEDS_PERSON:
+            # Collected; what the run lacks is recorded, and the Pod holds nothing more, so it goes.
+            if realization_id:
+                record_launch_phase(run_dir, realization_id, "download_finished")
+            safe_to_stop = True
+            hold_for_sec = 0
+            try:
+                status_now = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                status_now = {"state": "recovery_required"}
+            print(format_run_completion(_workspace(), run_dir, status_now))
+            _notify(notify_channels, subject=f"Kura run needs attention: {run_id}",
+                    body=f"Run {run_id} finished, but {status_now.get('publication_error') or 'its outputs could not be published'}. "
+                         f"The outputs are downloaded; the Pod will be stopped now. Inspect with `kura run status {run_id}`.")
+            return 1
         if realization_id:
             record_launch_phase(run_dir, realization_id, "download_finished")
         safe_to_stop = True
