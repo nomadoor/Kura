@@ -786,7 +786,7 @@ def _local_disk_preflight_report(
             "disk",
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
-            f"{_preflight_bytes(tightest['required_bytes'])} needed (docker.min_free_gb {payload['required_gib']} GiB plus estimated writes)",
+            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes)",
             "workspace.yaml",
         )
     ]
