@@ -58,9 +58,10 @@ Keep these claims separate:
 5. lifecycle evidence additionally proves recovery, download, and cleanup.
 
 A support claim requires upstream source evidence, a tested Kura compile
-projection, and a pinned-image entrypoint smoke. It must name the highest level
-actually observed; real optimizer and unchanged-lifecycle smokes are additional
-confidence, not universal prerequisites. One
+projection, and a pinned-image entrypoint smoke, and it names the highest level
+actually observed. A family is presented to users as supported only after one
+optimizer step completed on both local Docker and RunPod: the two executors
+differ in transfer, collection, and state handling. One
 representative smoke covers another selector only when their execution
 contracts are demonstrably the same under `docs/backend-validation.md` and the
 upgrade plan records that relationship. A shared Python entrypoint alone is not

@@ -1,86 +1,65 @@
 ---
 name: kura-core
-description: Core Kura repository operating rules. Use when changing Kura source code, run lifecycle behavior, workspace artifact handling, executor/backend boundaries, secrets handling, or any code that affects reproducible training/render runs.
+description: Kura's run-record, path, and authored-surface contracts. Use when changing Kura source code, run lifecycle behavior, run artifacts or status, workspace paths, secrets handling, or any authored file Kura reads (run.yaml, workspace.yaml, dataset files).
 ---
 
 # Kura Core
 
-Use this skill before changing production code in `src/kura/`, tests, executor/backend contracts, or run artifact semantics.
+The principles, boundaries, and working rules are in the root `AGENTS.md`;
+this skill holds the contracts code in `src/kura/` must keep.
 
-## Start
+## Run records
 
-1. Inspect `git status --short --branch` and `git log --oneline -5`.
-2. Identify relevant tests before editing.
-3. Use `uv` for Python commands.
-4. Preserve unrelated user changes.
+- `run.yaml` is intent; `resolved/` is frozen at compile and never edited;
+  `realizations/` is append-only facts (one record per fact, written before
+  status shows it); `status.json` is their projection, kept for fast reading.
+  Apart from `notes.md`, a run artifact changes only through the CLI command
+  that owns it.
+- Record intent before any external effect and settle an unconfirmed one by
+  discovery, never by acting again (`docs/adr/run-records-and-external-effects.md`).
+- Records carry `kind` and `schema_version` (`kura.records.record`). Readers
+  accept every version they know and never rewrite a record to migrate it.
+- Status writes go through `executors.common._mutate_run_status` (lock and
+  runner-epoch fence). The status projection runs in shadow mode
+  (`kura.status_projection`); a status field without a record behind it is a bug.
+- Run states and the decisions over them are declared once in
+  `executors.common` (`RUN_STATES`, `TERMINAL_STATES`, `RELAUNCHABLE_STATES`, …).
 
-## Architectural invariants
+## Authored surfaces are closed
 
-The durable path rules are in
-[Path namespace policy](../../../docs/adr/path-namespace-policy.md).
+A value with no declared consumer is refused where the file is loaded; it is
+never accepted and ignored. Dynamic names are declared explicitly, and values
+below them stay closed wherever Kura interprets them. Adding a consumer for a
+new key adds it to that surface's declaration in the same change;
+`tests/test_surface_contracts.py` walks the declarations, so a new surface goes
+into that registry too. A silently dropped setting makes `run.yaml` or
+`workspace.yaml` lie about what ran.
 
-- Kura is file-first: the run files are the only authoritative state. Do not introduce a hidden database, queue, or second truth store. The job runner (`kura runner`) is the one long-running process, allowed only as defined in `docs/adr/files-only-state-and-job-runner.md`. Record intent before any external effect (creating a Pod or container, or starting a remote job), keep `status.json` a projection of the records, and keep viewers read-only, as `docs/adr/run-records-and-external-effects.md` defines.
-- Every surface a user or agent authors is closed. A value with no declared
-  consumer is refused where the file is loaded; it is never accepted and ignored.
-  Dynamic names are declared explicitly and the values below them remain closed
-  whenever Kura interprets those values. Adding a consumer
-  for a new key means adding it to that surface's declaration in the same change,
-  and `tests/test_surface_contracts.py` walks the declarations, so a new surface
-  belongs in that registry too. This rule was implemented twice, never written
-  down, and then lost on the third and fourth consumers — a silently dropped
-  setting makes `run.yaml` and `workspace.yaml` lie about what executed.
-- `run.yaml` is human/agent intent.
-- `resolved/` is compile-time immutable input.
-- Launch/runtime facts go into append-only `realizations/`.
-- `status.json` materializes latest state; it is not the source of historical truth.
-- Apart from `notes.md`, treat run artifacts as append-only or immutable unless a CLI command explicitly owns the mutation.
-- Path namespace is determined by the artifact consumer:
-  - container command specs, dataset TOML, and training argv may use container absolute paths such as `/workspace/...`;
-  - host-consumed state such as `status.json`, model locks, indexes, and workspace symlinks should use workspace-relative paths or host-resolvable links;
-  - realization mounts are explicit source/target pairs and may contain both host and container paths;
-  - logs are not machine-interpreted path truth.
-- Do not persist container-private paths such as `/root/...`, `/opt/...`, `/tmp/...`, `/var/...`, or `/app/...` into host-consumed workspace artifacts. Use `src/kura/paths.py` and the workspace mount table; if a path cannot be mapped, fail or treat it as unavailable rather than guessing.
-- Host-side plan/monitor code must not crash on unresolvable convenience symlinks. Treat cache detection as best-effort and fall back to "not cached".
+## Paths
 
-## Backend / executor split
+The rules are in `docs/adr/path-namespace-policy.md`. In short:
 
-- Backends compile native configuration and container-native command specs.
-- Backends do not launch runs.
-- Executors launch/reconcile/stop runs.
-- Training goes through Docker locally or RunPod remotely. Do not run AI-Toolkit or Musubi directly on the host.
-- Render runs are the exception: they call a local ComfyUI endpoint.
+- Container command specs, dataset TOML, and training argv may use container
+  paths such as `/workspace/...`.
+- Host-consumed state (status, locks, indexes, symlinks) uses workspace-relative
+  paths or host-resolvable links; never persist container-private paths
+  (`/root`, `/opt`, `/tmp`, `/var`, `/app`) there. Use `src/kura/paths.py` and
+  the workspace mount table; a path that cannot be mapped is unavailable, not
+  guessed.
+- Host-side plan and monitor code treats cache detection as best effort and
+  never crashes on an unresolvable convenience symlink.
 
-## Safety rules
+## Secrets
 
-- Never write secrets to `workspace.yaml`, `run.yaml`, `env.lock`, logs, README, or Docker images.
-- Secrets come from the environment, a workspace `.env.local`, or the user secrets file, in that order (`docs/adr/user-secrets.md`); a command that needs a missing one reports `kura secrets set <NAME>`, and nothing makes an agent handle a value.
-- Do not commit datasets, model weights, checkpoints, outputs, caches, downloads, or generated workspace data.
-- Registry image names belong in workspace/config, not hardcoded policy.
+Secrets come from the environment, a workspace `.env.local`, or the user
+secrets file, in that order (`docs/adr/user-secrets.md`). Names are recognized
+by `kura.secrets.is_secret_name` and declared values read through
+`kura.secrets.declared_secret`. A command that needs a missing secret reports
+`kura secrets set <NAME>`.
 
-## Documentation
-
-- Keep README, focused docs, examples, CLI help, and project skills consistent
-  with changed behavior.
-- Verify current CLI output instead of copying remembered flags or historical
-  examples.
-- Keep README concise and move detailed contracts or history to focused docs or
-  ADRs.
-- Do not publish local paths, machine-specific state, credentials, dataset
-  contents, or generated run artifacts.
-
-## Validation
-
-Use the narrowest relevant check first, then broader checks when lifecycle behavior changes:
-
-```sh
-uv run python -m unittest discover -s tests
-uv run kura --help
-uv run python scripts/check_readme_cli_sync.py
-```
-
-## RunPod lifecycle changes
+## RunPod lifecycle
 
 Pod-side deletion, shared by training and render Pods, lives in
-`src/kura/container_scripts/pod_self_delete.sh`. After lifecycle changes run
-`uv run python -m unittest tests.test_cli` and check `uv run kura run remote --help`;
-usage guidance stays in the shipped `runpod-lifecycle` skill.
+`src/kura/container_scripts/pod_self_delete.sh`. A change to a RunPod executor
+source needs a new entry in `docs/adapter-source-identity-migrations.yaml`.
+Usage guidance stays in the shipped `runpod-lifecycle` skill.

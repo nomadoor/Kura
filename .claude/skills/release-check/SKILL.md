@@ -1,57 +1,52 @@
 ---
 name: release-check
-description: Pre-release or pre-commit quality gate for Kura. Use when preparing a commit, release, PR, or larger handoff; verifying tests, CLI help, docs, secrets, generated artifacts, workflows, and RunPod safety.
+description: Pre-push, pre-release, and milestone quality gate for Kura. Use when preparing a commit, PR, release, or larger handoff, or when closing a milestone; covers the release gate, real smokes, the context-free acceptance test, and the whole-codebase audit.
 ---
 
 # Release Check
 
-Use this skill before committing broad changes or preparing a release.
-
-## Checklist
+## Before a push
 
 ```sh
 git status --short --branch
-uv run python -m unittest discover -s tests
-uv run kura --help
-uv run kura run --help
-uv run python scripts/check_no_artifacts.py
-uv run python scripts/check_secrets.py
-uv run python scripts/check_workflows.py
-uv run python scripts/check_evaluation_blocks.py --repository-only
-uv run python scripts/check_readme_cli_sync.py
-uv run python scripts/check_runpod_safety.py
+uv run python scripts/check_release.py
 ```
 
-Also run targeted smoke commands when the change touches Docker, RunPod, render, or TUI behavior.
+Stage new files first: the secrets and artifact checks read tracked files. Run
+targeted commands (`uv run kura ... --help`, a focused test module) for the
+surface you changed.
 
-An execution path (local Docker, RunPod SSH, RunPod session, ComfyUI render)
-is not "done" until a real smoke has run through it end-to-end. Unit tests
-mock the executor↔container seams where environment-contract bugs live; do
-not declare a new or changed path complete on green tests alone.
-Before publishing, inspect ignored files with `git status --ignored --short`
-and confirm datasets, runs, downloads, caches, checkpoints, and prompt/workflow
-experiments are not about to be committed.
+An execution path (local Docker, RunPod SSH, RunPod session, ComfyUI render) is
+not done until a real smoke has run through it end to end: unit tests mock the
+executor and container seams where environment-contract bugs live. Real smokes
+need the owner's request, and anything that bills needs the cost shown first.
 
-The release gate validates authored evaluation examples with
-`--repository-only`, so ignored, immutable workspace runs cannot make the same
-commit pass or fail differently on two machines. Run
-`uv run python scripts/check_evaluation_blocks.py` without that flag when
-auditing the local workspace itself.
+Before publishing, check `git status --ignored --short` so datasets, runs,
+downloads, caches, checkpoints, and experiments stay out of the commit.
 
-## Before final handoff
+## Before a milestone closes or a release
 
-- Report tests run.
-- Report known skipped external checks.
-- Confirm whether RunPod has live Pods/Network Volumes when relevant.
-- Do not hide dirty worktree state.
+Two checks by agents that have none of your context, each given only what is
+written below; report their findings to the owner with your assessment.
 
-## Pull requests
+**Acceptance test.** Install Kura from the branch into a fresh tool environment
+and create a fresh workspace with `kura init`; give the agent only that
+workspace and a user task (prepare a small dataset, plan a run, run a short
+local training, report the result), never the repository or this session. It
+works from the shipped `AGENTS.md`, skills, CLI help, and errors alone, and
+reports every place it hesitated, guessed, or was misled. RunPod tasks need the
+owner's approval with the cost shown.
 
-- Keep PR titles and bodies about the product change, risk, validation, and
-  reviewer context.
-- Do not include tool/agent attribution such as "Codex", "Claude", or
-  "AI-generated" unless the user explicitly asks for it or it is technically
-  relevant to the change.
-- Do not paste local paths, secrets, dataset details, or generated experiment
-  artifacts into the PR body.
-- Prefer a short structure: summary, validation, notes/risks.
+**Whole-codebase audit.** Give the agent the repository and the root
+`AGENTS.md`, not a diff. It looks for decisions made in more than one place
+(between executors, between training and render, between commands), for
+mechanism that guards against something unlikely, and for records or status
+fields without a single owner, and reports each with the places involved and a
+concrete input on which the copies disagree.
+
+## Handoff and pull requests
+
+- Report the tests and checks run, skipped external checks, and whether RunPod
+  has live Pods when relevant; do not hide a dirty worktree.
+- A PR is about the product change: summary, validation, risks. No agent
+  attribution, local paths, secrets, or dataset details.
