@@ -5649,25 +5649,28 @@ class DockerLifecycleTests(unittest.TestCase):
         self.assertEqual(payload["disk"]["workspace"]["free_bytes"], 20 * 1024**3)
 
     def test_plan_reports_local_disk_on_a_machine_without_docker(self) -> None:
-        from kura.run_commands.plan import collect_run_preflight
+        from kura.run_commands.plan import _local_disk_preflight_report
 
         run = {"id": "r", "type": "train", "backend": {"name": "ai-toolkit"}, "compute": {"executor": "docker"}}
         with tempfile.TemporaryDirectory() as directory:
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), \
                     patch("kura.run_commands.plan.subprocess.run", side_effect=FileNotFoundError("docker")):
-                records = [item for item in collect_run_preflight(run, Path(directory), config={}, executor="docker") if item["check"] == "disk"]
+                records = _local_disk_preflight_report(run, Path(directory), {}, {})
         self.assertEqual([item["severity"] for item in records], ["info"])
 
     def test_plan_reports_the_local_disk_verdict_launch_will_reach(self) -> None:
-        from kura.run_commands.plan import collect_run_preflight
+        from kura.run_commands.plan import _local_disk_preflight_report, collect_run_preflight
 
         run = {"id": "r", "type": "train", "backend": {"name": "ai-toolkit"}, "compute": {"executor": "docker"}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)), \
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
-                short = [item for item in collect_run_preflight(run, root, config={}, executor="docker") if item["check"] == "disk"]
-                enough = [item for item in collect_run_preflight(run, root, config={"docker": {"min_free_gb": 50}}, executor="docker") if item["check"] == "disk"]
+                short = _local_disk_preflight_report(run, root, {}, {})
+                enough = _local_disk_preflight_report(run, root, {"docker": {"min_free_gb": 50}}, {})
+                # The launch's own preflight (dry runs included) does not run the disk check twice.
+                shared = [item for item in collect_run_preflight(run, root, config={}, executor="docker") if item["check"] == "disk"]
+        self.assertEqual(shared, [])
         self.assertEqual([item["severity"] for item in short], ["error"])
         self.assertIn("requires at least 100 GiB", short[0]["fact"])
         self.assertEqual([item["severity"] for item in enough], ["info"])
