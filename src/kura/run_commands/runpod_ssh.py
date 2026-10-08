@@ -963,6 +963,8 @@ PY
 
 def _runpod_remote_training_states(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
+    # sd-scripts Anima LoRA trains into a native directory and moves its state to outputs only after it exits.
+    remote_native = f"{workspace.rstrip('/')}/runs/{run_id}/cache/sd-scripts/native-output"
     script = f"""
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 python - <<'PY'
@@ -971,9 +973,13 @@ import json
 import os
 import re
 
-directory = {remote_outputs!r}
 items = []
-for state_dir in sorted(glob.glob(os.path.join(directory, "*-step*-state"))):
+seen = set()
+state_dirs = sorted(glob.glob(os.path.join({remote_outputs!r}, "*-step*-state"))) + sorted(glob.glob(os.path.join({remote_native!r}, "*-step*-state")))
+for state_dir in state_dirs:
+    if os.path.basename(state_dir) in seen:
+        continue
+    seen.add(os.path.basename(state_dir))
     if not os.path.isdir(state_dir) or os.path.islink(state_dir):
         continue
     name = os.path.basename(state_dir)

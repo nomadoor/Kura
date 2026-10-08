@@ -87,6 +87,26 @@ def native_files(native_dir, output_name, *, require_final):
     return matches
 
 
+def move_training_states(native_dir, output_dir, output_name):
+    """Move the trainer's state directories next to the published weights.
+
+    sd-scripts saves state beside its native weights; Kura looks for training
+    state in the run's outputs, as for every other backend. Run after the
+    trainer exits, so no state is moved while it is written or pruned.
+    """
+    if not native_dir.is_dir():
+        return
+    state = re.compile(re.escape(output_name) + r"(-step[0-9]{8})?-state\Z")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for source in sorted(native_dir.iterdir()):
+        if source.is_dir() and not source.is_symlink() and state.fullmatch(source.name):
+            destination = output_dir / source.name
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(source, destination)
+            print(f"[kura] moved training state {source.name} to outputs", flush=True)
+
+
 def recover(files, recovery_dir):
     recovery_dir.mkdir(parents=True, exist_ok=True)
     for source in files:
@@ -170,6 +190,7 @@ def train_and_publish(spec):
         returncode = child.wait()
         files = native_files(native_dir, output_name, require_final=returncode == 0)
         publish(files, spec, published)
+        move_training_states(native_dir, pathlib.Path(spec["output_dir"]), output_name)
         if returncode != 0:
             recover(files, recovery_dir)
         if forwarded_signal is not None:
