@@ -37,6 +37,27 @@ class RedactionTests(unittest.TestCase):
         with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "train"}):
             self.assertEqual(_redact_secrets({"state": "training"}), {"state": "training"})
 
+    def test_a_short_setting_under_a_secret_looking_name_is_not_a_secret(self) -> None:
+        from kura.executors.common import _redact_secrets
+
+        with patch.dict(os.environ, {"HF_HUB_DISABLE_IMPLICIT_TOKEN": "true"}):
+            self.assertEqual(_redact_secrets({"cmd": ["--use_xformers=true"]}), {"cmd": ["--use_xformers=true"]})
+
+    def test_an_unreadable_workspace_yaml_does_not_break_redaction(self) -> None:
+        text = self._redact({"HF_TOKEN": VALUE})
+        self.assertNotIn(VALUE, text)
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "workspace.yaml").write_bytes(b"runpod: \xff\n")
+            previous = Path.cwd()
+            os.chdir(directory)
+            try:
+                from kura.executors.common import _redact_secret_text
+
+                with patch.dict(os.environ, {"HF_TOKEN": VALUE}):
+                    self.assertNotIn(VALUE, _redact_secret_text(f"x {VALUE}"))
+            finally:
+                os.chdir(previous)
+
     def test_an_ordinary_variable_is_left_alone(self) -> None:
         self.assertIn(VALUE, self._redact({"KURA_NTFY_PRIORITY": VALUE}))
 

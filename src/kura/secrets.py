@@ -93,6 +93,11 @@ def is_secret_name(name: str) -> bool:
     )
 
 
+# A secret value is at least this long. Shorter values under a secret-looking name are
+# settings such as HF_HUB_DISABLE_IMPLICIT_TOKEN=true; hiding them would rewrite records.
+MIN_SECRET_VALUE_LENGTH = 8
+
+
 def secret_values() -> list[str]:
     """The values Kura holds as secrets, longest first: variables whose names hold a secret,
     and the key names workspace.yaml chooses. Output hides them and `kura check secrets`
@@ -100,7 +105,7 @@ def secret_values() -> list[str]:
     configured = set(_configured_names())
     values = {
         value for name, value in os.environ.items()
-        if value and len(value) >= 4 and (is_secret_name(name) or name in configured)
+        if len(value) >= MIN_SECRET_VALUE_LENGTH and (is_secret_name(name) or name in configured)
     }
     return sorted(values, key=len, reverse=True)
 

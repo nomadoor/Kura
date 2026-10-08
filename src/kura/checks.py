@@ -27,8 +27,6 @@ SECRET_PATTERNS = [
     re.compile(r"rpa_[A-Za-z0-9]{20,}", re.IGNORECASE),
     re.compile(r"Bearer\s+[A-Za-z0-9_./+=:-]{12,}", re.IGNORECASE),
 ]
-# Shorter values are too likely to appear by chance to report.
-MIN_KNOWN_SECRET_LENGTH = 8
 MODEL_SUFFIXES = {".safetensors", ".ckpt", ".pt", ".pth", ".gguf", ".onnx", ".bin"}
 
 
@@ -87,7 +85,7 @@ def secret_findings(files: Iterable[Path], root: Path) -> list[str]:
     """
 
     findings: list[str] = []
-    known = [value for value in secret_values() if len(value) >= MIN_KNOWN_SECRET_LENGTH]
+    known = secret_values()
     for path in files:
         suffix = path.suffix.lower()
         if never_read(path) or suffix in SECRET_SKIP_SUFFIXES or suffix in MODEL_SUFFIXES:
