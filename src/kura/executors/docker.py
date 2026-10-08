@@ -37,7 +37,6 @@ from kura.executors.common import (
     dataset_input_drift_warning,
     CONTAINER_WORKSPACE,
     LOW_AVAILABLE_MEMORY_BYTES,
-    MIN_FREE_SPACE_GIB,
     TERMINAL_STATES,
     append_run_event,
     launch_phases,
@@ -297,7 +296,7 @@ def docker_daemon_problem() -> str | None:
     return _redact_secret_text(info.stderr.strip() or info.stdout.strip() or f"`docker info` exited with {info.returncode}")
 
 
-def docker_preflight(workspace: Path, mounts: list[dict[str, str]], *, min_free_gb: int = MIN_FREE_SPACE_GIB) -> dict[str, Any]:
+def docker_preflight(workspace: Path, mounts: list[dict[str, str]]) -> dict[str, Any]:
     """Reject only unsafe launches; retain advisory host signals for realization truth."""
     if problem := docker_daemon_problem():
         suffix = " In WSL, start Docker Desktop and enable WSL integration for this distribution." if _is_wsl() else ""
@@ -309,16 +308,11 @@ def docker_preflight(workspace: Path, mounts: list[dict[str, str]], *, min_free_
             source = _resolve_mount_source(workspace, mount["source"])
             source.mkdir(parents=True, exist_ok=True)
             paths[f"mount:{mount.get('target', source)}"] = source.resolve()
+    # The free-space floor is decided by the launch disk preflight; this records what the host had.
     disk: dict[str, dict[str, int | str]] = {}
-    errors: list[str] = []
-    min_free_bytes = min_free_gb * 1024**3
     for name, path in paths.items():
         usage = shutil.disk_usage(path)
         disk[name] = {"path": str(path), "free_bytes": usage.free, "total_bytes": usage.total}
-        if usage.free < min_free_bytes:
-            errors.append(f"{path} has only {usage.free // 1024**3} GiB free; Kura requires at least {min_free_gb} GiB before local Docker launch")
-    if errors:
-        raise ValueError("; ".join(errors))
     available = _memory_available_bytes()
     warnings: list[str] = []
     if available is not None and available < LOW_AVAILABLE_MEMORY_BYTES:
@@ -438,7 +432,7 @@ def docker_command(
     return command, runtime_env, name
 
 
-def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, min_free_gb: int = MIN_FREE_SPACE_GIB, controlled_by: dict[str, Any] | None = None) -> tuple[list[str], str | None]:
+def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, controlled_by: dict[str, Any] | None = None) -> tuple[list[str], str | None]:
     """Start a detached Docker realization; completion is recovered by reconcile."""
     realization_id = _realization_id()
     mount_workspace = True
@@ -460,7 +454,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
             }
     else:
         effective_mounts = _effective_mounts(mounts, workspace_target)
-    preflight = {} if dry_run else docker_preflight(workspace, effective_mounts, min_free_gb=min_free_gb)
+    preflight = {} if dry_run else docker_preflight(workspace, effective_mounts)
     command, runtime_env, name = docker_command(
         workspace,
         run_dir,

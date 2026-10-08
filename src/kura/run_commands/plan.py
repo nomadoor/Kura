@@ -299,8 +299,6 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:
             warnings.append(f"sampling cadence may create about {expected_samples} sample batches")
-    if run_executor(run) == "docker":
-        warnings.append("local Docker launch requires a disk preflight; default minimum free space is 100GiB unless docker.min_free_gb is configured")
     return warnings
 
 
@@ -762,7 +760,32 @@ def collect_run_preflight(
     if resolved_executor == "runpod":
         runpod_config = workspace_config.get("runpod") if isinstance(workspace_config.get("runpod"), dict) else {}
         records.extend(_runpod_disk_preflight_report(run, runpod_config, estimate))
+    elif resolved_executor == "docker":
+        records.extend(_local_disk_preflight_report(run, workspace, workspace_config))
     return records
+
+
+def _local_disk_preflight_report(run: dict[str, Any], workspace: Path, workspace_config: dict[str, Any]) -> list[dict[str, Any]]:
+    """The verdict the local launch will reach, from the same check it runs."""
+    docker = workspace_config.get("docker") if isinstance(workspace_config.get("docker"), dict) else {}
+    mounts = docker.get("mounts") if isinstance(docker.get("mounts"), list) else []
+    try:
+        payload = _local_launch_disk_preflight(workspace, run, docker, mounts, workspace_config, enforce_model_download_safety=False)
+    except ValueError as exc:
+        return [_preflight_record("disk", "error", str(exc), "workspace.yaml")]
+    paths = payload["paths"].values()
+    tightest = min(paths, key=lambda item: item["effective_free_bytes"] - item["required_bytes"]) if paths else None
+    if tightest is None:
+        return []
+    return [
+        _preflight_record(
+            "disk",
+            "info",
+            f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
+            f"{_preflight_bytes(tightest['required_bytes'])} needed (docker.min_free_gb {payload['required_gib']} GiB plus estimated writes)",
+            "workspace.yaml",
+        )
+    ]
 
 
 def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
@@ -907,7 +930,11 @@ def _local_launch_disk_preflight(
     if errors:
         raise ValueError("; ".join(errors))
     docker_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
-    docker_system_df = subprocess.run(["docker", "system", "df", "--format", "{{json .}}"], text=True, capture_output=True, check=False)
+    try:
+        docker_system_df = subprocess.run(["docker", "system", "df", "--format", "{{json .}}"], text=True, capture_output=True, check=False)
+    except OSError:
+        # No docker command: the plan still reports disk; the launch reports the missing daemon.
+        docker_system_df = subprocess.CompletedProcess([], 1, "", "")
     docker_storage: list[dict[str, Any]] = []
     if docker_system_df.returncode == 0:
         for line in docker_system_df.stdout.splitlines():

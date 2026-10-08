@@ -24,9 +24,6 @@ from kura.training_artifacts import is_training_state_output
 CONTAINER_WORKSPACE = "/workspace"
 
 
-MIN_FREE_SPACE_GIB = 50
-
-
 LOW_AVAILABLE_MEMORY_BYTES = 4 * 1024**3
 
 
