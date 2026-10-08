@@ -602,6 +602,15 @@ MISSING_STATE_SYNC_ERROR = (
 )
 
 
+def missing_training_state_error(capture_required: bool, *, trainer_completed: bool) -> str | None:
+    """What a run that left no valid training state records, on every executor.
+
+    Only a trainer that completed must have saved one; a run that failed or was
+    stopped may have ended before its first save, and has nothing to resume from.
+    """
+    return MISSING_STATE_SYNC_ERROR if capture_required and trainer_completed else None
+
+
 def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None, *, frozen: bool = False) -> bool:
     """The one rule for whether Kura manages a run's training state.
 
