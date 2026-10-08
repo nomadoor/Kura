@@ -11,7 +11,10 @@ NAMES = {
     # AI-Toolkit
     "vivi_000000500.safetensors": 500,
     "my_lora_v2_000001000.safetensors": 1000,
-    # final weights carry no step
+    # AI-Toolkit names checkpoints after the run ID, which ends in 4 hex digits
+    "20261008-2356_smoke-test-gc_7868_000000025.safetensors": 25,
+    # final weights carry no step, even when the run ID ends in digits
+    "20261008-2356_smoke-test-gc_7868.safetensors": None,
     "vivi.safetensors": None,
     "my_lora_v2.safetensors": None,
 }
