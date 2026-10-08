@@ -30,7 +30,7 @@ from kura.executors.runpod import project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
 from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
-from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure
+from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
 from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
 from kura.fsio import append_line_durably, atomic_write_json
@@ -645,6 +645,8 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     # supersedes any error recorded by an earlier mid-run sync.
                     status.pop("training_state_sync_error", None)
                 status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
+                if exit_code == 0 and not contract and realization_id is not None:
+                    record_unverified_publication(run_dir, realization_id, list(outputs or []))
                 status.pop("publication_error", None)
                 if publication_manifest:
                     status["publication_manifest"] = publication_manifest

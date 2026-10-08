@@ -76,6 +76,21 @@ def record_publication_failure(run_dir: Path, realization_id: str, error: str) -
     return path.relative_to(run_dir).as_posix()
 
 
+def record_unverified_publication(run_dir: Path, realization_id: str, outputs: list[str]) -> str:
+    """Record that a run with no output contract completed with these outputs, unverified.
+
+    A legacy command lock names no outputs to verify; the record lets status say
+    `completed` from a record rather than from the step that wrote it.
+    """
+    path = run_dir / "realizations" / f"{realization_id}.publication-unverified.json"
+    atomic_write_json(path, record("publication_unverified", {
+        "realization_id": realization_id,
+        "observed_at": datetime.now().astimezone().isoformat(),
+        "outputs": outputs,
+    }))
+    return path.relative_to(run_dir).as_posix()
+
+
 def publish_outputs(
     run_dir: Path,
     realization_id: str,
