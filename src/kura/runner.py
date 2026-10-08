@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE
+from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -1031,6 +1031,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     out = out or sys.stderr
     restarts = 0
     queued_said = False
+    quiet_said = False
     log_path = run_dir / "logs" / "stdout.log"
     offset = log_path.stat().st_size if log_path.exists() else 0
     # The follower's own messages (capacity wait, transfer, download, stop) are part of what the user sees.
@@ -1048,6 +1049,11 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             queued_said = True
             print("waiting for a free local slot: another local training run is using it (`runner.local_slots`)", file=out)
         status = _status(run_dir)
+        # Said once per quiet spell; progress resets it.
+        quiet = quiet_run_notice(run_quiet_since(run_dir, status))
+        if quiet and not quiet_said:
+            print(quiet, file=out)
+        quiet_said = quiet is not None
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
         if launched and run_finished(status) and (not _held(run_dir) or (held_for_review and status.get("downloaded_run"))):

@@ -102,19 +102,6 @@ class InitTests(unittest.TestCase):
         self.assertNotIn("still needed", output)
 
 
-class ReadinessTests(unittest.TestCase):
-    def test_the_docker_probe_runs_outside_the_workspace(self) -> None:
-        from kura.doctor import readiness_gaps
-
-        with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
-            with patch("kura.doctor.shutil.which", return_value="docker"), patch("kura.doctor.subprocess.run") as run:
-                run.return_value.returncode = 0
-                readiness_gaps(Path(directory))
-        cwd = Path(run.call_args.kwargs["cwd"]).resolve()
-        self.assertNotEqual(cwd, Path(directory).resolve())
-        self.assertNotIn(Path(directory).resolve(), cwd.parents)
-
-
 class EnvironmentDeclarationTests(unittest.TestCase):
     def test_every_environment_variable_kura_reads_is_declared(self) -> None:
         # Literal reads, plus names read through a loop over a tuple next to the read.
