@@ -8,6 +8,7 @@ import platform
 import re
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -716,6 +717,11 @@ def reconcile_docker(
             else:
                 state = "unknown"
             detail = _redact_secret_text(str(docker_state.get("Error"))) if docker_state.get("Error") else None
+        container_exit_code = None
+        if state in ("completed", "failed") and _stopped_on_request(run_dir, realization["id"], finished_at=ended):
+            # `kura run stop` ends a run as interrupted on every executor; the exit code the
+            # stop signal caused is kept for the record, not taken as the trainer's result.
+            state, container_exit_code, exit_code = "interrupted", exit_code, None
         observation = {
             "realization_id": realization["id"],
             "observed_at": observed_at,
@@ -729,6 +735,7 @@ def reconcile_docker(
             # Docker reported the container absent; the only evidence that no
             # later reconcile can finish this realization's handoff cleanup.
             "container_missing": container_missing,
+            **({"container_exit_code": container_exit_code} if container_exit_code is not None else {}),
         }
         recorded = False
 
@@ -854,6 +861,33 @@ def reconcile_docker(
         if recorded:
             append_run_event(run_dir, {"event": "run_reconciled", **observation})
         return status
+
+
+def _stopped_on_request(run_dir: Path, realization_id: str, *, finished_at: Any = None) -> bool:
+    """Whether a stop of this realization ended it: a `stop` record with outcome stopped, requested
+    before the container finished. A trainer that had already finished keeps its own result."""
+    finished = _parse_time(finished_at)
+    for path in (run_dir / "realizations").glob(f"{realization_id}.stop-*.json"):
+        try:
+            record_ = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record_, dict) or record_.get("outcome") != "stopped":
+            continue
+        requested = _parse_time(record_.get("requested_at"))
+        if finished is None or requested is None or requested <= finished:
+            return True
+    return False
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.astimezone()
 
 
 def stop_docker(run_dir: Path) -> dict[str, Any]:
