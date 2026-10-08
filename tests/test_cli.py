@@ -5623,7 +5623,7 @@ class DockerLifecycleTests(unittest.TestCase):
             # The free-space floor is tested separately; this test must not
             # depend on how full the machine running it is.
             with (
-                patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.docker.docker_daemon_problem", return_value=None),
                 patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
                 docker_preflight(root, mounts)
@@ -5638,7 +5638,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.docker.docker_daemon_problem", return_value=None),
                 patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
@@ -5653,7 +5653,7 @@ class DockerLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
-                patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                patch("kura.executors.docker.docker_daemon_problem", return_value=None),
                 patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
                 payload = docker_preflight(root, [], min_free_gb=10)
