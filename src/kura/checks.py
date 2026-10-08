@@ -14,31 +14,41 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from kura.render import is_safe_component
-from kura.secrets import is_secret_file
+from kura.secrets import is_secret_file, is_secret_name
 
 # A workspace may keep secrets here; no check ever opens it, nor the user secrets file.
 NEVER_READ = {".env.local"}
 
 SECRET_SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".lock"}
+# Token shapes that are secrets wherever they appear.
 SECRET_PATTERNS = [
     re.compile(r"hf_[A-Za-z0-9]{20,}"),
     re.compile(r"rpa_[A-Za-z0-9]{20,}", re.IGNORECASE),
-    re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"),
     re.compile(r"Bearer\s+[A-Za-z0-9_./+=:-]{12,}", re.IGNORECASE),
 ]
-SECRET_ALLOW_HINTS = {
-    "your-app-password",
-    "send-to@example.com",
-    "your-address@gmail.com",
-    "KURA_NTFY_TOPIC",
-    "KURA_NTFY_TOKEN",
-    "RUNPOD_API_KEY",
-    "HF_TOKEN",
-    "HUGGINGFACE_HUB_TOKEN",
-    "api_key_env",
-    "os.environ.get",
-    "token-example",
-}
+# `NAME = value` or `name: value`; whether NAME holds a secret is kura.secrets' decision.
+ASSIGNMENT = re.compile(r"(?P<name>[A-Za-z][A-Za-z0-9_.-]*)['\"]?\s*[:=]\s*['\"]?(?P<value>[A-Za-z0-9_./+=:-]{12,})")
+# Values that stand for a secret without being one: documentation placeholders and lookups.
+PLACEHOLDER_HINTS = ("example", "your-", "xxxx", "os.environ", "changeme")
+
+
+def _is_placeholder(value: str) -> bool:
+    # An all-capitals value is the name of a variable, such as `api_key_env: RUNPOD_API_KEY`;
+    # a value without both letters and digits is a word or code (`declared_secret`), not a key.
+    if re.fullmatch(r"[A-Z0-9_]+", value) or not (re.search(r"[0-9]", value) and re.search(r"[A-Za-z]", value)):
+        return True
+    return any(hint in value.lower() for hint in PLACEHOLDER_HINTS)
+
+
+def _secret_line(line: str) -> bool:
+    if any(pattern.search(line) for pattern in SECRET_PATTERNS):
+        return True
+    return any(
+        is_secret_name(match.group("name")) and not _is_placeholder(match.group("value"))
+        for match in ASSIGNMENT.finditer(line)
+    )
+
+
 MODEL_SUFFIXES = {".safetensors", ".ckpt", ".pt", ".pth", ".gguf", ".onnx", ".bin"}
 
 
@@ -108,9 +118,7 @@ def secret_findings(files: Iterable[Path], root: Path) -> list[str]:
                     continue
             with path.open(encoding="utf-8") as handle:
                 for lineno, line in enumerate(handle, 1):
-                    if any(hint in line for hint in SECRET_ALLOW_HINTS):
-                        continue
-                    if any(pattern.search(line) for pattern in SECRET_PATTERNS):
+                    if _secret_line(line):
                         findings.append(f"{shown}:{lineno}: looks like a secret value")
         except UnicodeDecodeError:
             continue
