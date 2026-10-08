@@ -14,7 +14,7 @@ from typing import Any
 
 from kura.secrets import declared_secret
 from kura.install_source import kura_provenance
-from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication
+from kura.artifact_publication import existing_output_snapshot, output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
 from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
@@ -778,17 +778,9 @@ def reconcile_docker(
                 try:
                     contract = output_contract(run_dir)
                     if contract is not None:
-                        manifest_ref = f"realizations/{realization['id']}.publication.json"
-                        current = _load_status(run_dir)
-                        already_published = (
-                            current.get("last_realization") == realization_ref
-                            and current.get("publication_state") == "completed"
-                            and current.get("publication_manifest") == manifest_ref
-                            and (run_dir / manifest_ref).is_file()
-                        )
-                        if already_published:
-                            publication_manifest = manifest_ref
-                            published_outputs = list(current.get("outputs") or [])
+                        reused = existing_publication(run_dir, realization["id"])
+                        if reused is not None:
+                            publication_manifest, published_outputs = reused
                         else:
                             publication_manifest, published_outputs = publish_outputs(
                                 run_dir, realization["id"], contract, baseline=realization.get("output_baseline")
