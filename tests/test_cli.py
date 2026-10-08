@@ -1073,10 +1073,10 @@ class DoctorDockerTests(unittest.TestCase):
                 os.chdir(previous)
             payload = json.loads(stdout.getvalue())
             managed = payload["docker_storage"]["kura_managed"]
-            # Counts and the command that acts on them; `kura run prune` lists the containers.
+            # Counts, and a command that removes only Kura's stopped containers.
             self.assertEqual((managed["containers"], managed["stopped_containers"], managed["volumes"]), (1, 1, 1))
-            self.assertIn("kura run prune --help", managed["prune"])
-            self.assertNotIn("--yes", managed["prune"])  # prune with --yes also removes old runs
+            # Not `kura run prune`: with --yes it also removes old runs.
+            self.assertEqual(managed["remove_stopped"], "docker container prune --filter label=io.kura.managed=true")
 
     def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -85,11 +85,11 @@ def _docker_managed_resources() -> dict[str, Any]:
     containers = kura_docker_containers()
     stopped = stopped_kura_containers(containers)
     volumes = kura_docker_volumes()
-    # Counts only: a workspace that has run for a while has hundreds of these, and
-    # `kura run prune` lists exactly the ones it would remove.
+    # Counts only: a workspace that has run for a while has hundreds of these.
     summary: dict[str, Any] = {"containers": len(containers), "stopped_containers": len(stopped), "volumes": len(volumes)}
-    if stopped or volumes:
-        summary["prune"] = "see `kura run prune --help`: --docker-containers and --docker-volumes preview what it would remove"
+    if stopped:
+        # Docker's own prune touches only stopped containers with Kura's label, never run files.
+        summary["remove_stopped"] = "docker container prune --filter label=io.kura.managed=true"
     return summary
 
 
