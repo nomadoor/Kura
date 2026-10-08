@@ -580,10 +580,8 @@ def training_state_contract(run: dict[str, Any]) -> dict[str, Any]:
 
 
 # The step a backend writes into a checkpoint name: `-step00000100` (sd-scripts, Musubi
-# Tuner) or `_000000500` (AI-Toolkit). Final weights carry none. A name of the second
-# form that ends in four or more digits of its own is read as a step too.
-# sd-scripts and Musubi write "-step00000100"; AI-Toolkit writes "_" plus exactly nine digits.
-# A shorter number after "_" is part of the name, such as a run ID's four hex digits.
+# Tuner) or `_` plus exactly nine digits (AI-Toolkit). Final weights carry none; a shorter
+# number after `_` is part of the name, such as a run ID's four hex digits.
 _CHECKPOINT_STEP = re.compile(r"(?:(?:^|[-_])step0*(\d+)|_(\d{9}))(?=\.safetensors$|[-_.]|$)", re.IGNORECASE)
 
 
