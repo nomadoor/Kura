@@ -570,7 +570,7 @@ def _model_download_preflight_report(run: dict[str, Any], download_estimate: dic
                 "info",
                 f"the trainer downloads {sources} itself before the first step, "
                 + ("on every run, while the Pod bills: each Pod starts with an empty cache"
-                   if executor == "runpod" else "unless the workspace's Hugging Face cache already holds it")
+                   if executor == "runpod" else "unless the Hugging Face cache local runs mount already holds it")
                 + "; Kura cannot know the size in advance",
                 "run.yaml",
             )

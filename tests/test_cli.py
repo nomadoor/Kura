@@ -1737,7 +1737,7 @@ class RunPlanTests(unittest.TestCase):
         self.assertIn("Preflight", output)
         self.assertIn("[info] model-acquisition", output)
         self.assertIn("the trainer downloads example itself before the first step", output)
-        self.assertIn("unless the workspace's Hugging Face cache already holds it", output)
+        self.assertIn("unless the Hugging Face cache local runs mount already holds it", output)
         self.assertNotIn("estimated model downloads write 0 B", output)
         self.assertIn("[warning] disk", output)
         self.assertNotIn("Disk warnings", output)
