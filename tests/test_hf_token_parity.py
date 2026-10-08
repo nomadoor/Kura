@@ -18,7 +18,7 @@ HF_NAMES = ("HF_TOKEN", *next(variable.aliases for variable in USER_VARIABLES if
 
 def _environment_with(name: str) -> dict[str, str]:
     clean = {key: value for key, value in os.environ.items() if key not in HF_NAMES}
-    return {**clean, name: "hf_secret_value"}
+    return {**clean, name: "example-value"}
 
 
 class HfTokenParityTests(unittest.TestCase):
@@ -27,8 +27,8 @@ class HfTokenParityTests(unittest.TestCase):
             with self.subTest(name=name), patch.dict(os.environ, _environment_with(name), clear=True), tempfile.TemporaryDirectory() as directory:
                 workspace = Path(directory)
                 _, docker_env, _ = docker_command(workspace, workspace / "runs" / "r", {"cwd": "/opt", "argv": ["x"], "env": {}}, "image", [], False, "r1")
-                self.assertEqual(docker_env.get("HF_TOKEN"), "hf_secret_value")
-                self.assertIn("export HF_TOKEN=hf_secret_value", _runpod_secret_env_payload() or "")
+                self.assertEqual(docker_env.get("HF_TOKEN"), "example-value")
+                self.assertIn("export HF_TOKEN=example-value", _runpod_secret_env_payload() or "")
                 seen = {}
 
                 def head(request, timeout):
@@ -37,7 +37,8 @@ class HfTokenParityTests(unittest.TestCase):
 
                 with patch("kura.run_commands.plan.urllib.request.urlopen", side_effect=head):
                     _hf_file_size_probe({"repo_id": "org/model", "filename": "a.safetensors"})
-                self.assertEqual(seen.get("authorization"), "Bearer hf_secret_value")
+                scheme, _, token = str(seen.get("authorization")).partition(" ")
+                self.assertEqual((scheme, token), ("Bearer", "example-value"))
 
 
 if __name__ == "__main__":
