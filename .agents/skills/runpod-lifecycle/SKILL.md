@@ -122,9 +122,10 @@ stop Pod
   missing state, or outputs that cannot be published, cannot be fetched by
   collecting again: Kura records the run as `recovery_required` with the reason
   (as on Docker), keeps the downloaded files, deletes the Pod, and notifies;
-  `kura run download` exits 3 for it. A failed trainer whose snapshot has no
-  state completes as failed with `training_state_sync_error`. A run whose
-  state is not managed saves none and is never held for it.
+  `kura run download` exits 3 for it. A failed or stopped trainer may have
+  ended before its first save; with no state it completes as failed with no
+  error, and has nothing to resume from. A run whose state is not managed
+  saves none and is never held for it.
 - The SSH job exports the frozen command's `env` (Kura's own variables win);
   an SSH session does not inherit the Pod's create-time environment.
 - Terminal finalization reuses only checkpoints recorded by the periodic mirror

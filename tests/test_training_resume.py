@@ -1934,7 +1934,7 @@ class ResumeRunTests(unittest.TestCase):
                         status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
                         self.assertNotIn("training_state_sync_error", status)
 
-    def test_runpod_download_of_a_failed_run_without_state_completes_and_records_the_gap(self) -> None:
+    def test_runpod_download_of_a_failed_run_without_state_completes_without_an_error(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1964,7 +1964,8 @@ class ResumeRunTests(unittest.TestCase):
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "failed")
             self.assertEqual(status["execution_state"], "failed")
-            self.assertIn("no valid training-state artifact", status["training_state_sync_error"])
+            # A run that did not finish may never have saved state; that is not a new problem.
+            self.assertNotIn("training_state_sync_error", status)
 
     def test_runpod_final_download_clears_a_stale_state_sync_error(self) -> None:
         previous = Path.cwd()
@@ -2314,6 +2315,38 @@ class ResumeRunTests(unittest.TestCase):
             self.assertEqual(status["execution_state"], "completed")
             self.assertEqual(status["publication_state"], "blocked")
             self.assertIn("no valid training-state artifact", status["training_state_sync_error"])
+
+
+    def test_a_local_run_that_did_not_finish_without_state_records_no_error(self) -> None:
+        # The same outcome test_runpod_download_of_a_failed_run_without_state_completes_without_an_error asserts for RunPod.
+        for exit_code in (1, 137):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = root / "runs" / "source"
+                (run_dir / "resolved").mkdir(parents=True)
+                (run_dir / "realizations").mkdir()
+                run = {
+                    "id": "source", "type": "train", "backend": {"name": "ai-toolkit", "config": {}},
+                    "model": {"base": "example/model"}, "datasets": [{"id": "tiny", "digest": "sha256:data"}],
+                    "recipe": {"steps": 20, "seed": 1},
+                    "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
+                }
+                (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+                (run_dir / "realizations" / "launch.json").write_text(json.dumps({"id": "launch", "container": {"id": "container-1"}}), encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/launch.json"}), encoding="utf-8")
+                docker_state = {"Running": False, "ExitCode": exit_code, "FinishedAt": "2026-08-27T00:00:00Z", "Error": ""}
+                with patch("kura.executors.docker.subprocess.run", return_value=subprocess.CompletedProcess([], 0, json.dumps(docker_state), "")):
+                    status = reconcile_docker(run_dir)
+                self.assertEqual(status["state"], "failed")
+                self.assertNotIn("training_state_sync_error", status)
+
+    def test_both_executors_ask_one_rule_whether_missing_state_is_an_error(self) -> None:
+        from kura import training_artifacts
+        from kura.executors import docker
+        from kura.run_commands import runpod_ssh
+
+        self.assertIs(docker.missing_training_state_error, training_artifacts.missing_training_state_error)
+        self.assertIs(runpod_ssh.missing_training_state_error, training_artifacts.missing_training_state_error)
 
 
 if __name__ == "__main__":

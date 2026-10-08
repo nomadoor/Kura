@@ -25,7 +25,7 @@ from kura.dataset_handoff import (
     remove_dataset_views,
 )
 from kura.provenance import image_reference_identity
-from kura.training_artifacts import publish_completed_training_states, training_state_capture_required, MISSING_STATE_PUBLICATION_ERROR, MISSING_STATE_SYNC_ERROR
+from kura.training_artifacts import publish_completed_training_states, training_state_capture_required, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.executors.common import (
     kura_container_env,
     CREATE_INTENT_SUFFIX,
@@ -832,8 +832,8 @@ def reconcile_docker(
                     ]
                 elif state_error:
                     latest["training_state_sync_error"] = state_error
-                elif capture_required:
-                    latest["training_state_sync_error"] = MISSING_STATE_SYNC_ERROR
+                elif missing := missing_training_state_error(capture_required, trainer_completed=state == "completed"):
+                    latest["training_state_sync_error"] = missing
                 else:
                     latest.pop("training_state_sync_error", None)
                 if state == "completed":
