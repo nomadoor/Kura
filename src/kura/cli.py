@@ -223,29 +223,55 @@ def cmd_run_new(args: argparse.Namespace) -> int:
     if not safe_slug:
         print("slug must contain letters or numbers", file=sys.stderr)
         return 1
+    source_id = getattr(args, "source", None)
+    source_run: dict[str, Any] | None = None
+    if source_id:
+        # A compiled run never changes; a change is a new run that starts from its settings.
+        if any(getattr(args, name, None) is not None for name in ("backend", "executor", "gpu")):
+            print("--from copies the source's backend and compute; change them in the new run.yaml instead", file=sys.stderr)
+            return 1
+        try:
+            source_run = _load_yaml(_run_path(source_id) / "run.yaml")
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"cannot read the run to start from: {_safe_error(exc)}", file=sys.stderr)
+            return 1
+        if source_run.get("type", "train") != "train":
+            print("--from starts only from a training run", file=sys.stderr)
+            return 1
+    elif not args.experiment:
+        print("--experiment is required unless --from names a run to start from", file=sys.stderr)
+        return 1
     timestamp = _now()
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
     run_dir = _run_path(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
-    run = {
-        "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
-        "created": timestamp.isoformat(), "parent_run": None, "intent": "",
-        "backend": {"name": args.backend, "adapter_version": 1, "config": {}},
-        "model": {"base": "", "revision": None},
-        "datasets": [{"id": ""}],
-        "recipe": {"steps": None, "seed": None},
-        "compute": {
-            "executor": args.executor,
-            "gpu": args.gpu,
-            **({"capacity": {"mode": "immediate"}} if args.executor == "runpod" else {}),
-        },
-        "sampling": {"cadence_steps": None},
-    }
+    if source_run is not None:
+        run = without_retired_train_run_keys(source_run)
+        run.update({"id": run_id, "created": timestamp.isoformat()})
+        if args.experiment:
+            run["experiment"] = args.experiment
+    else:
+        executor = args.executor or "docker"
+        run = {
+            "schema_version": 2, "id": run_id, "type": "train", "experiment": args.experiment,
+            "created": timestamp.isoformat(), "parent_run": None, "intent": "",
+            "backend": {"name": args.backend or "ai-toolkit", "adapter_version": 1, "config": {}},
+            "model": {"base": "", "revision": None},
+            "datasets": [{"id": ""}],
+            "recipe": {"steps": None, "seed": None},
+            "compute": {
+                "executor": executor,
+                "gpu": args.gpu,
+                **({"capacity": {"mode": "immediate"}} if executor == "runpod" else {}),
+            },
+            "sampling": {"cadence_steps": None},
+        }
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
     atomic_write_text(run_dir / "plan.md", "# Training plan\n\n")
     atomic_write_text(run_dir / "notes.md", "# Notes\n\n")
     print(run_id)
+    print(f"edit runs/{run_id}/run.yaml, then `kura run compile {run_id}`", file=sys.stderr)
     return 0
 
 
@@ -454,7 +480,12 @@ def cmd_run_compile(args: argparse.Namespace) -> int:
         print(f"cannot compile run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     if current_status.get("state") != "draft":
-        print("cannot compile run: resolved artifacts are immutable; create a new run instead", file=sys.stderr)
+        print(
+            f"cannot compile run: {args.run_id} is already compiled and never changes; start a new run from its settings with "
+            f"`kura run new --from {args.run_id} --slug <words>`, make the change there, and remove this one with "
+            f"`kura run discard {args.run_id}` if it was never launched",
+            file=sys.stderr,
+        )
         return 1
     if run.get("type", "train") == "render":
         try:
@@ -1509,10 +1540,11 @@ def main() -> None:
     )
     run_sub = run.add_subparsers(dest="run_command", required=True)
     new = run_sub.add_parser("new", help="Create a train run")
-    new.add_argument("--experiment", required=True, help="Name that groups runs answering one question (e.g. vivi-sdxl); its runs are listed together")
+    new.add_argument("--from", dest="source", metavar="RUN_ID", help="Start from this training run's run.yaml (to change a compiled run, which never changes itself)")
+    new.add_argument("--experiment", help="Name that groups runs answering one question (e.g. vivi-sdxl); its runs are listed together. Required unless --from")
     new.add_argument("--slug", required=True, help="A few words for this run; the run ID becomes <date>-<time>_<slug>_<4 hex>")
-    new.add_argument("--backend", default="ai-toolkit", choices=backend_names(), help="Trainer (default ai-toolkit); `kura run capabilities <backend>` lists its settings")
-    new.add_argument("--executor", default="docker", choices=("docker", "runpod"), help="Where it trains: local Docker (default) or RunPod")
+    new.add_argument("--backend", choices=backend_names(), help="Trainer (default ai-toolkit); `kura run capabilities <backend>` lists its settings")
+    new.add_argument("--executor", choices=("docker", "runpod"), help="Where it trains: local Docker (default) or RunPod")
     new.add_argument("--gpu", help="RunPod GPU type ID to request (e.g. \"NVIDIA GeForce RTX 4090\"); `kura run plan` shows its stock and price. Only for --executor runpod")
     new.set_defaults(func=cmd_run_new)
     resume = run_sub.add_parser("resume", help="Create a derived run from durable training state")
