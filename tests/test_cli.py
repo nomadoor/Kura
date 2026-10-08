@@ -5845,7 +5845,7 @@ class DockerLifecycleTests(unittest.TestCase):
                         pass
             phases = launch_phases(run_dir, "r1")
         self.assertEqual([item["phase"] for item in phases], ["container_started", "container_exited"])
-        self.assertEqual(format_launch_phases(phases), "job 3m 40s")
+        self.assertEqual(format_launch_phases(phases), "model download + training 3m 40s")
 
     def test_reconcile_docker_merges_observation_into_latest_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6192,7 +6192,7 @@ class LaunchPhaseTests(unittest.TestCase):
             ]:
                 record_launch_phase(run_dir, "r1", phase, at=at)
             summary = format_launch_phases(launch_phases(run_dir, "r1"))
-        self.assertEqual(summary, "startup 4m 34s · upload 22s · job 1m 40s · download 40s")
+        self.assertEqual(summary, "startup 4m 34s · upload 22s · model download + training 1m 40s · download 40s")
 
     def test_launch_phase_write_failure_only_warns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6285,7 +6285,7 @@ class LaunchPhaseTests(unittest.TestCase):
             record_launch_phase(run_dir, "r1", "container_started", at="2026-10-01T03:00:15+00:00")
             record_launch_phase(run_dir, "r1", "container_exited", at="2026-10-01T03:01:00+00:00")
             text = format_run_completion(root, run_dir, {"state": "completed", "exit_code": 0, "last_realization": "realizations/r1.json"})
-        self.assertIn("time       startup 15s · job 45s", text)
+        self.assertIn("time       startup 15s · model download + training 45s", text)
 
     def test_docker_timestamps_normalize_to_parseable_values(self) -> None:
         self.assertEqual(_docker_timestamp("2026-10-01T03:45:40.123456789Z"), "2026-10-01T03:45:40.123456+00:00")

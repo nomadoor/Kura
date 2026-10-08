@@ -348,8 +348,9 @@ LAUNCH_PHASE_SEGMENTS: tuple[tuple[str, str, str], ...] = (
     ("startup", "pod_create_requested", "ssh_ready"),
     ("startup", "container_start_requested", "container_started"),
     ("upload", "ssh_ready", "remote_job_started"),
-    ("job", "remote_job_started", "remote_exit_observed"),
-    ("job", "container_started", "container_exited"),
+    # The trainer downloads and loads its models before the first step, so that time is here, not in startup.
+    ("model download + training", "remote_job_started", "remote_exit_observed"),
+    ("model download + training", "container_started", "container_exited"),
     ("download", "download_started", "download_finished"),
     ("stop", "pod_stop_requested", "pod_stopped"),
 )
