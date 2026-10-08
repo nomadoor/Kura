@@ -1707,7 +1707,9 @@ class RunPlanTests(unittest.TestCase):
             previous = Path.cwd()
             os.chdir(root)
             try:
-                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout:
+                # The host's real free space must not decide this test.
+                with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1723,7 +1725,7 @@ class RunPlanTests(unittest.TestCase):
             self.assertIn("preflight", payload)
             disk_records = [item for item in payload["preflight"] if item["check"] == "disk"]
             self.assertTrue(disk_records)
-            self.assertIn("local Docker launch requires a disk preflight", disk_records[0]["fact"])
+            self.assertIn("passes", disk_records[0]["fact"])
             self.assertNotIn("disk_warnings", payload)
 
     def test_run_plan_prints_preflight_section(self) -> None:
@@ -1751,6 +1753,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
@@ -1761,7 +1764,7 @@ class RunPlanTests(unittest.TestCase):
         self.assertIn("the trainer downloads example itself before the first step", output)
         self.assertIn("unless the Hugging Face cache local runs mount already holds it", output)
         self.assertNotIn("estimated model downloads write 0 B", output)
-        self.assertIn("[warning] disk", output)
+        self.assertIn("[info] disk", output)
         self.assertNotIn("Disk warnings", output)
 
     def test_run_plan_preflight_bytes_preserve_small_units(self) -> None:
@@ -5652,7 +5655,8 @@ class DockerLifecycleTests(unittest.TestCase):
                 docker_preflight(root, mounts)
             self.assertTrue((root / "cache" / "huggingface").is_dir())
 
-    def test_docker_preflight_rejects_low_disk_space(self) -> None:
+    def test_docker_preflight_records_free_space_without_deciding_the_floor(self) -> None:
+        # The floor is decided once, by _local_launch_disk_preflight, which plan and launch both run.
         class Usage:
             total = 100 * 1024**3
             used = 80 * 1024**3
@@ -5664,23 +5668,36 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.executors.docker.docker_daemon_problem", return_value=None),
                 patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
-                with self.assertRaisesRegex(ValueError, "requires at least 50 GiB"):
-                    docker_preflight(root, [])
-
-    def test_docker_preflight_honors_configured_disk_floor(self) -> None:
-        class Usage:
-            total = 100 * 1024**3
-            used = 80 * 1024**3
-            free = 20 * 1024**3
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with (
-                patch("kura.executors.docker.docker_daemon_problem", return_value=None),
-                patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
-            ):
-                payload = docker_preflight(root, [], min_free_gb=10)
+                payload = docker_preflight(root, [])
         self.assertEqual(payload["disk"]["workspace"]["free_bytes"], 20 * 1024**3)
+
+    def test_plan_reports_local_disk_on_a_machine_without_docker(self) -> None:
+        from kura.run_commands.plan import _local_disk_preflight_report
+
+        run = {"id": "r", "type": "train", "backend": {"name": "ai-toolkit"}, "compute": {"executor": "docker"}}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(200)), \
+                    patch("kura.run_commands.plan.subprocess.run", side_effect=FileNotFoundError("docker")):
+                records = _local_disk_preflight_report(run, Path(directory), {}, {})
+        self.assertEqual([item["severity"] for item in records], ["info"])
+
+    def test_plan_reports_the_local_disk_verdict_launch_will_reach(self) -> None:
+        from kura.run_commands.plan import _local_disk_preflight_report, collect_run_preflight
+
+        run = {"id": "r", "type": "train", "backend": {"name": "ai-toolkit"}, "compute": {"executor": "docker"}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)), \
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                short = _local_disk_preflight_report(run, root, {}, {})
+                enough = _local_disk_preflight_report(run, root, {"docker": {"min_free_gb": 50}}, {})
+                # The launch's own preflight (dry runs included) does not run the disk check twice.
+                shared = [item for item in collect_run_preflight(run, root, config={}, executor="docker") if item["check"] == "disk"]
+        self.assertEqual(shared, [])
+        self.assertEqual([item["severity"] for item in short], ["error"])
+        self.assertIn("requires at least 100 GiB", short[0]["fact"])
+        self.assertEqual([item["severity"] for item in enough], ["info"])
+        self.assertIn("passes", enough[0]["fact"])
 
     def test_local_launch_disk_preflight_uses_configured_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -6161,7 +6178,6 @@ class DockerLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertEqual(launch.call_args.kwargs["image"], "override-image:dev")
-            self.assertEqual(launch.call_args.kwargs["min_free_gb"], 10)
 
     def test_launch_rejects_non_default_workspace_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

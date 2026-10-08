@@ -31,7 +31,7 @@ from kura.images import launch_image
 from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error, requested_gpu_types, runpod_settings_for_adapter
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
-from kura.run_commands.plan import _configured_gib, _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
+from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
@@ -581,7 +581,6 @@ def launch_run(
                 gpu=bool(docker.get("gpu", False)),
                 workspace_target=workspace_target,
                 dry_run=dry_run,
-                min_free_gb=_configured_gib(docker.get("min_free_gb"), default=100) if isinstance(docker, dict) else 100,
                 controlled_by=controlled_by,
             )
             if wait and not dry_run:
