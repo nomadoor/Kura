@@ -1076,7 +1076,8 @@ class DoctorDockerTests(unittest.TestCase):
             # Counts, and a command that removes only Kura's stopped containers.
             self.assertEqual((managed["containers"], managed["stopped_containers"], managed["volumes"]), (1, 1, 1))
             # Not `kura run prune`: with --yes it also removes old runs.
-            self.assertEqual(managed["remove_stopped"], "docker container prune --filter label=io.kura.managed=true")
+            # The workspace AGENTS.md keeps state-changing Docker commands with the user.
+            self.assertEqual(managed["remove_stopped"], "ask the user to run: docker container prune --filter label=io.kura.managed=true")
 
     def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
