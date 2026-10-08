@@ -43,7 +43,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
+from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -128,6 +128,7 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
         raise ValueError("Resume runs require recovery.training_state.enabled: true")
     validate_backend_config(run)
     validated_recipe(run, required=native.get("command") is None)
+    validate_train_run_fields(run)
     adapter = get_backend(backend_name)
     if adapter.project_dataset is None and adapter.validate_dataset is not None:
         adapter.validate_dataset(run, _workspace())
@@ -230,7 +231,7 @@ def cmd_run_new(args: argparse.Namespace) -> int:
             "gpu": args.gpu,
             **({"capacity": {"mode": "immediate"}} if args.executor == "runpod" else {}),
         },
-        "sampling": {"prompts": [], "cadence_steps": None},
+        "sampling": {"cadence_steps": None},
     }
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
@@ -312,7 +313,8 @@ def _create_resume_derived_run(
     timestamp = _now()
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
     run_dir = _run_path(run_id)
-    derived = deepcopy(source_run)
+    # The source's frozen manifest may carry keys older Kura versions wrote; the new run is authored now.
+    derived = without_retired_train_run_keys(source_run)
     derived.pop("_kura", None)
     derived.update(
         {
