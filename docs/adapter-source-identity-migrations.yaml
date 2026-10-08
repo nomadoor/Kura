@@ -52,7 +52,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: b140927bf3a01dbe77c94a4ff974f2f7c43879a7786d69f01bae301436f0f19e
+      value: 90b9e1f7c42c56e4d77c8788eaacb7349a86206abc66f35d6bb6f2b06e8f4254
   - id: runpod-executor-disk-verdict-2026-10-08
     executor: runpod
     reason: >-
