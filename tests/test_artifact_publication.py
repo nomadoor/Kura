@@ -547,6 +547,17 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertEqual(status["state"], "completed")
             self.assertEqual(status["publication_state"], "completed")
             self.assertEqual(status["publication_manifest"], "realizations/launch.publication.json")
+            # Collected again (as after `kura run download`) with a file the publication never listed:
+            # the run stays published, as a Docker run re-observed after publication does.
+            (downloaded / "outputs" / "notes.txt").write_text("later", encoding="utf-8")
+            os.chdir(root)
+            try:
+                self.assertEqual(cmd_run_download(argparse.Namespace(run_id="example", force=False)), 0)
+            finally:
+                os.chdir(previous)
+            again = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual((again["state"], again["publication_state"], again["publication_manifest"]),
+                             ("completed", "completed", "realizations/launch.publication.json"))
 
     @posix_only(POSIX_PATHS)
     def test_input_postflight_failure_never_blocks_download_completion(self) -> None:
