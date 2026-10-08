@@ -132,8 +132,9 @@ replaces any delegation given earlier in a conversation or in memory.
 1. **Name the decisions.** Say which decisions the change touches and find
    every place that makes them today (search the code, not your memory).
 2. **Write the design.** Five to fifteen lines: what decides it, the owner
-   function, the copies that go away, the behavior that changes, and the tests
-   that show it. If it needs more, split it, or it needs an ADR. Show it to the
+   function, the copies that go away, the behavior that changes, the tests that
+   show it, and why this is the simplest form (the accident it prevents, the
+   simpler option considered, and why that falls short). If it needs more, split it, or it needs an ADR. Show it to the
    maintainer and wait. Until it is approved, do not implement it; write other
    designs or stop, and never take silence for approval. An approved design is
    permission to commit, push, and open its pull request. A contributor posts
