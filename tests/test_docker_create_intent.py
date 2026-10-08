@@ -8,6 +8,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
@@ -228,7 +229,9 @@ class DockerCreateIntentTests(unittest.TestCase):
             run_dir = _run(root)
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
                 _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
-            stopped = json.dumps({"Running": False, "ExitCode": 137, "FinishedAt": "2026-10-08T10:00:00Z"})
+            # The container ends after the stop was asked for; a fixed date would pass into the past.
+            after_stop = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            stopped = json.dumps({"Running": False, "ExitCode": 137, "FinishedAt": after_stop})
             with _docker([subprocess.CompletedProcess([], 0, "container-1\n", ""), subprocess.CompletedProcess([], 0, stopped, "")]):
                 status = stop_docker(run_dir)
             # `kura run stop` ends a run the same way on every executor (runpod.stop_runpod: interrupted).
