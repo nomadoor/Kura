@@ -112,7 +112,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 3b0332ee3ee6e5c05557fb4e806f1b1ba1f49e23303eceb69a20453730582544
+      value: 49046011e2d745922a41f1077dacbfe53a020c72adb15a9c71bf58bb6b5ec547
   - id: runpod-executor-training-speed-2026-10-08
     executor: runpod
     reason: >-

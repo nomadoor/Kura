@@ -162,7 +162,7 @@ class SecretAndArtifactCommandTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(output.count("looks like a secret value"), 1, output)
 
-    def test_file_checks_never_load_env_local(self) -> None:
+    def test_only_the_secret_check_loads_secrets_among_file_checks(self) -> None:
         from kura import cli
 
         for argv in (["kura", "check", "secrets", "x"], ["kura", "check", "artifacts", "x"], ["kura", "workflow", "check"], ["kura", "doctor", "workspace"]):
@@ -171,7 +171,8 @@ class SecretAndArtifactCommandTests(unittest.TestCase):
                     patch.object(cli, "cmd_workflow_check", return_value=0), patch.object(cli, "cmd_doctor_workspace", return_value=0):
                 with self.assertRaises(SystemExit):
                     cli.main()
-                self.assertEqual(load.called, argv[1] == "doctor")
+                # `kura check secrets` needs the values it looks for; it still never scans a secrets file.
+                self.assertEqual(load.called, argv[1] == "doctor" or argv[1:3] == ["check", "secrets"])
 
     def test_secret_values_are_never_printed_and_binary_or_weight_files_are_skipped(self) -> None:
         with _workspace() as root:

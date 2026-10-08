@@ -15,6 +15,7 @@ HF = "hf" + "_" + "A" * 24
 NAMES = {
     "HF_TOKEN": True, "RUNPOD_API_KEY": True, "R2_SECRET_ACCESS_KEY": True, "AWS_ACCESS_KEY_ID": True,
     "SSH_PRIVATE_KEY": True, "DB_PASSWORD": True, "apiKey": True, "api-key": True, "accessToken": True,
+    "APIKey": True, "HFToken": True,
     "TOKENIZERS_PARALLELISM": False, "tokenizer_path": False, "KEYFRAME_COUNT": False, "PATH": False,
     "KURA_NTFY_PRIORITY": False,
 }

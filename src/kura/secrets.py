@@ -84,7 +84,8 @@ SECRET_NAME_WORDS = (("TOKEN",), ("SECRET",), ("PASSWORD",), ("API", "KEY"), ("A
 
 
 def is_secret_name(name: str) -> bool:
-    words = re.split(r"[^A-Za-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).upper())
+    split = re.sub(r"([A-Z])([A-Z][a-z])", r"\1_\2", re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name))
+    words = re.split(r"[^A-Za-z0-9]+", split.upper())
     return any(
         tuple(words[index:index + len(sequence)]) == sequence
         for sequence in SECRET_NAME_WORDS
@@ -94,13 +95,12 @@ def is_secret_name(name: str) -> bool:
 
 def secret_values() -> list[str]:
     """The values Kura holds as secrets, longest first: variables whose names hold a secret,
-    declared credentials such as the ntfy topic, and the key names workspace.yaml chooses.
-    Output hides them and `kura check secrets` looks for them."""
+    and the key names workspace.yaml chooses. Output hides them and `kura check secrets`
+    looks for them."""
     configured = set(_configured_names())
-    credentials = {variable.name for variable in USER_VARIABLES if variable.credential}
     values = {
         value for name, value in os.environ.items()
-        if value and len(value) >= 4 and (is_secret_name(name) or name in credentials or name in configured)
+        if value and len(value) >= 4 and (is_secret_name(name) or name in configured)
     }
     return sorted(values, key=len, reverse=True)
 
@@ -134,7 +134,7 @@ def _configured_names() -> list[str]:
     """Secret names workspace.yaml chooses: the RunPod key and the object-store keys."""
     try:
         config = yaml.safe_load((workspace() / "workspace.yaml").read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return []
     runpod = config.get("runpod") if isinstance(config, dict) else None
     if not isinstance(runpod, dict):

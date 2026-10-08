@@ -29,9 +29,13 @@ class RedactionTests(unittest.TestCase):
         text = self._redact({"MY_RUNPOD": VALUE}, "schema_version: 2\nrunpod:\n  api_key_env: MY_RUNPOD\n")
         self.assertNotIn(VALUE, text)
 
-    def test_the_ntfy_topic_is_hidden(self) -> None:
-        # Anyone who knows the topic can read the run's notifications.
-        self.assertNotIn(VALUE, self._redact({"KURA_NTFY_TOPIC": VALUE}))
+    def test_a_word_the_user_chose_for_a_non_key_is_never_cut_out_of_records(self) -> None:
+        # An ntfy topic is a name the user picks, such as "train"; hiding it would rewrite
+        # "training" and run IDs in every record.
+        from kura.executors.common import _redact_secrets
+
+        with patch.dict(os.environ, {"KURA_NTFY_TOPIC": "train"}):
+            self.assertEqual(_redact_secrets({"state": "training"}), {"state": "training"})
 
     def test_an_ordinary_variable_is_left_alone(self) -> None:
         self.assertIn(VALUE, self._redact({"KURA_NTFY_PRIORITY": VALUE}))
@@ -41,6 +45,13 @@ class RedactionTests(unittest.TestCase):
         from kura.executors import common
 
         self.assertIs(common.secret_values, secrets.secret_values)
+
+    def test_values_are_looked_up_once_per_record(self) -> None:
+        from kura.executors import common
+
+        with patch.object(common, "secret_values", return_value=[VALUE]) as lookup:
+            common._redact_secrets({"a": [f"x {VALUE}", "y", {"b": VALUE}]})
+        self.assertEqual(lookup.call_count, 1)
 
 
 if __name__ == "__main__":

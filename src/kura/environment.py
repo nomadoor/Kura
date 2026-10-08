@@ -15,8 +15,6 @@ class UserVariable:
     name: str
     purpose: str
     aliases: tuple[str, ...] = ()
-    # A credential whose name does not say so: its value is hidden in output like a key's.
-    credential: bool = False
 
 
 USER_VARIABLES: tuple[UserVariable, ...] = (
@@ -26,7 +24,7 @@ USER_VARIABLES: tuple[UserVariable, ...] = (
         "Only for models that need authenticated Hugging Face access (gated or private).",
         aliases=("HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN"),
     ),
-    UserVariable("KURA_NTFY_TOPIC", "Optional: ntfy topic for completion and failure notifications; pick a long, unguessable name.", credential=True),
+    UserVariable("KURA_NTFY_TOPIC", "Optional: ntfy topic for completion and failure notifications; pick a long, unguessable name."),
     UserVariable("KURA_NTFY_SERVER", "Optional: your own ntfy server URL; ntfy.sh is used when empty."),
     UserVariable("KURA_NTFY_TOKEN", "Optional: access token for a protected ntfy topic."),
     UserVariable("KURA_NTFY_PRIORITY", "Optional: ntfy priority from 1 to 5; 4 when empty."),
