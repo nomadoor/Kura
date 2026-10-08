@@ -20,6 +20,25 @@ def png_bytes(width: int, height: int) -> bytes:
 
 
 class DatasetInspectTests(unittest.TestCase):
+    def test_a_folder_of_images_and_captions_is_counted_from_the_caption_text(self) -> None:
+        # Before items.jsonl exists, the captions are the .txt files beside the images.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "datasets" / "folder"
+            dataset.mkdir(parents=True)
+            (dataset / "dataset.yaml").write_text("id: folder\ntrigger_word: myaku\n", encoding="utf-8")
+            for stem, text in (("a", "myaku red suit"), ("b", "myaku blue suit"), ("c", "  \n")):
+                (dataset / f"{stem}.png").write_bytes(png_bytes(512, 512))
+                (dataset / f"{stem}.txt").write_text(text, encoding="utf-8")
+
+            report = inspect_dataset("folder", workspace=root)
+
+        self.assertEqual(report["observations"]["captions_present"], 2)
+        self.assertEqual(report["observations"]["captions_missing"], 1)
+        self.assertNotIn("empty", report["captions"])
+        self.assertEqual(report["captions"]["first_tokens_top3"][0]["token"], "myaku")
+        self.assertEqual(report["captions"]["trigger_word"]["caption_count"], 2)
+
     def test_inspect_reports_v2_typed_inputs_and_caption_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -44,7 +63,7 @@ class DatasetInspectTests(unittest.TestCase):
 
         self.assertEqual(report["images"]["items_jsonl_count"], 1)
         self.assertEqual(report["captions"]["total"], 1)
-        self.assertEqual(report["captions"]["empty"], 0)
+        self.assertEqual(report["observations"]["captions_missing"], 0)
         self.assertEqual(report["paired_control"]["source_count"], 1)
         self.assertEqual(report["paired_control"]["target_count"], 1)
         self.assertEqual(report["paired_control"]["missing_source_count"], 0)
@@ -75,7 +94,6 @@ class DatasetInspectTests(unittest.TestCase):
             self.assertEqual(report["videos"]["items_jsonl_count"], 2)
             self.assertEqual(report["videos"]["count"], 3)
             self.assertEqual(report["images"]["items_jsonl_count"], 0)
-            self.assertEqual(report["captions"]["empty"], 0)
             self.assertEqual(report["observations"]["captions_missing"], 0)
             self.assertIn("videos.items_jsonl_count: 2", text)
             self.assertIn("videos.directory_count: 3", text)
@@ -100,7 +118,7 @@ class DatasetInspectTests(unittest.TestCase):
 
         self.assertEqual(report["items_jsonl"], {"records": 1, "parse_errors": 0})
         self.assertEqual(report["captions"]["total"], 1)
-        self.assertEqual(report["captions"]["empty"], 0)
+        self.assertEqual(report["observations"]["captions_missing"], 0)
         self.assertNotIn("invalid_items_jsonl", {
             item.get("code") for item in report["structural_findings"]
         })
@@ -230,7 +248,7 @@ class DatasetInspectTests(unittest.TestCase):
         self.assertEqual(report["images"]["resolution"]["max"], [1200, 1024])
         self.assertEqual(report["images"]["resolution"]["below_512_count"], 1)
         self.assertEqual(report["captions"]["total"], 5)
-        self.assertEqual(report["captions"]["empty"], 1)
+        self.assertEqual(report["observations"]["captions_missing"], 1)
         self.assertEqual(report["captions"]["duplicate_exact_count"], 4)
         self.assertEqual(report["captions"]["first_tokens_top3"][0], {"token": "myaku", "count": 2, "coverage": "2/5"})
         self.assertEqual(report["captions"]["trigger_word"]["occurrences"], 2)

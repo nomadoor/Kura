@@ -60,7 +60,7 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
     missing_captions = 0
     aspect_mismatches: dict[str, int] = defaultdict(int)
     for sample in samples:
-        if not sample.get("caption") and not sample.get("caption_path"):
+        if not (sample.get("caption") or "").strip():
             missing_captions += 1
         target_aspect = _aspect(sample.get("target_size"))
         condition_files = sample.pop("_condition_files", None)
@@ -193,6 +193,8 @@ def _sample_from_record(
             conditions[role] = {"path": _relative(root, path), "size": _size_list(path)}
     caption = item.get("caption") if isinstance(item.get("caption"), str) else None
     caption_path = _record_path(root, item.get("caption_path"), sample_id, "caption", issues) if isinstance(item.get("caption_path"), str) else caption_files.get(stem)
+    if caption is None and caption_path is not None:
+        caption = _caption_file_text(root, caption_path, sample_id, issues)
     if target is None:
         issues.append({"code": "missing_target", "sample": sample_id})
     return {
@@ -240,10 +242,7 @@ def _sample_from_v2_record(
         path = _record_path(root, raw_path, sample_id, "caption", issues)
         if path is not None:
             caption_path = _relative(root, path)
-            try:
-                caption = path.read_bytes().decode("utf-8")
-            except (OSError, UnicodeDecodeError):
-                issues.append({"code": "unreadable_caption", "sample": sample_id, "path": raw_path})
+            caption = _caption_file_text(root, path, sample_id, issues)
     elif raw_caption is not None:
         issues.append({"code": "invalid_caption", "sample": sample_id})
     if not targets:
@@ -265,6 +264,7 @@ def _sample_from_v2_record(
 
 
 def _sample_from_stem(root: Path, stem: str, target: Path, directory_files: dict[str, dict[str, Path]], caption_files: dict[str, Path]) -> dict[str, Any]:
+    issues: list[dict[str, Any]] = []
     conditions = {
         role: {"path": _relative(root, files[stem]), "size": _size_list(files[stem])}
         for role, files in directory_files.items()
@@ -275,10 +275,19 @@ def _sample_from_stem(root: Path, stem: str, target: Path, directory_files: dict
         "target": _relative(root, target),
         "target_size": _size_list(target),
         "conditions": conditions,
-        "caption": None,
+        "caption": _caption_file_text(root, caption_files[stem], stem, issues) if stem in caption_files else None,
         "caption_path": _relative(root, caption_files[stem]) if stem in caption_files else None,
-        "_issues": [],
+        "_issues": issues,
     }
+
+
+def _caption_file_text(root: Path, path: Path, sample_id: str, issues: list[dict[str, Any]]) -> str | None:
+    """A caption file's text; an unreadable file is a finding, not a caption."""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        issues.append({"code": "unreadable_caption", "sample": sample_id, "path": _relative(root, path)})
+        return None
 
 
 def _record_path(root: Path, value: Any, sample_id: str, role: str, issues: list[dict[str, Any]]) -> Path | None:
