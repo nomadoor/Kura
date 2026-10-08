@@ -83,6 +83,9 @@ def record_unverified_publication(run_dir: Path, realization_id: str, outputs: l
     `completed` from a record rather than from the step that wrote it.
     """
     path = run_dir / "realizations" / f"{realization_id}.publication-unverified.json"
+    if path.exists():
+        # Recorded once; a later observation of the same finished run adds nothing.
+        return path.relative_to(run_dir).as_posix()
     atomic_write_json(path, record("publication_unverified", {
         "realization_id": realization_id,
         "observed_at": datetime.now().astimezone().isoformat(),

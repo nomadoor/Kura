@@ -578,6 +578,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             outputs = materialize_primary_outputs(output_dir)
             publication_manifest: str | None = None
             contract: dict[str, Any] | None = None
+            realization_id: str | None = None
             if exit_code == 0:
                 current_status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
                 realization_ref = current_status.get("last_realization")

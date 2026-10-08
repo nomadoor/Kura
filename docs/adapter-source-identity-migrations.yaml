@@ -52,7 +52,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 487ec21abfd04fd57cbd7a08d439c6b2649576ca4b5e5e590fc5ea3c863bbf2f
+      value: 91d05ad875402ab01ec4e2b29a918dcc2ff2dbbb70a84c96911692cc462a04bb
   - id: runpod-executor-status-shadow-2026-10-08
     executor: runpod
     reason: After each status write the executor's shared status helper compares the lifecycle fields
