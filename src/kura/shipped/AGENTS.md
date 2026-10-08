@@ -10,8 +10,8 @@ read the skill named at the end of this file before that task.
 
 ## A first training run
 
-1. Check the machine: `kura doctor docker` for a local run, `kura doctor runpod`
-   for RunPod.
+1. Check the machine: `kura doctor docker` and `kura doctor disk` for a local
+   run (`local-disk-safety` if either warns), `kura doctor runpod` for RunPod.
 2. Prepare the dataset (`dataset-prep`): `kura dataset draft`, then
    `kura dataset validate` and `kura dataset inspect`.
 3. `kura run new --experiment <name> --slug <words>`, then fill in
