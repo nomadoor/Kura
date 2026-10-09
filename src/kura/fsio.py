@@ -25,9 +25,11 @@ def file_lock(path: Path, *, blocking: bool = True):
         if os.name == "nt":
             import msvcrt
 
-            if handle.seek(0, os.SEEK_END) == 0:
-                handle.write(b"\0")
-                handle.flush()
+            # Byte 0 is locked even while the file is empty: LockFile "You can
+            # lock bytes that are beyond the end of the current file."
+            # (learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfile);
+            # _locking "It's possible to lock bytes past end of file."
+            # (learn.microsoft.com/en-us/cpp/c-runtime-library/reference/locking).
             handle.seek(0)
             mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
             try:

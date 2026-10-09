@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,7 +9,7 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.fsio import append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml, file_lock
 
 
 class FsioTests(unittest.TestCase):
@@ -85,6 +86,18 @@ class FsioTests(unittest.TestCase):
 
             self.assertEqual(path.read_text(encoding="utf-8"), "old\n")
             self.assertEqual([item.name for item in root.iterdir()], ["status.json"])
+
+    @unittest.skipUnless(os.name == "nt", "msvcrt byte-range locks are Windows-only")
+    def test_windows_lock_on_an_empty_file_excludes_a_second_holder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".locks" / "secrets.lock"
+            with file_lock(path):
+                self.assertEqual(path.stat().st_size, 0)
+                with self.assertRaises(FileLockBusy):
+                    with file_lock(path, blocking=False):
+                        pass
+            with file_lock(path, blocking=False):
+                pass
 
 
 if __name__ == "__main__":
