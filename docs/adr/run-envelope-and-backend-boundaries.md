@@ -224,10 +224,12 @@ strength is explicit, for example:
 
 The record distinguishes not observed from not observable. Kura does not claim
 a content hash for backend-managed multi-file acquisition it did not inspect.
-Adapter source hashes cover only the selected adapter, its shared backend
-helper and registry, and runtime helper source embedded in that adapter's
-frozen command. Unrelated backend changes do not invalidate evidence, while a
-download/assert/validation helper change correctly invalidates Musubi evidence.
+Adapter source hashes are derived from the import graph: starting at the
+selected adapter's registry entry, they follow every Kura symbol it reaches and
+hash each container script or data file named by literal, without entering the
+registry's dispatch to other adapters. Unrelated backend changes do not
+invalidate evidence, while a change to any reached helper or embedded runtime
+script does.
 
 ## Decision 9: architecture boundaries are mechanically checked
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import importlib
 from dataclasses import replace
 import io
@@ -22,6 +23,10 @@ from kura.media_types import frozen_suffixes
 import kura.provenance as provenance
 from kura.provenance import adapter_source_identity
 from tests.platform_support import POSIX_PATHS, posix_only
+
+
+def _unregistered_display(run):
+    return {}
 
 
 MUSUBI_MEDIA_ENV = {
@@ -214,14 +219,64 @@ class ContainerScriptTests(unittest.TestCase):
                     self.assertEqual(baseline, self._identity_with_source(backend, filename, old, new))
 
     def test_adapter_identity_refuses_imports_it_cannot_follow(self) -> None:
+        state_body = b"    if frozen and not"
+        aliased_script = b"from kura.container_scripts import script_source\nfrom kura.container_scripts import script_source as load_script\n"
         cases = (
-            ("training_artifacts.py", b"    if frozen and not", b"    import kura.fsio\n    if frozen and not", "training_artifacts.py"),
-            ("ai_toolkit.py", b'script_source("ai_toolkit_state.py")', b"script_source(spec)", "ai_toolkit.py"),
+            ("module import", "training_artifacts.py", state_body, b"    import kura.fsio\n" + state_body, r"training_artifacts\.py:\d+"),
+            ("relative import", "training_artifacts.py", state_body, b"    from .fsio import atomic_write_text\n" + state_body, r"training_artifacts\.py:\d+"),
+            ("backends submodule", "training_artifacts.py", state_body, b"    from kura.backends import shared\n" + state_body, r"training_artifacts\.py:\d+"),
+            ("backends re-export", "training_artifacts.py", state_body, b"    from kura.backends import compile_sd_scripts\n" + state_body, r"training_artifacts\.py:\d+"),
+            ("non-literal script", "ai_toolkit.py", b'script_source("ai_toolkit_state.py")', b"script_source(spec)", r"ai_toolkit\.py:\d+"),
+            ("non-literal data file", "ai_toolkit_baseline.py", b'with_name("ai_toolkit_baseline.json")', b"with_name(BASELINE_NAME)", r"ai_toolkit_baseline\.py:\d+"),
         )
-        for filename, old, new, location in cases:
-            with self.subTest(filename=filename):
+        for label, filename, old, new, location in cases:
+            with self.subTest(label):
                 with self.assertRaisesRegex(ValueError, location):
                     self._identity_with_source("ai-toolkit", filename, old, new)
+        original = Path.read_bytes
+
+        def aliased(path):
+            payload = original(path)
+            if not path.as_posix().endswith("/backends/ai_toolkit.py"):
+                return payload
+            payload = payload.replace(b"from kura.container_scripts import script_source\n", aliased_script, 1)
+            return payload.replace(b'script_source("ai_toolkit_state.py")', b"load_script(spec)", 1)
+
+        with patch.object(Path, "read_bytes", aliased):
+            with self.assertRaisesRegex(ValueError, r"ai_toolkit\.py:\d+"):
+                adapter_source_identity("ai-toolkit")
+
+    def test_adapter_identity_refuses_registered_callables_it_cannot_walk(self) -> None:
+        adapter = BACKENDS["ai-toolkit"]
+        cases = (
+            ("lambda", replace(adapter, display=lambda run: {})),
+            ("partial", replace(adapter, display=functools.partial(_unregistered_display))),
+            ("unreached function", replace(adapter, display=_unregistered_display)),
+        )
+        for label, changed in cases:
+            with self.subTest(label):
+                with patch.dict(BACKENDS, {"ai-toolkit": changed}):
+                    with self.assertRaisesRegex(ValueError, "display"):
+                        adapter_source_identity("ai-toolkit")
+
+    def test_adapter_identity_follows_a_re_export_to_its_definition(self) -> None:
+        baseline = adapter_source_identity("ai-toolkit")["value"]
+        changed = self._identity_with_source(
+            "ai-toolkit", "training_artifacts.py", b"    if frozen and not",
+            b"    from kura.backends.musubi_models import _truthy\n    if frozen and not",
+        )
+        self.assertNotEqual(baseline, changed)
+
+    def test_adapter_identity_hashes_top_level_statements_that_bind_no_plain_name(self) -> None:
+        baseline = adapter_source_identity("ai-toolkit")["value"]
+        marker = b"\nAI_TOOLKIT_VIDEO_SUFFIXES = "
+        for label, statement in (
+            ("subscript", b"\nAI_TOOLKIT_PINNED_MODEL_ARCHS['zzz'] = 1\n"),
+            ("attribute", b"\nAI_TOOLKIT_VIDEO_SUFFIXES.zzz = 1\n"),
+            ("tuple", b"\nZZZ_A, ZZZ_B = 1, 2\n"),
+        ):
+            with self.subTest(label):
+                self.assertNotEqual(baseline, self._identity_with_source("ai-toolkit", "ai_toolkit.py", marker, statement + marker))
 
     def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
         baseline = adapter_source_identity("sd-scripts")["value"]
