@@ -725,7 +725,7 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
         )
         if code:
             return code
-        if str(options.get("wait_for_capacity") or "0") not in ("0", "0s"):
+        if _parse_duration_seconds(options.get("wait_for_capacity")) > 0:
             print("  The runner may wait for capacity; prices can change before the Pod is created.", file=sys.stderr)
         try:
             request = runner.write_launch_request(run_dir, executor="runpod", image=options.get("image"), notify=options.get("notify_channels"), extra={
