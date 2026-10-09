@@ -916,7 +916,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
             with patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_scp), patch(
                 "kura.run_commands.runpod_ssh._runpod_remote_training_states", return_value=[item]
-            ):
+            ), patch("kura.run_commands.runpod_ssh._workspace_config", return_value={}):
                 published = _pull_remote_training_state_items(
                     run_dir,
                     {"ip": "example", "port": 22, "key": root / "key"},

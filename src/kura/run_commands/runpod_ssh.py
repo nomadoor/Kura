@@ -996,7 +996,6 @@ def _pull_remote_training_state_items(
     items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     host_workspace = run_dir.parent.parent
-    config = _workspace_config()
     published: list[dict[str, Any]] = []
     pending_root = run_dir / "recovery" / "training-state-pull"
     pending_root.mkdir(parents=True, exist_ok=True)
@@ -1031,7 +1030,7 @@ def _pull_remote_training_state_items(
             published.append(existing)
             continue
         total_size = sum(entry.get("size") for entry in files if isinstance(entry, dict) and isinstance(entry.get("size"), int))
-        ensure_free_bytes(pending_root, total_size + 1024**3, context="RunPod training-state pull", config=config)
+        ensure_free_bytes(pending_root, total_size + 1024**3, context="RunPod training-state pull", config=_workspace_config())
         partial = pending_root / f".{name}.partial"
         if partial.exists():
             shutil.rmtree(partial)

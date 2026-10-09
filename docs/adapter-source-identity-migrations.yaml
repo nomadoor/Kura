@@ -53,7 +53,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: 0090c8958715f5acd09b3068ef262df0f393a09d4e4671f7aa6b7343e0f8f3e3
+      value: 49a0d346af9768f2183ca99d057e2f9475adc45f1e62138ef48a975d0c1d3b94
   - id: runpod-executor-how-a-run-ends-2026-10-08
     executor: runpod
     reason: >-
