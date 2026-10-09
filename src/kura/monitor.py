@@ -768,11 +768,7 @@ def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
 def _checkpoint_count(outputs: Path) -> int:
     if not outputs.is_dir():
         return 0
-    weights = list(outputs.rglob("*.safetensors"))
-    if any(path.parent == outputs for path in weights):
-        legacy_root = outputs / outputs.parent.name
-        weights = [path for path in weights if not path.is_relative_to(legacy_root)]
-    return checkpoint_files(path.relative_to(outputs) for path in weights).saved
+    return checkpoint_files((path.relative_to(outputs) for path in outputs.rglob("*.safetensors")), outputs.parent.name).saved
 
 
 def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:

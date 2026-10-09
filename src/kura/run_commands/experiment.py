@@ -261,11 +261,11 @@ def _format_duration(started: Any, ended: Any) -> str | None:
     return format_seconds((end - start).total_seconds())
 
 
-def _output_lines(outputs: Any) -> list[str]:
+def _output_lines(outputs: Any, run_id: str) -> list[str]:
     paths = [Path(value) for value in outputs if isinstance(value, str)] if isinstance(outputs, list) else []
     if not paths:
         return ["produced   0 outputs"]
-    checkpoints = checkpoint_files(paths)
+    checkpoints = checkpoint_files((path.relative_to("outputs") if path.is_relative_to("outputs") else path for path in paths), run_id)
     steps = sorted({checkpoint_step(path.name) for path in checkpoints.stepped})
     if checkpoints.saved:
         detail = f"{checkpoints.saved} checkpoint{'s' if checkpoints.saved != 1 else ''}"
@@ -292,7 +292,7 @@ def format_run_completion(workspace: Path, run_dir: Path, status: dict[str, Any]
     if duration:
         headline += f"  {duration}"
     intent = " ".join(str(run.get("intent") or "").split()) or "(not recorded)"
-    lines = [headline, f"intent     {intent}", *_output_lines(status.get("outputs"))]
+    lines = [headline, f"intent     {intent}", *_output_lines(status.get("outputs"), run_dir.name)]
     realization = status.get("last_realization")
     if isinstance(realization, str) and realization.endswith(".json"):
         timing = format_launch_phases(launch_phases(run_dir, Path(realization).stem))

@@ -131,7 +131,7 @@ class OneCheckpointCountTests(unittest.TestCase):
 
         for case, (outputs, stepped, final, saved) in SAVED.items():
             with self.subTest(case=case):
-                files = checkpoint_files(Path(value) for value in outputs)
+                files = checkpoint_files((Path(value).relative_to("outputs") for value in outputs), "vivi")
                 self.assertEqual((len(files.stepped), len(files.final), files.saved), (stepped, final, saved))
                 self.assertFalse(any(part.endswith("-state") for path in files.stepped + files.final for part in path.parts))
 
@@ -146,20 +146,36 @@ class OneCheckpointCountTests(unittest.TestCase):
             for legacy in (False, True):
                 with self.subTest(case=case, legacy=legacy), tempfile.TemporaryDirectory() as directory:
                     run_dir = Path(directory) / "vivi"
-                    for value in outputs:
+                    recorded = list(outputs)
+                    if legacy:
+                        # An older AI-Toolkit layout left a copy below outputs/<run id>/; it is not counted again.
+                        recorded += [str(Path("outputs/vivi") / Path(value).relative_to("outputs")) for value in outputs]
+                    for value in recorded:
                         (run_dir / value).parent.mkdir(parents=True, exist_ok=True)
                         (run_dir / value).touch()
-                        if legacy:
-                            # An older AI-Toolkit layout left a copy below outputs/<run id>/; it is not counted again.
-                            nested = run_dir / "outputs" / "vivi" / Path(value).relative_to("outputs")
-                            nested.parent.mkdir(parents=True, exist_ok=True)
-                            nested.touch()
                     self.assertEqual(_checkpoint_count(run_dir / "outputs"), saved)
-                    produced = _output_lines(outputs)[0]
+                    produced = _output_lines(recorded, "vivi")[0]
                     if saved:
                         self.assertTrue(produced.startswith(f"produced   {saved} checkpoint"), produced)
                     else:
                         self.assertNotIn("checkpoint", produced)
+
+    def test_a_run_id_ending_in_state_is_not_read_as_a_training_state_directory(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from kura.monitor import _checkpoint_count
+        from kura.run_commands.experiment import _output_lines
+
+        # Only the older nested layout: every checkpoint sits below outputs/<run id>/.
+        recorded = [f"outputs/vivi-state/vivi-state-step{step:08d}.safetensors" for step in (250, 500)]
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "vivi-state"
+            for value in recorded:
+                (run_dir / value).parent.mkdir(parents=True, exist_ok=True)
+                (run_dir / value).touch()
+            self.assertEqual(_checkpoint_count(run_dir / "outputs"), 2)
+            self.assertTrue(_output_lines(recorded, "vivi-state")[0].startswith("produced   2 checkpoints"))
 
 
 if __name__ == "__main__":

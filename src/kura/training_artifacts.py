@@ -722,13 +722,24 @@ class CheckpointFiles(NamedTuple):
         return len(self.stepped) or len(self.final)
 
 
-def checkpoint_files(paths: Iterable[Path]) -> CheckpointFiles:
-    """Sort a run's outputs into checkpoints, for every reader that counts them.
+def checkpoint_files(paths: Iterable[Path], run_id: str) -> CheckpointFiles:
+    """Sort a run's outputs, relative to its outputs directory, into checkpoints, for every reader that counts them.
 
     A checkpoint is a .safetensors file outside a native training-state
     directory; its name says whether it is a step's checkpoint or the final weights.
+    An older AI-Toolkit layout wrote below `<run id>/`; when weights also sit at the
+    top, those are copies and are not counted again. The state check reads a path
+    below `<run id>/` from there, so a run ID ending in `-state` is not a state directory.
     """
-    weights = [path for path in paths if path.suffix.lower() == ".safetensors" and not is_training_state_output(path)]
+    legacy_root = Path(run_id)
+    weights = [path for path in paths if path.suffix.lower() == ".safetensors"]
+    if any(len(path.parts) == 1 for path in weights):
+        weights = [path for path in weights if not path.is_relative_to(legacy_root)]
+    weights = [
+        path
+        for path in weights
+        if not is_training_state_output(path.relative_to(legacy_root) if path.is_relative_to(legacy_root) else path)
+    ]
     return CheckpointFiles(
         stepped=[path for path in weights if checkpoint_step(path.name) is not None],
         final=[path for path in weights if checkpoint_step(path.name) is None],
