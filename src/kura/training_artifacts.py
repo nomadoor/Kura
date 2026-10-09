@@ -18,7 +18,7 @@ import yaml
 
 from kura.fsio import atomic_write_json, file_lock
 from kura.install_source import kura_continuity
-from kura.run_envelope import common_recipe, resume_intent, training_state_policy
+from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
 
 ARTIFACT_SCHEMA_VERSION = 1
@@ -768,13 +768,14 @@ EPOCH_SAVE_FLAGS = frozenset({"--save_every_n_epochs", "--save_last_n_epochs", "
 
 
 def managed_state_cadence(run: dict[str, Any], configured_cadence: int | None, *, contract: dict[str, Any] | None = None) -> int | None:
-    """How many native steps apart the trainer saves state: the configured cadence, else the
-    recipe's steps; a process-local Resume saves at least once within the steps it adds."""
-    cadence = configured_cadence if configured_cadence is not None else common_recipe(run).get("steps")
+    """The state save cadence Kura sets: the configured one (None when unset, so each backend
+    keeps its own default) on a fresh run; on a process-local Resume, the configured cadence or
+    the recipe's steps capped at the steps the run adds, so it saves at least once."""
     steps = resume_steps(run, contract=contract)
-    if isinstance(cadence, int) and steps is not None and steps["native_progress"] == "process_local":
-        cadence = min(cadence, steps["additional_steps"])
-    return cadence
+    if steps is None or steps["native_progress"] != "process_local":
+        return configured_cadence
+    cadence = configured_cadence if configured_cadence is not None else validated_recipe(run, required=True)["steps"]
+    return min(cadence, steps["additional_steps"])
 
 
 def managed_state_save_args(
@@ -786,10 +787,11 @@ def managed_state_save_args(
 ) -> list[str]:
     """The save flags of an accelerate trainer (Musubi Tuner, sd-scripts) whose state Kura manages.
 
-    The trainer saves state every `managed_state_cadence` steps and at the end, and keeps the
-    states of the last cadence (two generations) or only the newest (one generation).
-    `configured_cadence` is the backend's validated `save_every_n_steps`; a backend building
-    its own command passes its training-state contract.
+    The trainer saves state at `managed_state_cadence` (named only when Kura sets one) and at
+    the end, and keeps the states of the last cadence, or of the recipe's steps when none is
+    set (two generations), or only the newest (one generation). `configured_cadence` is the
+    backend's validated `save_every_n_steps`; a backend building its own command passes its
+    training-state contract.
     """
     epoch_flags = sorted({arg.split("=", 1)[0] for arg in extra_args} & EPOCH_SAVE_FLAGS)
     if epoch_flags:
@@ -799,8 +801,12 @@ def managed_state_save_args(
             "use backend.config.save_every_n_steps instead: " + ", ".join(epoch_flags)
         )
     cadence = managed_state_cadence(run, configured_cadence, contract=contract)
-    window = cadence if training_state_policy(run)["keep_generations"] == 2 else 1
-    return ["--save_every_n_steps", str(cadence), "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(window)]
+    if training_state_policy(run)["keep_generations"] == 2:
+        window = cadence if cadence is not None else validated_recipe(run, required=True)["steps"]
+    else:
+        window = 1
+    every = [] if cadence is None else ["--save_every_n_steps", str(cadence)]
+    return [*every, "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(window)]
 
 
 def run_output_name(run: dict[str, Any]) -> str:

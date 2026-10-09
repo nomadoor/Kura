@@ -139,15 +139,17 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         ):
             raise ValueError("Musubi backend.config.save_every_n_steps must be a positive integer")
         save_args = managed_state_save_args(run, configured_cadence, _extra_args(override), contract=training_state_contract_musubi(run))
-        # Every Musubi command already names a cadence; the managed one takes its place.
-        cadence_flag, cadence = save_args[:2]
-        try:
-            cadence_index = train.index(cadence_flag) + 1
-        except ValueError:
-            train.extend([cadence_flag, cadence])
-        else:
-            train[cadence_index] = cadence
-        train.extend(save_args[2:])
+        if save_args[0] == "--save_every_n_steps":
+            # Every Musubi command already names its default cadence; one Kura sets takes its place.
+            cadence = save_args[1]
+            save_args = save_args[2:]
+            try:
+                cadence_index = train.index("--save_every_n_steps") + 1
+            except ValueError:
+                train.extend(["--save_every_n_steps", cadence])
+            else:
+                train[cadence_index] = cadence
+        train.extend(save_args)
     if continuation is not None:
         extra_scheduler = _extra_arg_value(_extra_args(override), "--lr_scheduler")
         if extra_scheduler is not None and override.get("lr_scheduler") is not None:

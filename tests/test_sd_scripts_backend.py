@@ -165,6 +165,11 @@ class SdScriptsBackendTests(unittest.TestCase):
         self.assertIn('"--output_name","derived-run"', script)
         self.assertNotIn('"--output_name","source-run"', script)
 
+    def test_fresh_state_capture_keeps_the_trainer_default_cadence(self) -> None:
+        script = command_sd_scripts(base_run("sd15", "lora"))["argv"][2]
+        self.assertNotIn("--save_every_n_steps", script)
+        self.assertIn('"--save_last_n_steps_state","1"', script)
+
     def test_sd_scripts_resume_rejects_unsafe_initial_envelopes(self) -> None:
         for architecture, mode, change, message in (
             ("sd15", "lora", {"lr_scheduler": "cosine"}, "constant scheduler"),

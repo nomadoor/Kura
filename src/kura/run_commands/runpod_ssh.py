@@ -931,18 +931,19 @@ def _pull_remote_training_state_items(
     published: list[dict[str, Any]] = []
     pending_root = run_dir / "recovery" / "training-state-pull"
     pending_root.mkdir(parents=True, exist_ok=True)
+    # A run whose frozen manifest cannot be read or interpreted raises, and the caller records
+    # it as the training-state sync error rather than pulling nothing silently.
     try:
         run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        steps = frozen_resume_steps(run_dir, run)
-        output_name = run_output_name(run)
-        retention_floor = training_state_retention_floor(
-            host_workspace,
-            run_dir.name,
-            training_state_policy(run)["keep_generations"],
-        )
-    except (OSError, ValueError, yaml.YAMLError):
-        # Without the frozen run there is no output name, so no directory is the run's state.
-        return published
+    except yaml.YAMLError as exc:
+        raise ValueError("cannot read the frozen run manifest for training-state sync") from exc
+    steps = frozen_resume_steps(run_dir, run)
+    output_name = run_output_name(run)
+    retention_floor = training_state_retention_floor(
+        host_workspace,
+        run_dir.name,
+        training_state_policy(run)["keep_generations"],
+    )
     for item in items:
         name, remote_path, files = item.get("name"), item.get("path"), item.get("files")
         if not isinstance(name, str) or Path(name).name != name or not isinstance(remote_path, str):

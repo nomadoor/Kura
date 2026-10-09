@@ -1165,6 +1165,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     if state_cadence is None:
         state_cadence = ai_save.get("save_every")
     state_cadence = managed_state_cadence(run, state_cadence)
+    if state_cadence is None:
+        state_cadence = run_recipe.get("steps")
     state_capability = training_state_contract(run)["capability"]
     state_payload = {
         "enabled": state_policy["enabled"],
