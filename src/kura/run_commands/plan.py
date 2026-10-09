@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors.common import can_start
+from kura.executors.common import can_start, start_refusal
 from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
@@ -1790,7 +1790,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         if status.get("state") == "running":
             raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")
         if not can_start(status):
-            raise ValueError("run must be compiled before staging")
+            raise ValueError(start_refusal(run_id, status, action="staging"))
         dataset_ids = [item.get("id") for item in _run_datasets(locked)]
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]
         if not dataset_ids:

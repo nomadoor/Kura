@@ -54,7 +54,7 @@ stop Pod
 - An explicit `kura run reconcile` records a Pod that no longer exists (it
   deleted itself or was deleted elsewhere) as `interrupted` with
   `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
-  does. Before relaunching such a run, confirm in the RunPod console that the
+  does. Before starting a new run from such a run, confirm in the RunPod console that the
   Pod is really gone.
 - Kura records its intent before creating a Pod. If a launch dies, or RunPod
   does not confirm a create, Kura never creates again on its own: launch and

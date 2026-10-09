@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "kura"
 
@@ -19,10 +23,54 @@ class RunStateVocabularyTests(unittest.TestCase):
         self.assertIs(launch.can_start, common.can_start)
         self.assertIs(plan.can_start, common.can_start)
         self.assertIs(runner.EXIT_FOR_STATE, common.EXIT_CODE_FOR_STATE)
-        for name in ("ACTIVE_STATES", "OBSERVABLE_STATES", "TERMINAL_STATES", "UNFINISHED_STATES", "RELAUNCHABLE_STATES", "CLEANUP_ELIGIBLE_STATES", "UNSUCCESSFUL_STATES"):
+        for name in ("ACTIVE_STATES", "OBSERVABLE_STATES", "TERMINAL_STATES", "UNFINISHED_STATES", "CLEANUP_ELIGIBLE_STATES", "UNSUCCESSFUL_STATES"):
             with self.subTest(name=name):
                 self.assertLessEqual(set(getattr(common, name)), common.RUN_STATES)
         self.assertLessEqual(set(common.EXIT_CODE_FOR_STATE), common.RUN_STATES)
+
+    def test_a_run_starts_only_from_compiled_or_its_own_capacity_wait(self) -> None:
+        from kura.executors.common import can_start
+
+        self.assertTrue(can_start({"state": "compiled"}))
+        self.assertTrue(can_start({"state": "queued", "capacity_wait": {"started_at": "2026-10-09T00:00:00+09:00"}}))
+        for state in ("failed", "interrupted", "unknown", "launch_failed", "completed", "draft", "queued", "running"):
+            with self.subTest(state=state):
+                self.assertFalse(can_start({"state": state}))
+
+    def test_stage_and_launch_send_an_ended_run_to_a_new_run_from_its_settings(self) -> None:
+        from kura.run_commands import launch, plan
+
+        def stage(run_dir: Path, state: str):
+            return (lambda: plan.stage_run("example")), (
+                patch.object(plan, "_run_path", return_value=run_dir),
+                patch.object(plan, "_load_yaml", return_value={"datasets": [{"id": "dataset"}]}),
+                patch.object(plan, "_workspace_config", return_value={}),
+                patch.object(plan, "stage_runpod", return_value={}),
+                patch.object(plan, "observe_run", return_value={"state": state}),
+            )
+
+        def start(run_dir: Path, state: str):
+            return (lambda: launch.launch_run("example", executor="docker", dry_run=False, check_only=True)), (
+                patch.object(launch, "_run_path", return_value=run_dir),
+                patch.object(launch, "_load_yaml", return_value={"compute": {"executor": "docker"}}),
+                patch.object(launch, "_workspace_config", return_value={}),
+                patch.object(launch, "unresolved_create_intents", return_value=[]),
+                patch.object(launch, "unstopped_recovered_pod", return_value=None),
+                patch.object(launch, "observe_run", return_value={"state": state}),
+            )
+
+        for state in ("failed", "interrupted", "unknown", "launch_failed"):
+            for name, attempt in (("stage", stage), ("launch", start)):
+                with self.subTest(state=state, command=name), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+                    run_dir = Path(directory) / "runs" / "example"
+                    run_dir.mkdir(parents=True)
+                    call, patches = attempt(run_dir, state)
+                    for item in patches:
+                        stack.enter_context(item)
+                    stderr = stack.enter_context(patch("sys.stderr", new_callable=io.StringIO))
+                    self.assertEqual(call(), 1)
+                    self.assertIn(f"run example ended {state}", stderr.getvalue())
+                    self.assertIn("kura run new --from example", stderr.getvalue())
 
     def test_no_module_keeps_its_own_list_of_run_states(self) -> None:
         # A literal set or tuple of two or more run states outside executors/common.py is a second copy.

@@ -39,15 +39,22 @@ RUN_STATES = frozenset({
 
 ACTIVE_STATES = frozenset({"queued", "staged", "launching", "running"})
 
-# A run in one of these may be launched again; `recovery_required` waits for a person.
-RELAUNCHABLE_STATES = frozenset({"compiled", "failed", "interrupted", "unknown", "launch_failed"})
-
-
 def can_start(status: dict[str, Any]) -> bool:
-    """Whether a launch may stage and start this run: it has not started, or it ended without
-    a Pod, or it is a capacity wait whose follower stopped (the runner resumes that wait)."""
+    """Whether a launch may stage and start this run: a run starts once, from `compiled`, or
+    resumes its own capacity wait whose follower stopped (the runner resumes that wait)."""
     state = status.get("state")
-    return state in RELAUNCHABLE_STATES or (state == "queued" and isinstance(status.get("capacity_wait"), dict))
+    return state == "compiled" or (state == "queued" and isinstance(status.get("capacity_wait"), dict))
+
+
+def start_refusal(run_id: str, status: dict[str, Any], *, action: str) -> str:
+    """Why `can_start` refused this run; an ended run starts again only as a new run from its settings."""
+    state = status.get("state")
+    if state in UNSUCCESSFUL_STATES or state == "unknown":
+        return (
+            f"run {run_id} ended {state}, and a run starts only once; start a new run from its settings "
+            f"with `kura run new --from {run_id} --slug <words>`"
+        )
+    return f"run must be compiled before {action}"
 
 # Finished runs whose artifacts `kura cleanup` may offer; unknown and recovery_required wait for a person.
 CLEANUP_ELIGIBLE_STATES = frozenset({"completed", "failed", "interrupted", "launch_failed"})

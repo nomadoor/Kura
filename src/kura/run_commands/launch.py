@@ -16,7 +16,7 @@ import yaml
 
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start, start_refusal
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -429,7 +429,7 @@ def launch_run(
         if status.get("state") == "launching":
             raise ValueError(f"a launch of this run is in progress or stopped midway; if none is running, run `kura run reconcile {run_id}`")
         if not can_start(status):
-            raise ValueError("run must be compiled before launch")
+            raise ValueError(start_refusal(run_id, status, action="launch"))
         input_lock = None
         input_path = run_dir / "resolved" / "dataset-input.lock.json"
         if input_path.is_file():
