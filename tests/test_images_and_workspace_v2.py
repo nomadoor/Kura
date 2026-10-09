@@ -205,7 +205,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
         self.assertEqual((again, notes), (migrated, []))
 
     def test_a_mount_over_the_hugging_face_cache_is_refused_with_the_migrate_command(self) -> None:
-        for target in ("/workspace/cache/huggingface", "/root/.cache/huggingface", "/workspace/cache/huggingface/hub"):
+        for target in ("/workspace/cache/huggingface", "/root/.cache/huggingface", "/workspace/cache/huggingface/hub", "/workspace/cache", "/workspace/cache/"):
             with self.subTest(target=target):
                 with self.assertRaisesRegex(ValueError, "docker.hf_cache.*kura workspace migrate"):
                     validate_workspace_config({"schema_version": 2, "docker": {"mounts": [{"source": "/mnt/e/hf", "target": target}]}})
@@ -256,9 +256,12 @@ class WorkspaceSchemaTests(unittest.TestCase):
             self.assertEqual(backup.read_text(encoding="utf-8"), before)
             # A backup left by an earlier migration does not block the next one.
             path.write_text(yaml.safe_dump({"schema_version": 2, "docker": {"mounts": [{"source": "/mnt/e/hf", "target": "/workspace/cache/huggingface"}]}}), encoding="utf-8")
+            Path("workspace.yaml.20991231-000000.bak").write_text("earlier backup\n", encoding="utf-8")
             with patch("sys.stdout", io.StringIO()), patch("kura.cli.datetime") as clock:
                 clock.now.return_value.strftime.return_value = "20991231-000000"
                 self.assertEqual(cmd_workspace_migrate(argparse.Namespace(yes=True)), 0)
+            self.assertEqual(Path("workspace.yaml.20991231-000000.bak").read_text(encoding="utf-8"), "earlier backup\n")
+            self.assertTrue(Path("workspace.yaml.20991231-000000-1.bak").is_file())
             self.assertEqual(yaml.safe_load(path.read_text(encoding="utf-8"))["docker"], {"hf_cache": "/mnt/e/hf"})
             require_workspace()
 

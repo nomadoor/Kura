@@ -58,10 +58,16 @@ def local_docker_mounts(workspace: Path, config: dict[str, Any]) -> list[dict[st
     return [*configured, {"source": str(cache), "target": HF_CACHE_CONTAINER_PATH, "mode": "rw"}]
 
 
-def is_hf_cache_target(target: str) -> bool:
-    """True for a container path inside the Hugging Face cache, under its current or legacy target."""
+def overlaps_hf_cache(target: str) -> bool:
+    """True for a mount target that would decide where the Hugging Face cache lives.
+
+    That is the cache path or anything inside it (also under the legacy target),
+    or a directory containing it, such as /workspace/cache.
+    """
     raw = posixpath.normpath(target.replace("\\", "/"))
-    return any(raw == prefix or raw.startswith(prefix + "/") for prefix in (HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH))
+    if any(raw == prefix or raw.startswith(prefix + "/") for prefix in (HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH)):
+        return True
+    return HF_CACHE_CONTAINER_PATH.startswith(raw.rstrip("/") + "/")
 
 
 def to_host_path(

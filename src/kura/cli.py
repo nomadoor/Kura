@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import difflib
+import itertools
 import json
 import os
 import platform
@@ -1351,11 +1352,13 @@ def cmd_workspace_migrate(args: argparse.Namespace) -> int:
     if migrated == config:
         print("workspace.yaml already uses the current schema")
         return 0
-    # Timestamped, so an earlier migration's backup never blocks this one.
-    backup = path.with_name(f"workspace.yaml.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak")
-    if backup.exists():
-        print(f"cannot migrate workspace: {backup} already exists; move it aside first", file=sys.stderr)
-        return 1
+    # A new name for every migration: an earlier backup is kept and never blocks this one.
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(f"workspace.yaml.{stamp}.bak")
+    for suffix in itertools.count(1):
+        if not backup.exists():
+            break
+        backup = path.with_name(f"workspace.yaml.{stamp}-{suffix}.bak")
     after = yaml.safe_dump(migrated, sort_keys=False, allow_unicode=True)
     diff = difflib.unified_diff(before.splitlines(), after.splitlines(), "workspace.yaml", "workspace.yaml (migrated)", lineterm="")
     print("\n".join(diff))

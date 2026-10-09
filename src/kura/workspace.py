@@ -13,7 +13,7 @@ import yaml
 
 from kura.fsio import atomic_write_yaml
 from kura.images import PINNED_IMAGES
-from kura.paths import DEFAULT_HF_CACHE, HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH, is_hf_cache_target
+from kura.paths import DEFAULT_HF_CACHE, HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH, overlaps_hf_cache
 
 
 def dump_yaml(path: Path, value: Any) -> None:
@@ -293,7 +293,7 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
             raise ValueError(f"{source} images.{name} must name an image; delete the line to use the pinned image")
     docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     for index, mount in enumerate(docker.get("mounts") or []):
-        if is_hf_cache_target(mount.get("target", "")):
+        if overlaps_hf_cache(mount.get("target", "")):
             raise ValueError(
                 f"{source} docker.mounts[{index}] mounts over the Hugging Face cache; set docker.hf_cache to choose where "
                 "the cache lives, or run `kura workspace migrate` to move this entry there"
@@ -352,7 +352,7 @@ def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
         target = mount.get("target") if isinstance(mount, dict) else None
         source = mount.get("source") if isinstance(mount, dict) else None
         whole_cache = isinstance(target, str) and posixpath.normpath(target.replace("\\", "/")) in {HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH}
-        if not isinstance(target, str) or not is_hf_cache_target(target):
+        if not isinstance(target, str) or not overlaps_hf_cache(target):
             kept.append(mount)
         elif not whole_cache or not isinstance(source, str) or mount.get("mode", "rw") != "rw" or "hf_cache" in docker:
             kept.append(mount)
