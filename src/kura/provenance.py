@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def artifact_pinning(identity: dict[str, Any], *, observable: bool) -> dict[str, Any]:
@@ -30,46 +31,273 @@ def _hash_source_parts(parts: list[tuple[str, bytes]], backend_name: str, *, sco
     return {"kind": "source-tree-sha256", "value": hasher.hexdigest(), "backend": backend_name, "scope": scope}
 
 
-def _source_symbol(path: Path, symbol: str) -> bytes:
-    payload = path.read_bytes()
-    text = payload.decode("utf-8")
-    tree = ast.parse(text, filename=str(path))
-    definitions: dict[str, list[ast.AST]] = {}
-    for node in tree.body:
-        names: list[str] = []
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.append(node.name)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names.extend(target.id for target in targets if isinstance(target, ast.Name))
-        for name in names:
-            definitions.setdefault(name, []).append(node)
-    if len(definitions.get(symbol, [])) != 1:
-        raise ValueError(f"source identity symbol {symbol!r} was not found exactly once in {path.name}")
-    pending = [symbol]
-    closure: dict[str, ast.AST] = {}
-    while pending:
-        name = pending.pop()
-        if name in closure:
-            continue
-        matches = definitions.get(name, [])
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+# The registry dispatches to every adapter, so an import of it is not followed
+# and the walk never enters its table: one adapter's identity does not take in
+# the others. The selected adapter's own entry in the table is the start point.
+_DISPATCH_MODULES = frozenset({"kura.backends", "kura.backends.registry"})
+# The only names code may import from those modules; anything else is refused.
+_DISPATCH_NAMES = frozenset({"BACKENDS", "backend_names", "get_backend"})
+_REGISTRY_MODULE = "kura.backends.registry"
+_REGISTRY_TABLE = "BACKENDS"
+_SCRIPT_SOURCE = ("kura.container_scripts", "script_source")
+# Freezing the dataset splits items.jsonl into items and chooses each caption,
+# which decides what every trainer receives, so the walk starts there too.
+_DATASET_FREEZE = ("kura.dataset_handoff", "freeze_dataset_handoff")
+
+
+def _bound_names(targets: list[ast.expr]) -> list[str]:
+    """Names an assignment binds; a subscript or attribute target binds none."""
+    names: list[str] = []
+    for target in targets:
+        if isinstance(target, ast.Name):
+            names.append(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            names.extend(_bound_names(target.elts))
+        elif isinstance(target, ast.Starred):
+            names.extend(_bound_names([target.value]))
+    return names
+
+
+class _SourceModule:
+    """One parsed kura module: its top-level names, imports, and other statements."""
+
+    def __init__(self, name: str) -> None:
+        parts = name.split(".")[1:]
+        candidate = _PACKAGE_ROOT.joinpath(*parts).with_suffix(".py") if parts else None
+        self.path = candidate if candidate is not None and candidate.is_file() else _PACKAGE_ROOT.joinpath(*parts, "__init__.py")
+        self.name = name
+        self.relative = self.path.relative_to(_PACKAGE_ROOT).as_posix()
+        # Split lines the way the parser numbers them (str.splitlines also splits on form feeds).
+        self.lines = io.StringIO(self.path.read_bytes().decode("utf-8"), newline="").readlines()
+        tree = ast.parse("".join(self.lines), filename=str(self.path))
+        self.definitions: dict[str, list[ast.stmt]] = {}
+        self.imports: dict[str, tuple[str, ast.ImportFrom]] = {}
+        # Top-level statements that are not a plain definition or an import run
+        # whenever the module is imported, so they belong to every reach of it.
+        self.statements: list[ast.stmt] = []
+        for index, node in enumerate(tree.body):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                self.definitions.setdefault(node.name, []).append(node)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for name in _bound_names(targets):
+                    self.definitions.setdefault(name, []).append(node)
+                # `X[k] = ...`, `x.y = ...`, and `A, B = ...` change or bind
+                # more than one plain name, so they are hashed with the module.
+                if not all(isinstance(target, ast.Name) for target in targets):
+                    self.statements.append(node)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    self.imports[alias.asname or alias.name] = (alias.name, node)
+            elif isinstance(node, ast.Import):
+                # Checked when the module is reached; never hashed.
+                self.statements.append(node)
+            elif not (index == 0 and isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)):
+                self.statements.append(node)
+
+    def location(self, node: ast.AST) -> str:
+        return f"{self.relative}:{getattr(node, 'lineno', '?')}"
+
+    def source(self, node: ast.AST) -> bytes:
+        decorators = getattr(node, "decorator_list", [])
+        start = min([node.lineno, *(item.lineno for item in decorators)])
+        return "".join(self.lines[start - 1:node.end_lineno]).encode("utf-8")
+
+    def symbol(self, name: str) -> ast.stmt:
+        matches = self.definitions.get(name, [])
+        if not matches and name in self.imports:
+            raise ValueError(
+                f"source identity cannot follow {name!r}: {self.relative} re-exports it from {self.imports[name][1].module}"
+            )
         if len(matches) != 1:
-            raise ValueError(f"source identity dependency {name!r} was not found exactly once in {path.name}")
-        node = matches[0]
-        closure[name] = node
-        pending.extend(
-            child.id for child in ast.walk(node)
-            if isinstance(child, ast.Name)
-            and isinstance(child.ctx, ast.Load)
-            and child.id in definitions
+            raise ValueError(f"source identity dependency {name!r} was not found exactly once in {self.relative}")
+        return matches[0]
+
+
+def _kura_import_target(module: _SourceModule, node: ast.ImportFrom, name: str) -> tuple[str, str] | None:
+    """Resolve one imported name to the kura symbol it names, or None when the walk stops there."""
+    if node.level:
+        raise ValueError(f"source identity cannot follow a relative import at {module.location(node)}")
+    target = node.module or ""
+    if target != "kura" and not target.startswith("kura."):
+        return None
+    parts = [*target.split(".")[1:], name]
+    if _PACKAGE_ROOT.joinpath(*parts).with_suffix(".py").is_file() or _PACKAGE_ROOT.joinpath(*parts, "__init__.py").is_file():
+        raise ValueError(
+            f"source identity cannot follow module import {target}.{name} at {module.location(node)}; "
+            "import the names the code uses"
         )
-    parts: list[bytes] = []
-    for name, node in sorted(closure.items()):
-        source = ast.get_source_segment(text, node)
-        if source is None:
-            raise ValueError(f"source identity symbol {name!r} has no source segment in {path.name}")
-        parts.append(name.encode("utf-8") + b"\0" + source.encode("utf-8"))
-    return b"\0".join(parts)
+    if target in _DISPATCH_MODULES:
+        if name in _DISPATCH_NAMES:
+            return None
+        if name in _SourceModule(_REGISTRY_MODULE).definitions:
+            raise ValueError(
+                f"source identity cannot follow {name} from {target} at {module.location(node)}; "
+                f"the walk does not enter the registry, so move {name} out of {_REGISTRY_MODULE} into a module the code can import"
+            )
+        raise ValueError(
+            f"source identity cannot follow {name} from {target} at {module.location(node)}; "
+            f"only {', '.join(sorted(_DISPATCH_NAMES))} come from there, so import {name} from the module that defines it"
+        )
+    return target, name
+
+
+def _literal_argument(call: ast.Call) -> str | None:
+    if len(call.args) == 1 and not call.keywords and isinstance(call.args[0], ast.Constant) and isinstance(call.args[0].value, str):
+        return call.args[0].value
+    return None
+
+
+def _is_module_file_path(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Path"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "__file__"
+    )
+
+
+def _references(
+    module: _SourceModule, node: ast.AST, resolve: Callable[[tuple[str, str]], tuple[str, str]]
+) -> tuple[list[tuple[str, str]], list[Path]]:
+    """Return the kura symbols and the whole files one reached node uses.
+
+    ``resolve`` follows a symbol through re-exports to its definition.
+    """
+    symbols: list[tuple[str, str]] = []
+    files: list[Path] = []
+    imports = dict(module.imports)
+    imports.update(
+        (alias.asname or alias.name, (alias.name, child))
+        for child in ast.walk(node) if isinstance(child, ast.ImportFrom)
+        for alias in child.names
+    )
+    called = {id(child.func): child for child in ast.walk(node) if isinstance(child, ast.Call)}
+    data_file_names: set[int] = set()
+    # ast.walk visits a node before its children, so a data-file call marks its
+    # __file__ before the name itself is visited.
+    for child in ast.walk(node):
+        if isinstance(child, ast.Import):
+            for alias in child.names:
+                if alias.name == "kura" or alias.name.startswith("kura."):
+                    raise ValueError(
+                        f"source identity cannot follow module import {alias.name} at {module.location(child)}; "
+                        "import the names the code uses"
+                    )
+        elif isinstance(child, ast.ImportFrom):
+            for alias in child.names:
+                target = _kura_import_target(module, child, alias.name)
+                if target is not None:
+                    symbols.append(target)
+        elif (
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Attribute)
+            and child.func.attr == "with_name"
+            and _is_module_file_path(child.func.value)
+        ):
+            literal = _literal_argument(child)
+            if literal is None:
+                raise ValueError(f"source identity needs a literal file name next to the module at {module.location(child)}")
+            files.append(module.path.with_name(literal))
+            data_file_names.add(id(child.func.value.args[0]))
+        elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+            if child.id == "__file__":
+                if id(child) not in data_file_names:
+                    raise ValueError(
+                        f"source identity can follow __file__ only as Path(__file__).with_name(\"<file>\") at {module.location(child)}"
+                    )
+                continue
+            if child.id in module.definitions:
+                key: tuple[str, str] | None = (module.name, child.id)
+            elif child.id in imports:
+                name, statement = imports[child.id]
+                key = _kura_import_target(module, statement, name)
+            else:
+                key = None
+            if key is None:
+                continue
+            symbols.append(key)
+            if resolve(key) == _SCRIPT_SOURCE:
+                call = called.get(id(child))
+                literal = _literal_argument(call) if call is not None else None
+                if literal is None:
+                    raise ValueError(
+                        f"source identity needs script_source called with one literal script name at {module.location(child)}"
+                    )
+                files.append(_PACKAGE_ROOT / "container_scripts" / literal)
+    return symbols, files
+
+
+def _adapter_source_parts(backend_name: str) -> tuple[list[tuple[str, bytes]], set[tuple[str, str]]]:
+    """Walk the import graph from the selected adapter's registry entry and the dataset freeze.
+
+    Same-module names and ``from kura.X import name`` (at module level or inside
+    a function) are followed symbol by symbol; container scripts and data files
+    named by literal are hashed whole; each reached module adds its top-level
+    statements that define nothing.
+    """
+    modules: dict[str, _SourceModule] = {}
+
+    def load(name: str) -> _SourceModule:
+        if name not in modules:
+            modules[name] = _SourceModule(name)
+        return modules[name]
+
+    registry = load(_REGISTRY_MODULE)
+    table = registry.symbol(_REGISTRY_TABLE)
+    entries = table.value if isinstance(table, (ast.Assign, ast.AnnAssign)) else None
+    entry = next(
+        (value for key, value in zip(entries.keys, entries.values) if isinstance(key, ast.Constant) and key.value == backend_name),
+        None,
+    ) if isinstance(entries, ast.Dict) else None
+    if entry is None:
+        raise ValueError(f"unsupported backend for source identity: {backend_name}")
+    parts: dict[str, bytes] = {f"{registry.relative}:{_REGISTRY_TABLE}[{backend_name}]": registry.source(entry)}
+    files: set[Path] = set()
+    reached: set[tuple[str, str]] = set()
+
+    def resolve(key: tuple[str, str]) -> tuple[str, str]:
+        # A name a module only imports is a re-export: follow it to its definition.
+        target = load(key[0])
+        followed = {key}
+        while key[1] not in target.definitions and key[1] in target.imports:
+            original, statement = target.imports[key[1]]
+            resolved = _kura_import_target(target, statement, original)
+            if resolved is None or resolved in followed:
+                break
+            followed.add(resolved)
+            key, target = resolved, load(resolved[0])
+        return key
+
+    nodes: list[tuple[_SourceModule, ast.AST]] = [(registry, entry)]
+    symbols: list[tuple[str, str]] = [_DATASET_FREEZE]
+    while nodes or symbols:
+        if nodes:
+            module, node = nodes.pop()
+            found, node_files = _references(module, node, resolve)
+            symbols.extend(found)
+            files.update(node_files)
+            continue
+        key = resolve(symbols.pop())
+        if key in reached or key == (_REGISTRY_MODULE, _REGISTRY_TABLE):
+            continue
+        reached.add(key)
+        target = load(key[0])
+        module_label = f"{target.relative}:<module>"
+        if module_label not in parts:
+            parts[module_label] = b"\0".join(target.source(item) for item in target.statements if not isinstance(item, ast.Import))
+            nodes.extend((target, item) for item in target.statements)
+        definition = target.symbol(key[1])
+        parts[f"{target.relative}:{key[1]}"] = target.source(definition)
+        nodes.append((target, definition))
+    missing = sorted(path.name for path in files if not path.is_file())
+    if missing:
+        raise ValueError("source identity input is missing: " + ", ".join(missing))
+    parts.update((path.relative_to(_PACKAGE_ROOT).as_posix(), path.read_bytes()) for path in files)
+    return sorted(parts.items()), reached
 
 
 # Source files whose behavior an executor's transport and lifecycle evidence
@@ -113,133 +341,31 @@ def executor_source_identity(executor: str, *, read: Any = None) -> dict[str, st
     return identity
 
 
-def legacy_adapter_source_identity(backend_name: str) -> dict[str, str]:
-    """Calculate the old whole-file algorithm on the current tree.
-
-    Historical migration values are reproducible only from their pre-migration
-    source trees; this helper does not recreate those trees or their hashes.
-    """
-    root = Path(__file__).resolve().parent / "backends"
-    container_root = Path(__file__).resolve().parent / "container_scripts"
-    if backend_name == "ai-toolkit":
-        paths = [root / "common.py", root / "ai_toolkit.py", root / "registry.py"]
-    elif backend_name == "musubi-tuner":
-        paths = [
-            root / "common.py",
-            root / "registry.py",
-            *sorted(root.glob("musubi_*.py")),
-            *(container_root / name for name in (
-                "hf_download.py",
-                "musubi_dataset_assert.py",
-                "prune_checkpoints.py",
-                "safetensors_validator.py",
-            )),
-        ]
-    else:
-        raise ValueError(f"unsupported backend for source identity: {backend_name}")
-    parts: list[tuple[str, bytes]] = []
-    for path in paths:
-        parts.append((path.relative_to(Path(__file__).resolve().parent).as_posix(), path.read_bytes()))
-    return _hash_source_parts(parts, backend_name, scope="legacy-whole-files")
-
-
 def adapter_source_identity(backend_name: str) -> dict[str, str]:
-    """Hash only the selected adapter and the helpers it actually consumes."""
-    package_root = Path(__file__).resolve().parent
-    backend_root = package_root / "backends"
-    container_root = package_root / "container_scripts"
-    shared = backend_root / "shared.py"
-    registry = backend_root / "registry.py"
-    run_envelope = package_root / "run_envelope.py"
-    if backend_name == "ai-toolkit":
-        paths = [
-            backend_root / "ai_toolkit.py",
-            backend_root / "ai_toolkit_baseline.py",
-            backend_root / "ai_toolkit_baseline.json",
-            backend_root / "dataset_profiles.py",
-        ]
-        symbols = [
-            *((shared, name) for name in ("_datasets", "_script_command")),
-            *((run_envelope, name) for name in (
-                "backend_config", "resume_intent", "run_executor",
-                "training_state_policy", "validated_recipe",
-            )),
-        ]
-        runtime_paths = [
-            container_root / "ai_toolkit_state.py",
-            container_root / "ai_toolkit_video_assert.py",
-            container_root / "training_state_verify.py",
-        ]
-    elif backend_name == "musubi-tuner":
-        paths = [
-            backend_root / "common.py",
-            backend_root / "dataset_profiles.py",
-            *sorted(backend_root.glob("musubi_*.py")),
-        ]
-        symbols = [
-            (shared, name)
-            for name in (
-                "_datasets", "_toml_scalar", "_script_command", "_truthy",
-                "_extra_args", "_reject_owned_extra_args", "_append_flag", "_int_or_none",
-                "MODEL_DOWNLOAD_KEYS", "explicit_model_paths", "_safe_hf_filename", "model_downloads",
-                "download_specs_for", "recorded_model_source",
-            )
-        ]
-        symbols.extend((run_envelope, name) for name in (
-            "backend_config", "resume_intent", "training_state_policy", "validated_recipe",
-        ))
-        runtime_paths = [
-            container_root / name
-            for name in ("hf_download.py", "musubi_dataset_assert.py", "prune_checkpoints.py", "safetensors_validator.py", "training_state_verify.py")
-        ]
-    elif backend_name == "sd-scripts":
-        paths = [
-            backend_root / "dataset_profiles.py",
-            *sorted(backend_root.glob("sd_scripts*.py")),
-        ]
-        symbols = [
-            (shared, name)
-            for name in (
-                "_datasets", "_toml_scalar", "_script_command", "_truthy",
-                "_extra_args", "_reject_owned_extra_args", "_int_or_none", "_append_flag",
-                "MODEL_DOWNLOAD_KEYS", "explicit_model_paths", "_safe_hf_filename", "model_downloads",
-                "download_specs_for", "recorded_model_source",
-            )
-        ]
-        symbols.extend((run_envelope, name) for name in (
-            "backend_config", "resume_intent", "training_state_policy", "validated_recipe",
-        ))
-        runtime_paths = [
-            container_root / name
-            for name in (
-                "hf_download.py",
-                "sd_scripts_probe.py",
-                "sd_scripts_publish_anima.py",
-                "sd_scripts_state.py",
-                "sd_scripts_validate.py",
-                "training_state_verify.py",
-            )
-        ]
-    else:
-        raise ValueError(f"unsupported backend for source identity: {backend_name}")
-    paths.extend([
-        package_root / "dataset_handoff.py",
-        package_root / "dataset_jsonl.py",
-        package_root / "media_types.py",
-        package_root / "dataset_manifest.py",
-    ])
-    missing = [path for path in [*paths, *runtime_paths] if not path.is_file()]
-    if missing:
-        raise ValueError("source identity input is missing: " + ", ".join(path.name for path in missing))
-    parts = [(path.relative_to(package_root).as_posix(), path.read_bytes()) for path in [*paths, *runtime_paths]]
-    parts.extend((f"{path.relative_to(package_root).as_posix()}:{symbol}", _source_symbol(path, symbol)) for path, symbol in symbols)
-    # Surface membership changes which authored intent reaches the adapter and
-    # therefore belongs to adapter identity even though registry dispatch itself
-    # remains outside the per-adapter source hash.
+    """Hash the selected adapter's registry entry and the kura code it reaches."""
+    from dataclasses import fields
+
     from kura.backends.registry import _GENERAL_ML_ALIASES, _GENERAL_UNAVAILABLE, get_backend
 
-    surface = get_backend(backend_name).surface
-    parts.append(("backends/registry.py:validate_backend_config", _source_symbol(registry, "validate_backend_config")))
+    adapter = get_backend(backend_name)
+    parts, reached = _adapter_source_parts(backend_name)
+    for field in fields(adapter):
+        value = getattr(adapter, field.name)
+        if not callable(value):
+            continue
+        module = getattr(value, "__module__", None)
+        qualname = getattr(value, "__qualname__", None)
+        if not isinstance(module, str) or not isinstance(qualname, str) or not qualname.isidentifier():
+            raise ValueError(
+                f"source identity for {backend_name} needs {field.name} to be a module-level function, not {value!r}"
+            )
+        if (module, qualname) not in reached:
+            raise ValueError(
+                f"source identity for {backend_name} does not reach its registered {field.name}={module}.{qualname}"
+            )
+    # Surface membership changes which authored intent reaches the adapter, so
+    # the surface the registry holds at run time belongs to the identity too.
+    surface = adapter.surface
     parts.append((
         "backend-surface-contract.json",
         json.dumps(
@@ -279,7 +405,7 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
             separators=(",", ":"),
         ).encode("utf-8"),
     ))
-    return _hash_source_parts(parts, backend_name, scope="selected-adapter-v2")
+    return _hash_source_parts(parts, backend_name, scope="selected-adapter-v3")
 
 
 def image_reference_identity(reference: str, observed_id: str | None = None) -> dict[str, Any]:
