@@ -41,7 +41,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
 from kura.training_artifacts import checkpoint_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
@@ -1450,7 +1450,7 @@ def _wait_http_ready(endpoint: str, *, timeout_sec: int = 180) -> None:
     raise ValueError(f"ComfyUI endpoint did not become ready before timeout: {last_error}")
 
 
-def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = 12 * 3600) -> None:
+def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC) -> None:
     """Start the Pod-side lease fuse over SSH; it never moves a deadline the Pod already set."""
 
     if max_lease_sec <= 0:
@@ -2083,7 +2083,7 @@ def _prepare_remote_upload_unchecked(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = 12 * 3600, unattended_wait_sec: int | None = None, notify_channels: Any = None) -> int:
+def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec: int | None, remote_notify: bool = False, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC, unattended_wait_sec: int | None = None, notify_channels: Any = None) -> int:
     prepared_upload = _prepare_remote_upload(run_dir)
     status = prepared_upload["status"]
     realization = prepared_upload["realization"]

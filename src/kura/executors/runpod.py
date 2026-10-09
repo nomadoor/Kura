@@ -28,7 +28,7 @@ from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, declared_secret
 from kura.storage import ensure_free_bytes
-from kura.executors.common import PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 
@@ -690,7 +690,7 @@ def _runpod_training_env(
     return {**spec_env, **kura_container_env(workspace_path=workspace_path, run_id=run_id, realization_id=realization_id)}
 
 
-def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = 12 * 3600) -> dict[str, str]:
+def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC) -> dict[str, str]:
     return {**kura_container_env(workspace_path=workspace_path, run_id=run_id), "KURA_MAX_LEASE_SEC": str(max_lease_sec)}
 
 
@@ -1488,7 +1488,7 @@ def launch_runpod_session(
     purpose: str,
     dry_run: bool = False,
     yes: bool = False,
-    max_lease_sec: int = 12 * 3600,
+    max_lease_sec: int = DEFAULT_MAX_LEASE_SEC,
     controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
     """Create a thin disposable RunPod session without Kura training staging.

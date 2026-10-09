@@ -869,7 +869,7 @@ class LocalRenderTests(unittest.TestCase):
                 through_runner.assert_called_once()
                 runpod = through_runner.call_args.kwargs.get("runpod")
                 if name == "runpod":
-                    self.assertEqual((runpod["yes"], runpod["max_lease"]), (True, "12h"))
+                    self.assertEqual((runpod["yes"], runpod["max_lease"]), (True, launch.DEFAULT_MAX_LEASE_SEC))
                 else:
                     self.assertIsNone(runpod)
 

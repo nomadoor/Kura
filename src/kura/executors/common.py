@@ -62,6 +62,10 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
+# A RunPod Pod deletes itself this long after Kura first reaches it unless the launch says otherwise.
+DEFAULT_MAX_LEASE_SEC = 12 * 3600
+
+
 # A run that shows no progress this long is worth a look; status, the follower, and the monitor all say so at this age.
 QUIET_RUN_NOTICE_SEC = 15 * 60
 

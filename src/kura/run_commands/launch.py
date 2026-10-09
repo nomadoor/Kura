@@ -16,7 +16,7 @@ import yaml
 
 from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -80,7 +80,7 @@ def _run_remote_locked(
     job_timeout: int | None,
     download_attempts: int,
     download_interval: int,
-    max_lease: Any = "12h",
+    max_lease: Any = DEFAULT_MAX_LEASE_SEC,
     notify_channels: Any = None,
     image: str | None = None,
     wait_for_capacity: Any = "0",
@@ -272,7 +272,7 @@ def execute_run(
     job_timeout: int | None = 0,
     download_attempts: int = 60,
     download_interval: int = 20,
-    max_lease: Any = "12h",
+    max_lease: Any = DEFAULT_MAX_LEASE_SEC,
     notify_channels: Any = None,
     image: str | None = None,
     wait_for_capacity: Any = None,
@@ -341,7 +341,7 @@ def cmd_run_execute(args: argparse.Namespace) -> int:
         job_timeout=getattr(args, "job_timeout", 0),
         download_attempts=getattr(args, "download_attempts", 60),
         download_interval=getattr(args, "download_interval", 20),
-        max_lease=getattr(args, "max_lease", "12h"),
+        max_lease=getattr(args, "max_lease", DEFAULT_MAX_LEASE_SEC),
         unattended_wait=getattr(args, "unattended_wait", "auto"),
         notify_channels=getattr(args, "notify", None),
         image=getattr(args, "image", None),
@@ -378,7 +378,7 @@ def launch_run(
         return 1
     if run_type == "render":
         if executor == "runpod":
-            render_max_lease_sec = 12 * 3600 if max_lease is None else _parse_duration_seconds(max_lease)
+            render_max_lease_sec = DEFAULT_MAX_LEASE_SEC if max_lease is None else _parse_duration_seconds(max_lease)
             code = launch_render_runpod(
                 run_id,
                 dry_run=dry_run,
@@ -620,7 +620,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
     if not in_progress and runpod is not None:
         prepared: dict[str, Any] = {}
         try:
-            max_lease_sec = 12 * 3600 if runpod.get("max_lease") is None else _parse_duration_seconds(runpod["max_lease"])
+            max_lease_sec = DEFAULT_MAX_LEASE_SEC if runpod.get("max_lease") is None else _parse_duration_seconds(runpod["max_lease"])
         except ValueError as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1
@@ -719,7 +719,7 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
         prepared: dict[str, Any] = {}
         code = launch_run(
             run_id, executor="runpod", dry_run=False, image=options.get("image"), check_only=True, yes=yes,
-            max_lease=options.get("max_lease", "12h"), wait_for_capacity=options.get("wait_for_capacity", "0"),
+            max_lease=options.get("max_lease", DEFAULT_MAX_LEASE_SEC), wait_for_capacity=options.get("wait_for_capacity", "0"),
             capacity_poll_interval=options.get("capacity_poll_interval", "30s"), unattended_wait=unattended_label,
             prepared=prepared,
         )
