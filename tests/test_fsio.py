@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import yaml
 
-from kura.fsio import append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.fsio import append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml, file_lock
 
 
 class FsioTests(unittest.TestCase):
@@ -85,6 +87,48 @@ class FsioTests(unittest.TestCase):
 
             self.assertEqual(path.read_text(encoding="utf-8"), "old\n")
             self.assertEqual([item.name for item in root.iterdir()], ["status.json"])
+
+    def test_windows_lock_waits_when_another_holder_seeded_and_locked_the_new_file(self) -> None:
+        # Windows: two callers race on a new lock file. The first seeds byte 0
+        # and locks it, so the second's seed write fails with PermissionError.
+        # The second must still wait for the lock, not fail its caller.
+        calls: list[int] = []
+        fake_msvcrt = types.SimpleNamespace(LK_LOCK=1, LK_NBLCK=2, LK_UNLCK=0, locking=lambda fd, mode, size: calls.append(mode))
+        real_open = Path.open
+
+        class HandleWithLockedByteZero:
+            def __init__(self, handle) -> None:
+                self._handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info) -> None:
+                self._handle.close()
+
+            def write(self, data):
+                raise PermissionError(13, "Permission denied")
+
+            def flush(self) -> None:
+                raise PermissionError(13, "Permission denied")
+
+            def seek(self, *args):
+                return self._handle.seek(*args)
+
+            def fileno(self) -> int:
+                return self._handle.fileno()
+
+        def open_with_locked_byte_zero(path, *args, **kwargs):
+            return HandleWithLockedByteZero(real_open(path, *args, **kwargs))
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".locks" / "secrets.lock"
+            entered = False
+            with patch("kura.fsio.os.name", "nt"), patch.dict(sys.modules, {"msvcrt": fake_msvcrt}), patch.object(Path, "open", open_with_locked_byte_zero):
+                with file_lock(path):
+                    entered = True
+            self.assertTrue(entered)
+            self.assertEqual(calls, [fake_msvcrt.LK_LOCK, fake_msvcrt.LK_UNLCK])
 
 
 if __name__ == "__main__":

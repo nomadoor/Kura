@@ -21,13 +21,19 @@ def file_lock(path: Path, *, blocking: bool = True):
     """Hold an advisory lock; Windows blocking locks may time out after about 10s."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+b") as handle:
+    # Unbuffered, so a seed write that fails leaves nothing in a buffer for
+    # a later seek or close to retry.
+    with path.open("a+b", buffering=0) as handle:
         if os.name == "nt":
             import msvcrt
 
             if handle.seek(0, os.SEEK_END) == 0:
-                handle.write(b"\0")
-                handle.flush()
+                # Seed byte 0 of a new lock file. When two callers race on it,
+                # the one that seeded first may already hold byte 0 locked, and
+                # this write then fails with PermissionError; the file is
+                # seeded either way, so wait for the lock below.
+                with contextlib.suppress(PermissionError):
+                    handle.write(b"\0")
             handle.seek(0)
             mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
             try:
