@@ -1596,7 +1596,7 @@ def main() -> None:
     execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run; for a RunPod run whose job is already running, follow it and collect instead")
     execute.add_argument("run_id")
     execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
-    execute.add_argument("--max-lease", default=f"{DEFAULT_MAX_LEASE_SEC // 3600}h", help="RunPod only: the Pod deletes itself this long after it starts, whatever happens locally, e.g. 12h; 0 disables it.")
+    execute.add_argument("--max-lease", default=f"{DEFAULT_MAX_LEASE_SEC // 3600}h", help="RunPod only: the Pod deletes itself this long after it starts, whatever happens locally, e.g. 12h; it must be longer than zero, since Kura never starts a Pod without it.")
     execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after training, how long the Pod waits for Kura to collect outputs before deleting itself: auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
     execute.set_defaults(func=cmd_run_execute)
     logs = run_sub.add_parser("logs", help="Print the last 200 lines (at most 50 KB) of a run log, naming the full log, or follow it")

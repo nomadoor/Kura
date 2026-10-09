@@ -6610,7 +6610,6 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
         guard = _runpod_lease_guard_shell(max_lease_sec=3600, pod_id="pod-7", log_path="/workspace/runs/example/logs/stdout.log")
         self.assertIn("kura_pod_self_delete", guard)
         self.assertIn("kura_lease_initial=$(( $(date +%s) + 3600 ))", guard)
-        self.assertEqual(_runpod_lease_guard_shell(max_lease_sec=0, pod_id="pod-7", log_path="/x"), "")
         result = subprocess.run(["bash", "-n"], input=guard, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -8336,7 +8335,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         result = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_runpod_ssh_can_disable_pod_side_max_lease_guard(self) -> None:
+    def test_runpod_ssh_always_arms_the_pod_side_max_lease_guard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
@@ -8367,10 +8366,10 @@ class RunPodLifecycleTests(unittest.TestCase):
 
             with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
                 with patch("kura.cli.subprocess.run", side_effect=fake_run):
-                    self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=0), 0)
+                    self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=3600), 0)
 
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
-            self.assertNotIn("runpodctl pod delete", argv_text)
+            self.assertIn("kura_lease_initial=$(( $(date +%s) + 3600 ))", argv_text)
 
     def test_runpod_training_records_the_deadline_the_pod_holds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

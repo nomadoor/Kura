@@ -43,8 +43,6 @@ def _render_runpod_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_duration(seconds: int) -> str:
-    if seconds <= 0:
-        return "disabled"
     if seconds % 3600 == 0:
         return f"{seconds // 3600}h"
     if seconds % 60 == 0:

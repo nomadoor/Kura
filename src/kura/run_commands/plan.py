@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors.common import can_start, start_refusal
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, can_start, start_refusal
 from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
@@ -1670,6 +1670,19 @@ def _parse_duration_seconds(value: Any) -> int:
     unit = match.group(2) or "s"
     scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
     return amount * scale
+
+
+def max_lease_seconds(value: Any) -> int:
+    """The maximum lease in seconds; Kura never starts a RunPod Pod without its self-delete timer."""
+    if value is None:
+        return DEFAULT_MAX_LEASE_SEC
+    seconds = _parse_duration_seconds(value)
+    if seconds <= 0:
+        raise ValueError(
+            f"--max-lease must be a positive duration such as {DEFAULT_MAX_LEASE_SEC // 3600}h (got {value!r}); "
+            "Kura never starts a Pod without its self-delete timer"
+        )
+    return seconds
 
 
 def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:

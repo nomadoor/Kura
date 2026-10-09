@@ -31,7 +31,7 @@ from kura.run_commands.common import _backend_image_name, _load_frozen_command, 
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
 from kura.paths import local_docker_mounts
-from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run
+from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, max_lease_seconds, stage_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
@@ -92,12 +92,16 @@ def _run_remote_locked(
     runpod_config_override: dict[str, Any] | None = None,
 ) -> int:
     run_dir = _run_path(run_id)
+    try:
+        max_lease_sec = max_lease_seconds(max_lease)
+    except ValueError as exc:
+        print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     launched = False
     safe_to_stop = False
     exit_code = 1
     unattended_label = "longer of 2h and the job time"
     try:
-        max_lease_sec = _parse_duration_seconds(max_lease)
         unattended_wait_sec, unattended_label = _unattended_wait(unattended_wait)
         wait_for_capacity_sec = _parse_duration_seconds(wait_for_capacity)
         capacity_poll_interval_sec = _parse_duration_seconds(capacity_poll_interval)
@@ -376,16 +380,21 @@ def launch_run(
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot launch run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
+    try:
+        # Read before any check or confirmation, so a refused lease creates nothing.
+        max_lease_sec = max_lease_seconds(max_lease)
+    except ValueError as exc:
+        print(f"cannot launch run: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     if run_type == "render":
         if executor == "runpod":
-            render_max_lease_sec = DEFAULT_MAX_LEASE_SEC if max_lease is None else _parse_duration_seconds(max_lease)
             code = launch_render_runpod(
                 run_id,
                 dry_run=dry_run,
                 image=image,
                 notify_channels=notify_channels,
                 yes=yes,
-                max_lease_sec=render_max_lease_sec,
+                max_lease_sec=max_lease_sec,
             )
             if not dry_run:
                 print(format_render_completion(_workspace(), run_dir, exit_code=code))
@@ -515,7 +524,7 @@ def launch_run(
             if check_only:
                 confirm_runpod_billing(
                     runpod_config, remote_image, yes=yes,
-                    max_lease_sec=None if max_lease is None else _parse_duration_seconds(max_lease),
+                    max_lease_sec=max_lease_sec,
                     wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity), unattended_wait=unattended_wait,
                 )
                 return 0
@@ -529,7 +538,7 @@ def launch_run(
                     wait_for_capacity_sec=_parse_duration_seconds(wait_for_capacity),
                     capacity_poll_interval_sec=_parse_duration_seconds(capacity_poll_interval),
                     yes=yes,
-                    max_lease_sec=None if max_lease is None else _parse_duration_seconds(max_lease),
+                    max_lease_sec=max_lease_sec,
                     unattended_wait=unattended_wait,
                     controlled_by=controlled_by,
                 )
@@ -620,7 +629,7 @@ def _launch_render_through_runner(run_id: str, *, follow: bool, notify_channels:
     if not in_progress and runpod is not None:
         prepared: dict[str, Any] = {}
         try:
-            max_lease_sec = DEFAULT_MAX_LEASE_SEC if runpod.get("max_lease") is None else _parse_duration_seconds(runpod["max_lease"])
+            max_lease_sec = max_lease_seconds(runpod.get("max_lease"))
         except ValueError as exc:
             print(f"cannot launch render: {_safe_error(exc)}", file=sys.stderr)
             return 1

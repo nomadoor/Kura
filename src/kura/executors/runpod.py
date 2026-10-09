@@ -267,8 +267,6 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, 
 def _format_lease_limit(max_lease_sec: int | None) -> str:
     if max_lease_sec is None:
         return "none (this command does not install an automatic stop limit)"
-    if max_lease_sec <= 0:
-        return "disabled"
     if max_lease_sec % 3600 == 0:
         return f"{max_lease_sec // 3600}h"
     if max_lease_sec % 60 == 0:
@@ -1442,8 +1440,6 @@ LEASE_DEADLINE_PATH = "/tmp/kura-lease-deadline"
 
 def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
     """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
-    if max_lease_sec <= 0:
-        return ""
     pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
     deadline_file = shlex.quote(LEASE_DEADLINE_PATH)
     # The deadline lives in a file, so `kura run lease` can move it; an unreadable

@@ -1453,8 +1453,6 @@ def _wait_http_ready(endpoint: str, *, timeout_sec: int = 180) -> None:
 def _start_runpod_session_lease_guard(details: dict[str, Any], *, workspace: str, run_id: str, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC) -> None:
     """Start the Pod-side lease fuse over SSH; it never moves a deadline the Pod already set."""
 
-    if max_lease_sec <= 0:
-        return
     pod_id = details.get("pod_id")
     pod_id_value = pod_id if isinstance(pod_id, str) else ""
     log_path = f"{workspace.rstrip('/')}/runs/{run_id}/logs/stdout.log"

@@ -40,7 +40,7 @@ stop Pod
   its settings: `kura run new --from <run-id> --slug <words>`.
 - The compiled `compute.capacity` applies: by default the run waits for its
   GPU (no Pod, no billing while waiting); `mode: immediate` fails at once.
-- `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does.
+- `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does. It cannot be turned off; zero is refused.
   If Kura warns that training looks longer than the lease, tell the user the
   estimate and ask before running `kura run lease <run-id> <duration>`, which
   shows the change and its price; a longer lease is a billing decision, and
