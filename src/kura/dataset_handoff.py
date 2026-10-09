@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import yaml
 
+from kura.container_scripts.runpod_input_verify import view_changes
 from kura.dataset_manifest import measure_manifest
 from kura.fsio import atomic_write_json
 from kura.media_types import KNOWN_MEDIA_SUFFIXES
@@ -1391,85 +1392,12 @@ def _view_requires_rebuild(workspace: Path, view: dict[str, Any]) -> bool:
         return False
     if root.is_symlink() or not root.is_dir():
         raise ValueError(f"dataset view root is not a real directory: {root_relative}")
-    expected_links = {
-        item["path"]: item["target"] for item in view.get("links", [])
-        if isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("target"), str)
-    }
-    actual_links = {
-        path.relative_to(workspace).as_posix(): os.readlink(path)
-        for path in root.rglob("*") if path.is_symlink()
-    }
-    if actual_links != expected_links:
-        return True
-    expected_generated = {
-        item["path"]: str(item.get("text")).encode("utf-8")
-        for item in _generated_view_files(view) if isinstance(item.get("path"), str)
-    }
-    for relative, content in expected_generated.items():
-        path = workspace / relative
-        if not path.is_file() or path.is_symlink() or path.read_bytes() != content:
-            return True
-    for path in root.rglob("*"):
-        relative = path.relative_to(workspace).as_posix()
-        if (
-            path.is_file()
-            and not path.is_symlink()
-            and path.suffix.lower() in KNOWN_MEDIA_SUFFIXES
-            and relative not in expected_generated
-        ):
-            return True
-    return False
+    return bool(view_changes(workspace, {"views": [view]}, KNOWN_MEDIA_SUFFIXES))
 
 
 def inspect_dataset_view(workspace: Path, lock: dict[str, Any]) -> list[str]:
-    """Compare the materialized view with the exact compiled native handoff."""
-    changes: list[str] = []
-    for view in lock.get("views", []):
-        if not isinstance(view, dict) or not isinstance(view.get("root"), str):
-            changes.append("invalid view lock")
-            continue
-        root_relative = view["root"]
-        root = workspace / root_relative
-        expected_links = {
-            item["path"]: item["target"] for item in view.get("links", [])
-            if isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("target"), str)
-        }
-        actual_links: dict[str, str] = {}
-        if root.is_dir():
-            for path in root.rglob("*"):
-                if path.is_symlink():
-                    actual_links[path.relative_to(workspace).as_posix()] = os.readlink(path)
-        for path, target in expected_links.items():
-            if path not in actual_links:
-                changes.append(f"missing view link: {path}")
-            elif actual_links[path] != target:
-                changes.append(f"retargeted view link: {path}")
-        for path in sorted(set(actual_links) - set(expected_links)):
-            changes.append(f"unexpected view link: {path}")
-        expected_generated = {
-            item["path"] for item in _generated_view_files(view)
-            if isinstance(item, dict) and isinstance(item.get("path"), str)
-        }
-        if root.is_dir():
-            for path in root.rglob("*"):
-                relative = path.relative_to(workspace).as_posix()
-                if (
-                    path.is_file()
-                    and not path.is_symlink()
-                    and path.suffix.lower() in KNOWN_MEDIA_SUFFIXES
-                    and relative not in expected_generated
-                ):
-                    changes.append(f"unexpected regular media in view: {relative}")
-        for generated in _generated_view_files(view):
-            if not isinstance(generated, dict) or not isinstance(generated.get("path"), str):
-                changes.append("invalid generated view file")
-                continue
-            path = _view_path(workspace, generated["path"], root_relative)
-            if not path.is_file() or path.is_symlink():
-                changes.append(f"missing generated view file: {generated['path']}")
-            elif path.read_bytes() != str(generated.get("text")).encode("utf-8"):
-                changes.append(f"changed generated view file: {generated['path']}")
-    return changes
+    """Compare the materialized view with the exact compiled native handoff, as the Pod does."""
+    return view_changes(workspace, lock, KNOWN_MEDIA_SUFFIXES)
 
 
 def inspect_dataset_handoff(workspace: Path, lock: dict[str, Any]) -> list[str]:

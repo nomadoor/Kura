@@ -270,6 +270,26 @@ class LocalOutputPublicationTests(unittest.TestCase):
             self.assertEqual(second["dataset_input_postflight"], first["dataset_input_postflight"])
             self.assertFalse(view.parent.parent.exists())
 
+    @posix_only("named pipes are POSIX")
+    def test_non_regular_view_entry_is_recorded_as_view_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = self._run(Path(directory))
+            _, view = self._manifest_view(run_dir)
+            os.mkfifo(view / "x.png")
+            output = run_dir / "outputs" / "example.safetensors"
+            output.parent.mkdir()
+            output.write_bytes(_safetensors_bytes())
+
+            status = self._reconcile(run_dir)
+
+            postflight = status["dataset_input_postflight"]
+            self.assertEqual(postflight["status"], "changed")
+            record = json.loads((run_dir / postflight["record"]).read_text(encoding="utf-8"))
+            self.assertEqual(record["view_link_verification"], "changed")
+            self.assertEqual(record["view_changes"], [
+                "unexpected view entry: runs/example/cache/dataset-view/ai-toolkit/tiny/x.png",
+            ])
+
     def test_later_reconciles_do_not_rescan_events_and_never_duplicate_them(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run(Path(directory))

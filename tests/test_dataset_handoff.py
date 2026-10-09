@@ -52,7 +52,7 @@ from kura.backends.dataset_profiles import (
 from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architecture, musubi_native_dataset_architecture
 from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
-from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views
+from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, inspect_dataset_view, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views
 from kura.backends import validate_backend_config
 from kura.dataset_handoff import _digest, local_training_mounts, trainer_captions
 from kura.executors.docker import docker_command, launch_docker
@@ -2355,7 +2355,7 @@ class DatasetHandoffTests(unittest.TestCase):
             view = materialize_dataset_view(workspace, lock)
             (view / "native" / "items.jsonl").write_text("{}\n", encoding="utf-8")
 
-            self.assertIn("changed generated view file", " ".join(inspect_dataset_handoff(workspace, lock)))
+            self.assertIn("generated view file differs", " ".join(inspect_dataset_handoff(workspace, lock)))
 
     def test_projection_missing_one_input_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3121,7 +3121,7 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertEqual(inspect_dataset_handoff(workspace, lock), [])
             link.unlink()
             link.symlink_to("/workspace/datasets/tiny/other.png")
-            self.assertIn("retargeted view link", " ".join(inspect_dataset_handoff(workspace, lock)))
+            self.assertIn("view link differs", " ".join(inspect_dataset_handoff(workspace, lock)))
 
     def test_generated_caption_preserves_crlf_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3166,6 +3166,87 @@ class DatasetHandoffTests(unittest.TestCase):
 
             self.assertIn("unexpected regular media", " ".join(inspect_dataset_handoff(workspace, lock)))
 
+    def test_docker_and_pod_compare_a_view_with_the_same_function(self) -> None:
+        from kura.container_scripts import script_source
+        from kura.media_types import KNOWN_MEDIA_SUFFIXES
+
+        namespace = {"__name__": "__test__"}
+        exec(script_source("runpod_input_verify.py"), namespace)
+
+        def retarget(view: Path) -> None:
+            (view / "000000.png").unlink()
+            (view / "000000.png").symlink_to("/workspace/datasets/tiny/other.png")
+
+        def replace_root(view: Path) -> None:
+            real = view.parent / "real"
+            view.rename(real)
+            view.symlink_to(real)
+
+        def caption_link(view: Path) -> None:
+            (view / "000000.txt").unlink()
+            (view / "000000.txt").symlink_to("/workspace/datasets/tiny/a.txt")
+
+        cases = {
+            "exact": lambda view: None,
+            "retargeted link": retarget,
+            "extra link": lambda view: (view / "extra.png").symlink_to("/workspace/datasets/tiny/a.png"),
+            "extra media": lambda view: (view / "stale.png").write_bytes(b"stale"),
+            "extra cache": lambda view: (view / "latents.cache").write_bytes(b"cache"),
+            "symlinked root": replace_root,
+            "generated file replaced by a link": caption_link,
+            "generated file edited": lambda view: (view / "000000.txt").write_text("edited\n", encoding="utf-8"),
+        }
+        if os.name != "nt":
+            cases["fifo"] = lambda view: os.mkfifo(view / "x.png")
+        for name, mutate in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                lock = freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=self.image_projection,
+                )
+                mutate(materialize_dataset_view(workspace, lock))
+
+                docker = inspect_dataset_view(workspace, lock)
+                pod = namespace["view_changes"](workspace, lock, frozenset(KNOWN_MEDIA_SUFFIXES))
+
+                self.assertEqual(docker, pod)
+                self.assertEqual(docker == [], name in ("exact", "extra cache"))
+
+    @posix_only("named pipes are POSIX")
+    def test_non_regular_view_entry_makes_launch_rebuild_the_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=self.image_projection,
+            )
+            view = materialize_dataset_view(workspace, lock)
+            os.mkfifo(view / "x.png")
+
+            materialize_dataset_view(workspace, lock)
+
+            self.assertFalse(os.path.lexists(view / "x.png"))
+            self.assertEqual(inspect_dataset_handoff(workspace, lock), [])
+
+    def test_docker_view_checks_call_the_pod_comparer(self) -> None:
+        from kura import dataset_handoff
+        from kura.container_scripts import runpod_input_verify
+
+        self.assertIs(dataset_handoff.view_changes, runpod_input_verify.view_changes)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run, resolved = self.make_run(workspace)
+            lock = freeze_dataset_handoff(
+                run, workspace, resolved, backend="ai-toolkit", project=self.image_projection,
+            )
+            materialize_dataset_view(workspace, lock)
+            # Plan/postflight inspection, then launch's rebuild decision and its final check.
+            with patch.object(dataset_handoff, "view_changes", side_effect=[["changed"], ["changed"], []]) as shared:
+                self.assertEqual(inspect_dataset_view(workspace, lock), ["changed"])
+                materialize_dataset_view(workspace, lock)
+            self.assertEqual(shared.call_count, 3)
+
     def test_changed_source_stops_before_view_materialization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -3196,8 +3277,7 @@ class DatasetHandoffTests(unittest.TestCase):
 
             self.assertEqual(lock["dataset_roots"][0]["physical"], str((external / "datasets" / "tiny").resolve()))
             self.assertEqual(inspect_dataset_handoff(workspace, lock), [
-                "missing view link: runs/example/cache/dataset-view/ai-toolkit/tiny/000000.png",
-                "missing generated view file: runs/example/cache/dataset-view/ai-toolkit/tiny/000000.txt",
+                "missing view root: runs/example/cache/dataset-view/ai-toolkit/tiny",
             ])
             replacement = external / "replacement"
             replacement.mkdir()
