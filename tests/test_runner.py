@@ -1106,7 +1106,7 @@ class RunPodRenderLaunchTests(unittest.TestCase):
                 with patch.object(render_runpod, "launch_runpod_session", side_effect=session), \
                         patch.object(render_runpod, "_runpod_ssh_details", return_value={"ip": "h", "port": 22, "key": "k"}), \
                         patch.object(render_runpod, "_start_runpod_session_lease_guard"), \
-                        patch.object(render_runpod, "_record_session_lease"), \
+                        patch.object(render_runpod, "record_pod_lease_deadline"), \
                         patch.object(render_runpod, "_sync_runpod_remote_stdout"), \
                         patch.object(render_runpod, "check_stop", side_effect=StopRequested()), \
                         patch.object(render_runpod.subprocess, "run") as remote, \

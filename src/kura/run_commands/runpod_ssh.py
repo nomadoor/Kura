@@ -1772,6 +1772,17 @@ def record_lease_deadline(run_dir: Path, deadline_epoch: int, *, reason: str, pr
     return path
 
 
+def record_pod_lease_deadline(run_dir: Path, details: dict[str, Any]) -> None:
+    """Record the deadline the Pod holds, so `kura run status` and `kura run lease` see it; best effort."""
+    try:
+        result = subprocess.run([*_ssh_base(details), f"cat {shlex.quote(LEASE_DEADLINE_PATH)}"], text=True, capture_output=True, check=False, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    value = result.stdout.strip()
+    if result.returncode == 0 and value.isdigit():
+        record_lease_deadline(run_dir, int(value), reason="armed")
+
+
 def latest_lease_deadline(run_dir: Path, realization_id: str) -> int | None:
     """The lease deadline last recorded for this realization, in seconds since the epoch."""
     found = sorted((run_dir / "realizations").glob(f"{realization_id}.lease-*.json"))
@@ -2116,12 +2127,12 @@ def _runpod_run_over_ssh(run_dir: Path, *, ssh_timeout_sec: int, job_timeout_sec
     command_env = prepared_upload["command_env"]
     realization_id = str(realization.get("id") or Path(realization_ref).stem)
     details = _runpod_ssh_details(run_dir, timeout_sec=ssh_timeout_sec, interval_sec=3)
-    # The lease starts at first contact, so a Pod that fails before its job starts is still bounded.
+    # The Pod armed its lease when it started; this second guard never moves that deadline
+    # and stays for Pods whose start command predates it.
     lease_pod_id = status.get("pod_id")
     _start_runpod_session_lease_guard({**details, "pod_id": lease_pod_id if isinstance(lease_pod_id, str) else ""},
                                       workspace=workspace, run_id=run_id, max_lease_sec=max_lease_sec)
-    if max_lease_sec > 0:
-        record_lease_deadline(run_dir, int(time.time()) + max_lease_sec, reason="armed")
+    record_pod_lease_deadline(run_dir, details)
     record_launch_phase(run_dir, realization_id, "ssh_ready", container_started_at=details.get("container_started_at"))
     _start_ssh_master(details)
     remote_dir = f"{workspace}/.kura-transfer/{run_id}" if selected_files else workspace

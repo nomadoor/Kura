@@ -3223,7 +3223,7 @@ class RenderNotificationTests(unittest.TestCase):
                     "kura.run_commands.render_runpod._wait_http_ready",
                 ), patch("kura.run_commands.render_runpod.launch_render", return_value=0) as render, patch(
                     "kura.run_commands.render_runpod._sync_runpod_remote_stdout",
-                ), patch("kura.run_commands.render_runpod.stop_runpod"), patch("kura.run_commands.render_runpod._record_session_lease"), patch("kura.run_commands.render_runpod._notify"):
+                ), patch("kura.run_commands.render_runpod.stop_runpod"), patch("kura.run_commands.render_runpod.record_pod_lease_deadline"), patch("kura.run_commands.render_runpod._notify"):
                     self.assertEqual(launch_render_runpod("render-1", dry_run=False, yes=True), 0)
             finally:
                 os.chdir(previous)
@@ -7477,6 +7477,34 @@ class RunPodLifecycleTests(unittest.TestCase):
             syntax = subprocess.run(["sh", "-n"], input=payload["dockerStartCmd"][2], text=True, capture_output=True, check=False)
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             self.assertIn("RUNPOD_POD_ID", payload["dockerStartCmd"][2])
+            self._assert_arms_lease_first(payload["dockerStartCmd"][2], max_lease_sec=12 * 3600, log_path="/workspace/runs/example/logs/stdout.log")
+
+    def _assert_arms_lease_first(self, script: str, *, max_lease_sec: int, log_path: str) -> None:
+        """Every start command Kura writes arms the same maximum lease before anything else."""
+        from kura.executors.runpod import POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
+
+        guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
+        self.assertTrue(script.startswith(POD_SELF_DELETE_FUNCTION + "\n" + guard + "\n"), script[:200])
+        syntax = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True, check=False)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+    def test_launch_runpod_training_pod_arms_the_max_lease_at_start(self) -> None:
+        log_path = "/workspace/runs/example/logs/stdout.log"
+        for name in ("staging", "container_disk"):
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = self._run_dir(root)
+                if name == "staging":
+                    self._stage_upload(root, run_dir)
+                config = self._config() if name == "staging" else self._container_disk_config()
+                with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
+                    with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
+                         patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
+                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
+                                      image="registry/image:tag", config=config, yes=True, max_lease_sec=3 * 3600)
+                script = request.call_args.args[3]["dockerStartCmd"][2]
+                # A Pod whose controller never reaches it is still bounded.
+                self._assert_arms_lease_first(script, max_lease_sec=3 * 3600, log_path=log_path)
 
     def test_launch_runpod_can_pin_availability_filters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8318,6 +8346,63 @@ class RunPodLifecycleTests(unittest.TestCase):
 
             argv_text = "\n".join(" ".join(map(str, call[0][0])) if isinstance(call[0][0], list) else str(call[0][0]) for call in calls)
             self.assertNotIn("runpodctl pod delete", argv_text)
+
+    def test_runpod_training_records_the_deadline_the_pod_holds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "logs").mkdir()
+            (run_dir / "resolved").mkdir()
+            (run_dir / "resolved" / "manifest.lock.yaml").write_text("backend:\n  name: ai-toolkit\n", encoding="utf-8")
+            (run_dir / "resolved" / "backend-command.lock.json").write_text(json.dumps({
+                "backend": "ai-toolkit", "cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"SEED": "1"},
+                "adapter_source": {"kind": "test", "value": "test"},
+            }), encoding="utf-8")
+            (run_dir / "transfer").mkdir()
+            (run_dir / "transfer" / "bundle.tar.gz").write_bytes(b"bundle")
+            (run_dir / "realizations" / "stage.json").write_text(json.dumps({"storage_mode": "upload", "archive": "transfer/bundle.tar.gz", "archive_name": "bundle.tar.gz"}), encoding="utf-8")
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"executor": "runpod", "request": {"env": {"KURA_WORKSPACE": "/workspace"}}, "container_cwd": "/opt/tool", "backend_command": ["python", "train.py"]}), encoding="utf-8")
+            (run_dir / "status.json").write_text(json.dumps({"pod_id": "pod-1", "last_stage": "realizations/stage.json", "last_realization": "realizations/r1.json"}), encoding="utf-8")
+            # The Pod set this when it started, hours before the controller reached it.
+            held = 1_900_000_000
+
+            def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                command_text = " ".join(map(str, args[0])) if isinstance(args[0], list) else str(args[0])
+                if command_text.endswith("cat /tmp/kura-lease-deadline"):
+                    return subprocess.CompletedProcess(args[0], 0, f"{held}\n", "")
+                if "nohup sh" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, "1234\n", "")
+                if "remote-exit-*.json" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, json.dumps({"event": "remote_exit", "exit_code": 0}), "")
+                if "__KURA_LOG_SIZE__" in command_text:
+                    return subprocess.CompletedProcess(args[0], 0, b"\n__KURA_LOG_SIZE__:0\n", b"")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}):
+                with patch("kura.cli.subprocess.run", side_effect=fake_run):
+                    self.assertEqual(_runpod_run_over_ssh(run_dir, ssh_timeout_sec=1, job_timeout_sec=1, max_lease_sec=3600), 0)
+            [lease] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.lease-*.json")]
+            self.assertEqual((lease["deadline_epoch"], lease["reason"]), (held, "armed"))
+
+    def test_training_and_render_record_the_lease_with_one_function(self) -> None:
+        from kura.run_commands import render_runpod
+
+        self.assertIs(render_runpod.record_pod_lease_deadline, runpod_ssh_module.record_pod_lease_deadline)
+        self.assertFalse(hasattr(render_runpod, "_record_session_lease"))
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            (run_dir / "realizations").mkdir(parents=True)
+            (run_dir / "status.json").write_text(json.dumps({"last_realization": "realizations/r1.json"}), encoding="utf-8")
+            details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}
+            with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "", "")):
+                runpod_ssh_module.record_pod_lease_deadline(run_dir, details)
+            # A Pod without a deadline file (lease disabled) records nothing.
+            self.assertEqual(list((run_dir / "realizations").glob("r1.lease-*.json")), [])
+            with patch("kura.run_commands.runpod_ssh.subprocess.run", return_value=subprocess.CompletedProcess(["ssh"], 0, "1900000000\n", "")) as run:
+                runpod_ssh_module.record_pod_lease_deadline(run_dir, details)
+            self.assertTrue(run.call_args.args[0][-1].endswith("cat /tmp/kura-lease-deadline"))
+            [lease] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob("r1.lease-*.json")]
+            self.assertEqual((lease["deadline_epoch"], lease["reason"]), (1_900_000_000, "armed"))
 
     def test_runpod_render_session_starts_lease_guard_over_ssh(self) -> None:
         details = {"pod_id": "pod-1", "ip": "127.0.0.1", "port": 22, "key": "/tmp/key"}

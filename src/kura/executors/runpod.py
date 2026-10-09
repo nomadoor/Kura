@@ -1149,7 +1149,7 @@ fi
 echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"
 sleep infinity
 '''.strip()
-            start_command = ["sh", "-lc", upload_script]
+            start_command = ["sh", "-lc", _pod_start_script(upload_script, max_lease_sec=max_lease_sec, log_path=log_path)]
             workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
     else:
         mkdir_targets = [
@@ -1159,7 +1159,7 @@ sleep infinity
         ]
         checks = [f"test -w {shlex.quote(path)}" for path in write_paths]
         wrapper = " && ".join([f"mkdir -p {' '.join(mkdir_targets)}", *checks, 'exec "$@" >> "$KURA_LOG_PATH" 2>&1'])
-        start_command = ["sh", "-lc", wrapper, "kura-job", *spec["argv"]]
+        start_command = ["sh", "-lc", _pod_start_script(wrapper, max_lease_sec=max_lease_sec, log_path=log_path), "kura-job", *spec["argv"]]
         workspace_contract = "Container disk only; caller must ensure inputs exist in the container workspace"
     request_body = {
         "name": f"kura-{run_dir.name}-{realization_id}",
@@ -1484,6 +1484,15 @@ kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
 """.strip()
 
 
+def _pod_start_script(script: str, *, max_lease_sec: int | None, log_path: str) -> str:
+    """Every start command Kura writes arms the maximum lease before anything else.
+
+    A Pod whose controller never reaches it is then still bounded, and a later
+    guard started over SSH keeps the deadline set here.
+    """
+    guard = "" if max_lease_sec is None else _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
+    return "\n".join(part for part in (POD_SELF_DELETE_FUNCTION, guard, script) if part)
+
 
 def launch_runpod_session(
     *,
@@ -1506,12 +1515,10 @@ def launch_runpod_session(
     workspace_path = settings["workspace_path"]
     log_path = f"{workspace_path}/runs/{run_dir.name}/logs/stdout.log"
     runtime_env = _runpod_session_env(workspace_path=workspace_path, run_id=run_dir.name, max_lease_sec=max_lease_sec)
-    # The lease is armed first, so a Pod whose SSH setup stalls is still bounded.
     ssh_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 touch "$KURA_LOG_PATH"
-'''.strip() + "\n" + _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path) + "\n" + r'''
 if ! command -v sshd >/dev/null 2>&1; then
   apt-get update >> "$KURA_LOG_PATH" 2>&1
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server >> "$KURA_LOG_PATH" 2>&1
@@ -1533,7 +1540,7 @@ sleep infinity
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"],
         "env": runtime_env,
-        "dockerStartCmd": ["sh", "-lc", POD_SELF_DELETE_FUNCTION + "\n" + ssh_script],
+        "dockerStartCmd": ["sh", "-lc", _pod_start_script(ssh_script, max_lease_sec=max_lease_sec, log_path=log_path)],
         "imageName": image,
         "minCudaVersion": runpod_min_cuda_version(image),
     }
