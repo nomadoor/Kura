@@ -52,7 +52,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: b9657fb979763bccada4838c8d244b58306c45d1452c0ed8c0cc08932b8e333a
+      value: f4496eea0182c1dea2386e79b3b85ced44d577b6257e23b506f1b3b324168749
   - id: secrets-names-values-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-

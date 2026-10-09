@@ -249,7 +249,7 @@ def _running_remote_job(run_id: str) -> bool:
             raise
         raise ValueError(
             f"RunPod reports no Pod for {run_id}: if it deleted itself after its wait or lease, its uncollected outputs are gone. "
-            f"Confirm with `kura run reconcile {run_id}`, which records it, before launching again"
+            f"Confirm with `kura run reconcile {run_id}`, which records it, before starting a new run from it"
         ) from exc
     if status.get("state") != "running":
         return False
@@ -259,7 +259,7 @@ def _running_remote_job(run_id: str) -> bool:
     if not started:
         raise ValueError(
             f"run {run_id} has a running Pod but its job never started (an earlier launch stopped mid-way); "
-            f"run `kura run stop {run_id}`, then execute it again"
+            f"run `kura run stop {run_id}`, then start a new run from its settings with `kura run new --from {run_id} --slug <words>`"
         )
     return True
 
@@ -328,10 +328,8 @@ def execute_run(
             unattended_wait=unattended_wait,
             reattach=reattach,
         )
-    if executor == "docker" and locked.get("type", "train") != "render":
-        return _launch_docker_through_runner(run_id, image=image, follow=True, notify_channels=notify_channels)
     if executor == "docker":
-        return launch_run(run_id, executor="docker", dry_run=False, image=image, notify_channels=notify_channels, wait=True)
+        return _launch_docker_through_runner(run_id, image=image, follow=True, notify_channels=notify_channels)
     print(f"cannot execute run: unsupported compiled executor {executor!r}", file=sys.stderr)
     return 1
 
@@ -353,22 +351,6 @@ def cmd_run_execute(args: argparse.Namespace) -> int:
     )
 
 
-def _wait_for_docker_run(run_dir: Path) -> int:
-    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    identity = status.get("container_id") or status.get("container_name")
-    if not isinstance(identity, str) or not identity:
-        raise ValueError("launched Docker run has no container identity")
-    try:
-        result = subprocess.run(["docker", "wait", identity], text=True, capture_output=True, check=False)
-    except FileNotFoundError as exc:
-        raise ValueError("docker executable was not found on PATH") from exc
-    if result.returncode:
-        raise ValueError(_redact_secret_text(result.stderr.strip() or result.stdout.strip() or "docker wait failed"))
-    final = reconcile_docker(run_dir)
-    print(format_run_completion(_workspace(), run_dir, final))
-    return 0 if final.get("state") == "completed" else 1
-
-
 def launch_run(
     run_id: str,
     *,
@@ -376,7 +358,6 @@ def launch_run(
     dry_run: bool,
     image: str | None = None,
     notify_channels: Any = None,
-    wait: bool = False,
     wait_for_capacity: Any = "0",
     capacity_poll_interval: Any = "30s",
     yes: bool = False,
@@ -441,7 +422,7 @@ def launch_run(
                 f"an earlier launch stopped before recording whether its Pod or container was created; run `kura run reconcile {run_id}` first"
             )
         if (recovered := unstopped_recovered_pod(run_dir)) is not None:
-            raise ValueError(f"Pod {recovered} from an earlier launch may still be billing; run `kura run stop {run_id}` before launching again")
+            raise ValueError(f"Pod {recovered} from an earlier launch may still be billing; run `kura run stop {run_id}` before starting a new run from it")
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run already has a running realization; reconcile or stop it first")
@@ -525,11 +506,7 @@ def launch_run(
                 dry_run=dry_run,
                 controlled_by=controlled_by,
             )
-            if wait and not dry_run:
-                return _wait_for_docker_run(run_dir)
         else:
-            if wait:
-                raise ValueError("waiting here is only for local Docker runs; `kura run execute` follows a RunPod run")
             runpod_config = runpod_settings_for_adapter(config.get("runpod", {}), adapter, image_name)
             if continuation is not None and continuation.get("mode") == "resume" and not selected["frozen"]:
                 raise ValueError("Resume remote runtime has no compile-time frozen image; recompile the run")
@@ -791,9 +768,6 @@ def _launch_runpod_through_runner(run_id: str, *, follow: bool, yes: bool, optio
 
 def cmd_render_launch(args: argparse.Namespace) -> int:
     """Start a compiled render run; `kura run execute` starts a training run."""
-    if args.dry_run:
-        return launch_run(args.run_id, executor=args.executor, dry_run=True, image=getattr(args, "image", None),
-                          notify_channels=getattr(args, "notify", None))
     try:
         run_type = _load_yaml(_run_path(args.run_id) / "resolved" / "manifest.lock.yaml").get("type", "train")
     except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -802,5 +776,8 @@ def cmd_render_launch(args: argparse.Namespace) -> int:
     if run_type != "render":
         print(f"cannot launch render: {args.run_id} is a training run; start it with `kura run execute {args.run_id}`", file=sys.stderr)
         return 1
+    if args.dry_run:
+        return launch_run(args.run_id, executor=args.executor, dry_run=True, image=getattr(args, "image", None),
+                          notify_channels=getattr(args, "notify", None))
     runpod = {"image": getattr(args, "image", None), "yes": bool(getattr(args, "yes", False)), "max_lease": None} if args.executor == "runpod" else None
     return _launch_render_through_runner(args.run_id, follow=True, notify_channels=getattr(args, "notify", None), runpod=runpod)

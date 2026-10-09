@@ -596,7 +596,7 @@ def _hand_over_unconfirmed_create(run_dir: Path, realization_id: str, pod_name: 
     return ValueError(
         f"RunPod did not confirm whether it created Pod {pod_name} ({error}). Kura does not retry a create it cannot "
         f"confirm, because a retry could start a second billed Pod. Run `kura run reconcile {run_dir.name}`: it looks "
-        "for the Pod by name, records what it finds, and tells you whether to stop it before relaunching."
+        "for the Pod by name, records what it finds, and tells you whether to stop it before a new run starts."
     )
 
 

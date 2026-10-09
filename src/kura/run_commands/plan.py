@@ -1246,7 +1246,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "compute": {
             "executor": plan_executor,
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
-            "capacity": compute.get("capacity") if isinstance(compute.get("capacity"), dict) else None,
+            "capacity": capacity_policy(run) if plan_executor == "runpod" else None,
         },
         "resume": resume_payload,
         "training_state": training_state_payload,
