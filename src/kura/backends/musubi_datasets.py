@@ -847,7 +847,6 @@ def _resolve_musubi_projection_blocks(
     dataset: dict[str, Any], options: dict[str, Any], *, flatten_groups: bool,
 ) -> list[_MusubiProjectionBlock]:
     """Resolve every selected dataset to N explicit native blocks; ordinary means N=1."""
-    dataset_id = str(dataset.get("id"))
     authored_blocks = options.get("blocks")
     common_options = {
         key: deepcopy(value) for key, value in options.items() if key != "blocks"

@@ -41,10 +41,6 @@ def has_prefix(keys, prefix):
     return any(key.startswith(prefix) for key in keys)
 
 
-def has_fragment(keys, fragment):
-    return any(fragment in key for key in keys)
-
-
 def validate_model(role, path, expected):
     if expected == "hf_model_id_or_path":
         if os.path.exists(path):

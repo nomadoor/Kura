@@ -73,7 +73,6 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import migrate_workspace_config
 from kura.run_commands.common import _backend_image_name
-from kura.workspace import workspace_relative_path as _workspace_relative_path
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:

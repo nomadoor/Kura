@@ -4373,8 +4373,9 @@ class MusubiBackendTests(unittest.TestCase):
     def test_command_musubi_rejects_native_steps_that_duplicate_recipe(self) -> None:
         run = self._run()
         run["backend"]["config"]["max_train_steps"] = 2
-        with self.assertRaisesRegex(ValueError, "duplicates common recipe"):
-            command_musubi_tuner(run)
+        from kura.backends import validate_backend_config
+        with self.assertRaisesRegex(ValueError, "unsupported key.*max_train_steps"):
+            validate_backend_config(run)
 
     def test_command_musubi_requires_architecture(self) -> None:
         run = self._run()

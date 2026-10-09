@@ -1628,7 +1628,6 @@ def _local_model_mounts(
 ) -> list[dict[str, str]]:
     mounts: list[dict[str, str]] = []
     seen_targets: set[str] = set()
-    workspace_root = PurePosixPath("/workspace")
     for requirement in _local_model_requirements(run_dir):
         role = requirement.get("role")
         reference = requirement.get("runtime_reference")

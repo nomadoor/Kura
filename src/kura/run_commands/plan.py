@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import posixpath
 import re
@@ -79,40 +78,10 @@ def _count_dataset_items(path: Path | None) -> int | None:
         return None
 
 
-def _nested_get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
-    current: Any = mapping
-    for key in path:
-        if not isinstance(current, dict) or key not in current:
-            return None
-        current = current[key]
-    return current
-
-
 def _plan_value(value: Any) -> Any:
     if value is None or value == "":
         return NOT_SET
     return value
-
-
-def _extra_args_value(extra_args: Any, name: str) -> Any:
-    if not isinstance(extra_args, list):
-        return NOT_SET
-    index = 0
-    while index < len(extra_args):
-        item = extra_args[index]
-        if not isinstance(item, str):
-            index += 1
-            continue
-        flag, sep, inline_value = item.partition("=")
-        if flag != name:
-            index += 1
-            continue
-        if sep:
-            return inline_value or True
-        if index + 1 < len(extra_args) and isinstance(extra_args[index + 1], str) and not extra_args[index + 1].startswith("--"):
-            return extra_args[index + 1]
-        return True
-    return NOT_SET
 
 
 def _local_gpu_payload() -> dict[str, Any]:

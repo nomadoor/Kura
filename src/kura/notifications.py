@@ -6,7 +6,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -16,20 +15,6 @@ from kura.executors import _redact_secret_text
 
 def safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
-
-
-def format_duration(seconds: int) -> str:
-    seconds = max(0, int(seconds))
-    if seconds >= 86400 and seconds % 86400 == 0:
-        return f"{seconds // 86400}d"
-    if seconds >= 3600:
-        hours, remainder = divmod(seconds, 3600)
-        minutes = remainder // 60
-        return f"{hours}h{minutes:02d}m" if minutes else f"{hours}h"
-    if seconds >= 60:
-        minutes, remainder = divmod(seconds, 60)
-        return f"{minutes}m{remainder:02d}s" if remainder else f"{minutes}m"
-    return f"{seconds}s"
 
 
 def notification_channels(raw: Any) -> list[str]:

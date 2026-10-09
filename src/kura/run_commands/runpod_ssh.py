@@ -40,8 +40,8 @@ from kura.records import record
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, host_time, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
+from kura.run_envelope import resume_intent, training_state_policy
+from kura.executors.common import _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
 from kura.training_artifacts import checkpoint_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
@@ -1265,33 +1265,6 @@ def cmd_run_pull(args: argparse.Namespace) -> int:
         return 1
 
 
-def _runpod_upload_process(run_dir: Path, code_seed: str, timeout_sec: int) -> tuple[subprocess.Popen[str], str]:
-    stage = _latest_runpod_stage(run_dir)
-    archive = stage.get("archive")
-    if not isinstance(archive, str):
-        raise ValueError("latest RunPod stage has no upload archive")
-    archive_path = run_dir / archive
-    if not archive_path.is_file():
-        raise ValueError(f"upload archive is missing: {archive_path}")
-    if not shutil.which("runpodctl"):
-        raise ValueError("runpodctl is not installed locally")
-    process = subprocess.Popen(["runpodctl", "send", str(archive_path), "--code", code_seed], text=True, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-    time.sleep(min(max(timeout_sec, 0), 1))
-    if process.poll() is not None:
-        raise ValueError(f"runpodctl send exited early with exit code {process.returncode}")
-    return process, code_seed
-
-
-def _wait_process(process: subprocess.Popen[str], timeout_sec: int) -> None:
-    try:
-        process.wait(timeout=timeout_sec)
-    except subprocess.TimeoutExpired as exc:
-        process.terminate()
-        raise ValueError("runpodctl send did not complete before timeout") from exc
-    if process.returncode:
-        raise ValueError(f"runpodctl send failed with exit code {process.returncode}")
-
-
 def remote_job_pid(run_dir: Path, pid_path: str, *, timeout_sec: int = 120) -> str | None:
     """The pid a started remote job left on its Pod, or None when the Pod has no such file.
 
@@ -2352,21 +2325,6 @@ def download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
             return code
         sleep_checking_stop(interval_sec)
     return 1
-
-
-def _download_with_retries(run_id: str, attempts: int, interval_sec: int) -> int:
-    return download_with_retries(run_id, attempts, interval_sec)
-
-
-def _remote_path_size(details: dict[str, Any], path: str, *, timeout_sec: int = 60) -> int | None:
-    script = f"du -sb {shlex.quote(path)} 2>/dev/null | awk '{{print $1}}'"
-    result = subprocess.run([*_ssh_base(details), script], text=True, capture_output=True, check=False, timeout=timeout_sec)
-    if result.returncode:
-        return None
-    try:
-        return int(result.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return None
 
 
 def _format_remaining(seconds: float) -> str:

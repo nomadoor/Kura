@@ -714,8 +714,9 @@ class SdScriptsBackendTests(unittest.TestCase):
     def test_unknown_builtin_config_key_is_rejected(self) -> None:
         run = base_run()
         run["backend"]["config"]["netwrok_dim"] = 8
+        from kura.backends import validate_backend_config
         with self.assertRaisesRegex(ValueError, "unsupported key.*netwrok_dim"):
-            command_sd_scripts(run)
+            validate_backend_config(run)
 
     def test_flow_matching_defaults_are_explicit_and_visible_in_plan_data(self) -> None:
         flux = base_run("flux1")

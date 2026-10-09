@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kura.images import effective_image
-from kura.executors.common import append_run_event, _redact_secret_text
+from kura.executors.common import _redact_secret_text
 from kura.backends import get_backend
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace_config as _workspace_config

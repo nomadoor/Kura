@@ -272,9 +272,9 @@ MUSUBI_SURFACE = BackendSurface(
 )
 
 SD_SCRIPTS_SURFACE = BackendSurface(
-    fields=frozenset(CONFIG_KEYS - {"command", "extra_args", "deepspeed", "fused_backward_pass"}),
+    fields=frozenset(CONFIG_KEYS - {"command", "extra_args"}),
     escape_hatches=frozenset({"command", "extra_args"}),
-    boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS - {"deepspeed", "fused_backward_pass"}),
+    boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS),
     selector_defaults=(("mode", "lora"),),
     unavailable=(
         ("batch", "sd-scripts batch size is configured at backend.config.dataset_config.general.batch_size or backend.config.dataset_config.datasets[].batch_size"),

@@ -5,15 +5,12 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import platform
 import secrets
 import shlex
 import shutil
-import subprocess
 import sys
 import tarfile
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -635,7 +632,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     intents = unresolved_create_intents(run_dir, "runpod")
     if not intents:
         return []
-    settings = _runpod_settings(config)
+    _runpod_settings(config)
     api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
     lines = []
     for intent_path in intents:
@@ -724,17 +721,6 @@ def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
         "access_key": access_key,
         "secret_key": secret_key,
     }
-
-
-def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
-    settings = _object_store_settings(config)
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError as exc:
-        raise ValueError("runpod.storage_mode=object_staging requires optional dependency: pip install 'kura[object-staging]'") from exc
-    client = boto3.client("s3", endpoint_url=settings["endpoint_url"], region_name=settings["region"], aws_access_key_id=settings["access_key"], aws_secret_access_key=settings["secret_key"], config=Config(retries={"max_attempts": 10, "mode": "standard"}, read_timeout=7200))
-    return client, settings
 
 
 def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -1641,7 +1627,7 @@ def reconcile_runpod(
     source: str = "explicit",
 ) -> dict[str, Any]:
     with _run_operation_lock(run_dir, "observe", blocking=blocking):
-        settings = _runpod_settings(config)
+        _runpod_settings(config)
         api_key = runpod_api_key("needed to reconcile a RunPod run")
         status = _load_status(run_dir)
         realization_ref = status.get("last_realization")
@@ -1705,7 +1691,7 @@ def reconcile_runpod(
 
 
 def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
-    settings = _runpod_settings(config)
+    _runpod_settings(config)
     status = _load_status(run_dir)
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(

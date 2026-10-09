@@ -14,9 +14,9 @@ from typing import Any
 
 import yaml
 
-from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker, reconcile_runpod
+from kura.executors import launch_docker, launch_runpod, observe_run, reconcile_runpod
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, sleep_checking_stop, can_start
+from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, can_start
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -31,7 +31,7 @@ from kura.run_commands.common import _backend_image_name, _load_frozen_command, 
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
 from kura.paths import local_docker_mounts
-from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
+from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
 from kura.run_commands.runpod_ssh import _runpod_run_over_ssh, download_with_retries, follow_running_runpod_job, DOWNLOAD_NEEDS_PERSON
@@ -287,7 +287,6 @@ def execute_run(
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"cannot execute run: compile the run first ({_safe_error(exc)})", file=sys.stderr)
         return 1
-    compute = locked.get("compute") if isinstance(locked.get("compute"), dict) else {}
     executor = run_executor(locked)
     if locked.get("type") == "render":
         # A render names its executor in `executor.name`, not in `compute`.

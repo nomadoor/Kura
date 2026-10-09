@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import posixpath
 import re
 from functools import lru_cache

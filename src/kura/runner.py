@@ -898,7 +898,7 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
 
 def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int:
     """Pick up a launch an earlier follower started, from its records."""
-    from kura.executors.common import remote_job_record, remote_job_started
+    from kura.executors.common import remote_job_started
     from kura.run_commands.runpod_ssh import remote_job_pid
 
     from kura.executors.common import end_run

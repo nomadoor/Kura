@@ -54,7 +54,6 @@ from kura.executors.common import (
     _safe_env,
     _write_json,
     _write_observation,
-    _write_status,
 )
 from kura.fsio import file_lock
 from kura.records import record as as_record
@@ -353,7 +352,6 @@ def docker_command(
 ) -> tuple[list[str], dict[str, str], str]:
     """Build a detached Docker command and direct container output into the run mount."""
     name = _container_name(run_dir.name, realization_id)
-    log_path = f"{CONTAINER_WORKSPACE}/runs/{run_dir.name}/logs/stdout.log"
     command = [
         "docker", "run", "-d", "--init", "--stop-timeout", "30", "--name", name,
         # Docker's default /dev/shm is 64 MiB; PyTorch data loaders pass whole images
