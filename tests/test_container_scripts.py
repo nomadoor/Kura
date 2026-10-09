@@ -180,15 +180,19 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertNotEqual(baseline, changed)
 
     def _identity_with_source(self, backend: str, filename: str, old: bytes, new: bytes) -> str:
+        return self._identity_with_sources(backend, {filename: (old, new)})
+
+    def _identity_with_sources(self, backend: str, edits: dict[str, tuple[bytes, bytes]]) -> str:
         original = Path.read_bytes
 
         def changed(path):
             payload = original(path)
-            if not path.as_posix().endswith("/" + filename):
-                return payload
-            if old not in payload:
-                raise AssertionError(f"{old!r} is not in {filename}")
-            return payload.replace(old, new, 1)
+            for filename, (old, new) in edits.items():
+                if path.as_posix().endswith("/" + filename):
+                    if old not in payload:
+                        raise AssertionError(f"{old!r} is not in {filename}")
+                    return payload.replace(old, new, 1)
+            return payload
 
         with patch.object(Path, "read_bytes", changed):
             return adapter_source_identity(backend)["value"]
@@ -277,6 +281,79 @@ class ContainerScriptTests(unittest.TestCase):
         ):
             with self.subTest(label):
                 self.assertNotEqual(baseline, self._identity_with_source("ai-toolkit", "ai_toolkit.py", marker, statement + marker))
+
+    def test_adapter_identity_covers_the_dataset_freeze_path(self) -> None:
+        # How items.jsonl lines are split and which caption is chosen changes
+        # what every trainer receives, so every adapter's identity covers it.
+        cases = (
+            ("dataset_handoff.py", b"def freeze_dataset_handoff(", b"def  freeze_dataset_handoff("),
+            ("dataset_jsonl.py", b"def items_jsonl_rows(", b"def  items_jsonl_rows("),
+        )
+        for backend in BACKENDS:
+            _, reached = provenance._adapter_source_parts(backend)
+            self.assertIn(("kura.dataset_handoff", "freeze_dataset_handoff"), reached)
+            self.assertIn(("kura.dataset_jsonl", "items_jsonl_rows"), reached)
+            baseline = adapter_source_identity(backend)["value"]
+            for filename, old, new in cases:
+                with self.subTest(backend=backend, filename=filename):
+                    self.assertNotEqual(baseline, self._identity_with_source(backend, filename, old, new))
+
+    def test_adapter_identity_follows_script_source_through_a_re_export(self) -> None:
+        re_export = ("backends/common.py", (b"from __future__ import annotations\n", b"from __future__ import annotations\n\nfrom kura.container_scripts import script_source\n"))
+        imported = (b"from kura.container_scripts import script_source\n", b"from kura.backends.common import script_source\n")
+        call = b'script_source("ai_toolkit_state.py")'
+        original = Path.read_bytes
+
+        def with_changed_script(path):
+            payload = original(path)
+            return payload + (b"# changed\n" if path.name == "ai_toolkit_state.py" else b"")
+
+        edits = dict([re_export, ("backends/ai_toolkit.py", imported)])
+        baseline = self._identity_with_sources("ai-toolkit", edits)
+        with patch.object(Path, "read_bytes", with_changed_script):
+            changed = self._identity_with_sources("ai-toolkit", edits)
+        self.assertNotEqual(baseline, changed)
+
+        for label, use in (
+            ("non-literal call", b"script_source(spec)"),
+            ("bare reference", b'getattr(script_source, "__call__")("ai_toolkit_state.py")'),
+        ):
+            with self.subTest(label):
+                source = original(provenance._PACKAGE_ROOT / "backends" / "ai_toolkit.py")
+                edited = source.replace(imported[0], imported[1], 1).replace(call, use, 1)
+                with self.assertRaisesRegex(ValueError, r"ai_toolkit\.py:\d+"):
+                    self._identity_with_sources("ai-toolkit", {re_export[0]: re_export[1], "backends/ai_toolkit.py": (source, edited)})
+
+    def test_adapter_identity_refuses_a_bare_script_source_reference(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"ai_toolkit\.py:\d+"):
+            self._identity_with_source(
+                "ai-toolkit", "ai_toolkit.py", b'script_source("ai_toolkit_state.py")',
+                b'getattr(script_source, "__call__")("ai_toolkit_state.py")',
+            )
+
+    def test_adapter_identity_refuses_other_uses_of_module_file(self) -> None:
+        for label, new in (
+            ("parent join", b'Path(__file__).parent / "ai_toolkit_baseline.json"'),
+            ("bare", b'Path(str(__file__)).with_name("ai_toolkit_baseline.json")'),
+        ):
+            with self.subTest(label):
+                with self.assertRaisesRegex(ValueError, r"ai_toolkit_baseline\.py:\d+"):
+                    self._identity_with_source(
+                        "ai-toolkit", "ai_toolkit_baseline.py", b'Path(__file__).with_name("ai_toolkit_baseline.json")', new,
+                    )
+
+    def test_adapter_identity_says_a_registry_definition_must_move_out_of_the_registry(self) -> None:
+        state_body = b"    if frozen and not"
+        with self.assertRaisesRegex(ValueError, r"training_artifacts\.py:\d+.*move BackendSurface out of kura\.backends\.registry"):
+            self._identity_with_source(
+                "ai-toolkit", "training_artifacts.py", state_body,
+                b"    from kura.backends.registry import BackendSurface\n" + state_body,
+            )
+        with self.assertRaisesRegex(ValueError, "import compile_sd_scripts from the module that defines it"):
+            self._identity_with_source(
+                "ai-toolkit", "training_artifacts.py", state_body,
+                b"    from kura.backends import compile_sd_scripts\n" + state_body,
+            )
 
     def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
         baseline = adapter_source_identity("sd-scripts")["value"]

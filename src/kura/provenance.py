@@ -7,7 +7,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 def artifact_pinning(identity: dict[str, Any], *, observable: bool) -> dict[str, Any]:
@@ -40,6 +40,10 @@ _DISPATCH_MODULES = frozenset({"kura.backends", "kura.backends.registry"})
 _DISPATCH_NAMES = frozenset({"BACKENDS", "backend_names", "get_backend"})
 _REGISTRY_MODULE = "kura.backends.registry"
 _REGISTRY_TABLE = "BACKENDS"
+_SCRIPT_SOURCE = ("kura.container_scripts", "script_source")
+# Freezing the dataset splits items.jsonl into items and chooses each caption,
+# which decides what every trainer receives, so the walk starts there too.
+_DATASET_FREEZE = ("kura.dataset_handoff", "freeze_dataset_handoff")
 
 
 def _bound_names(targets: list[ast.expr]) -> list[str]:
@@ -127,18 +131,16 @@ def _kura_import_target(module: _SourceModule, node: ast.ImportFrom, name: str) 
     if target in _DISPATCH_MODULES:
         if name in _DISPATCH_NAMES:
             return None
+        if name in _SourceModule(_REGISTRY_MODULE).definitions:
+            raise ValueError(
+                f"source identity cannot follow {name} from {target} at {module.location(node)}; "
+                f"the walk does not enter the registry, so move {name} out of {_REGISTRY_MODULE} into a module the code can import"
+            )
         raise ValueError(
             f"source identity cannot follow {name} from {target} at {module.location(node)}; "
             f"only {', '.join(sorted(_DISPATCH_NAMES))} come from there, so import {name} from the module that defines it"
         )
     return target, name
-
-
-def _is_script_source(module: _SourceModule, name: str, imports: dict[str, tuple[str, ast.ImportFrom]]) -> bool:
-    if module.name == "kura.container_scripts" and name == "script_source" and name in module.definitions:
-        return True
-    imported = imports.get(name)
-    return imported is not None and imported[0] == "script_source" and imported[1].module == "kura.container_scripts"
 
 
 def _literal_argument(call: ast.Call) -> str | None:
@@ -158,8 +160,13 @@ def _is_module_file_path(node: ast.AST) -> bool:
     )
 
 
-def _references(module: _SourceModule, node: ast.AST) -> tuple[list[tuple[str, str]], list[Path]]:
-    """Return the kura symbols and the whole files one reached node uses."""
+def _references(
+    module: _SourceModule, node: ast.AST, resolve: Callable[[tuple[str, str]], tuple[str, str]]
+) -> tuple[list[tuple[str, str]], list[Path]]:
+    """Return the kura symbols and the whole files one reached node uses.
+
+    ``resolve`` follows a symbol through re-exports to its definition.
+    """
     symbols: list[tuple[str, str]] = []
     files: list[Path] = []
     imports = dict(module.imports)
@@ -168,6 +175,10 @@ def _references(module: _SourceModule, node: ast.AST) -> tuple[list[tuple[str, s
         for child in ast.walk(node) if isinstance(child, ast.ImportFrom)
         for alias in child.names
     )
+    called = {id(child.func): child for child in ast.walk(node) if isinstance(child, ast.Call)}
+    data_file_names: set[int] = set()
+    # ast.walk visits a node before its children, so a data-file call marks its
+    # __file__ before the name itself is visited.
     for child in ast.walk(node):
         if isinstance(child, ast.Import):
             for alias in child.names:
@@ -181,19 +192,6 @@ def _references(module: _SourceModule, node: ast.AST) -> tuple[list[tuple[str, s
                 target = _kura_import_target(module, child, alias.name)
                 if target is not None:
                     symbols.append(target)
-        elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
-            if child.id in module.definitions:
-                symbols.append((module.name, child.id))
-            elif child.id in module.imports:
-                name, statement = module.imports[child.id]
-                target = _kura_import_target(module, statement, name)
-                if target is not None:
-                    symbols.append(target)
-        elif isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and _is_script_source(module, child.func.id, imports):
-            literal = _literal_argument(child)
-            if literal is None:
-                raise ValueError(f"source identity needs a literal script_source name at {module.location(child)}")
-            files.append(_PACKAGE_ROOT / "container_scripts" / literal)
         elif (
             isinstance(child, ast.Call)
             and isinstance(child.func, ast.Attribute)
@@ -204,11 +202,37 @@ def _references(module: _SourceModule, node: ast.AST) -> tuple[list[tuple[str, s
             if literal is None:
                 raise ValueError(f"source identity needs a literal file name next to the module at {module.location(child)}")
             files.append(module.path.with_name(literal))
+            data_file_names.add(id(child.func.value.args[0]))
+        elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+            if child.id == "__file__":
+                if id(child) not in data_file_names:
+                    raise ValueError(
+                        f"source identity can follow __file__ only as Path(__file__).with_name(\"<file>\") at {module.location(child)}"
+                    )
+                continue
+            if child.id in module.definitions:
+                key: tuple[str, str] | None = (module.name, child.id)
+            elif child.id in imports:
+                name, statement = imports[child.id]
+                key = _kura_import_target(module, statement, name)
+            else:
+                key = None
+            if key is None:
+                continue
+            symbols.append(key)
+            if resolve(key) == _SCRIPT_SOURCE:
+                call = called.get(id(child))
+                literal = _literal_argument(call) if call is not None else None
+                if literal is None:
+                    raise ValueError(
+                        f"source identity needs script_source called with one literal script name at {module.location(child)}"
+                    )
+                files.append(_PACKAGE_ROOT / "container_scripts" / literal)
     return symbols, files
 
 
 def _adapter_source_parts(backend_name: str) -> tuple[list[tuple[str, bytes]], set[tuple[str, str]]]:
-    """Walk the import graph from the selected adapter's registry entry.
+    """Walk the import graph from the selected adapter's registry entry and the dataset freeze.
 
     Same-module names and ``from kura.X import name`` (at module level or inside
     a function) are followed symbol by symbol; container scripts and data files
@@ -234,32 +258,41 @@ def _adapter_source_parts(backend_name: str) -> tuple[list[tuple[str, bytes]], s
     parts: dict[str, bytes] = {f"{registry.relative}:{_REGISTRY_TABLE}[{backend_name}]": registry.source(entry)}
     files: set[Path] = set()
     reached: set[tuple[str, str]] = set()
-    pending: list[tuple[_SourceModule, ast.AST]] = [(registry, entry)]
-    while pending:
-        module, node = pending.pop()
-        symbols, node_files = _references(module, node)
-        files.update(node_files)
-        for key in symbols:
-            target = load(key[0])
-            # A name a module only imports is a re-export: follow it to its definition.
-            followed = {key}
-            while key[1] not in target.definitions and key[1] in target.imports:
-                original, statement = target.imports[key[1]]
-                resolved = _kura_import_target(target, statement, original)
-                if resolved is None or resolved in followed:
-                    break
-                followed.add(resolved)
-                key, target = resolved, load(resolved[0])
-            if key in reached or key == (_REGISTRY_MODULE, _REGISTRY_TABLE):
-                continue
-            reached.add(key)
-            module_label = f"{target.relative}:<module>"
-            if module_label not in parts:
-                parts[module_label] = b"\0".join(target.source(item) for item in target.statements if not isinstance(item, ast.Import))
-                pending.extend((target, item) for item in target.statements)
-            definition = target.symbol(key[1])
-            parts[f"{target.relative}:{key[1]}"] = target.source(definition)
-            pending.append((target, definition))
+
+    def resolve(key: tuple[str, str]) -> tuple[str, str]:
+        # A name a module only imports is a re-export: follow it to its definition.
+        target = load(key[0])
+        followed = {key}
+        while key[1] not in target.definitions and key[1] in target.imports:
+            original, statement = target.imports[key[1]]
+            resolved = _kura_import_target(target, statement, original)
+            if resolved is None or resolved in followed:
+                break
+            followed.add(resolved)
+            key, target = resolved, load(resolved[0])
+        return key
+
+    nodes: list[tuple[_SourceModule, ast.AST]] = [(registry, entry)]
+    symbols: list[tuple[str, str]] = [_DATASET_FREEZE]
+    while nodes or symbols:
+        if nodes:
+            module, node = nodes.pop()
+            found, node_files = _references(module, node, resolve)
+            symbols.extend(found)
+            files.update(node_files)
+            continue
+        key = resolve(symbols.pop())
+        if key in reached or key == (_REGISTRY_MODULE, _REGISTRY_TABLE):
+            continue
+        reached.add(key)
+        target = load(key[0])
+        module_label = f"{target.relative}:<module>"
+        if module_label not in parts:
+            parts[module_label] = b"\0".join(target.source(item) for item in target.statements if not isinstance(item, ast.Import))
+            nodes.extend((target, item) for item in target.statements)
+        definition = target.symbol(key[1])
+        parts[f"{target.relative}:{key[1]}"] = target.source(definition)
+        nodes.append((target, definition))
     missing = sorted(path.name for path in files if not path.is_file())
     if missing:
         raise ValueError("source identity input is missing: " + ", ".join(missing))
