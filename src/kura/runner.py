@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from kura import __version__
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
+from kura.executors.common import StaleRunnerEpoch, _is_secret, _run_operation_lock, _OperationBusy, run_finished, EXIT_CODE_FOR_STATE, quiet_run_notice, run_quiet_since
 from kura.fsio import FileLockBusy, atomic_write_json, file_lock
 from kura.records import record
 
@@ -737,6 +737,7 @@ def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, st
 def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     """Render once on a Pod whose billing the writer confirmed; a render cut short is recorded, its Pod deleted."""
     from kura.executors.common import set_stop_check
+    from kura.run_commands.plan import request_max_lease_seconds
     from kura.run_commands.render_runpod import launch_render_runpod
 
     details = _read_json(request)
@@ -766,8 +767,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         # It notifies on completion and failure itself, on the request's channels or Kura's defaults.
         launch_render_runpod(
             run_dir.name, dry_run=False, image=details.get("remote_image"), notify_channels=details.get("notify"), yes=True,
-            # A request written before Kura refused a zero lease may carry 0 or none; it runs with the default, never without one.
-            max_lease_sec=int(options.get("max_lease_sec") or DEFAULT_MAX_LEASE_SEC), controlled_by=controlled_by,
+            max_lease_sec=request_max_lease_seconds(options.get("max_lease_sec")), controlled_by=controlled_by,
             runpod_config_override=details.get("runpod_config"),
         )
     finally:
@@ -886,16 +886,11 @@ RETIRED_REQUEST_OPTIONS = frozenset({"hold_for", "notify_repeat_interval"})
 
 def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: bool) -> int:
     from kura.run_commands.launch import _run_remote_locked
-    from kura.run_commands.plan import max_lease_seconds
+    from kura.run_commands.plan import request_max_lease_seconds
 
     # Requests written by older Kura may carry options that no longer exist (the review hold).
     options = {key: value for key, value in (details.get("options") or {}).items() if key not in RETIRED_REQUEST_OPTIONS}
-    if "max_lease" in options:
-        try:
-            max_lease_seconds(options["max_lease"])
-        except ValueError:
-            # A request written before Kura refused a zero lease runs with the default, never without one.
-            options["max_lease"] = DEFAULT_MAX_LEASE_SEC
+    options["max_lease"] = request_max_lease_seconds(options.get("max_lease"))
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
                      "billing_confirmed_at": details.get("billing_confirmed_at")}
     return _run_remote_locked(

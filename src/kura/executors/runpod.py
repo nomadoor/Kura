@@ -264,9 +264,7 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, 
     return {"status": "ok", "checked_at": _now(), "gpu_count": settings["gpu_count"], "candidates": candidates}
 
 
-def _format_lease_limit(max_lease_sec: int | None) -> str:
-    if max_lease_sec is None:
-        return "none (this command does not install an automatic stop limit)"
+def _format_lease_limit(max_lease_sec: int) -> str:
     if max_lease_sec % 3600 == 0:
         return f"{max_lease_sec // 3600}h"
     if max_lease_sec % 60 == 0:
@@ -279,7 +277,7 @@ def _confirm_runpod_launch(
     settings: dict[str, Any],
     *,
     yes: bool,
-    max_lease_sec: int | None,
+    max_lease_sec: int,
     wait_for_capacity_sec: int = 0,
     unattended_wait: str | None = None,
     min_cuda_version: str | None = None,
@@ -575,7 +573,7 @@ PER_LAUNCH_STATUS_FIELDS = (
 
 
 def confirm_runpod_billing(
-    config: dict[str, Any], image: str, *, yes: bool, max_lease_sec: int | None,
+    config: dict[str, Any], image: str, *, yes: bool, max_lease_sec: int,
     wait_for_capacity_sec: int = 0, unattended_wait: str | None = None,
 ) -> dict[str, Any]:
     """Show the launch's cost and take the user's confirmation without creating anything.
@@ -1051,7 +1049,7 @@ def launch_runpod(
     wait_for_capacity_sec: int = 0,
     capacity_poll_interval_sec: int = 30,
     yes: bool = False,
-    max_lease_sec: int | None = None,
+    max_lease_sec: int,
     unattended_wait: str | None = None,
     controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
@@ -1466,14 +1464,14 @@ kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
 """.strip()
 
 
-def _pod_start_script(script: str, *, max_lease_sec: int | None, log_path: str) -> str:
+def _pod_start_script(script: str, *, max_lease_sec: int, log_path: str) -> str:
     """Every start command Kura writes arms the maximum lease before anything else.
 
     A Pod whose controller never reaches it is then still bounded, and a later
     guard started over SSH keeps the deadline set here.
     """
-    guard = "" if max_lease_sec is None else _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
-    return "\n".join(part for part in (POD_SELF_DELETE_FUNCTION, guard, script) if part)
+    guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
+    return "\n".join((POD_SELF_DELETE_FUNCTION, guard, script))
 
 
 def launch_runpod_session(

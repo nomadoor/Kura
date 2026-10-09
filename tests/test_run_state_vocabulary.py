@@ -107,6 +107,17 @@ class StartRefusalTests(unittest.TestCase):
             with self.subTest(state=state):
                 self.assertNotIn("run new --from", start_refusal("r1", {"state": state}, action="launch"))
 
+    def test_an_unknown_run_is_first_sent_to_reconcile_or_stop(self) -> None:
+        from kura.executors.common import start_refusal
+
+        # A RunPod run ends unknown while its exited Pod may still exist and bill for its disk.
+        message = start_refusal("r1", {"state": "unknown"}, action="launch")
+        self.assertIn("kura run reconcile r1", message)
+        self.assertIn("kura run stop r1", message)
+        for state in ("completed", "failed", "interrupted", "launch_failed"):
+            with self.subTest(state=state):
+                self.assertNotIn("kura run reconcile", start_refusal("r1", {"state": state}, action="launch"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,10 +50,17 @@ def start_refusal(run_id: str, status: dict[str, Any], *, action: str) -> str:
     """Why `can_start` refused this run; an ended run starts again only as a new run from its settings."""
     state = status.get("state")
     if state in TERMINAL_STATES and state != "recovery_required":
-        return (
+        message = (
             f"run {run_id} ended {state}, and a run starts only once; start a new run from its settings "
             f"with `kura run new --from {run_id} --slug <words>`"
         )
+        if state == "unknown":
+            # An exited RunPod Pod reads as unknown while it still exists and bills for its disk.
+            message += (
+                f"; its Pod or container may still exist, so first refresh it with `kura run reconcile {run_id}` "
+                f"or end it with `kura run stop {run_id}`"
+            )
+        return message
     return f"run must be compiled before {action}"
 
 # Finished runs whose artifacts `kura cleanup` may offer; unknown and recovery_required wait for a person.
@@ -69,7 +76,7 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 OBSERVABLE_STATES = frozenset({"running"})
 
 
-# A RunPod Pod deletes itself this long after Kura first reaches it unless the launch says otherwise.
+# A RunPod Pod deletes itself this long after it starts unless the launch sets another maximum lease.
 DEFAULT_MAX_LEASE_SEC = 12 * 3600
 
 

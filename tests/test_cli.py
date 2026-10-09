@@ -7416,7 +7416,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret", "HF_TOKEN": "hf-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
-                    realization_id = launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
+                    realization_id = launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             self.assertIsNotNone(realization_id)
             payload = request.call_args.args[3]
             self.assertNotIn("networkVolumeId", payload)
@@ -7451,7 +7451,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}):
-                    realization_id = launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
+                    realization_id = launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             phases = launch_phases(run_dir, realization_id)
             self.assertEqual([item["phase"] for item in phases], ["pod_create_requested", "pod_created"])
             self.assertEqual(phases[1]["pod_id"], "pod-1")
@@ -7471,7 +7471,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
-                    launch_runpod(run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, yes=True)
+                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, yes=True)
             payload = request.call_args.args[3]
             self.assertEqual(payload["templateId"], "0fqzfjy6f3")
             self.assertEqual(payload["ports"], ["8675/http", "22/tcp"])
@@ -7556,7 +7556,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                              "gpuDisplayName": "A40",
                          },
                      }) as request:
-                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
+                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
             payload = request.call_args.args[3]
             # An image Kura does not know asks for the newest CUDA Kura has seen.
             self.assertEqual(payload["minCudaVersion"], NEWEST_KNOWN_CUDA)
@@ -7604,7 +7604,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                              {"id": "pod-1", "desiredStatus": "RUNNING"},
                          ],
                      ) as request:
-                    launch_runpod(
+                    launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
                         spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                         image="registry/image:tag",
@@ -7657,7 +7657,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", side_effect=[ValueError("no community capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
-                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
+                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             first = request.call_args_list[0].args[3]
             second = request.call_args_list[1].args[3]
             self.assertEqual(first["cloudType"], "COMMUNITY")
@@ -7674,7 +7674,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", side_effect=[ValueError("no A5000 capacity"), {"id": "pod-1", "desiredStatus": "RUNNING"}]) as request:
-                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
+                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, yes=True)
             first = request.call_args_list[0].args[3]
             second = request.call_args_list[1].args[3]
             self.assertEqual(first["gpuTypeIds"], ["NVIDIA RTX A5000"])
@@ -7692,7 +7692,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request,
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
-                    realization_id = launch_runpod(
+                    realization_id = launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
                         spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                         image="registry/image:tag",
@@ -7727,7 +7727,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
                     with self.assertRaisesRegex(ValueError, "invalid template"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -7753,7 +7753,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_pods_named") as listed,
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
-                    realization_id = launch_runpod(
+                    realization_id = launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
                         spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                         image="registry/image:tag",
@@ -7784,7 +7784,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep"),
                 ):
                     with self.assertRaisesRegex(ValueError, "kura run reconcile"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -7810,7 +7810,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_pods_named", side_effect=lambda _key, name: [{"id": "pod-late", "name": name, "desiredStatus": "RUNNING"}]),
                     patch("kura.executors.runpod.time.sleep"),
                 ):
-                    realization_id = launch_runpod(
+                    realization_id = launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
                         spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                         image="registry/image:tag",
@@ -7838,7 +7838,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep", side_effect=KeyboardInterrupt),
                 ):
                     with self.assertRaisesRegex(ValueError, "no Pod was created"):
-                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
+                        launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=config, wait_for_capacity_sec=60, capacity_poll_interval_sec=5, yes=True)
             self.assertEqual(unresolved_create_intents(run_dir), [])
             self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "launch_failed")
 
@@ -7854,7 +7854,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 return {"id": "pod-1", "desiredStatus": "RUNNING"}
 
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False), patch("kura.executors.runpod._runpod_request", side_effect=create):
-                launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
+                launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._config(), yes=True)
             self.assertEqual(seen, [True])
 
     def test_launch_runpod_wait_does_not_create_while_probe_is_rate_limited(self) -> None:
@@ -7870,7 +7870,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request,
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
-                    realization_id = launch_runpod(
+                    realization_id = launch_runpod(max_lease_sec=3600, 
                         run_dir=run_dir,
                         spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                         image="registry/image:tag",
@@ -7898,7 +7898,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
                     with self.assertRaisesRegex(ValueError, "stock snapshot reports no matching GPU capacity"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -7937,7 +7937,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep") as sleep,
                 ):
                     with self.assertRaisesRegex(ValueError, "GraphQL failed.*401"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -7970,7 +7970,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep", side_effect=KeyboardInterrupt),
                 ):
                     with self.assertRaisesRegex(ValueError, "no Pod was created"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -8004,7 +8004,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod.time.sleep"),
                 ):
                     with self.assertRaisesRegex(ValueError, "did not confirm"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -8031,7 +8031,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                     patch("kura.executors.runpod._runpod_request", side_effect=KeyboardInterrupt),
                 ):
                     with self.assertRaisesRegex(ValueError, "creation is unconfirmed"):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir,
                             spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                             image="registry/image:tag",
@@ -8130,7 +8130,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 "ports": ["8675/http", "22/tcp", "22/udp"],
             }
             with self.assertRaisesRegex(ValueError, "only supports /http and /tcp"):
-                launch_runpod(run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, dry_run=True)
+                launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, dry_run=True)
 
     def test_launch_runpod_object_staging_is_disabled_until_secret_safe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8138,7 +8138,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             env = {"RUNPOD_API_KEY": "api-secret", "R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}
             with patch.dict(os.environ, env, clear=False):
                 with self.assertRaisesRegex(ValueError, "disabled until object-store credentials"):
-                    launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._object_config())
+                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._object_config())
 
     def test_launch_runpod_records_failed_attempt_without_stale_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8148,7 +8148,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", side_effect=ValueError("RunPod API POST /pods failed (500): echoed api-secret hf-secret")):
                     with self.assertRaisesRegex(ValueError, r"\\*\\*\\*"):
-                        launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._container_disk_config(), yes=True)
+                        launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, image="registry/image:tag", config=self._container_disk_config(), yes=True)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["state"], "launch_failed")
             self.assertNotIn("pod_id", status)
@@ -8165,7 +8165,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run_dir = self._run_dir(Path(directory))
             with self.assertRaisesRegex(ValueError, "pod env must not contain secrets"):
-                launch_runpod(run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "should-not-enter-pod-env"}}, image="registry/image:tag", config=self._container_disk_config())
+                launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {"HF_TOKEN": "should-not-enter-pod-env"}}, image="registry/image:tag", config=self._container_disk_config())
 
     def test_runpod_ssh_secret_injection_keeps_token_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

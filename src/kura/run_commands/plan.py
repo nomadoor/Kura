@@ -1685,6 +1685,14 @@ def max_lease_seconds(value: Any) -> int:
     return seconds
 
 
+def request_max_lease_seconds(value: Any) -> int:
+    """The maximum lease a runner request carries; one written before Kura refused a zero lease may
+    carry none or zero, and runs with the default, never without one. Anything else is read as a lease."""
+    if value is None or value == 0 or (isinstance(value, str) and _parse_duration_seconds(value) == 0):
+        return DEFAULT_MAX_LEASE_SEC
+    return max_lease_seconds(value)
+
+
 def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
     """Hand the stop to the runner's follower when one will see it; None when the CLI should act."""
     import time

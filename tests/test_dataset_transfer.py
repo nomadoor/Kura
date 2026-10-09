@@ -431,7 +431,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
                         patch("kura.executors.runpod._runpod_graphql") as graphql,
                         self.assertRaisesRegex(ValueError, message),
                     ):
-                        launch_runpod(
+                        launch_runpod(max_lease_sec=3600, 
                             run_dir=run_dir, spec=spec, image="registry/image:tag",
                             config={**self._config(), **settings}, yes=True,
                         )
