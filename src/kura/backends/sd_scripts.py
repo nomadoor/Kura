@@ -125,7 +125,7 @@ ANIMA_ATTENTION_MODES = {"torch", "sdpa", "flash"}
 BOOLEAN_CONFIG_KEYS = {
     "gradient_checkpointing", "network_train_unet_only", "fp8_base", "cache_latents", "cache_latents_to_disk",
     "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk", "qwen_image_vae_2d", "cpu_offload_checkpointing",
-    "unsloth_offload_checkpointing", "deepspeed", "fused_backward_pass", "lllite_use_aspp",
+    "unsloth_offload_checkpointing", "deepspeed", "fused_backward_pass", "lllite_use_aspp", "flatten_groups",
 }
 
 
@@ -162,9 +162,6 @@ def _validate_config(native: dict[str, Any], architecture: str, mode: str) -> No
     unknown = sorted(set(native) - CONFIG_KEYS)
     if unknown:
         raise ValueError("sd-scripts backend.config contains unsupported key(s): " + ", ".join(unknown))
-    invalid_booleans = sorted(key for key in BOOLEAN_CONFIG_KEYS if key in native and not isinstance(native[key], bool))
-    if invalid_booleans:
-        raise ValueError("sd-scripts boolean config key(s) must be true or false: " + ", ".join(invalid_booleans))
     for key in ("learning_rate", "network_alpha", "unet_lr", "text_encoder_lr1", "text_encoder_lr2", "discrete_flow_shift", "sigmoid_scale", "guidance_scale"):
         if native.get(key) is not None:
             _number(native[key], field=key, positive=key != "guidance_scale")

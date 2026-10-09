@@ -42,11 +42,8 @@ def _script_command(commands: list[list[str]], *, step_name: str, probe_root: st
 
 
 def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
+    """An authored boolean is on only when it is YAML true; validate_backend_config refuses any other value."""
+    return value is True
 
 
 def _extra_args(override: dict[str, Any], *, backend_label: str) -> list[str]:

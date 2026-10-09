@@ -55,6 +55,53 @@ class BackendSurfaceContractTests(unittest.TestCase):
     def _write_sd_scripts_projection(self, run: dict[str, object], resolved: Path) -> None:
         freeze_fixture(run, resolved)
 
+    def test_boolean_fields_take_only_true_or_false_on_every_backend(self) -> None:
+        # A quoted "false" used to switch Musubi's precache on while the registry read it as off.
+        cases = (
+            ("musubi-tuner", {"architecture": "hidream_o1", "precache": "false"}, "precache='false'"),
+            ("musubi-tuner", {"architecture": "framepack", "one_frame": "true"}, "one_frame='true'"),
+            ("musubi-tuner", {"architecture": "krea2", "gradient_checkpointing": "true"}, "gradient_checkpointing='true'"),
+            ("sd-scripts", {"architecture": "sdxl", "gradient_checkpointing": 1}, "gradient_checkpointing=1"),
+            # Written into AI-Toolkit's YAML as the string "false", which its Python reads as on.
+            ("ai-toolkit", {"model_arch": "sdxl", "low_vram": "false"}, "low_vram='false'"),
+        )
+        for backend, config, named in cases:
+            with self.subTest(backend=backend, config=config):
+                with self.assertRaisesRegex(ValueError, f"{backend} backend.config field.* must be true or false: {re.escape(named)}"):
+                    validate_backend_config({"backend": {"name": backend, "config": config}})
+        validate_backend_config({"backend": {"name": "musubi-tuner", "config": {"architecture": "hidream_o1", "precache": False}}})
+        for name, adapter in BACKENDS.items():
+            with self.subTest(declared=name):
+                self.assertLessEqual(adapter.surface.boolean_fields, adapter.surface.fields)
+        self.assertIn("precache", BACKENDS["musubi-tuner"].surface.boolean_fields)
+        # Agents learn this from the capabilities output before they write the value.
+        self.assertIn("precache", backend_capabilities("musubi-tuner")["boolean_fields"])
+
+    def test_every_field_read_as_a_boolean_is_declared_boolean(self) -> None:
+        # A field read with _truthy or _append_flag must be refused by the shared validator
+        # when it is not true or false, or a quoted value would be read as off.
+        import ast
+        import kura.backends as backends
+
+        root = Path(backends.__file__).parent
+        files = {"musubi-tuner": ("musubi_command.py", "musubi_datasets.py", "musubi_models.py"), "sd-scripts": ("sd_scripts.py",)}
+        for backend, names in files.items():
+            surface = BACKENDS[backend].surface
+            read: set[str] = set()
+            for name in names:
+                for node in ast.walk(ast.parse((root / name).read_text(encoding="utf-8"))):
+                    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                        continue
+                    if node.func.id == "_append_flag" and len(node.args) >= 3 and isinstance(node.args[2], ast.Constant):
+                        read.add(node.args[2].value)
+                    elif node.func.id == "_truthy" and node.args and isinstance(node.args[0], ast.Call):
+                        inner = node.args[0]
+                        if isinstance(inner.func, ast.Attribute) and inner.func.attr == "get" and inner.args and isinstance(inner.args[0], ast.Constant):
+                            read.add(inner.args[0].value)
+            with self.subTest(backend=backend):
+                self.assertTrue(read)
+                self.assertEqual(sorted((read & surface.fields) - surface.boolean_fields), [])
+
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for name, adapter in BACKENDS.items():
@@ -497,12 +544,15 @@ class BackendSurfaceContractTests(unittest.TestCase):
             for condition in adapter.surface.conditions:
                 with self.subTest(backend=name, field=condition.field):
                     first_clause = condition.when_any[0]
-                    config = {condition.field: "sentinel"}
+                    booleans = adapter.surface.boolean_fields
+                    # Values of the right type, so only applicability can refuse them.
+                    config = {condition.field: True if condition.field in booleans else "sentinel"}
                     for selector, allowed in first_clause:
                         config[selector] = allowed[0]
                     candidates = [selector for selector, _ in first_clause if selector not in conditional_names]
                     self.assertTrue(candidates, f"{name}.{condition.field} needs an independently selectable condition")
-                    config[candidates[-1]] = "not-a-supported-selector"
+                    off = candidates[-1]
+                    config[off] = (not config[off]) if off in booleans else "not-a-supported-selector"
                     run = {"backend": {"name": name, "config": config}}
                     with self.assertRaisesRegex(ValueError, rf"{condition.field}.*not applicable"):
                         validate_backend_config(run)
@@ -795,7 +845,7 @@ class BackendSurfaceContractTests(unittest.TestCase):
 
         invalid = deepcopy(run)
         invalid["backend"]["config"]["model_edit"] = "true"
-        with self.assertRaisesRegex(ValueError, "model_edit must be true or false"):
+        with self.assertRaisesRegex(ValueError, "must be true or false: model_edit='true'"):
             validate_backend_config(invalid)
 
     def test_ai_toolkit_generated_controls_are_closed_and_flex2_only(self) -> None:

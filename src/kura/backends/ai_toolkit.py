@@ -799,9 +799,7 @@ def _ai_toolkit_projection_options(
     run: dict[str, Any], selection: dict[str, Any],
 ) -> tuple[bool, dict[str, dict[str, Any]]]:
     override = _ai_toolkit_backend_override(run)
-    flatten_groups = override.get("flatten_groups", False)
-    if not isinstance(flatten_groups, bool):
-        raise ValueError("AI-Toolkit backend.config.flatten_groups must be true or false")
+    flatten_groups = override.get("flatten_groups") is True
     raw_options = override.get("dataset_options", {})
     if not isinstance(raw_options, dict):
         raise ValueError(
@@ -991,16 +989,6 @@ def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
     native_model_kwargs = native_model.get("model_kwargs") if isinstance(native_model, dict) else None
     native_train = native_config.get("train") if isinstance(native_config.get("train"), dict) else {}
     model_arch = _ai_toolkit_projection_architecture(run, required=False) or ""
-    bypass_guidance_embedding = native.get("bypass_guidance_embedding")
-    if bypass_guidance_embedding is not None and not isinstance(
-        bypass_guidance_embedding, bool
-    ):
-        raise ValueError(
-            "AI-Toolkit backend.config.bypass_guidance_embedding must be true or false"
-        )
-    model_edit = native.get("model_edit")
-    if model_edit is not None and not isinstance(model_edit, bool):
-        raise ValueError("AI-Toolkit backend.config.model_edit must be true or false")
     if isinstance(native_model_kwargs, dict) and "edit" in native_model_kwargs:
         raise ValueError(
             "AI-Toolkit backend.config.native_config.model.model_kwargs.edit is not a "
