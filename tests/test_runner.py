@@ -579,6 +579,23 @@ class RunPodFollowerTests(unittest.TestCase):
             self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertFalse(runner.run_unfinished(run_dir))
 
+    def test_a_finished_run_keeps_how_it_ended_however_often_its_pod_delete_fails(self) -> None:
+        # Nothing on a finished run's Pod is needed, so a failing delete is retried uncounted
+        # and never turns the run into recovery_required.
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir, notify=["ntfy"])
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="completed")
+            attempts = runner.COLLECTION_ATTEMPTS + 2
+            with patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("api down")), \
+                 patch("kura.notifications.notify") as notify:
+                codes = [runner.work(root, "example", request.name) for _ in range(attempts)]
+            self.assertEqual(codes, [1] * attempts)
+            self.assertEqual(json.loads((run_dir / "status.json").read_text(encoding="utf-8"))["state"], "completed")
+            self.assertFalse(runner._sibling(request, ".failures.json").exists())
+            notify.assert_called_once()
+            self.assertIn("could not be deleted", notify.call_args.kwargs["subject"])
+
     def test_a_job_whose_pid_file_exists_is_followed_not_deleted(self) -> None:
         with _workspace() as (root, run_dir):
             request = _runpod_request(run_dir)
