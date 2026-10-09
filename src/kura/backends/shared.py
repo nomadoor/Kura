@@ -137,9 +137,19 @@ def model_downloads(
                 + "; use " + ", ".join(MODEL_DOWNLOAD_KEYS)
                 + " (model_paths points a role at a file you already have)"
             )
+        malformed = [
+            key for key in MODEL_DOWNLOAD_KEYS if key in value and not (
+                isinstance(value[key], list) and value[key] and all(isinstance(item, str) and item for item in value[key])
+                if key == "filenames" else isinstance(value[key], str) and value[key]
+            )
+        ]
+        if malformed:
+            raise ValueError(
+                f"{label} model_downloads.{role} has invalid value(s) for: {', '.join(malformed)}; "
+                "filenames takes a list of non-empty file names, every other key a non-empty string"
+            )
         repo_id = value.get("repo_id") or value.get("repo")
-        listed = value.get("filenames")
-        filenames = [item for item in listed if isinstance(item, str) and item] if isinstance(listed, list) else []
+        filenames = list(value.get("filenames") or [])
         filename = value.get("filename") or value.get("file") or (filenames[0] if filenames else None)
         if not isinstance(repo_id, str) or not repo_id or not isinstance(filename, str) or not filename:
             raise ValueError(f"{label} model_downloads.{role} requires repo_id and filename")

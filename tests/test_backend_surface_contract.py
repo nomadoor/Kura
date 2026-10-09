@@ -160,6 +160,17 @@ class BackendSurfaceContractTests(unittest.TestCase):
                 BACKENDS[backend].download_specs(run)
             owner.assert_called()
 
+    def test_a_malformed_download_value_is_refused_not_dropped(self) -> None:
+        for declaration in (
+            {"repo_id": "org/model", "filenames": "a.safetensors"},
+            {"repo_id": "org/model", "filename": "a.safetensors", "filenames": ["b.safetensors", ""]},
+            {"repo_id": "org/model", "filename": "", "file": "a.safetensors"},
+            {"repo_id": "org/model", "filename": "a.safetensors", "revision": 3},
+        ):
+            for backend, (role, run) in self._model_download_runs(declaration).items():
+                with self.subTest(backend=backend, declaration=declaration), self.assertRaisesRegex(ValueError, f"model_downloads.{role} has invalid value"):
+                    BACKENDS[backend].download_specs(run)
+
     def test_a_download_mapping_is_checked_even_when_model_paths_names_the_role(self) -> None:
         for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filname": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
             with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "unsupported key.*filname"):
