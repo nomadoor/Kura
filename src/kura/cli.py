@@ -44,7 +44,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
+from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_step_request, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -280,6 +280,11 @@ def cmd_run_resume(args: argparse.Namespace) -> int:
         return 1
     additional_steps = args.additional_steps
     to_step = args.to_step
+    try:
+        resume_step_request(additional_steps, to_step)
+    except ValueError as exc:
+        print(f"cannot create Resume run: {exc}", file=sys.stderr)
+        return 1
     safe_slug = re.sub(r"[^a-z0-9-]+", "-", str(args.slug or "resume").lower()).strip("-")
     if not safe_slug:
         print("cannot create Resume run: slug must contain letters or numbers", file=sys.stderr)

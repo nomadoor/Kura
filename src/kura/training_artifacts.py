@@ -513,7 +513,7 @@ def resume_steps(
     if lock is not None:
         source_step, target_step = lock.get("source_step"), lock.get("target_step")
         if not all(isinstance(value, int) and not isinstance(value, bool) for value in (source_step, target_step)):
-            return None
+            raise ValueError("the frozen training-state source lock has no integer source_step and target_step; recompile the run")
         progress = lock.get("native_progress", "logical")
         space = lock.get("native_target", "logical")
     else:
@@ -553,12 +553,21 @@ def frozen_resume_steps(run_dir: Path, run: dict[str, Any]) -> dict[str, Any] | 
 
 
 def read_resume_lock(run_dir: Path) -> dict[str, Any] | None:
-    """The run's frozen training-state source lock, or None when it has none or it is unreadable."""
-    try:
-        loaded = json.loads((run_dir / "resolved" / "training-state-source.lock.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    """The run's frozen training-state source lock, or None when it has none.
+
+    A lock that exists but cannot be read raises: reading it as no lock would treat a
+    Resume as a fresh run and record its native steps as logical ones.
+    """
+    path = run_dir / "resolved" / "training-state-source.lock.json"
+    if not path.is_file():
         return None
-    return loaded if isinstance(loaded, dict) else None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("cannot read the frozen training-state source lock; recompile the run") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError("the frozen training-state source lock is not a mapping; recompile the run")
+    return loaded
 
 
 def resume_artifact_directory(workspace: Path, run: dict[str, Any]) -> Path | None:

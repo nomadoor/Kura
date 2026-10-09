@@ -189,18 +189,25 @@ def training_state_policy(run: dict[str, Any]) -> dict[str, Any]:
     return {"enabled": enabled, "keep_generations": keep}
 
 
+def resume_step_request(additional: Any, to_step: Any) -> None:
+    """The one rule for a Resume step request: exactly one of `additional` or `to_step`, a
+    positive integer. Errors name the `kura run resume` flag and the run.yaml field."""
+    if (additional is None) == (to_step is None):
+        raise ValueError("Resume requires exactly one of --additional-steps / continuation.additional_steps or --to-step / continuation.to_step")
+    name, selected = ("--additional-steps / continuation.additional_steps", additional) if additional is not None else ("--to-step / continuation.to_step", to_step)
+    if isinstance(selected, bool) or not isinstance(selected, int) or selected <= 0:
+        raise ValueError(f"Resume {name} must be a positive integer, got {selected!r}")
+
+
 def resume_target_step(observed: int, additional: Any, to_step: Any) -> int:
     """The one rule for the logical step a Resume trains to: the source step plus
     `additional`, or `to_step`; exactly one is given, and the target is past the source."""
-    if (additional is None) == (to_step is None):
-        raise ValueError("Resume continuation requires exactly one of additional_steps or to_step")
-    selected = additional if additional is not None else to_step
-    if isinstance(selected, bool) or not isinstance(selected, int) or selected <= 0:
-        raise ValueError("Resume continuation step request must be a positive integer")
-    target = observed + additional if additional is not None else to_step
-    if target <= observed:
-        raise ValueError(f"Resume continuation target_step {target} must be greater than observed_step {observed}")
-    return target
+    resume_step_request(additional, to_step)
+    if additional is not None:
+        return observed + additional
+    if to_step <= observed:
+        raise ValueError(f"Resume --to-step / continuation.to_step {to_step} must be greater than the source step {observed}")
+    return to_step
 
 
 def final_step(run: dict[str, Any]) -> int | None:

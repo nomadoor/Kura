@@ -1003,8 +1003,6 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
         native_state_path = training_state_payload(artifact_id)
         restoration = artifact.get("restoration_contract") if isinstance(artifact.get("restoration_contract"), dict) else {}
         files = artifact.get("files") if isinstance(artifact.get("files"), list) else []
-    if steps is None:
-        return None
     return {
         "source_run": run.get("parent_run"),
         "artifact_id": artifact_id,

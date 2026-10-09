@@ -178,6 +178,8 @@ class ResumeTargetTests(unittest.TestCase):
             (1000, 0, None, "positive integer"),
             (1000, True, None, "positive integer"),
             (1000, None, 1000, "greater than"),
+            (1000, 0, None, "--additional-steps"),
+            (1000, None, 1000, "--to-step"),
         ):
             with self.subTest(additional=additional, to_step=to_step), self.assertRaisesRegex(ValueError, message):
                 resume_target_step(observed, additional, to_step)
@@ -299,6 +301,38 @@ class ResumeExecutorParityTests(unittest.TestCase):
                 published[executor] = [entry["observed_step"] for entry in items]
         self.assertEqual(statuses, {"docker": 1150, "runpod": 1150})
         self.assertEqual(published, {"docker": [1150], "runpod": [1150]})
+
+
+    def test_an_unreadable_source_lock_is_refused_rather_than_read_as_not_a_resume(self) -> None:
+        # Read as not a Resume, native step 150 would be published and shown as logical step 150.
+        def non_int_steps(lock_path: Path) -> None:
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock["source_step"] = "1000"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+        def broken_json(lock_path: Path) -> None:
+            lock_path.write_text("{not json", encoding="utf-8")
+
+        for corrupt in (non_int_steps, broken_json):
+            with self.subTest(corrupt=corrupt.__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_dir = self._derived(root)
+                corrupt(run_dir / "resolved" / "training-state-source.lock.json")
+                run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
+                _write_state(run_dir / "outputs" / "derived-step0150-state")
+                checks = {
+                    "status": lambda: _materialize_stdout_progress(run_dir, {}, state="running"),
+                    "plan": lambda: _resume_plan_payload(root, run, run_dir),
+                    "publish": lambda: publish_completed_training_states(root, run_dir),
+                }
+                for site, check in checks.items():
+                    with self.assertRaisesRegex(ValueError, "training-state source lock", msg=site):
+                        check()
+                observed = [
+                    json.loads(path.read_text(encoding="utf-8")).get("observed_step")
+                    for path in (root / "artifacts" / "training-state").glob("*/manifest.json")
+                ]
+                self.assertNotIn(150, observed)
 
 
 class ResumeSourceVerificationTests(unittest.TestCase):
