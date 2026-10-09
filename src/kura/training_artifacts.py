@@ -51,57 +51,83 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _validate_safetensors_file(path: Path) -> None:
-    """Validate the safe container structure without deserializing tensor data."""
+_DTYPE_BYTES = {
+    "BOOL": 1, "I8": 1, "U8": 1,
+    "I16": 2, "U16": 2, "F16": 2, "BF16": 2,
+    "I32": 4, "U32": 4, "F32": 4,
+    "I64": 8, "U64": 8, "F64": 8,
+    "F8_E4M3": 1, "F8_E5M2": 1,
+}
+
+
+def validate_safetensors_file(path: Path) -> None:
+    """The one structural check for a weights file Kura keeps, wherever it came from.
+
+    It reads the header only: unique keys, string metadata, and tensors that
+    fill the data exactly once. A tensor's byte length is checked when Kura
+    knows its dtype; a newer dtype is accepted on the other checks.
+    """
 
     size = path.stat().st_size
     with path.open("rb") as handle:
         prefix = handle.read(8)
         if len(prefix) != 8:
-            raise ValueError(f"training-state has an incomplete safetensors file: {path.name}")
+            raise ValueError(f"not a complete safetensors file: {path.name}")
         header_size = int.from_bytes(prefix, "little", signed=False)
         if header_size <= 0 or header_size > size - 8:
-            raise ValueError(f"training-state has an invalid safetensors header size: {path.name}")
+            raise ValueError(f"invalid safetensors header size: {path.name}")
+
+        def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate safetensors header keys: {path.name}")
+                result[key] = value
+            return result
+
         try:
-            header = json.loads(handle.read(header_size))
+            header = json.loads(handle.read(header_size), object_pairs_hook=unique_keys)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"training-state has an invalid safetensors header: {path.name}") from exc
+            raise ValueError(f"invalid safetensors header: {path.name}") from exc
     if not isinstance(header, dict):
-        raise ValueError(f"training-state has a non-object safetensors header: {path.name}")
+        raise ValueError(f"non-object safetensors header: {path.name}")
     data_size = size - 8 - header_size
-    dtype_bytes = {
-        "BOOL": 1, "I8": 1, "U8": 1,
-        "I16": 2, "U16": 2, "F16": 2, "BF16": 2,
-        "I32": 4, "U32": 4, "F32": 4,
-        "I64": 8, "U64": 8, "F64": 8,
-        "F8_E4M3": 1, "F8_E5M2": 1,
-    }
     intervals: list[tuple[int, int]] = []
     for key, value in header.items():
         if key == "__metadata__":
+            if not isinstance(value, dict) or not all(isinstance(name, str) and isinstance(item, str) for name, item in value.items()):
+                raise ValueError(f"invalid safetensors metadata: {path.name}")
             continue
         offsets = value.get("data_offsets") if isinstance(value, dict) else None
         shape = value.get("shape") if isinstance(value, dict) else None
         dtype = value.get("dtype") if isinstance(value, dict) else None
         if (
-            dtype not in dtype_bytes
+            not isinstance(dtype, str) or not dtype
             or not isinstance(shape, list)
             or not all(isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in shape)
             or not isinstance(offsets, list)
             or len(offsets) != 2
         ):
-            raise ValueError(f"training-state has an invalid safetensors tensor entry: {path.name}")
+            raise ValueError(f"invalid safetensors tensor entry: {path.name}")
         start, end = offsets
         if not isinstance(start, int) or isinstance(start, bool) or not isinstance(end, int) or isinstance(end, bool) or start < 0 or end < start or end > data_size:
-            raise ValueError(f"training-state safetensors data is out of bounds: {path.name}")
-        elements = 1
-        for dimension in shape:
-            elements *= dimension
-        if end - start != elements * dtype_bytes[dtype]:
-            raise ValueError(f"training-state safetensors tensor byte size is invalid: {path.name}")
+            raise ValueError(f"safetensors tensor data is outside the file: {path.name}")
+        if dtype in _DTYPE_BYTES:
+            elements = 1
+            for dimension in shape:
+                elements *= dimension
+            if end - start != elements * _DTYPE_BYTES[dtype]:
+                raise ValueError(f"safetensors tensor byte size is invalid: {path.name}")
         intervals.append((start, end))
-    if not intervals or sorted(intervals)[0][0] != 0 or any(left[1] != right[0] for left, right in zip(sorted(intervals), sorted(intervals)[1:])) or sorted(intervals)[-1][1] != data_size:
-        raise ValueError(f"training-state safetensors data is not complete: {path.name}")
+    if not intervals:
+        raise ValueError(f"safetensors file contains no tensors: {path.name}")
+    cursor = 0
+    for start, end in sorted(intervals):
+        if start != cursor:
+            raise ValueError(f"safetensors tensor data is not contiguous: {path.name}")
+        cursor = end
+    if cursor != data_size:
+        raise ValueError(f"safetensors tensor data is not contiguous: {path.name}")
 
 
 def _validate_torch_archive(path: Path) -> None:
@@ -313,7 +339,10 @@ def publish_training_state(
         raise ValueError("training-state candidate must be a directory")
     model_file = candidate / "model.safetensors"
     if model_file.is_file():
-        _validate_safetensors_file(model_file)
+        try:
+            validate_safetensors_file(model_file)
+        except ValueError as exc:
+            raise ValueError(f"training-state has {exc}") from exc
     for path in candidate.rglob("*"):
         if path.is_file() and (path.name in {"optimizer.bin", "scheduler.bin", "optimizer.pt", "rng.pt"} or re.fullmatch(r"random_states_\d+\.pkl", path.name)):
             _validate_torch_archive(path)

@@ -44,7 +44,7 @@ from kura.run_envelope import common_recipe, resume_intent, training_state_polic
 from kura.executors.common import _OperationBusy, host_time, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
-from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -345,7 +345,7 @@ def _local_reusable_snapshot_source(
         if candidate.stat().st_size != item["size"] or _sha256_file(candidate) != item["sha256"]:
             return None
         if candidate.suffix == ".safetensors":
-            _validate_safetensors_file(candidate)
+            validate_safetensors_file(candidate)
     except (OSError, ValueError):
         return None
     return candidate
@@ -807,8 +807,7 @@ def _runpod_workspace_for_run(run_dir: Path) -> str:
 def _select_remote_outputs(items: list[dict[str, Any]], *, step: int | None = None, since_step: int | None = None, all_outputs: bool = False) -> list[dict[str, Any]]:
     candidates = [item for item in items if isinstance(item.get("name"), str)]
     for item in candidates:
-        if not isinstance(item.get("step"), int):
-            item["step"] = checkpoint_step(str(item["name"]))
+        item["step"] = checkpoint_step(item["name"])
     if step is not None:
         return [item for item in candidates if item.get("step") == step]
     if since_step is not None:
@@ -852,60 +851,6 @@ def _same_remote_training_state_version(before: dict[str, Any], after: dict[str,
     )
 
 
-def _validate_safetensors_file(path: Path) -> None:
-    """Reject truncated or structurally invalid safetensors before publication."""
-
-    size = path.stat().st_size
-    with path.open("rb") as handle:
-        prefix = handle.read(8)
-        if len(prefix) != 8:
-            raise ValueError(f"checkpoint is not a complete safetensors file: {path.name}")
-        header_size = int.from_bytes(prefix, "little", signed=False)
-        if header_size <= 0 or header_size > size - 8:
-            raise ValueError(f"checkpoint has an invalid safetensors header size: {path.name}")
-        try:
-            def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-                result: dict[str, Any] = {}
-                for key, value in pairs:
-                    if key in result:
-                        raise ValueError(f"checkpoint has duplicate safetensors header keys: {path.name}")
-                    result[key] = value
-                return result
-
-            header = json.loads(handle.read(header_size), object_pairs_hook=reject_duplicate_keys)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"checkpoint has an invalid safetensors header: {path.name}") from exc
-    if not isinstance(header, dict):
-        raise ValueError(f"checkpoint has a non-object safetensors header: {path.name}")
-    data_size = size - 8 - header_size
-    intervals: list[tuple[int, int]] = []
-    for key, value in header.items():
-        if key == "__metadata__":
-            if not isinstance(value, dict) or not all(isinstance(name, str) and isinstance(item, str) for name, item in value.items()):
-                raise ValueError(f"checkpoint has invalid safetensors metadata: {path.name}")
-            continue
-        if not isinstance(value, dict) or not isinstance(value.get("dtype"), str) or not value["dtype"]:
-            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
-        shape = value.get("shape")
-        if not isinstance(shape, list) or not all(isinstance(dimension, int) and not isinstance(dimension, bool) and dimension >= 0 for dimension in shape):
-            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
-        if not isinstance(value.get("data_offsets"), list) or len(value["data_offsets"]) != 2:
-            raise ValueError(f"checkpoint has an invalid tensor entry: {path.name}")
-        start, end = value["data_offsets"]
-        if not isinstance(start, int) or isinstance(start, bool) or not isinstance(end, int) or isinstance(end, bool) or start < 0 or end < start or end > data_size:
-            raise ValueError(f"checkpoint has tensor data outside the file: {path.name}")
-        intervals.append((start, end))
-    if not intervals:
-        raise ValueError(f"checkpoint contains no tensors: {path.name}")
-    cursor = 0
-    for start, end in sorted(intervals):
-        if start != cursor:
-            raise ValueError(f"checkpoint tensor data is not contiguous: {path.name}")
-        cursor = end
-    if cursor != data_size:
-        raise ValueError(f"checkpoint tensor data is not contiguous: {path.name}")
-
-
 def _runpod_remote_outputs(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
     script = f"""
@@ -914,16 +859,14 @@ python - <<'PY'
 import glob
 import json
 import os
-import re
 
 directory = {remote_outputs!r}
 items = []
 for path in sorted(glob.glob(os.path.join(directory, "*.safetensors"))):
     name = os.path.basename(path)
     stat = os.stat(path)
-    matches = re.findall(r"(?:step|_)(\\d{{4,}})(?=\\.safetensors$|[-_.])", name)
-    step = int(matches[-1]) if matches else None
-    items.append({{"path": path, "name": name, "step": step, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
+    # The controller reads the step from the name, with the parser every other reader uses.
+    items.append({{"path": path, "name": name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
 print(json.dumps(items))
 PY
 """.strip()
@@ -933,7 +876,10 @@ PY
     data = json.loads(result.stdout or "[]")
     if not isinstance(data, list):
         raise ValueError("remote output listing did not return a list")
-    return [item for item in data if isinstance(item, dict)]
+    items = [item for item in data if isinstance(item, dict) and isinstance(item.get("name"), str)]
+    for item in items:
+        item["step"] = checkpoint_step(item["name"])
+    return items
 
 
 def _runpod_remote_training_states(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
@@ -1110,7 +1056,7 @@ def _pull_remote_output_items(
             metadata_matches = isinstance(previous, dict) and previous.get("remote_path") == item.get("path") and previous.get("remote_mtime_ns") == item.get("mtime_ns")
             if local_path.exists() and isinstance(size, int) and local_path.stat().st_size == size and metadata_matches and not force:
                 try:
-                    _validate_safetensors_file(local_path)
+                    validate_safetensors_file(local_path)
                 except (OSError, ValueError):
                     pass
                 else:
@@ -1144,7 +1090,7 @@ def _pull_remote_output_items(
             after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
             if not _same_remote_output_version(item, after) or not isinstance(size, int) or partial_path.stat().st_size != size:
                 raise ValueError(f"remote checkpoint changed while it was being copied: {name}; wait for the save to finish and retry")
-            _validate_safetensors_file(partial_path)
+            validate_safetensors_file(partial_path)
             os.replace(partial_path, local_path)
         finally:
             partial_path.unlink(missing_ok=True)
