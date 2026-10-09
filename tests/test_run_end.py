@@ -70,6 +70,21 @@ class NeedsAPersonTests(unittest.TestCase):
             self.assertNotIn("recovery_required", json.loads((run_dir / "status.json").read_text(encoding="utf-8")))
 
 
+class RemotePhaseTests(unittest.TestCase):
+    def test_a_run_that_needs_a_person_says_so_before_any_remote_phase(self) -> None:
+        from kura.monitor import ExecutorInfo, RunSummary
+        from kura.tui import _remote_execution_phase
+
+        def phase(state: str, remote_state: str | None) -> str:
+            return _remote_execution_phase(RunSummary(
+                id="r", experiment=None, type="train", executor="runpod", state=state,
+                executor_info=ExecutorInfo(kind="remote", remote_state=remote_state, recovery_required=state == "recovery_required"),
+            ))
+
+        self.assertIn("recovery required", phase("recovery_required", "failed"))
+        self.assertIn("job failed", phase("running", "failed"))
+
+
 class StateVerificationErrorTests(unittest.TestCase):
     def test_a_runpod_state_error_hands_the_run_to_a_person_at_once_as_on_docker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
