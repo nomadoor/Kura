@@ -23,14 +23,14 @@ from kura.container_scripts import script_source
 
 from kura.backends import MUSUBI_ADAPTER_SCRIPTS
 from kura.executors import _redact_secret_text, _redact_secrets
-from kura.secrets import is_secret_name
+from kura.secrets import declared_secret, is_secret_name
 from kura.executors.docker import docker_daemon_problem
 from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storage, probe_storages
 from kura.run_commands.plan import _configured_gib, local_min_free_gib
-from kura.workspace import validate_workspace_config, workspace_schema_description
+from kura.workspace import comfyui_endpoint, validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
@@ -641,8 +641,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"runpod: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
-    api_key_env = config.get("api_key_env", "RUNPOD_API_KEY")
-    api_key_present = isinstance(api_key_env, str) and bool(os.environ.get(api_key_env))
+    api_key_present = bool(declared_secret("RUNPOD_API_KEY"))
     checks: dict[str, Any] = {
         "runpodctl_command": bool(shutil.which("runpodctl")),
         "api_key": api_key_present,
@@ -652,7 +651,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         "network_volumes_empty": None,
         "images_pinned": True,
     }
-    diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "api_key_env": api_key_env, "config": {key: value for key, value in config.items() if not is_secret_name(key)}}
+    diagnostics: dict[str, Any] = {"runpodctl_path": shutil.which("runpodctl"), "config": {key: value for key, value in config.items() if not is_secret_name(key)}}
     images = [effective_image(workspace_config, name) for name in image_names()]
     mutable_images = {image["name"]: image["reference"] for image in images if mutable_override_warning(image)}
     checks["images_pinned"] = not mutable_images
@@ -777,7 +776,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
         print(f"comfyui: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
-    endpoint = str(getattr(args, "endpoint", None) or comfyui.get("endpoint") or "http://127.0.0.1:8188").rstrip("/")
+    endpoint = str(getattr(args, "endpoint", None) or comfyui_endpoint(config)).rstrip("/")
     parsed_endpoint = urllib.parse.urlparse(endpoint)
     lora_dir = _workspace_relative_path(str(comfyui["lora_dir"])) if isinstance(comfyui.get("lora_dir"), str) and comfyui.get("lora_dir") else None
     stage_subdir = str(comfyui.get("lora_stage_subdir") or "Kura_tmp").strip("/\\")
@@ -1018,16 +1017,12 @@ def readiness_gaps(root: Path) -> list[str]:
     except (OSError, yaml.YAMLError):
         config = {}
     config = config if isinstance(config, dict) else {}
-    runpod = config.get("runpod") if isinstance(config.get("runpod"), dict) else {}
-    api_key_env = runpod.get("api_key_env") if isinstance(runpod.get("api_key_env"), str) and runpod.get("api_key_env") else "RUNPOD_API_KEY"
-    if not os.environ.get(api_key_env):
-        gaps.append(f"{api_key_env} is not set: RunPod training and renders need it. Run `kura secrets set {api_key_env}` in your own terminal.")
-    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
-    endpoint = comfyui.get("endpoint")
-    if isinstance(endpoint, str) and endpoint:
-        try:
-            with urllib.request.urlopen(f"{endpoint.rstrip('/')}/system_stats", timeout=2):
-                pass
-        except (OSError, ValueError, http.client.HTTPException):
-            gaps.append(f"ComfyUI is not reachable at {endpoint}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
+    if not declared_secret("RUNPOD_API_KEY"):
+        gaps.append("RUNPOD_API_KEY is not set: RunPod training and renders need it. Run `kura secrets set RUNPOD_API_KEY` in your own terminal.")
+    endpoint = comfyui_endpoint(config)
+    try:
+        with urllib.request.urlopen(f"{endpoint}/system_stats", timeout=2):
+            pass
+    except (OSError, ValueError, http.client.HTTPException):
+        gaps.append(f"ComfyUI is not reachable at {_redact_url_userinfo(endpoint)}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
     return gaps

@@ -63,6 +63,7 @@ from kura.run_commands import cmd_run_pull
 from kura.run_commands import cmd_run_stop
 from kura.tui import run_textual_monitor
 from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
+from kura.workspace import comfyui_endpoint
 from kura.workspace import dump_yaml as _dump_yaml
 from kura.secrets import MissingSecret, cmd_secrets_set, load_secrets as _load_secrets
 from kura.workspace import load_yaml as _load_yaml
@@ -451,8 +452,13 @@ def cmd_render_new(args: argparse.Namespace) -> int:
     if not safe_slug:
         print("slug must contain letters or numbers", file=sys.stderr); return 1
     timestamp = _now(); run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"; run_dir = _run_path(run_id)
+    try:
+        endpoint = comfyui_endpoint(_workspace_config())
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print(f"cannot create render: {_safe_error(exc)}", file=sys.stderr)
+        return 1
     run_dir.mkdir(parents=True, exist_ok=False)
-    run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": "http://127.0.0.1:8188"}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
+    run = {"schema_version": 1, "id": run_id, "type": "render", "created": timestamp.isoformat(), "intent": "", "inputs": {"train_run": None, "checkpoint": {"path": "", "hash": None}, "workflow": {"path": "", "digest": None}, "cases": {"path": "", "digest": None}}, "generator": {"name": "comfyui", "endpoint": endpoint}, "executor": {"name": "local"}, "workflow_patches": {}, "render": {"output_dir": "samples/images", "timeout_sec": 600, "default_seed": None}}
     _dump_yaml(run_dir / "run.yaml", run)
     atomic_write_json(run_dir / "status.json", record("run_status", {"state": "draft", "started": None, "ended": None, "last_step": None, "total_steps": None, "exit_code": None, "host": None, "outputs": []}))
     atomic_write_text(run_dir / "plan.md", "# Render plan\n\n")

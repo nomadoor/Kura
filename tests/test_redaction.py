@@ -26,7 +26,7 @@ class RedactionTests(unittest.TestCase):
                 os.chdir(previous)
 
     def test_a_key_under_a_name_workspace_yaml_chose_is_hidden(self) -> None:
-        text = self._redact({"MY_RUNPOD": VALUE}, "schema_version: 2\nrunpod:\n  api_key_env: MY_RUNPOD\n")
+        text = self._redact({"MY_RUNPOD": VALUE}, "schema_version: 2\nrunpod:\n  object_store: {access_key_env: MY_RUNPOD}\n")
         self.assertNotIn(VALUE, text)
 
     def test_a_word_the_user_chose_for_a_non_key_is_never_cut_out_of_records(self) -> None:

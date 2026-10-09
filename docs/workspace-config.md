@@ -27,7 +27,6 @@ change, applies it only when confirmed, and keeps the previous file as
 | Key | Purpose | Default |
 | --- | --- | --- |
 | `storage.host_drive` | Optional override for the Windows drive that backs the WSL2 workspace VHDX, for example `F:`. Kura tries to auto-detect this from the WSL registry first. | `""` |
-| `storage.docker_data_drive` | Optional override for the Windows drive that backs Docker Desktop data, if different from `storage.host_drive`. Reserved for Docker backing accounting. | `""` |
 
 On native Linux and macOS, Kura trusts normal filesystem free space. On WSL2,
 large local Docker launches need the Windows backing drive as well as the Linux
@@ -60,8 +59,6 @@ digest moves only after compatibility checks.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `docker.workspace_target` | Container path for the mounted workspace. Kura currently supports only `/workspace`; other values are rejected at launch because backend artifacts compile `/workspace/...` paths. | `/workspace` |
-| `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.hf_cache` | Host directory for the Hugging Face cache of local Docker runs; a relative path is relative to the workspace | `./cache/huggingface` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs; a mount over the Hugging Face cache is refused (use `docker.hf_cache`) | none |
 | `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch; `kura doctor disk` warns below it | `100` |
@@ -92,6 +89,13 @@ Kura mounts that directory at `/workspace/cache/huggingface` in every local
 container, measures free space on its drive before launch, and counts the models
 already in it. `kura cleanup cache` reports a cache outside the workspace but
 never deletes it, since other workspaces may share it.
+
+Local Docker training always requests the GPU (`--gpus all`) and sees the
+workspace paths it uses under `/workspace` (only the selected ones for a
+manifest-v2 dataset); the RunPod API key is always read from
+`RUNPOD_API_KEY`. Older workspaces that still set `docker.gpu`,
+`docker.workspace_target`, `storage.docker_data_drive`, `runpod.api_key_env`, or
+`comfyui.runpod.api_key_env` are refused with a pointer to `kura workspace migrate`, which drops them.
 
 Workspaces created before `docker.hf_cache` mounted the cache through
 `docker.mounts` (target `/workspace/cache/huggingface` or the older
@@ -148,7 +152,7 @@ workspace mount table.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `comfyui.endpoint` | Local ComfyUI API endpoint | `http://127.0.0.1:8188` |
+| `comfyui.endpoint` | Local ComfyUI API endpoint; `kura render new` starts each render from it, and `kura doctor comfyui` checks it | `http://127.0.0.1:8188` |
 | `comfyui.lora_dir` | Host path to ComfyUI `models/loras`; empty means no automatic LoRA staging | `""` |
 | `comfyui.lora_stage_subdir` | Temporary subdirectory under `lora_dir` | `Kura_tmp` |
 | `comfyui.lora_stage_mode` | How render runs expose a local LoRA to ComfyUI: `auto` links when the endpoint's `/system_stats` reports Linux or WSL, and copies when it reports Windows, does not answer, or Kura itself runs on Windows; `symlink` or `copy` forces one | `auto` |
@@ -192,7 +196,6 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | Key | Purpose | Default |
 | --- | --- | --- |
 | `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
-| `runpod.api_key_env` | Environment variable that holds the RunPod API key | `RUNPOD_API_KEY` |
 | `runpod.storage_mode` | Remote staging mode | `upload` |
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |

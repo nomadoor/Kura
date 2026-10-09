@@ -80,7 +80,7 @@ class DockerCreateIntentTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "container-1\n", "")
 
             with _docker(docker):
-                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
 
             self.assertEqual(seen, {"intents": [f"{realization_id}{CREATE_INTENT_SUFFIX}"], "state": "launching"})
             realization = _realization(run_dir)
@@ -96,7 +96,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             run_dir = _run(root)
             replies = [subprocess.CompletedProcess([], 125, "", "could not select device driver"), _ps("container-2 created")]
             with _docker(replies), self.assertRaisesRegex(ValueError, "could not select device driver"):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=True)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
 
             realization = _realization(run_dir)
             self.assertEqual((realization["state"], realization["container"]["id"]), ("launch_failed", "container-2"))
@@ -110,7 +110,7 @@ class DockerCreateIntentTests(unittest.TestCase):
 
             # The process dies right after Docker started the container.
             with _docker(KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
 
             with _docker([_ps("container-3 running")]) as docker:
@@ -133,7 +133,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             replies = [subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon"),
                        subprocess.CompletedProcess([], 1, "", "Cannot connect to the Docker daemon")]
             with _docker(replies), self.assertRaisesRegex(ValueError, "Cannot connect.*could not check.*kura run reconcile example"):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             self.assertEqual(_status(run_dir)["state"], "launching")
             self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
 
@@ -142,7 +142,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             with _docker([_ps()]):
                 lines = resolve_docker_create_intents(run_dir)
 
@@ -156,7 +156,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             stderr = io.StringIO()
             with (
                 patch("kura.cli._run_path", return_value=run_dir),
@@ -188,7 +188,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-9\n", "")), \
                  patch("kura.executors.docker._mutate_run_status", side_effect=die_on_second_status_write), \
                  self.assertRaises(KeyboardInterrupt):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             self.assertEqual(_status(run_dir)["state"], "launching")
             self.assertEqual(len(unresolved_create_intents(run_dir, "docker")), 1)
             with _docker([]) as docker:
@@ -203,9 +203,9 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             with _docker([]) as docker, self.assertRaisesRegex(ValueError, "started first"):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             self.assertEqual([command[:2] for command in docker], [])
 
     def test_a_stop_records_what_it_did_before_reconciling(self) -> None:
@@ -213,7 +213,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
-                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             with _docker([subprocess.CompletedProcess([], 0, "container-1\n", "")]), patch("kura.executors.docker.reconcile_docker", return_value={}) as reconcile:
                 stop_docker(run_dir)
             reconcile.assert_called_once()
@@ -228,7 +228,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
-                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             # The container ends after the stop was asked for; a fixed date would pass into the past.
             after_stop = (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
             stopped = json.dumps({"Running": False, "ExitCode": 137, "FinishedAt": after_stop})
@@ -245,7 +245,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
-                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             finished = json.dumps({"Running": False, "ExitCode": 0, "FinishedAt": "2000-01-01T00:00:00.123456789Z"})
             with _docker([subprocess.CompletedProcess([], 0, "container-1\n", ""), subprocess.CompletedProcess([], 0, finished, "")]):
                 status = stop_docker(run_dir)
@@ -257,7 +257,7 @@ class DockerCreateIntentTests(unittest.TestCase):
             root = Path(directory)
             run_dir = _run(root)
             with _docker(lambda command: subprocess.CompletedProcess(command, 0, "container-1\n", "")):
-                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[], gpu=False)
+                _, realization_id = launch_docker(workspace=root, run_dir=run_dir, spec=SPEC, image="example:image", mounts=[])
             with _docker([subprocess.CompletedProcess([], 1, "", "permission denied")]), self.assertRaisesRegex(ValueError, "permission denied"):
                 stop_docker(run_dir)
             [stop] = [json.loads(path.read_text(encoding="utf-8")) for path in (run_dir / "realizations").glob(f"{realization_id}.stop-*.json")]
