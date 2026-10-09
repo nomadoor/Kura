@@ -236,13 +236,17 @@ def view_changes(workspace, lock, suffixes):
     """
     changes = []
     for view in lock["views"]:
-        root_relative = safe_relative(view["root"])
+        try:
+            root_relative = safe_relative(view["root"])
+            expected_links = {link["path"]: link["target"] for link in view["links"]}
+            expected_files = {
+                item["path"]: item["text"].encode("utf-8")
+                for item in [*view.get("files", []), *view.get("native_files", [])]
+            }
+        except (AttributeError, KeyError, TypeError) as exc:
+            # A frozen lock Kura did not write cannot be checked; say so instead of crashing the check.
+            raise TransferError(f"invalid view lock: {exc!r}") from exc
         root = workspace / root_relative
-        expected_links = {link["path"]: link["target"] for link in view["links"]}
-        expected_files = {
-            item["path"]: item["text"].encode("utf-8")
-            for item in [*view.get("files", []), *view.get("native_files", [])]
-        }
         actual_links = {}
         actual_files = set()
         if not root.is_dir() or root.is_symlink():

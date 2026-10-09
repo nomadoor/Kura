@@ -3166,6 +3166,13 @@ class DatasetHandoffTests(unittest.TestCase):
 
             self.assertIn("unexpected regular media", " ".join(inspect_dataset_handoff(workspace, lock)))
 
+    def test_a_malformed_view_lock_is_reported_not_crashed_on(self) -> None:
+        # Docker postflight and the Pod both record an unreadable lock as uncheckable (a ValueError).
+        with tempfile.TemporaryDirectory() as directory:
+            for lock in ({"views": ["not-a-view"]}, {"views": [{"root": "runs/r/view"}]}, {"views": [{"root": 3, "links": []}]}):
+                with self.subTest(lock=lock), self.assertRaises(ValueError):
+                    inspect_dataset_view(Path(directory), lock)
+
     def test_docker_and_pod_compare_a_view_with_the_same_function(self) -> None:
         from kura.container_scripts import script_source
         from kura.media_types import KNOWN_MEDIA_SUFFIXES
