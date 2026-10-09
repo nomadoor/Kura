@@ -970,12 +970,12 @@ def _ensure_lora_stage_visible(client: Any, endpoint: str, plan: dict[str, Any] 
         raise ValueError(
             "ComfyUI LoRA visibility could not be checked because object_info is unavailable. "
             f"endpoint={safe_endpoint}; error={exc}. "
-            f"Run `uv run kura doctor comfyui --endpoint {safe_endpoint}` to check the endpoint."
+            f"Run `kura doctor comfyui --endpoint {safe_endpoint}` to check the endpoint."
         ) from exc
     raise ValueError(
         "ComfyUI LoRA stage is not visible from the configured endpoint. "
         f"endpoint={safe_endpoint}; lora_name={plan.get('lora_name')}; lora_dir={Path(str(plan.get('target'))).parent.parent}. "
-        f"Run `uv run kura doctor comfyui --endpoint {safe_endpoint} --probe-stage` to verify staging, "
+        f"Run `kura doctor comfyui --endpoint {safe_endpoint} --probe-stage` to verify staging, "
         "then set comfyui.lora_dir to a LoRA directory used by that ComfyUI instance and recompile the render run."
     )
 

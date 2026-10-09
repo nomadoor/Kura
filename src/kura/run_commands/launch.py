@@ -203,9 +203,9 @@ def _run_remote_locked(
                 f"{message}\n\n"
                 f"{deadline_note}\n\n"
                 "The remote Pod may still be running and billing. Recover with:\n"
-                f"uv run kura run reconcile {run_id}\n"
-                f"uv run kura run download {run_id} --force\n"
-                f"uv run kura run stop {run_id}"
+                f"kura run reconcile {run_id}\n"
+                f"kura run download {run_id} --force\n"
+                f"kura run stop {run_id}"
             ),
         )
         return 1
@@ -223,7 +223,7 @@ def _run_remote_locked(
             except (OSError, ValueError) as exc:
                 print(f"cannot stop the RunPod pod: {_safe_error(exc)}; run `kura run stop {run_id}`", file=sys.stderr)
         elif launched:
-            print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `uv run kura run stop {run_id}` after recovery", file=sys.stderr)
+            print(f"warning: leaving RunPod pod running because remote completion/download was not confirmed; inspect and stop explicitly with `kura run stop {run_id}` after recovery", file=sys.stderr)
 
 
 def _running_remote_job(run_id: str) -> bool:
