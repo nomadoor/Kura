@@ -40,7 +40,7 @@ from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
-from kura.executors.common import _OperationBusy, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
+from kura.executors.common import _OperationBusy, host_time, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
 from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
@@ -532,11 +532,17 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 state_capture_required = training_state_capture_required(run_dir)
             except (OSError, ValueError):
                 state_capture_required = (run_dir / "resolved" / "manifest.lock.yaml").is_file()
-            published_states = (
-                publish_completed_training_states(run_dir.parent.parent, downloaded_run, allow_final_state=exit_code == 0)
-                if state_capture_required and output_dir.is_dir() and any(output_dir.glob("*-state"))
-                else []
-            )
+            # A state that fails verification is recorded for a person, as on Docker; collecting
+            # again cannot change a snapshot that is already complete.
+            state_error: str | None = None
+            try:
+                published_states = (
+                    publish_completed_training_states(run_dir.parent.parent, downloaded_run, allow_final_state=exit_code == 0)
+                    if state_capture_required and output_dir.is_dir() and any(output_dir.glob("*-state"))
+                    else []
+                )
+            except (OSError, ValueError) as exc:
+                published_states, state_error = [], _safe_error(exc)
             if state_capture_required and not published_states:
                 # Docker keeps every state the trainer wrote on local disk; on RunPod the states
                 # mirrored during training were published then, and stand in the same way.
@@ -548,8 +554,10 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             # everything the Pod had, so collecting again cannot change them: the run is
             # recorded as needing a person, as on Docker, and the Pod is not kept for it.
             blocked: list[str] = []
-            state_sync_error = missing_training_state_error(state_capture_required and not published_states, trainer_completed=exit_code == 0)
-            if state_sync_error:
+            state_sync_error = state_error or missing_training_state_error(state_capture_required and not published_states, trainer_completed=exit_code == 0)
+            if state_error and exit_code == 0:
+                blocked.append(state_error)
+            elif state_sync_error:
                 blocked.append(MISSING_STATE_PUBLICATION_ERROR)
             try:
                 outputs = materialize_primary_outputs(output_dir)
@@ -601,7 +609,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 }))
                 if input_postflight is not None:
                     status["dataset_input_postflight"] = input_postflight
-                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": remote_exit.get("timestamp"), "recovery_required": False})
+                status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp")})
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
                 if state_sync_error is not None:
                     status["training_state_sync_error"] = state_sync_error
@@ -629,7 +637,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 _apply_stdout_progress(run_dir, status, state="completed" if exit_code == 0 else "failed")
                 if blocked:
                     status.update({"state": "recovery_required", "publication_state": "blocked",
-                                   "publication_error": "; ".join(blocked), "recovery_required": True})
+                                   "publication_error": "; ".join(blocked)})
                     if attempt:
                         status["last_publication_attempt"] = attempt
 
@@ -1700,15 +1708,13 @@ def _record_remote_exit_observation(run_dir: Path, exit_record: dict[str, Any]) 
         "remote_state": "completed" if exit_code == 0 else "failed",
         "exit_code": exit_code,
         "remote_timestamp": exit_record.get("timestamp"),
-        "recovery_required": True,
     }
     atomic_write_json(observation_path, _redact_secrets(record("remote_exit_observation", observation)))
     def mutate(current: dict[str, Any]) -> None:
         current.update({
             "remote_state": observation["remote_state"],
             "remote_exit_code": exit_code,
-            "remote_ended": exit_record.get("timestamp"),
-            "recovery_required": True,
+            "remote_ended": host_time(exit_record.get("timestamp")) or exit_record.get("timestamp"),
             "last_remote_exit_observation": str(observation_path.relative_to(run_dir)),
         })
 

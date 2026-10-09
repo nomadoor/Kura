@@ -617,7 +617,8 @@ class RunPodFollowerTests(unittest.TestCase):
                     codes.append(runner.work(root, "example", request.name))
             self.assertEqual(codes, [1] * (runner.COLLECTION_ATTEMPTS - 1) + [0])
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-            self.assertEqual((status["state"], status["recovery_required"]), ("recovery_required", True))
+            self.assertEqual(status["state"], "recovery_required")
+            self.assertNotIn("recovery_required", status)  # the state alone says a person is needed
             self.assertTrue(run_finished(status))
 
     def test_a_stop_request_stops_the_pod(self) -> None:

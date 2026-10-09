@@ -137,6 +137,21 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat()
 
 
+def host_time(value: Any) -> str | None:
+    """A time another clock reported (Docker, a Pod), in the host's zone as Kura writes its own;
+    None when the value is not such a time. Accepts `Z` and fractions finer than microseconds."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(.*T\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)", value.strip())
+    if match is None:
+        return None
+    zone = "+00:00" if match.group(3) == "Z" else match.group(3)
+    try:
+        return datetime.fromisoformat(f"{match.group(1)}{(match.group(2) or '')[:7]}{zone}").astimezone().isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
 def _realization_id() -> str:
     return datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
 

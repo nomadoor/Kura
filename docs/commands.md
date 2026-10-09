@@ -181,7 +181,7 @@ situation-dependent decision, not a safe universal `recover` action.
 | `uv run kura run pull <run-id>` | Copy the latest completed intermediate checkpoint from a running RunPod run without stopping training |
 | `uv run kura run pull <run-id> --step <step>` | Copy one completed intermediate checkpoint for evaluation, such as a local ComfyUI render |
 | `uv run kura run download <run-id> --force` | Retry downloading a RunPod snapshot after inspecting remote state |
-| `uv run kura run stop <run-id>` | Explicitly stop the associated Pod/container |
+| `uv run kura run stop <run-id> [--yes]` | Explicitly stop the associated Pod/container; a RunPod Pod holding work not collected yet is stopped only with `--yes` |
 | `uv run kura run lease <run-id> <duration>` | Set how long a running RunPod Pod may live from now (shows the change and its price, then asks; `--yes` only on the user's instruction) |
 
 ## Execution flags

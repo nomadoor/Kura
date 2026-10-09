@@ -3431,7 +3431,8 @@ class RunPodLiveSyncTests(unittest.TestCase):
             self.assertEqual(status["state"], "running")
             self.assertEqual(status["remote_state"], "completed")
             self.assertEqual(status["remote_exit_code"], 0)
-            self.assertTrue(status["recovery_required"])
+            # Waiting for collection is not needing a person.
+            self.assertNotIn("recovery_required", status)
             observation = run_dir / status["last_remote_exit_observation"]
             self.assertEqual(json.loads(observation.read_text(encoding="utf-8"))["event"], "remote_exit_observed")
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -3456,7 +3457,8 @@ class RunPodLiveSyncTests(unittest.TestCase):
 
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(status["remote_state"], "completed")
-            self.assertTrue(status["recovery_required"])
+            # Waiting for collection is not needing a person.
+            self.assertNotIn("recovery_required", status)
             self.assertIn("could not append convenience event log", stderr.getvalue())
 
     def test_image_preflight_names_the_image_and_warns_only_for_a_mutable_override(self) -> None:
@@ -6293,9 +6295,10 @@ class LaunchPhaseTests(unittest.TestCase):
         self.assertIn("time       startup 15s · model download + training 45s", text)
 
     def test_docker_timestamps_normalize_to_parseable_values(self) -> None:
-        self.assertEqual(_docker_timestamp("2026-10-01T03:45:40.123456789Z"), "2026-10-01T03:45:40.123456+00:00")
-        self.assertEqual(_docker_timestamp("2026-10-01T03:45:40Z"), "2026-10-01T03:45:40+00:00")
-        self.assertEqual(_docker_timestamp("2026-10-01T12:45:40.5+09:00"), "2026-10-01T12:45:40.5+09:00")
+        from datetime import datetime, timezone
+
+        self.assertEqual(_docker_timestamp("2026-10-01T03:45:40.123456789Z"), datetime(2026, 10, 1, 3, 45, 40, 123456, tzinfo=timezone.utc).astimezone().isoformat())
+        self.assertEqual(_docker_timestamp("2026-10-01T03:45:40Z"), datetime(2026, 10, 1, 3, 45, 40, tzinfo=timezone.utc).astimezone().isoformat())
         self.assertIsNone(_docker_timestamp("0001-01-01T00:00:00Z"))
         self.assertIsNone(_docker_timestamp("not a time"))
 

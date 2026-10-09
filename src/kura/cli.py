@@ -1599,6 +1599,7 @@ def main() -> None:
     pull.set_defaults(func=cmd_run_pull)
     stop = run_sub.add_parser("stop", help="Stop the associated Pod or container")
     stop.add_argument("run_id")
+    stop.add_argument("--yes", action="store_true", help="Stop a RunPod run even though its Pod holds work not collected yet; use only on the user's instruction")
     stop.set_defaults(func=cmd_run_stop)
     reconcile = run_sub.add_parser("reconcile", help="Refresh observed external state")
     reconcile.add_argument("run_id")

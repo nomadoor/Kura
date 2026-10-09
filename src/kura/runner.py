@@ -962,8 +962,7 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     atomic_write_json(failures_path, record("follower_failures", {"count": failures, "at": _now()}))
     if failures < COLLECTION_ATTEMPTS:
         return 1
-    end_run(run_dir, "recovery_required", reason=f"collection failed {failures} times", keep_exit_code=True,
-            facts={"recovery_required": True})
+    end_run(run_dir, "recovery_required", reason=f"collection failed {failures} times", keep_exit_code=True)
     _log(f"{run_dir.name}: collection failed {failures} times; the run needs a person (see logs/runner.log)")
     _notify_text(details, f"Kura run needs attention: {run_dir.name}",
                  f"Run {run_dir.name} could not be collected after {failures} attempts, and its Pod may still be billing. "

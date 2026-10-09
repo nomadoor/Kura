@@ -1730,9 +1730,34 @@ def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | N
     return 1
 
 
-def stop_run(run_id: str) -> int:
+def _uncollected_pod_work(run_dir: Path) -> str | None:
+    """What a stop would destroy: a RunPod run whose Pod is alive and not yet collected holds
+    its outputs (or the checkpoints saved so far) only on that Pod. None when nothing is lost."""
+    try:
+        status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        realization = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if unresolved_create_intents(run_dir):
+        return None  # the stop itself reports that `kura run reconcile` comes first
+    if (realization.get("executor") != "runpod" or not isinstance(status.get("pod_id"), str)
+            or status.get("pod_stopped_at") or status.get("pod_missing_at") or status.get("downloaded_run")):
+        return None
+    if status.get("remote_state"):  # recorded only once the remote job has exited
+        return (f"its job has ended and its outputs are not collected; `kura run execute {run_dir.name}` collects them "
+                "and then deletes the Pod")
+    return (f"it is still training, and the checkpoints it has saved are only on the Pod; `kura run pull {run_dir.name}` "
+            "copies them first")
+
+
+def stop_run(run_id: str, *, yes: bool = False) -> int:
     try:
         run_dir = _run_path(run_id)
+        # Deleting a Pod before collection loses its work for good, so that stop is confirmed first.
+        if not yes and (at_risk := _uncollected_pod_work(run_dir)) is not None:
+            print(f"cannot stop run without confirmation: stopping deletes the Pod, and {at_risk}. "
+                  f"To stop anyway, run `kura run stop {run_id} --yes` (an agent only on the user's instruction).", file=sys.stderr)
+            return 1
         handed_over = _stop_through_runner(run_dir)
         if handed_over is not None:
             return handed_over
@@ -1757,7 +1782,7 @@ def stop_run(run_id: str) -> int:
 
 
 def cmd_run_stop(args: argparse.Namespace) -> int:
-    return stop_run(args.run_id)
+    return stop_run(args.run_id, yes=bool(getattr(args, "yes", False)))
 
 
 def cmd_run_logs(args: argparse.Namespace) -> int:
