@@ -22,7 +22,7 @@ from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.provenance import artifact_pinning
-from kura.training_artifacts import training_state_managed
+from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, run_executor, training_state_policy, validated_recipe
 
 
@@ -1472,7 +1472,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         scheduler = str(_nested(process, "train", "lr_scheduler") or "constant").lower()
         if scheduler != "constant":
             raise ValueError("AI-Toolkit State Resume initially requires the constant scheduler")
-        process["train"]["steps"] = continuation["target_step"]
+        process["train"]["steps"] = resume_steps(run, contract=state_contract)["native_end"]
     atomic_write_yaml(destination.with_suffix(".yaml"), config)
     return command_ai_toolkit(run)
 
@@ -1533,8 +1533,8 @@ def command_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             return {"cwd": cwd, "argv": argv, "env": runner_env, "write_roots": write_roots, "output_contract": output_contract}
         artifact_id = continuation["source"]["artifact_id"]
         spec["resume"] = {
-            "payload": f"/workspace/artifacts/training-state/{artifact_id}/payload",
-            "source_step": continuation["source"]["observed_step"],
+            "payload": training_state_payload(artifact_id),
+            "source_step": resume_steps(run, contract=state_contract)["source_step"],
             "rng_required": "rng_state_at_pre_iterator_hook" in continuation["restoration_contract"]["restored"],
         }
         runner[-1] = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))

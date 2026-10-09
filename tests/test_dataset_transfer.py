@@ -84,9 +84,17 @@ class _CompiledRunFixture:
             }
             raw = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
             (payload.parent / "manifest.json").write_bytes(raw)
-            run["continuation"] = {"mode": "resume", "source": {
-                "artifact_id": "state-1", "manifest_sha256": hashlib.sha256(raw).hexdigest(),
-            }}
+            run["parent_run"] = "source"
+            run["continuation"] = {
+                "mode": "resume",
+                "source": {
+                    "artifact_id": "state-1", "manifest_sha256": hashlib.sha256(raw).hexdigest(),
+                    "observed_step": 10, "recipe_sha256": "b" * 64,
+                },
+                "additional_steps": 5,
+                "target_step": 15,
+                "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
+            }
         from kura.backends import get_backend
         from kura.dataset_handoff import freeze_dataset_handoff
 

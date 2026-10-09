@@ -46,7 +46,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state, training_state_managed
+from kura.training_artifacts import read_resume_lock, resume_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -981,6 +981,52 @@ def _command_write_roots(command_lock: Any) -> list[str]:
     ]
 
 
+def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) -> dict[str, Any] | None:
+    """What a Resume run continues from and how far, from its frozen source lock when compile wrote one."""
+    if resume_intent(run) is None:
+        return None
+    lock = read_resume_lock(run_dir)
+    if lock is not None:
+        steps = resume_steps(run, lock=lock)
+        artifact_id = lock.get("artifact_id")
+        manifest_sha256 = lock.get("manifest_sha256")
+        native_state_path = lock.get("native_state_path")
+        restoration = lock.get("restoration_contract") if isinstance(lock.get("restoration_contract"), dict) else {}
+        files = lock.get("files") if isinstance(lock.get("files"), list) else []
+    else:
+        artifact = verified_resume_source(workspace, run)
+        if artifact is None:
+            return None
+        steps = resume_steps(run)
+        artifact_id = artifact["id"]
+        manifest_sha256 = artifact["manifest_sha256"]
+        native_state_path = training_state_payload(artifact_id)
+        restoration = artifact.get("restoration_contract") if isinstance(artifact.get("restoration_contract"), dict) else {}
+        files = artifact.get("files") if isinstance(artifact.get("files"), list) else []
+    if steps is None:
+        return None
+    return {
+        "source_run": run.get("parent_run"),
+        "artifact_id": artifact_id,
+        "manifest_sha256": manifest_sha256,
+        "source_step": steps["source_step"],
+        "target_step": steps["target_step"],
+        "additional_steps": steps["additional_steps"],
+        "restoration_level": restoration.get("level"),
+        "restored": restoration.get("restored") or [],
+        "not_restored": restoration.get("not_restored") or [],
+        "limitations": restoration.get("limitations") or [],
+        "scheduler_behavior": restoration.get("scheduler_behavior"),
+        "native_start": steps["native_start"],
+        "native_target": steps["native_end"],
+        "native_state_path": native_state_path,
+        "state_bytes": sum(item.get("size", 0) for item in files if isinstance(item, dict) and isinstance(item.get("size"), int)),
+        "capture_policy": training_state_policy(run),
+        "dataset_input": lock.get("dataset_input") if lock is not None and isinstance(lock.get("dataset_input"), dict) else None,
+        "kura": lock.get("kura") if lock is not None and isinstance(lock.get("kura"), dict) else None,
+    }
+
+
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
@@ -1123,7 +1169,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     if state_cadence is None:
         state_cadence = run_recipe.get("steps")
     state_capability = training_state_contract(run)["capability"]
-    training_state_payload = {
+    state_payload = {
         "enabled": state_policy["enabled"],
         "keep_generations": state_policy["keep_generations"],
         "cadence_steps": state_cadence,
@@ -1149,55 +1195,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     if run_executor(run) == "docker":
         # Shown, not enforced here: the launch runs the same check itself (and skips it for a dry run).
         preflight.extend(_local_disk_preflight_report(run, workspace, workspace_config, download_estimate))
-    continuation = resume_intent(run)
-    resume_payload = None
-    if continuation is not None:
-        lock_path = run_dir / "resolved" / "training-state-source.lock.json"
-        if lock_path.is_file():
-            lock = json.loads(lock_path.read_text(encoding="utf-8"))
-            source_step = lock.get("source_step")
-            target_step = lock.get("target_step")
-            artifact_id = lock.get("artifact_id")
-            manifest_sha256 = lock.get("manifest_sha256")
-            native_state_path = lock.get("native_state_path")
-            restoration = lock.get("restoration_contract") if isinstance(lock.get("restoration_contract"), dict) else {}
-            files = lock.get("files") if isinstance(lock.get("files"), list) else []
-        else:
-            source_intent = continuation["source"]
-            artifact = load_training_state(workspace, source_intent["artifact_id"])
-            if artifact["manifest_sha256"] != source_intent["manifest_sha256"]:
-                raise ValueError("Resume source manifest digest changed before planning")
-            verify_training_state(workspace, artifact)
-            source_step = source_intent["observed_step"]
-            target_step = continuation["target_step"]
-            artifact_id = artifact["id"]
-            manifest_sha256 = artifact["manifest_sha256"]
-            native_state_path = f"/workspace/artifacts/training-state/{artifact_id}/payload"
-            restoration = artifact.get("restoration_contract") if isinstance(artifact.get("restoration_contract"), dict) else {}
-            files = artifact.get("files") if isinstance(artifact.get("files"), list) else []
-        native_target_space = training_state_contract(run).get("native_target", "logical")
-        native_start = 0 if native_target_space == "process_local" else source_step
-        native_target = target_step - source_step if native_target_space == "process_local" else target_step
-        resume_payload = {
-            "source_run": run.get("parent_run"),
-            "artifact_id": artifact_id,
-            "manifest_sha256": manifest_sha256,
-            "source_step": source_step,
-            "target_step": target_step,
-            "additional_steps": target_step - source_step,
-            "restoration_level": restoration.get("level"),
-            "restored": restoration.get("restored") or [],
-            "not_restored": restoration.get("not_restored") or [],
-            "limitations": restoration.get("limitations") or [],
-            "scheduler_behavior": restoration.get("scheduler_behavior"),
-            "native_start": native_start,
-            "native_target": native_target,
-            "native_state_path": native_state_path,
-            "state_bytes": sum(item.get("size", 0) for item in files if isinstance(item, dict) and isinstance(item.get("size"), int)),
-            "capture_policy": training_state_policy(run),
-            "dataset_input": lock.get("dataset_input") if lock_path.is_file() and isinstance(lock.get("dataset_input"), dict) else None,
-            "kura": lock.get("kura") if lock_path.is_file() and isinstance(lock.get("kura"), dict) else None,
-        }
+    resume_payload = _resume_plan_payload(workspace, run, run_dir)
     return {
         "id": run_id,
         "type": run.get("type"),
@@ -1219,7 +1217,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             "capacity": capacity_policy(run) if plan_executor == "runpod" else None,
         },
         "resume": resume_payload,
-        "training_state": training_state_payload,
+        "training_state": state_payload,
         "datasets": datasets,
         "dataset_input": dataset_input_payload,
         "write_roots": write_roots,

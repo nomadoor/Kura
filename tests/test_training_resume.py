@@ -2055,10 +2055,13 @@ class ResumeRunTests(unittest.TestCase):
                 "type": "train",
                 "backend": {"name": "musubi-tuner", "config": {}},
                 "recipe": {"steps": 100, "seed": 1},
+                "parent_run": "source",
                 "continuation": {
                     "mode": "resume",
-                    "source": {"observed_step": 100},
+                    "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 100, "recipe_sha256": "b" * 64},
+                    "additional_steps": 50,
                     "target_step": 150,
+                    "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
                 },
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
@@ -2246,7 +2249,13 @@ class ResumeRunTests(unittest.TestCase):
                 native_format="accelerate-state-directory",
                 restoration_contract={"level": "best_effort_resume", "restored": ["optimizer"], "not_restored": []},
             )
-            run = {"id": "derived", "continuation": {"mode": "resume", "source": {"artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"]}}}
+            run = {"id": "derived", "parent_run": "source", "continuation": {
+                "mode": "resume",
+                "source": {"artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"], "observed_step": 10, "recipe_sha256": "b" * 64},
+                "additional_steps": 5,
+                "target_step": 15,
+                "restoration_contract": manifest["restoration_contract"],
+            }}
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
 

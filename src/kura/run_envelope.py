@@ -189,6 +189,30 @@ def training_state_policy(run: dict[str, Any]) -> dict[str, Any]:
     return {"enabled": enabled, "keep_generations": keep}
 
 
+def resume_target_step(observed: int, additional: Any, to_step: Any) -> int:
+    """The one rule for the logical step a Resume trains to: the source step plus
+    `additional`, or `to_step`; exactly one is given, and the target is past the source."""
+    if (additional is None) == (to_step is None):
+        raise ValueError("Resume continuation requires exactly one of additional_steps or to_step")
+    selected = additional if additional is not None else to_step
+    if isinstance(selected, bool) or not isinstance(selected, int) or selected <= 0:
+        raise ValueError("Resume continuation step request must be a positive integer")
+    target = observed + additional if additional is not None else to_step
+    if target <= observed:
+        raise ValueError(f"Resume continuation target_step {target} must be greater than observed_step {observed}")
+    return target
+
+
+def final_step(run: dict[str, Any]) -> int | None:
+    """The logical step a training run ends at: the Resume target, else the recipe's steps.
+    An invalid continuation raises; a run without a positive step count gives None."""
+    continuation = resume_intent(run)
+    if continuation is not None:
+        return continuation["target_step"]
+    steps = common_recipe(run).get("steps")
+    return steps if isinstance(steps, int) and not isinstance(steps, bool) and steps > 0 else None
+
+
 def resume_intent(run: dict[str, Any]) -> dict[str, Any] | None:
     continuation = run.get("continuation")
     if continuation is None:
@@ -219,16 +243,7 @@ def resume_intent(run: dict[str, Any]) -> dict[str, Any] | None:
     observed = source.get("observed_step")
     if isinstance(observed, bool) or not isinstance(observed, int) or observed < 0:
         raise ValueError("continuation.source.observed_step must be a non-negative integer")
-    additional = continuation.get("additional_steps")
-    to_step = continuation.get("to_step")
-    if (additional is None) == (to_step is None):
-        raise ValueError("Resume continuation requires exactly one of additional_steps or to_step")
-    selected = additional if additional is not None else to_step
-    if isinstance(selected, bool) or not isinstance(selected, int) or selected <= 0:
-        raise ValueError("Resume continuation step request must be a positive integer")
-    target = observed + additional if additional is not None else to_step
-    if target <= observed:
-        raise ValueError("Resume continuation target_step must be greater than observed_step")
+    target = resume_target_step(observed, continuation.get("additional_steps"), continuation.get("to_step"))
     if continuation.get("target_step") != target:
         raise ValueError("continuation.target_step does not match the requested Resume target")
     contract = continuation.get("restoration_contract")

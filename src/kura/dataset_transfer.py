@@ -24,7 +24,7 @@ from typing import Any, BinaryIO
 
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff
 from kura.fsio import atomic_write_bytes
-from kura.training_artifacts import load_training_state, verify_training_state
+from kura.training_artifacts import training_state_location, verified_resume_source
 
 TRANSFER_SCHEMA_VERSION = 1
 _CHUNK = 1024 * 1024
@@ -127,17 +127,11 @@ def _source_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
 def _resume_entries(
     workspace: Path, run: dict[str, Any], *, verify: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
-    continuation = run.get("continuation")
-    if not isinstance(continuation, dict) or continuation.get("mode") != "resume":
+    manifest = verified_resume_source(workspace, run, verify=verify)
+    if manifest is None:
         return [], None
-    source = continuation.get("source") if isinstance(continuation.get("source"), dict) else {}
-    artifact_id = source.get("artifact_id")
-    manifest = load_training_state(workspace, str(artifact_id))
-    if manifest["manifest_sha256"] != source.get("manifest_sha256"):
-        raise ValueError(f"training-state manifest digest mismatch: {artifact_id}")
-    if verify:
-        verify_training_state(workspace, manifest)
-    prefix = f"artifacts/training-state/{artifact_id}"
+    artifact_id = run["continuation"]["source"]["artifact_id"]
+    prefix = training_state_location(artifact_id, root=None)
     root = (workspace / prefix).resolve(strict=True)
     entries = [_entry(
         "resume", f"{prefix}/manifest.json", root, "manifest.json",

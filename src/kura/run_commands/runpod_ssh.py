@@ -40,11 +40,11 @@ from kura.records import record
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import run_path as _run_path
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_envelope import resume_intent, training_state_policy
+from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
-from kura.training_artifacts import checkpoint_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -947,16 +947,14 @@ def _pull_remote_training_state_items(
     pending_root.mkdir(parents=True, exist_ok=True)
     try:
         run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        continuation = resume_intent(run)
-        contract = training_state_contract(run)
+        steps = frozen_resume_steps(run_dir, run)
         retention_floor = training_state_retention_floor(
             host_workspace,
             run_dir.name,
             training_state_policy(run)["keep_generations"],
         )
     except (OSError, ValueError, yaml.YAMLError):
-        continuation = None
-        contract = {}
+        steps = None
         retention_floor = None
     for item in items:
         name, remote_path, step, files = item.get("name"), item.get("path"), item.get("step"), item.get("files")
@@ -964,14 +962,12 @@ def _pull_remote_training_state_items(
             continue
         if isinstance(step, bool) or not isinstance(step, int) or not isinstance(files, list) or not files:
             continue
-        logical_step = item.get("logical_step")
-        if isinstance(logical_step, bool) or not isinstance(logical_step, int):
-            logical_step = step
-            if continuation is not None and contract.get("native_progress") == "process_local":
-                logical_step = continuation["source"]["observed_step"] + step
-        if retention_floor is not None and logical_step < retention_floor:
+        marked_step = item.get("logical_step")
+        if isinstance(marked_step, bool) or not isinstance(marked_step, int):
+            marked_step = logical_step(step, steps)
+        if retention_floor is not None and marked_step < retention_floor:
             continue
-        existing = training_state_at_step(host_workspace, run_dir.name, logical_step, verify_payload=False)
+        existing = training_state_at_step(host_workspace, run_dir.name, marked_step, verify_payload=False)
         if existing is not None:
             published.append(existing)
             continue
