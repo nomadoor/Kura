@@ -8,7 +8,7 @@ from typing import Any
 
 from kura.container_scripts import script_source
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
-from kura.backends.shared import _truthy
+from kura.backends.shared import _truthy, download_specs_for, explicit_model_paths, model_downloads, recorded_model_source
 from kura.provenance import artifact_pinning
 
 MUSUBI_ADAPTER_SCRIPTS: dict[str, tuple[str, ...]] = {
@@ -88,27 +88,14 @@ def _normalize_musubi_model_version(value: Any, *, default: str = "") -> str:
 def _musubi_model_paths(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
     clean = _musubi_explicit_model_paths(override)
-    downloads = _musubi_model_downloads(run, existing_paths=clean)
-    clean.update(downloads[1])
+    clean.update(musubi_model_download_specs(run)[1])
     if not clean:
         raise ValueError("Musubi Tuner requires model_paths, model_downloads, or a known model.base bundle")
     return clean
 
 
 def _musubi_explicit_model_paths(override: dict[str, Any]) -> dict[str, str]:
-    paths = override.get("model_paths")
-    clean: dict[str, str] = {}
-    if isinstance(paths, dict):
-        for key, value in paths.items():
-            if isinstance(key, str) and isinstance(value, str) and value:
-                clean[key] = value
-    return clean
-
-
-def _safe_download_filename(filename: str) -> str:
-    if filename.startswith("/") or any(part in ("", ".", "..") for part in filename.split("/")):
-        raise ValueError(f"invalid Hugging Face filename for Musubi Tuner: {filename}")
-    return filename
+    return explicit_model_paths(override, label="Musubi Tuner")
 
 
 def _safe_cache_component(value: str) -> str:
@@ -237,55 +224,24 @@ def _known_musubi_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return downloads
 
 
-def musubi_model_download_specs(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[dict[str, str]], dict[str, str]]:
+def _musubi_download_entries(run: dict[str, Any]) -> list[dict[str, Any]]:
     override = _musubi_backend_override(run)
-    architecture = _musubi_architecture(run)
-    existing_paths = existing_paths or {}
-    resolved_downloads: dict[str, Any] = _known_musubi_bundle(run)
-    downloads = override.get("model_downloads")
-    if isinstance(downloads, dict):
-        resolved_downloads.update(downloads)
-    if not resolved_downloads:
-        return [], {}
-    download_specs: list[dict[str, str]] = []
-    paths: dict[str, str] = {}
-    for key, value in resolved_downloads.items():
-        if key in existing_paths:
-            continue
-        if not isinstance(key, str) or not isinstance(value, dict):
-            raise ValueError("Musubi Tuner model_downloads must map model keys to download mappings")
-        repo_id = value.get("repo_id") or value.get("repo")
-        filenames_value = value.get("filenames")
-        filenames = [item for item in filenames_value if isinstance(item, str) and item] if isinstance(filenames_value, list) else []
-        filename = value.get("filename") or value.get("file") or (filenames[0] if filenames else None)
-        if not isinstance(repo_id, str) or not repo_id or not isinstance(filename, str) or not filename:
-            raise ValueError(f"Musubi Tuner model_downloads.{key} requires repo_id and filename")
-        filename = _safe_download_filename(filename)
-        filenames = [_safe_download_filename(item) for item in (filenames or [filename])]
-        if value.get("local_dir"):
-            raise ValueError("Musubi Tuner model_downloads.local_dir is not supported; use HF_HOME cache or explicit model_paths")
-        for item_filename in filenames:
-            item = {
-                "key": key,
-                "repo_id": repo_id,
-                "filename": item_filename,
-                "link_path": _musubi_model_cache_path(repo_id, key, item_filename),
-            }
-            if architecture == "minimax_h3":
-                item["link_mode"] = "hardlink"
-            revision = value.get("revision")
-            if isinstance(revision, str) and revision:
-                item["revision"] = revision
-            repo_type = value.get("repo_type")
-            if isinstance(repo_type, str) and repo_type:
-                item["repo_type"] = repo_type
-            download_specs.append(item)
-        paths[key] = _musubi_model_cache_path(repo_id, key, filename)
-    return download_specs, paths
+    authored = override.get("model_downloads")
+    # A known bundle fills the roles the user did not declare; a malformed declaration goes to the owner as is.
+    downloads = {**_known_musubi_bundle(run), **authored} if isinstance(authored, dict) else authored if authored is not None else _known_musubi_bundle(run)
+    return model_downloads(
+        downloads, label="Musubi Tuner", explicit=_musubi_explicit_model_paths(override), cache_path=_musubi_model_cache_path,
+    )
 
 
-def _musubi_model_downloads(run: dict[str, Any], existing_paths: dict[str, str] | None = None) -> tuple[list[list[str]], dict[str, str]]:
-    download_specs, paths = musubi_model_download_specs(run, existing_paths=existing_paths)
+def musubi_model_download_specs(run: dict[str, Any]) -> tuple[list[dict[str, str]], dict[str, str]]:
+    # MiniMax-H3 reads its weights through hard links inside the cache.
+    extra = {"link_mode": "hardlink"} if _musubi_architecture(run) == "minimax_h3" else {}
+    return download_specs_for(_musubi_download_entries(run), **extra)
+
+
+def _musubi_model_downloads(run: dict[str, Any]) -> tuple[list[list[str]], dict[str, str]]:
+    download_specs, paths = musubi_model_download_specs(run)
     if not download_specs:
         return [], {}
     code = script_source("hf_download.py")
@@ -296,9 +252,7 @@ def requirements_musubi(run: dict[str, Any], download_estimate: dict[str, Any] |
     estimate = download_estimate or {}
     native = _musubi_backend_override(run)
     if declared:
-        paths = native.get("model_paths") if isinstance(native.get("model_paths"), dict) else {}
-        existing = {key: value for key, value in paths.items() if isinstance(key, str) and isinstance(value, str)}
-        specs, _ = musubi_model_download_specs(run, existing_paths=existing)
+        specs, _ = musubi_model_download_specs(run)
         estimate = {"items": [{"key": item.get("key"), "repo_id": item.get("repo_id"), "filename": item.get("filename"), "revision": item.get("revision"), "runtime_reference": item.get("link_path"), "size_status": "not-measured", "measurement_scope": "compile", "size_bytes": None, "cached": False} for item in specs]}
     requirements: list[dict[str, Any]] = []
     for item in estimate.get("items") if isinstance(estimate.get("items"), list) else []:
@@ -460,29 +414,13 @@ def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
 def _musubi_model_sources(run: dict[str, Any], paths: dict[str, str]) -> dict[str, dict[str, str]]:
     override = _musubi_backend_override(run)
     explicit_paths = _musubi_explicit_model_paths(override)
-    downloads = _known_musubi_bundle(run)
-    user_downloads = override.get("model_downloads")
-    if isinstance(user_downloads, dict):
-        downloads.update({key: value for key, value in user_downloads.items() if isinstance(key, str) and isinstance(value, dict)})
+    downloaded = {entry["role"]: entry for entry in _musubi_download_entries(run)}
     sources: dict[str, dict[str, str]] = {}
     for role, path in paths.items():
-        source: dict[str, str] = {"path": path}
-        if role in explicit_paths:
-            sources[role] = {**source, "source": "model_paths"}
-            continue
-        download = downloads.get(role)
-        if isinstance(download, dict):
-            repo = download.get("repo_id") or download.get("repo")
-            filename = download.get("filename") or download.get("file")
-            if isinstance(repo, str):
-                source["repo"] = repo
-            if isinstance(filename, str):
-                source["filename"] = filename
-            if isinstance(download.get("revision"), str):
-                source["revision"] = download["revision"]
+        if role in explicit_paths or role not in downloaded:
+            sources[role] = {"path": path, "source": "model_paths"}
         else:
-            source["source"] = "model_paths"
-        sources[role] = source
+            sources[role] = {"path": path, **recorded_model_source(downloaded[role])}
     return sources
 
 

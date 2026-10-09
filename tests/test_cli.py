@@ -345,7 +345,7 @@ class InitCommandTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(code, 1)
-        self.assertIn("model_downloads must map model keys to download mappings", stderr.getvalue())
+        self.assertIn("model_downloads must map model roles to download mappings", stderr.getvalue())
         self.assertFalse(resolved_exists)
 
     @posix_only(DATASET_IO)
@@ -5334,7 +5334,7 @@ class MusubiBackendTests(unittest.TestCase):
                 },
             }
         }
-        with self.assertRaisesRegex(ValueError, "model_downloads.local_dir is not supported"):
+        with self.assertRaisesRegex(ValueError, "model_downloads.dit contains unsupported key.*local_dir"):
             command_musubi_tuner(run)
 
     def test_command_musubi_resolves_known_flux2_klein_bundle(self) -> None:
@@ -5904,7 +5904,7 @@ class DockerLifecycleTests(unittest.TestCase):
         run = {
             "type": "train",
                         "recipe": {"steps": 3000},
-            "backend": {"name": "musubi-tuner", "config": {"save_every_n_steps": 100}},
+            "backend": {"name": "musubi-tuner", "config": {"architecture": "wan", "save_every_n_steps": 100}},
             "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2},
         }
         with tempfile.TemporaryDirectory() as directory:

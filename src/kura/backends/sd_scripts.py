@@ -12,7 +12,7 @@ from kura.backends.sd_scripts_datasets import (
     display_sd_scripts_dataset_config,
     write_sd_scripts_dataset_config,
 )
-from kura.backends.sd_scripts_models import explicit_model_paths, sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
+from kura.backends.sd_scripts_models import sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
 from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _reject_owned_extra_args, _script_command, _truthy
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
@@ -425,8 +425,7 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     architecture, mode = sd_scripts_architecture(run), sd_scripts_mode(run)
     _validate_selector(native, architecture, mode)
     paths = sd_scripts_model_paths(run)
-    explicit = explicit_model_paths(run)
-    download_commands, downloaded = sd_scripts_download_commands(run, explicit)
+    download_commands, downloaded = sd_scripts_download_commands(run)
     paths.update(downloaded)
     # A Resume run owns a new output namespace.  The source output_name is part
     # of the frozen training recipe, but reusing it would make the derived run
