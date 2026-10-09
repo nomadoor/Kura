@@ -33,7 +33,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolk
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
-from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_remote, cmd_run_status
+from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_launch, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_status
 from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
@@ -91,9 +91,11 @@ def tearDownModule() -> None:
 
 
 def _run_remote_in_process(args: argparse.Namespace) -> int:
-    """`kura run remote` through its in-process controller, as a job started before the runner uses."""
-    with patch("kura.run_commands.launch._runs_outside_the_runner", return_value=True):
-        return cmd_run_remote(args)
+    """A RunPod run through its in-process controller, as the runner's follower runs it."""
+    from kura.run_commands.launch import run_remote
+
+    options = {key: value for key, value in vars(args).items() if key not in {"run_id", "notify", "hold_for", "notify_repeat_interval"}}
+    return run_remote(args.run_id, notify_channels=getattr(args, "notify", None), **options)
 
 class InitCommandTests(unittest.TestCase):
     def test_cli_version_and_help_text(self) -> None:
@@ -109,9 +111,9 @@ class InitCommandTests(unittest.TestCase):
 
         run_help = subprocess.run([*command, "run", "--help"], text=True, capture_output=True, check=False)
         self.assertEqual(run_help.returncode, 0)
-        self.assertIn("Run on RunPod, download outputs, then auto-stop", run_help.stdout)
+        self.assertIn("Execute using the executor frozen in the compiled run", run_help.stdout)
 
-        for subcommand in (("run", "execute"), ("run", "launch"), ("run", "remote"), ("render", "launch")):
+        for subcommand in (("run", "execute"), ("render", "launch")):
             launch_help = subprocess.run([*command, *subcommand, "--help"], text=True, capture_output=True, check=False)
             self.assertEqual(launch_help.returncode, 0)
             self.assertIn("--yes", launch_help.stdout)
@@ -164,7 +166,8 @@ class InitCommandTests(unittest.TestCase):
             self.assertEqual(run["schema_version"], 2)
             self.assertEqual(run["compute"]["executor"], "runpod")
             self.assertEqual(run["compute"]["gpu"], "NVIDIA RTX A5000")
-            self.assertEqual(run["compute"]["capacity"], {"mode": "immediate"})
+            # No capacity policy is written: a RunPod run waits for a GPU by default.
+            self.assertNotIn("capacity", run["compute"])
             status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
             self.assertIsNone(status["last_step"])
             self.assertEqual(
@@ -2050,7 +2053,7 @@ class RenderNotificationTests(unittest.TestCase):
                 with patch("kura.run_commands.launch.launch_render_runpod", return_value=0) as launch, \
                         patch("kura.runner.ensure_runner", return_value=False), patch("kura.runner.follow", return_value=0), \
                         patch("sys.stdout", new_callable=io.StringIO) as stdout, patch("sys.stderr", new_callable=io.StringIO):
-                    code = cmd_run_launch(argparse.Namespace(run_id="render-1", executor="runpod", dry_run=False, yes=True))
+                    code = cmd_render_launch(argparse.Namespace(run_id="render-1", executor="runpod", dry_run=False, yes=True))
             finally:
                 os.chdir(previous)
             self.assertEqual(code, 0)
@@ -6914,7 +6917,9 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(through_runner.call_args.args, ("example",))
         self.assertTrue(through_runner.call_args.kwargs["yes"])
         options = through_runner.call_args.kwargs["options"]
-        self.assertEqual((options["hold_for"], options["max_lease"], options["wait_for_capacity"], options["capacity_poll_interval"]), ("0", "3h", "0", "30s"))
+        # A run that names no capacity policy waits for a GPU (RunPod GPUs are often taken).
+        self.assertNotIn("hold_for", options)
+        self.assertEqual((options["max_lease"], options["wait_for_capacity"], options["capacity_poll_interval"]), ("3h", "24h", "30s"))
 
     def test_execute_run_uses_frozen_capacity_wait_policy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8571,76 +8576,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual([item["phase"] for item in launch_phases(run_dir, "r1")], ["download_started", "download_finished"])
 
-    def test_run_remote_defaults_to_bounded_review_hold_after_confirmed_download(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
-            (root / "runs" / "example").mkdir(parents=True)
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch("kura.run_commands.launch.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch.launch_run", return_value=0) as launch, \
-                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0) as remote_run, \
-                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
-                     patch("kura.run_commands.launch._sleep_with_completion_reminders") as hold, \
-                     patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop:
-                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1))
-            finally:
-                os.chdir(previous)
-            self.assertEqual(code, 0)
-            hold.assert_called_once()
-            self.assertEqual(hold.call_args.kwargs["delay_sec"], 1800)
-            self.assertEqual(remote_run.call_args.kwargs["max_lease_sec"], 43200)
-            stop.assert_called_once()
-
-    def test_run_remote_repeats_completion_notification_during_review_hold(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
-            (root / "runs" / "example").mkdir(parents=True)
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch("kura.run_commands.launch.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch.launch_run", return_value=0), \
-                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
-                     patch("kura.notifications.time.sleep") as sleep, \
-                     patch("kura.run_commands.launch._notify") as initial_notify, \
-                     patch("kura.notifications.notify") as reminder_notify, \
-                     patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop:
-                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
-            finally:
-                os.chdir(previous)
-            self.assertEqual(code, 0)
-            self.assertEqual([call.args[0] for call in sleep.call_args_list], [600, 600])
-            initial_notify.assert_called_once()
-            reminder_notify.assert_called_once()
-            self.assertIn("completed", initial_notify.call_args.kwargs["subject"])
-            self.assertIn("reminder", reminder_notify.call_args.kwargs["subject"])
-            stop.assert_called_once()
-
-    def test_run_remote_stops_pod_when_review_hold_is_interrupted(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
-            (root / "runs" / "example").mkdir(parents=True)
-            previous = Path.cwd()
-            os.chdir(root)
-            try:
-                with patch("kura.run_commands.launch.stage_run", return_value=0), \
-                     patch("kura.run_commands.launch.launch_run", return_value=0), \
-                     patch("kura.run_commands.launch._runpod_run_over_ssh", return_value=0), \
-                     patch("kura.run_commands.launch.download_with_retries", return_value=0), \
-                     patch("kura.run_commands.launch._sleep_with_completion_reminders", side_effect=KeyboardInterrupt), \
-                     patch("kura.run_commands.launch.stop_runpod", return_value={}) as stop:
-                    code = _run_remote_in_process(argparse.Namespace(run_id="example", upload_timeout=1, job_timeout=1, download_attempts=1, download_interval=1, hold_for="20m", notify="ntfy", notify_repeat_interval="10m"))
-            finally:
-                os.chdir(previous)
-            self.assertEqual(code, 0)
-            stop.assert_called_once()
-
     def test_run_download_reuses_verified_local_checkpoint_in_terminal_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -9708,7 +9643,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch("kura.executors.runpod._runpod_request") as request:
-                with self.assertRaisesRegex(ValueError, "no Pod exists.*Ctrl\\+C.*doctor runpod.*run launch example"):
+                with self.assertRaisesRegex(ValueError, "no Pod exists.*Ctrl\\+C.*doctor runpod.*run execute example"):
                     stop_runpod(run_dir, self._config())
             request.assert_not_called()
 

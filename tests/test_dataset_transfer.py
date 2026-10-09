@@ -405,7 +405,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             root = Path(directory)
             run_dir, _ = self._compiled(root)
             cases = {
-                "no stage": ({"storage_mode": "upload"}, None, "staging first"),
+                "no stage": ({"storage_mode": "upload"}, None, "no staged bundle"),
                 "legacy stage": ({"storage_mode": "upload"}, {"storage_mode": "upload", "archive_name": "old.tar.gz"}, "selected-file stage"),
                 "container disk": ({"storage_mode": "container_disk"}, None, "storage_mode=upload"),
             }
@@ -477,7 +477,6 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             ):
                 code = run_remote(
                     "example", upload_timeout=1, job_timeout=0, download_attempts=1, download_interval=0,
-                    hold_for="30m",
                 )
 
             self.assertEqual(code, 1)

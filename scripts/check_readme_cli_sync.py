@@ -15,20 +15,20 @@ STALE_PATTERNS = [
     "--keep-pod",
     "--stop-delay",
 ]
-REQUIRED_REMOTE_FLAGS = ["--hold-for", "--max-lease"]
+REQUIRED_REMOTE_FLAGS = ["--max-lease"]
 
 
 def main() -> int:
     text = README.read_text(encoding="utf-8") if README.exists() else ""
     errors = [f"README contains stale text: {pattern}" for pattern in STALE_PATTERNS if pattern in text]
 
-    help_result = subprocess.run(["uv", "run", "kura", "run", "remote", "--help"], cwd=ROOT, text=True, capture_output=True, check=False)
+    help_result = subprocess.run(["uv", "run", "kura", "run", "execute", "--help"], cwd=ROOT, text=True, capture_output=True, check=False)
     if help_result.returncode:
         sys.stderr.write(help_result.stderr)
         return help_result.returncode
     for flag in REQUIRED_REMOTE_FLAGS:
         if flag not in help_result.stdout:
-            errors.append(f"remote help is missing {flag}")
+            errors.append(f"execute help is missing {flag}")
         if flag not in text:
             errors.append(f"README does not mention {flag}")
 

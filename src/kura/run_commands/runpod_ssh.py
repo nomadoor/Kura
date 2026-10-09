@@ -413,18 +413,6 @@ def _verify_snapshot_tree(snapshot: Path, manifest: list[dict[str, Any]]) -> Non
         raise ValueError(f"downloaded snapshot is missing a remote file: {missing[0]}")
 
 
-def _latest_runpod_transfer(run_dir: Path) -> dict[str, Any]:
-    status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
-    realization_ref = status.get("last_realization")
-    if not isinstance(realization_ref, str):
-        raise ValueError("run has no RunPod realization")
-    realization = json.loads((run_dir / realization_ref).read_text(encoding="utf-8"))
-    transfer = realization.get("transfer")
-    if realization.get("executor") != "runpod" or not isinstance(transfer, dict):
-        raise ValueError("latest realization has no RunPod upload transfer")
-    return transfer
-
-
 def _latest_runpod_stage(run_dir: Path) -> dict[str, Any]:
     status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     stage_ref = status.get("last_stage")
@@ -434,25 +422,6 @@ def _latest_runpod_stage(run_dir: Path) -> dict[str, Any]:
     if stage.get("storage_mode") != "upload":
         raise ValueError("latest RunPod stage is not an upload bundle")
     return stage
-
-
-def cmd_run_upload(args: argparse.Namespace) -> int:
-    try:
-        run_dir = _run_path(args.run_id)
-        transfer = _latest_runpod_transfer(run_dir)
-        archive = transfer.get("archive")
-        upload_code = transfer.get("upload_code")
-        if not isinstance(archive, str) or not isinstance(upload_code, str):
-            raise ValueError("latest realization has no upload archive/code")
-        archive_path = run_dir / archive
-        if not archive_path.is_file():
-            raise ValueError(f"upload archive is missing: {archive_path}")
-        if not shutil.which("runpodctl"):
-            raise ValueError("runpodctl is not installed locally; install it before uploading")
-        return subprocess.run(["runpodctl", "send", str(archive_path), "--code", upload_code], check=False).returncode
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"cannot upload run bundle: {_safe_error(exc)}", file=sys.stderr)
-        return 1
 
 
 # `kura run download` collected the snapshot, but the run needs a person (its outputs or its

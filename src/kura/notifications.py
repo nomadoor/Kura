@@ -90,23 +90,3 @@ def send_ntfy_notification(subject: str, body: str, priority: str | None = None)
     request = urllib.request.Request(url, data=body.encode("utf-8"), method="POST", headers=headers)
     with urllib.request.urlopen(request, timeout=20) as response:
         response.read()
-
-
-def sleep_with_completion_reminders(*, delay_sec: int, interval_sec: int, channels: Any, subject: str, body: str) -> None:
-    remaining = max(0, int(delay_sec))
-    interval = max(0, int(interval_sec))
-    elapsed = 0
-    while remaining > 0:
-        chunk = remaining if interval <= 0 else min(interval, remaining)
-        # A runner follower's review hold still ends on a stop request.
-        from kura.executors.common import sleep_checking_stop
-
-        sleep_checking_stop(chunk)
-        elapsed += chunk
-        remaining -= chunk
-        if interval > 0 and remaining > 0:
-            notify(
-                channels,
-                subject=f"{subject} (reminder)",
-                body=f"{body}\nReminder: {format_duration(elapsed)} since completion. Pod stops in about {format_duration(remaining)}.",
-            )

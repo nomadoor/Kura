@@ -92,7 +92,7 @@ Start an AI agent (Claude Code, Codex, and so on) in the Kura folder and talk to
 ### Where to train: your PC or RunPod
 
 - **Your PC**: training runs in Docker. A model is downloaded once and reused afterwards.
-- **RunPod**: Kura sends only the files the training needs, trains, collects the outputs, and then **stops the Pod automatically**. If the GPU you want is not available, you choose in the plan whether to use another GPU or wait for it (no charge while waiting). Even if your PC goes down, a Pod whose outputs were not collected stops itself after the longer of 2 hours and the training time, and any Pod stops itself once it reaches its maximum running time (`--max-lease`, 12 hours by default). Only when you want to inspect results on the Pod itself, `uv run kura run remote <run-id> --hold-for 30m` delays the stop.
+- **RunPod**: Kura sends only the files the training needs, trains, collects the outputs, and then **stops the Pod automatically**. If the GPU you want is not available, you choose in the plan whether to use another GPU or wait for it (no charge while waiting). Even if your PC goes down, a Pod whose outputs were not collected stops itself after the longer of 2 hours and the training time, and any Pod stops itself once it reaches its maximum running time (`--max-lease`, 12 hours by default).
 
 The agent suggests where to train based on GPU size and cost, and you decide in the plan.
 

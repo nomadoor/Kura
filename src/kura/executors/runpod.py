@@ -1086,7 +1086,7 @@ def launch_runpod(
         status = _load_status(run_dir)
         stage_ref = status.get("last_stage")
         if not isinstance(stage_ref, str):
-            raise ValueError("runpod upload mode requires staging first: kura run stage <run-id> --executor runpod")
+            raise ValueError("runpod upload mode found no staged bundle; `kura run execute` stages one before it uploads")
         stage = json.loads((run_dir / stage_ref).read_text(encoding="utf-8"))
         if stage.get("storage_mode") != "upload" or not isinstance(stage.get("archive_name"), str):
             raise ValueError("latest stage is not a runpod upload bundle")
@@ -1704,8 +1704,8 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "run is waiting for RunPod capacity and no Pod exists to stop; "
             "interrupt the active launch controller with Ctrl+C; if no controller remains, "
-            f"run `uv run kura doctor runpod`, then `uv run kura run launch {run_dir.name}` "
-            "to recover the stale wait"
+            f"run `kura doctor runpod`, then `kura run execute {run_dir.name}`, which follows the wait "
+            "or starts it again"
         )
     if unresolved_create_intents(run_dir):
         raise ValueError(

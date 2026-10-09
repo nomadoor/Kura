@@ -11,7 +11,7 @@ Use this skill whenever a run executes on RunPod or a RunPod Pod needs recovery 
 
 ```text
 draft run plan: measure GPU stock/price
-record the selected GPU and immediate/wait capacity policy
+record the selected GPU (the run waits for it by default; capacity mode: immediate fails instead)
 compile
 final run plan and one approval
 stage upload bundle (manifest-v2: selected files only, hashed against the lock)
@@ -21,7 +21,6 @@ verify inputs on the Pod before model acquisition (manifest-v2)
 run backend command detached from SSH control
 poll remote logs/exit record
 verify terminal manifest and download only the snapshot delta
-hold for review
 stop Pod
 ```
 
@@ -33,13 +32,11 @@ stop Pod
   approval, an agent runs `kura run execute <run-id> --yes`. The flag carries
   that approval through the non-interactive launch gate; it must not cause a
   second user prompt.
-- `kura run remote <run-id>` remains the low-level entry point for advanced
-  lifecycle flags and recovery work.
-- Prefer `run execute` when the compiled `compute.capacity` policy should apply.
-  Low-level `run remote` does not inherit that policy: pass
-  `--wait-for-capacity` and `--capacity-poll-interval` explicitly or it uses its
-  immediate-launch default.
-- `--hold-for 30m`: normal post-download review window.
+- It is the only way to start a training run. A run that did not complete,
+  such as a launch that lost its network, starts again as a new run from its
+  settings: `kura run new --from <run-id> --slug <words>`.
+- The compiled `compute.capacity` applies: by default the run waits for its
+  GPU (no Pod, no billing while waiting); `mode: immediate` fails at once.
 - `--max-lease 12h`: the Pod deletes itself this long after Kura first reaches it, whatever the local controller does.
   If Kura warns that training looks longer than the lease, tell the user the
   estimate and ask before running `kura run lease <run-id> <duration>`, which
@@ -49,7 +46,7 @@ stop Pod
 - `--unattended-wait auto`: after training, if the outputs were not collected,
   the Pod deletes itself after the longer of 2 hours and the job time
   (from remote job start, including model download). Collecting the outputs marks the
-  Pod so the timer leaves it to the controller and any `--hold-for` review;
+  Pod so the timer leaves it to the controller;
   a download in progress marks it too, so the timer waits for it.
 - An explicit `kura run reconcile` records a Pod that no longer exists (it
   deleted itself or was deleted elsewhere) as `interrupted` with
@@ -74,7 +71,7 @@ stop Pod
   trainer, and the normal download-then-stop path still runs. Launch pins the
   proven manifest in `realizations/<id>.transfer-manifest.json`; the Pod
   trusts only that pin. If the stage changes after launch, the controller
-  refuses before uploading and stops the unused Pod at once (no review hold).
+  refuses before uploading and stops the unused Pod at once.
   If stage or launch says "stage it again", the compile or staged files
   changed; rerun the stage rather than editing any staged file.
 - Treat configured GPU candidates as workspace policy, not durable skill
@@ -136,8 +133,7 @@ stop Pod
   metadata alone as completion.
 - If download/completion is uncertain, leave the Pod running and print/notify recovery steps.
 - Do not add unbounded keep-alive flags. Use bounded leases only.
-- If review hold is interrupted, stop the Pod.
-- `max-lease` is a billing safety fuse, not output preservation. Do not set it shorter than expected training plus review unless loss of container-disk outputs is acceptable.
+- `max-lease` is a billing safety fuse, not output preservation. Do not set it shorter than expected training unless loss of container-disk outputs is acceptable.
 - Do not put `HF_TOKEN`, RunPod keys, ntfy tokens, or object-store credentials in Pod create environment.
 - Every remote execution path must establish the executor contract before any
   work: `HF_HOME` set inside the workspace namespace (`$KURA_WORKSPACE/cache/huggingface`) and `HF_HUB_CACHE` set to its `hub/` child
