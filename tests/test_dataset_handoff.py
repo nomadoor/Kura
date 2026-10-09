@@ -3169,7 +3169,7 @@ class DatasetHandoffTests(unittest.TestCase):
     def test_a_malformed_view_lock_is_reported_not_crashed_on(self) -> None:
         # Docker postflight and the Pod both record an unreadable lock as uncheckable (a ValueError).
         with tempfile.TemporaryDirectory() as directory:
-            for lock in ({"views": ["not-a-view"]}, {"views": [{"root": "runs/r/view"}]}, {"views": [{"root": 3, "links": []}]}):
+            for lock in ({"views": ["not-a-view"]}, {"views": [{"root": "runs/r/view"}]}, {"views": [{"root": 3, "links": []}]}, {}, {"views": None}, []):
                 with self.subTest(lock=lock), self.assertRaises(ValueError):
                     inspect_dataset_view(Path(directory), lock)
 

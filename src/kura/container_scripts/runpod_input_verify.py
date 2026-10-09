@@ -235,7 +235,10 @@ def view_changes(workspace, lock, suffixes):
     Docker launch, plan, and postflight.
     """
     changes = []
-    for view in lock["views"]:
+    views = lock.get("views") if isinstance(lock, dict) else None
+    if not isinstance(views, list):
+        raise TransferError("invalid view lock: views is not a list")
+    for view in views:
         try:
             root_relative = safe_relative(view["root"])
             expected_links = {link["path"]: link["target"] for link in view["links"]}
