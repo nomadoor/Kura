@@ -3236,6 +3236,32 @@ class DatasetHandoffTests(unittest.TestCase):
             self.assertFalse(os.path.lexists(view / "x.png"))
             self.assertEqual(inspect_dataset_handoff(workspace, lock), [])
 
+    def test_launch_over_an_existing_view_refuses_a_malformed_view_lock(self) -> None:
+        # Launch stops with a ValueError, like every other unreadable lock, never a KeyError/TypeError.
+        def no_files(view: dict) -> None:
+            view["files"] = None
+
+        def no_links(view: dict) -> None:
+            del view["links"]
+
+        def link_without_target(view: dict) -> None:
+            del view["links"][0]["target"]
+
+        for name, corrupt in {
+            "files is None": no_files, "no links": no_links, "link without target": link_without_target,
+        }.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                run, resolved = self.make_run(workspace)
+                lock = freeze_dataset_handoff(
+                    run, workspace, resolved, backend="ai-toolkit", project=self.image_projection,
+                )
+                materialize_dataset_view(workspace, lock)
+                corrupt(lock["views"][0])
+
+                with self.assertRaises(ValueError):
+                    materialize_dataset_view(workspace, lock)
+
     def test_docker_view_checks_call_the_pod_comparer(self) -> None:
         from kura import dataset_handoff
         from kura.container_scripts import runpod_input_verify

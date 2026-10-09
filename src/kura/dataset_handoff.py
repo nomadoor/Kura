@@ -1442,23 +1442,16 @@ def materialize_dataset_view(workspace: Path, lock: dict[str, Any]) -> Path:
             shutil.rmtree(root)
         root.mkdir(parents=True, exist_ok=True)
         roots.append(root)
+        # An entry already present was compared by the owner above; the final check compares again.
         for link in view.get("links", []):
             path = _view_path(workspace, link["path"], root_relative)
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.is_symlink():
-                if os.readlink(path) != link["target"]:
-                    raise ValueError(f"retargeted view link: {link['path']}")
-            elif path.exists():
-                raise ValueError(f"view link destination already exists: {link['path']}")
-            else:
+            if not os.path.lexists(path):
                 path.symlink_to(link["target"])
         for generated in _generated_view_files(view):
             path = _view_path(workspace, generated["path"], root_relative)
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists():
-                if path.is_symlink() or path.read_bytes() != generated["text"].encode("utf-8"):
-                    raise ValueError(f"generated view file differs: {generated['path']}")
-            else:
+            if not os.path.lexists(path):
                 path.write_bytes(generated["text"].encode("utf-8"))
     changes = inspect_dataset_handoff(workspace, lock)
     if changes:
