@@ -55,6 +55,7 @@ from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
+from kura.run_commands.plan import docker_build_cache_limit_gib
 from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_render_launch
 from kura.run_commands import cmd_run_logs
@@ -1390,10 +1391,18 @@ def cmd_image_build(args: argparse.Namespace) -> int:
         return 1
     checkout, tag = development
     if not getattr(args, "allow_large_build_cache", False):
+        # A development checkout may build outside any workspace; there the default limit applies.
+        try:
+            config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
+            docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+            limit_gib = docker_build_cache_limit_gib(docker_config)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
+            return 1
         storage = _docker_storage_summary()
         for item in storage.get("usage", []):
-            if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
-                print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
+            if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > limit_gib * 1024**3:
+                print(f"cannot build image: Docker build cache exceeds {limit_gib}GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
                 return 1
     ref_arg, default_ref = BUILD_SOURCES[args.name]
     dockerfile = checkout / "docker" / args.name / "Dockerfile"
@@ -1660,7 +1669,7 @@ def main() -> None:
     build = image_sub.add_parser("build", help="Build a runtime image from the Kura checkout")
     build.add_argument("name", choices=tuple(PINNED_IMAGES))
     build.add_argument("--ref")
-    build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds the safety threshold")
+    build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds docker.build_cache_limit_gb (default 30)")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
     inspect.add_argument("name", choices=tuple(PINNED_IMAGES))

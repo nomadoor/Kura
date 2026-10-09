@@ -849,6 +849,11 @@ def local_min_free_gib(docker_config: dict[str, Any]) -> int:
     return _configured_gib(docker_config.get("min_free_gb"), default=100)
 
 
+def docker_build_cache_limit_gib(docker_config: dict[str, Any]) -> int:
+    """The Docker build cache size above which `kura doctor disk` warns and `kura image build` stops."""
+    return _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
+
+
 def _local_launch_disk_preflight(
     workspace: Path,
     run: dict[str, Any],

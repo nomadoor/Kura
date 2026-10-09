@@ -589,6 +589,30 @@ class ImageCommandTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("Docker build cache exceeds 30GiB", stderr.getvalue())
 
+    def test_image_build_reads_the_build_cache_limit_doctor_reads(self) -> None:
+        # One setting decides both doctor's warning and image build's stop; outside a workspace the default applies.
+        cache = {"usage": [{"Type": "Build Cache", "size_bytes": 25 * 1024**3}]}
+        for config, expected_code in (({"docker": {"build_cache_limit_gb": 20}}, 1), ({"docker": {"build_cache_limit_gb": 40}}, 0), (None, 0)):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if config is not None:
+                    (root / "workspace.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with (
+                        patch("kura.cli.development_checkout", return_value=REPOSITORY),
+                        patch("kura.cli._docker_storage_summary", return_value=cache),
+                        patch("kura.cli._docker_run", return_value=subprocess.CompletedProcess([], 0, "", "")),
+                        patch("sys.stderr", new_callable=__import__("io").StringIO) as stderr,
+                    ):
+                        code = cmd_image_build(argparse.Namespace(name="ai-toolkit", ref=None, allow_large_build_cache=False))
+                finally:
+                    os.chdir(previous)
+                self.assertEqual(code, expected_code, stderr.getvalue())
+                if expected_code:
+                    self.assertIn("Docker build cache exceeds 20GiB", stderr.getvalue())
+
 
 class DoctorDockerTests(unittest.TestCase):
     def test_cleanup_all_is_dry_run_inventory(self) -> None:
