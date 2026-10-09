@@ -26,7 +26,10 @@ from kura.dataset_handoff import (
     inspect_dataset_sources,
     inspect_dataset_view,
     load_frozen_dataset_projection,
+    trainer_captions,
 )
+from kura.dataset_inspect import dataset_trigger_word
+from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.executors.runpod import unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
@@ -633,6 +636,46 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+def _caption_preflight_report(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    """What the trainer will read as captions: shown before approval, never a refusal."""
+
+    def named(items: list[dict[str, str]]) -> str:
+        names = [f"{item['dataset']}/{item['sample']}" for item in items]
+        return ", ".join(names[:10]) + (f", and {len(names) - 10} more" if len(names) > 10 else "")
+
+    captions = trainer_captions(lock)
+    records: list[dict[str, Any]] = []
+    empty = [item for item in captions if caption_is_empty(item["text"])]
+    if empty:
+        records.append(_preflight_record(
+            "captions", "warning",
+            f"{len(empty)} of {len(captions)} caption(s) the trainer receives are empty: {named(empty)}",
+            "dataset-input.lock.json",
+        ))
+    for root in lock.get("dataset_roots", []):
+        dataset = root["dataset"]
+        trigger_word = dataset_trigger_word(Path(root["physical"]))
+        received = [item for item in captions if item["dataset"] == dataset]
+        if not received:
+            continue  # no caption reaches the trainer; the dataset's own facts show the missing captions
+        if trigger_word is None:
+            records.append(_preflight_record("captions", "info", f"trigger word: not declared for {dataset}", "dataset.yaml"))
+            continue
+        missing = [item for item in received if not caption_has_trigger(item["text"], trigger_word)]
+        if missing:
+            records.append(_preflight_record(
+                "captions", "warning",
+                f"trigger word {trigger_word!r} is missing from {len(missing)} of {len(received)} caption(s) "
+                f"the trainer receives for {dataset}: {named(missing)}",
+                "dataset.yaml",
+            ))
+        else:
+            records.append(_preflight_record(
+                "captions", "info", f"trigger word {trigger_word!r} is in all {len(received)} caption(s) for {dataset}", "dataset.yaml",
+            ))
+    return records
+
+
 def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> list[dict[str, Any]]:
     run_id = run.get("id")
     if isinstance(run_id, str) and run_id and "/" not in run_id and ".." not in run_id:
@@ -643,7 +686,10 @@ def _dataset_layout_preflight_report(run: dict[str, Any], workspace: Path) -> li
                 changes = inspect_dataset_sources(workspace, lock)
                 if changes:
                     return [_preflight_record("dataset-images", "error", "compiled dataset input changed: " + "; ".join(changes), "dataset-input.lock.json")]
-                return [_preflight_record("dataset-images", "info", "compiled dataset input stat matches", "dataset-input.lock.json")]
+                return [
+                    _preflight_record("dataset-images", "info", "compiled dataset input stat matches", "dataset-input.lock.json"),
+                    *_caption_preflight_report(lock),
+                ]
             return [_preflight_record("dataset-images", "warning", "compiled native source input is unverified", "dataset-input.lock.json")]
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     adapter = get_backend(backend.get("name"))

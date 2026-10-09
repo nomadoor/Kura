@@ -31,7 +31,8 @@ that command reads.
    ```yaml
    id: <id>                 # must match the directory name
    items_schema_version: 2
-   trigger_word: <word>     # optional; inspect counts it in the captions
+   trigger_word: <word>     # optional; inspect counts it, and `kura run plan`
+                            # warns about captions the trainer receives without it
    ```
 
 3. `kura dataset draft <id> --write` writes `dataset.v2.candidate.yaml` and

@@ -17,6 +17,7 @@ from kura.backends.dataset_profiles import (
 )
 from kura.backends.shared import _datasets, _toml_scalar
 from kura.dataset_handoff import project_caption_text
+from kura.dataset_manifest import caption_is_empty
 from kura.fsio import atomic_write_text
 from kura.run_envelope import backend_config
 
@@ -37,7 +38,7 @@ def _sd_scripts_caption_projection(
     if not isinstance(text, str):
         raise ValueError(f"sd-scripts sample {sample_id!r} has no caption text")
     projected = project_caption_text(text, transform)
-    if not projected:
+    if caption_is_empty(projected):
         raise ValueError(
             f"sd-scripts sample {sample_id!r} caption is empty after {transform}"
         )
