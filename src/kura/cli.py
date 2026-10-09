@@ -41,7 +41,7 @@ from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
 from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
-from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
+from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
@@ -847,10 +847,13 @@ def _chown_workspace_paths(workspace: Path, targets: list[Path], *, uid: int, gi
         _docker_chown_workspace_paths(workspace, targets, uid=uid, gid=gid)
 
 
-def _cleanup_path_item(workspace: Path, relative: str, *, classification: str) -> dict[str, Any]:
-    path = workspace / relative
+def _cleanup_path_item(workspace: Path, path: Path, *, classification: str) -> dict[str, Any]:
+    try:
+        target = path.relative_to(workspace).as_posix()
+    except ValueError:
+        target = str(path)
     return {
-        "target": relative,
+        "target": target,
         "path": str(path),
         "exists": path.exists(),
         "size_bytes": _path_size_bytes(path),
@@ -954,13 +957,19 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
     target = args.target
     actions: list[dict[str, Any]] = []
+    hf_cache = local_hf_cache(workspace, _workspace_config())
+    # A cache outside the workspace may be shared with other workspaces: report it, never delete it.
+    hf_cache_inside = workspace in hf_cache.parents
     if target in ("cache", "all"):
+        hf_item = _cleanup_path_item(workspace, hf_cache, classification="safe-cache" if hf_cache_inside else "outside-workspace")
+        if not hf_cache_inside:
+            hf_item["note"] = "docker.hf_cache is outside the workspace; Kura leaves it to you."
         actions.extend([
-            _cleanup_path_item(workspace, "cache/huggingface", classification="safe-cache"),
-            _cleanup_path_item(workspace, "cache/models", classification="safe-cache-index-or-symlink-tree"),
+            hf_item,
+            _cleanup_path_item(workspace, workspace / "cache" / "models", classification="safe-cache-index-or-symlink-tree"),
         ])
     if target in ("runs", "all"):
-        actions.append(_cleanup_path_item(workspace, "runs", classification="maybe-run-artifacts"))
+        actions.append(_cleanup_path_item(workspace, workspace / "runs", classification="maybe-run-artifacts"))
         run_actions = _run_cleanup_candidates(workspace, keep_last=args.keep_last, delete_final_artifacts=args.delete_final_artifacts)
         run_dirs = sorted(path for path in (workspace / "runs").glob("*") if path.is_dir())
         actions.append({
@@ -986,8 +995,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     if args.yes:
         try:
             if target in ("cache", "all"):
-                for relative in ("cache/huggingface", "cache/models"):
-                    path = workspace / relative
+                for path in ([hf_cache] if hf_cache_inside else []) + [workspace / "cache" / "models"]:
                     if path.exists():
                         _remove_tree(workspace, path)
                     path.mkdir(parents=True, exist_ok=True)
@@ -1058,9 +1066,7 @@ def cmd_fix_permissions(args: argparse.Namespace) -> int:
 
 def cmd_fix_links(args: argparse.Namespace) -> int:
     workspace = _require_workspace()
-    config = _workspace_config()
-    docker = config.get("docker", {}) if isinstance(config.get("docker"), dict) else {}
-    mounts = docker.get("mounts", []) if isinstance(docker.get("mounts"), list) else []
+    mounts = local_docker_mounts(workspace, _workspace_config())
     inspected = inspect_workspace_symlinks(workspace, mounts=mounts)
     actions: list[dict[str, Any]] = []
     for item in inspected.get("unsafe", []):
@@ -1345,7 +1351,8 @@ def cmd_workspace_migrate(args: argparse.Namespace) -> int:
     if migrated == config:
         print("workspace.yaml already uses the current schema")
         return 0
-    backup = path.with_name("workspace.yaml.v1")
+    # Timestamped, so an earlier migration's backup never blocks this one.
+    backup = path.with_name(f"workspace.yaml.{datetime.now().strftime('%Y%m%d-%H%M%S')}.bak")
     if backup.exists():
         print(f"cannot migrate workspace: {backup} already exists; move it aside first", file=sys.stderr)
         return 1

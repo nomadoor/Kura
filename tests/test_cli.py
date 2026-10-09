@@ -50,6 +50,7 @@ from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_a
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
+from kura.paths import local_docker_mounts
 from kura.storage import StorageStatus, ensure_free_bytes, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
 
@@ -149,8 +150,7 @@ class InitCommandTests(unittest.TestCase):
                 for relative in ("experiments", "backends", "executors", "docker"):
                     self.assertFalse((root / relative).exists(), relative)
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
-                self.assertEqual(workspace["docker"]["mounts"][0]["source"], "./cache/huggingface")
-                self.assertEqual(workspace["docker"]["mounts"][0]["target"], "/workspace/cache/huggingface")
+                self.assertNotIn("mounts", workspace["docker"])
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
                 self.assertNotIn("images", workspace)
@@ -747,7 +747,7 @@ class DoctorDockerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}}),
+                yaml.safe_dump({"docker": {}}),
                 encoding="utf-8",
             )
             link = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
@@ -795,13 +795,7 @@ class DoctorDockerTests(unittest.TestCase):
             root = Path(directory).resolve()
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {
-                        "docker": {
-                            "mounts": [
-                                {"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}
-                            ]
-                        }
-                    }
+                    {"docker": {}}
                 ),
                 encoding="utf-8",
             )
@@ -893,7 +887,7 @@ class DoctorDockerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
-                yaml.safe_dump({"docker": {"mounts": [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]}}),
+                yaml.safe_dump({"docker": {}}),
                 encoding="utf-8",
             )
             (root / "cache" / "huggingface").mkdir(parents=True)
@@ -1067,7 +1061,7 @@ class DoctorDockerTests(unittest.TestCase):
                         code = cmd_doctor_disk(argparse.Namespace())
                         launch = contextlib.nullcontext() if not short else self.assertRaisesRegex(ValueError, f"requires at least {min_free_gb} GiB")
                         with launch:
-                            _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": min_free_gb}, [])
+                            _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": min_free_gb}})
                 finally:
                     os.chdir(previous)
                 payload = json.loads(stdout.getvalue())
@@ -1078,12 +1072,48 @@ class DoctorDockerTests(unittest.TestCase):
                     self.assertEqual(low[0]["threshold_bytes"], min_free_gb * 1024**3)
                     self.assertIn(f"workspace backing store has less than {min_free_gb}GiB effective free (C:)", payload["warnings"])
 
+    def test_disk_checks_and_cleanup_follow_a_cache_outside_the_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as elsewhere:
+            root = Path(directory).resolve()
+            outside = Path(elsewhere).resolve() / "hf"
+            (outside / "hub").mkdir(parents=True)
+            (outside / "hub" / "weights.safetensors").write_bytes(b"x" * 10)
+            config = {"schema_version": 2, "docker": {"hf_cache": str(outside), "min_free_gb": 1}}
+            (root / "workspace.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with (
+                    patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                    patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as doctor_out,
+                ):
+                    cmd_doctor_disk(argparse.Namespace())
+                with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                    launch = _local_launch_disk_preflight(root, {"type": "train", "safety": {"allow_storage_risk": True}}, config)
+                with patch("kura.cli._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}), \
+                        patch("sys.stdout", new_callable=__import__("io").StringIO) as cleanup_out:
+                    code = cmd_cleanup(argparse.Namespace(target="cache", keep_last=30, delete_final_artifacts=False, yes=True))
+            finally:
+                os.chdir(previous)
+            doctor = json.loads(doctor_out.getvalue())
+            cleanup = json.loads(cleanup_out.getvalue())
+            self.assertEqual(doctor["sizes"]["huggingface_cache"]["path"], str(outside))
+            self.assertEqual(doctor["storage"]["huggingface_cache"]["path"], str(outside))
+            self.assertEqual(launch["paths"]["hf_cache"]["path"], str(outside))
+            self.assertEqual([name for name, item in launch["paths"].items() if item["path"] == str(outside)], ["hf_cache"])
+            self.assertEqual(code, 0)
+            # A cache outside the workspace may be shared: cleanup reports it and leaves it.
+            item = next(action for action in cleanup["actions"] if action.get("path") == str(outside))
+            self.assertEqual(item["classification"], "outside-workspace")
+            self.assertTrue((outside / "hub" / "weights.safetensors").is_file())
+
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {'docker': {'mounts': [{'source': './cache/huggingface', 'target': '/root/.cache/huggingface', 'mode': 'rw'}]}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}
+                    {'docker': {}, 'images': {'ai-toolkit': 'kura/ai-toolkit:test'}}
                 ),
                 encoding="utf-8",
             )
@@ -1122,6 +1152,8 @@ class DoctorDockerTests(unittest.TestCase):
             # Not `kura run prune`: with --yes it also removes old runs.
             # The workspace AGENTS.md keeps state-changing Docker commands with the user.
             self.assertEqual(managed["remove_stopped"], "ask the user to run: docker container prune --filter label=io.kura.managed=true")
+            self.assertEqual(payload["huggingface_cache"]["path"], str(root.resolve() / "cache" / "huggingface"))
+            self.assertNotIn("docker.mounts", payload["huggingface_cache"].get("note", ""))
 
     def test_doctor_docker_treats_an_unpulled_pinned_image_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1918,23 +1950,26 @@ class RunPlanTests(unittest.TestCase):
         self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
         self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
 
-    def test_local_plan_treats_unmapped_absolute_symlink_as_not_cached(self) -> None:
+    def _plan_cached_musubi_model(self, *, link_target: str, hf_cache: Path | None = None) -> dict:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            config: dict = {"schema_version": 2}
+            if hf_cache is not None:
+                config["docker"] = {"hf_cache": str(hf_cache)}
+            (root / "workspace.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
             (root / "datasets" / "tiny").mkdir(parents=True)
             run_dir = root / "runs" / "local"
             run_dir.mkdir(parents=True)
-            target = root / "cache" / "huggingface" / "hub" / "models--repo--model" / "snapshots" / "abc" / "weights.safetensors"
+            target = (hf_cache or root / "cache" / "huggingface") / "hub" / "models--repo--model" / "snapshots" / "abc" / "weights.safetensors"
             target.parent.mkdir(parents=True)
             target.write_bytes(b"x" * 123)
             cache_file = root / "cache" / "models" / "musubi" / "repo--model" / "dit" / "weights.safetensors"
             cache_file.parent.mkdir(parents=True)
-            cache_file.symlink_to("/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
+            cache_file.symlink_to(link_target)
             run = {
                 "id": "local",
                 "type": "train",
-                                "model": {"base": "repo/model"},
+                "model": {"base": "repo/model"},
                 "datasets": [{"id": "tiny"}],
                 "recipe": {"steps": 1},
                 "compute": {"executor": "docker"},
@@ -1945,12 +1980,27 @@ class RunPlanTests(unittest.TestCase):
             os.chdir(root)
             try:
                 with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}):
-                    payload = plan_run("local")
+                    return plan_run("local")["model_downloads"]
             finally:
                 os.chdir(previous)
-        self.assertEqual(payload["model_downloads"]["bytes"], 200, payload["model_downloads"])
-        self.assertEqual(payload["model_downloads"]["cached_bytes"], 0)
-        self.assertFalse(payload["model_downloads"]["items"][0]["cached"])
+
+    @posix_only(POSIX_PATHS)
+    def test_local_plan_follows_a_link_written_through_the_legacy_cache_target(self) -> None:
+        downloads = self._plan_cached_musubi_model(link_target="/root/.cache/huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors")
+        self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (0, 123), downloads)
+
+    @posix_only(POSIX_PATHS)
+    def test_local_plan_counts_a_model_cached_outside_the_workspace(self) -> None:
+        relative = "../../../../huggingface/hub/models--repo--model/snapshots/abc/weights.safetensors"
+        with tempfile.TemporaryDirectory() as elsewhere:
+            downloads = self._plan_cached_musubi_model(link_target=relative, hf_cache=Path(elsewhere).resolve() / "hf")
+        self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (0, 123), downloads)
+        self.assertTrue(downloads["items"][0]["cached"])
+
+    def test_local_plan_treats_unmapped_absolute_symlink_as_not_cached(self) -> None:
+        downloads = self._plan_cached_musubi_model(link_target="/opt/elsewhere/weights.safetensors")
+        self.assertEqual((downloads["bytes"], downloads["cached_bytes"]), (200, 0), downloads)
+        self.assertFalse(downloads["items"][0]["cached"])
 
     def test_runpod_disk_preflight_counts_downloads_and_checkpoints(self) -> None:
         run = {
@@ -5687,16 +5737,15 @@ class DockerLifecycleTests(unittest.TestCase):
             root = Path(directory).resolve()
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
-            mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
-            command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", mounts, True, "r1")
-        self.assertIn(f"{root}/cache/huggingface:/workspace/cache/huggingface", command)
-        self.assertEqual(
-            json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"]),
-            [
-                {"container": "/workspace/cache/huggingface", "workspace": "/workspace/cache/huggingface"},
-                {"container": "/workspace", "workspace": "/workspace"},
-            ],
-        )
+            spec = {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}
+            command, runtime_env, _ = docker_command(root, run_dir, spec, "example:image", local_docker_mounts(root, {}), True, "r1")
+            with tempfile.TemporaryDirectory() as elsewhere:
+                outside = Path(elsewhere).resolve() / "hf"
+                moved, _, _ = docker_command(root, run_dir, spec, "example:image", local_docker_mounts(root, {"docker": {"hf_cache": str(outside)}}), True, "r1")
+        # The default cache is reached through the workspace mount; a moved one gets its own mount.
+        self.assertFalse([item for item in command if item.endswith(":/workspace/cache/huggingface")])
+        self.assertIn(f"{outside}:/workspace/cache/huggingface", moved)
+        self.assertEqual(json.loads(runtime_env["KURA_WORKSPACE_PATH_MAPS"]), [{"container": "/workspace", "workspace": "/workspace"}])
 
     def test_docker_preflight_creates_writable_mount_sources(self) -> None:
         class Usage:
@@ -5706,7 +5755,7 @@ class DockerLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
+            mounts = local_docker_mounts(root, {"docker": {"hf_cache": "./models/hf"}})
             # The free-space floor is tested separately; this test must not
             # depend on how full the machine running it is.
             with (
@@ -5714,7 +5763,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.executors.docker.shutil.disk_usage", return_value=Usage()),
             ):
                 docker_preflight(root, mounts)
-            self.assertTrue((root / "cache" / "huggingface").is_dir())
+            self.assertTrue((root / "models" / "hf").is_dir())
 
     def test_docker_preflight_records_free_space_without_deciding_the_floor(self) -> None:
         # The floor is decided once, by _local_launch_disk_preflight, which plan and launch both run.
@@ -5765,8 +5814,8 @@ class DockerLifecycleTests(unittest.TestCase):
             root = Path(directory)
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(60)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 100 GiB"):
-                    _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
-                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": 50}, [])
+                    _local_launch_disk_preflight(root, {"type": "train"}, {})
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"min_free_gb": 50}})
         self.assertEqual(payload["required_gib"], 50)
 
     def test_local_launch_disk_preflight_counts_estimated_hf_downloads(self) -> None:
@@ -5781,7 +5830,6 @@ class DockerLifecycleTests(unittest.TestCase):
                 }
             },
         }
-        mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
@@ -5790,8 +5838,8 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 20 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 70 GiB"):
-                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
-                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 40}, mounts)
+                    _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
+                payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 40}})
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 20 * 1024**3)
         self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 20 * 1024**3)
 
@@ -5815,9 +5863,9 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 30 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "allow_large_model_downloads"):
-                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+                    _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
                 run["safety"] = {"allow_large_model_downloads": True}
-                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+                payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
         self.assertEqual(payload["estimates"]["musubi_downloads"]["bytes"], 30 * 1024**3)
 
     def test_local_launch_disk_preflight_counts_allowed_checkpoint_budget(self) -> None:
@@ -5834,7 +5882,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 110 GiB"):
-                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, [])
+                    _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
         self.assertEqual(_checkpoint_safety_preflight(run), None)
 
     def test_local_launch_disk_preflight_sums_estimates_on_shared_backing(self) -> None:
@@ -5851,7 +5899,6 @@ class DockerLifecycleTests(unittest.TestCase):
             },
             "safety": {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 2, "allow_large_model_downloads": True},
         }
-        mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface", "mode": "rw"}]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with (
@@ -5860,8 +5907,8 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 40 * 1024**3}),
             ):
                 with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
-                    _local_launch_disk_preflight(root, run, {"min_free_gb": 50}, mounts)
-                payload = _local_launch_disk_preflight(root, run, {"min_free_gb": 10}, mounts)
+                    _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
+                payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 10}})
         self.assertEqual(payload["paths"]["workspace"]["estimated_write_bytes"], 40 * 1024**3)
         self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 40 * 1024**3)
         self.assertEqual(payload["paths"]["workspace"]["backing_estimated_write_bytes"], 80 * 1024**3)
@@ -5872,15 +5919,15 @@ class DockerLifecycleTests(unittest.TestCase):
             root = Path(directory)
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(140)), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "requires at least 150 GiB"):
-                    _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"min_free_gb": 50}, [])
+                    _local_launch_disk_preflight(root, {"safety": {"max_run_disk_gb": 150}}, {"docker": {"min_free_gb": 50}})
 
     def test_local_launch_disk_preflight_rejects_unknown_wsl_backing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(900, confidence="unknown", backing_kind="wsl2_vhdx")), patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
                 with self.assertRaisesRegex(ValueError, "unknown physical backing free space"):
-                    _local_launch_disk_preflight(root, {"type": "train"}, {}, [])
-                payload = _local_launch_disk_preflight(root, {"safety": {"allow_storage_risk": True}}, {}, [])
+                    _local_launch_disk_preflight(root, {"type": "train"}, {})
+                payload = _local_launch_disk_preflight(root, {"safety": {"allow_storage_risk": True}}, {})
         self.assertEqual(payload["paths"]["workspace"]["confidence"], "unknown")
 
     def test_free_space_gate_measures_the_wsl_backing_drive(self) -> None:
@@ -5897,7 +5944,7 @@ class DockerLifecycleTests(unittest.TestCase):
             root = Path(directory)
             with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(500)), \
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, build_cache + "\n")):
-                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"build_cache_limit_gb": 30}, [])
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"docker": {"build_cache_limit_gb": 30}})
         self.assertEqual(payload["docker_storage"], [{"Type": "Build Cache", "Size": "120GB"}])
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:

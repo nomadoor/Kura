@@ -30,6 +30,7 @@ from kura.images import launch_image
 from kura.run_commands.common import _backend_image_name, _load_frozen_command, _safe_error, requested_gpu_types, runpod_settings_for_adapter
 from kura.run_commands.experiment import format_run_completion
 from kura.run_commands.render_completion import format_render_completion
+from kura.paths import local_docker_mounts
 from kura.run_commands.plan import _local_launch_disk_preflight, _parse_duration_seconds, collect_run_preflight, enforce_preflight_errors, stage_run, stop_run
 from kura.run_commands.render_runpod import launch_render_runpod
 from kura.backends import get_backend
@@ -478,11 +479,9 @@ def launch_run(
             workspace_target = str(docker.get("workspace_target", "/workspace"))
             if workspace_target != "/workspace":
                 raise ValueError("docker.workspace_target must be /workspace; backend artifacts currently compile container paths against /workspace")
-            mounts = docker.get("mounts", [])
-            if not isinstance(mounts, list):
-                raise ValueError("docker.mounts must be a list")
+            mounts = local_docker_mounts(_workspace(), config)
             if not dry_run:
-                _local_launch_disk_preflight(_workspace(), locked, docker if isinstance(docker, dict) else {}, mounts, config, enforce_model_download_safety=False)
+                _local_launch_disk_preflight(_workspace(), locked, config, enforce_model_download_safety=False)
             if check_only:
                 return 0
             local_image = image or selected["reference"]

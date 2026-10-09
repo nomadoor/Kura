@@ -1704,8 +1704,6 @@ def local_training_mounts(
         source, target_value, mode = item.get("source"), item.get("target"), item.get("mode", "rw")
         if not isinstance(source, str) or not source or mode not in {"ro", "rw"}:
             raise ValueError(f"configured mount {index} has an invalid source or mode")
-        if target_value == "/root/.cache/huggingface":
-            target_value = "/workspace/cache/huggingface"
         target = _container_path(target_value, context=f"configured mount {index} target")
         if target == PurePosixPath("/workspace"):
             raise ValueError("configured mount must not reintroduce the broad /workspace mount")

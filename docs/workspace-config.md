@@ -20,7 +20,7 @@ reads them.
 The file carries `schema_version: 2`. A workspace written by an older Kura is
 refused with the command that migrates it: `kura workspace migrate` shows the
 change, applies it only when confirmed, and keeps the previous file as
-`workspace.yaml.v1`.
+`workspace.yaml.<timestamp>.bak`.
 
 ## Storage
 
@@ -62,7 +62,8 @@ digest moves only after compatibility checks.
 | --- | --- | --- |
 | `docker.workspace_target` | Container path for the mounted workspace. Kura currently supports only `/workspace`; other values are rejected at launch because backend artifacts compile `/workspace/...` paths. | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
-| `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
+| `docker.hf_cache` | Host directory for the Hugging Face cache of local Docker runs; a relative path is relative to the workspace | `./cache/huggingface` |
+| `docker.mounts[]` | Extra host mounts for local Docker runs; a mount over the Hugging Face cache is refused (use `docker.hf_cache`) | none |
 | `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch; `kura doctor disk` warns below it | `100` |
 | `docker.build_cache_limit_gb` | Docker build cache size above which `kura doctor disk` warns; it does not stop a launch | `30` |
 
@@ -78,20 +79,25 @@ digest moves only after compatibility checks.
 | --- | --- | --- |
 | `runner.local_slots` | How many local Docker training runs the job runner runs at once; later launches wait in the order they were requested. Values below 1 count as 1 | `1` |
 
-Default Hugging Face cache mount:
+Model downloads for local Docker runs go to the Hugging Face cache, by default
+`./cache/huggingface`, which stays outside Git and is reused across runs. To keep
+these large files on another drive, name a host directory:
 
 ```yaml
 docker:
-  mounts:
-    - source: ./cache/huggingface
-      target: /workspace/cache/huggingface
-      mode: rw
+  hf_cache: /mnt/e/hf-cache
 ```
 
-`./cache/huggingface` stays outside Git and is reused across local Docker runs
-inside the same workspace. Advanced users can point `source` at a shared absolute
-path. Kura also maps the legacy `/root/.cache/huggingface` target into this
-workspace path so existing workspaces do not keep creating root-owned files.
+Kura mounts that directory at `/workspace/cache/huggingface` in every local
+container, measures free space on its drive before launch, and counts the models
+already in it. `kura cleanup cache` reports a cache outside the workspace but
+never deletes it, since other workspaces may share it.
+
+Workspaces created before `docker.hf_cache` mounted the cache through
+`docker.mounts` (target `/workspace/cache/huggingface` or the older
+`/root/.cache/huggingface`). Kura now refuses that entry; `kura workspace migrate`
+moves it to `docker.hf_cache`, or removes it when it named the default location.
+Links that containers wrote through the older target still resolve.
 
 Executors set `HF_HOME=/workspace/cache/huggingface` and
 `HF_HUB_CACHE=/workspace/cache/huggingface/hub`. AI-Toolkit, Kura-managed

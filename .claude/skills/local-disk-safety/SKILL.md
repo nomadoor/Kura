@@ -147,7 +147,9 @@ or WSL/VHDX/Windows-side operations.
 
 Think in terms of what can write bytes and where:
 
-- model downloads and local Docker runs write to workspace/cache backing storage
+- model downloads write to the Hugging Face cache (`docker.hf_cache`, default
+  `cache/huggingface`), which may sit on another drive; local Docker runs write
+  to the workspace
 - the configured local free-space floor is a margin after estimated writes, not
   a budget to spend
 - Docker builds write to Docker build cache

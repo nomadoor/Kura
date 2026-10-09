@@ -120,7 +120,7 @@ uv run kura run watch <run-id>  # one run in detail
 | `datasets/<name>/` | Your datasets |
 | `runs/<run-id>/outputs/` | The LoRAs you trained |
 | `artifacts/training-state/` | Saved state for continuing training |
-| `cache/huggingface/` | Downloaded models (tens of GB) |
+| `cache/huggingface/` | Downloaded models (tens of GB); `docker.hf_cache` in `workspace.yaml` can put them on another drive |
 
 None of these go into Git. If disk space is a concern, you can look first without changing anything:
 
@@ -130,7 +130,7 @@ uv run kura cleanup all   # what can be removed (add --yes to delete)
 uv run kura run prune     # older training runs (add --yes to delete)
 ```
 
-To free the model cache, delete `cache/huggingface/`. Models are downloaded again when needed.
+To free the model cache, delete `cache/huggingface/` (or the directory `docker.hf_cache` names). Models are downloaded again when needed.
 
 ## Supported models
 

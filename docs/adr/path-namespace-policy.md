@@ -67,9 +67,10 @@ Executor model-cache contract:
 - Container helpers must treat missing or unmappable `HF_HUB_CACHE` as a contract
   error before downloading. They must not fall back to private locations such as
   `/root/.cache/huggingface` or `/tmp/...`.
-- Local Docker may continue to expose a legacy Hugging Face cache mount through
-  `KURA_WORKSPACE_PATH_MAPS`, but new executor paths should prefer a single
-  workspace-visible cache location.
+- Local Docker exposes the Hugging Face cache only at
+  `/workspace/cache/huggingface`; `docker.hf_cache` chooses the host directory
+  behind it. The older `/root/.cache/huggingface` mount target is refused, and
+  `kura.paths` reads it only to resolve links written through it.
 
 ## Enforcement
 

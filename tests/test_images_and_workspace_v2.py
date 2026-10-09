@@ -14,7 +14,7 @@ import yaml
 from kura.cli import cmd_image_build, cmd_image_publish, cmd_init, cmd_run_status, cmd_workspace_migrate
 from kura.images import IMAGE_CUDA_VERSIONS, NEWEST_KNOWN_CUDA, PINNED_IMAGES, effective_image, image_cuda_version, runpod_min_cuda_version, launch_image, launch_image_warnings, mutable_override_warning
 from kura.run_commands.plan import _image_preflight_report
-from kura.workspace import WORKSPACE_SCHEMA_VERSION, migrate_workspace_config, require_workspace
+from kura.workspace import WORKSPACE_SCHEMA_VERSION, migrate_workspace_config, require_workspace, validate_workspace_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -153,6 +153,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             config = yaml.safe_load(Path("workspace.yaml").read_text(encoding="utf-8"))
             self.assertEqual(config["schema_version"], WORKSPACE_SCHEMA_VERSION)
             self.assertNotIn("images", config.get("docker", {}))
+            self.assertNotIn("mounts", config.get("docker", {}))
             self.assertNotIn("default_image", config.get("runpod", {}))
             self.assertFalse(list(Path(directory).rglob("Dockerfile")))
 
@@ -203,6 +204,41 @@ class WorkspaceSchemaTests(unittest.TestCase):
         again, notes = migrate_workspace_config(migrated := migrate_workspace_config(V1_WORKSPACE)[0])
         self.assertEqual((again, notes), (migrated, []))
 
+    def test_a_mount_over_the_hugging_face_cache_is_refused_with_the_migrate_command(self) -> None:
+        for target in ("/workspace/cache/huggingface", "/root/.cache/huggingface", "/workspace/cache/huggingface/hub"):
+            with self.subTest(target=target):
+                with self.assertRaisesRegex(ValueError, "docker.hf_cache.*kura workspace migrate"):
+                    validate_workspace_config({"schema_version": 2, "docker": {"mounts": [{"source": "/mnt/e/hf", "target": target}]}})
+        validate_workspace_config({"schema_version": 2, "docker": {"hf_cache": "/mnt/e/hf", "mounts": [{"source": "./loras", "target": "/workspace/loras"}]}})
+
+    def test_migration_moves_a_hugging_face_cache_mount_to_docker_hf_cache(self) -> None:
+        default, notes = migrate_workspace_config({"schema_version": 2, "docker": {"gpu": True, "mounts": [
+            {"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"},
+        ]}})
+        self.assertEqual(default, {"schema_version": 2, "docker": {"gpu": True}})
+        self.assertIn("removed the docker.mounts entry for the Hugging Face cache", "\n".join(notes))
+        moved, notes = migrate_workspace_config({"schema_version": 2, "docker": {"mounts": [
+            {"source": "/mnt/e/hf", "target": "/root/.cache/huggingface", "mode": "rw"},
+            {"source": "./loras", "target": "/workspace/loras", "mode": "ro"},
+        ]}})
+        self.assertEqual(moved["docker"], {"hf_cache": "/mnt/e/hf", "mounts": [{"source": "./loras", "target": "/workspace/loras", "mode": "ro"}]})
+        self.assertIn("moved the Hugging Face cache mount to docker.hf_cache", "\n".join(notes))
+        from_v1, _ = migrate_workspace_config({"schema_version": 1, "docker": {"mounts": [{"source": "/mnt/e/hf", "target": "/workspace/cache/huggingface"}]}})
+        self.assertEqual(from_v1["docker"], {"hf_cache": "/mnt/e/hf"})
+        self.assertEqual(migrate_workspace_config(moved), (moved, []))
+        untouched = {"schema_version": 2, "docker": {"gpu": True, "mounts": []}}
+        self.assertEqual(migrate_workspace_config(untouched), (untouched, []))
+        # A read-only mount, a mount of part of the cache, or a second location is never reinterpreted.
+        for mount, hf_cache in (
+            ({"source": "/mnt/e/hf", "target": "/workspace/cache/huggingface", "mode": "ro"}, None),
+            ({"source": "/mnt/e/hub", "target": "/workspace/cache/huggingface/hub"}, None),
+            ({"source": "/mnt/e/hf", "target": "/workspace/cache/huggingface"}, "/mnt/f/hf"),
+        ):
+            with self.subTest(mount=mount, hf_cache=hf_cache):
+                docker = {"mounts": [mount], **({"hf_cache": hf_cache} if hf_cache else {})}
+                with self.assertRaisesRegex(ValueError, "Edit workspace.yaml by hand"):
+                    migrate_workspace_config({"schema_version": 2, "docker": docker})
+
     def test_migrate_previews_then_applies_only_when_confirmed(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):
             path = Path("workspace.yaml")
@@ -216,7 +252,14 @@ class WorkspaceSchemaTests(unittest.TestCase):
             with patch("sys.stdout", io.StringIO()):
                 self.assertEqual(cmd_workspace_migrate(argparse.Namespace(yes=True)), 0)
             self.assertEqual(yaml.safe_load(path.read_text(encoding="utf-8"))["schema_version"], WORKSPACE_SCHEMA_VERSION)
-            self.assertEqual(Path("workspace.yaml.v1").read_text(encoding="utf-8"), before)
+            [backup] = Path(".").glob("workspace.yaml.*.bak")
+            self.assertEqual(backup.read_text(encoding="utf-8"), before)
+            # A backup left by an earlier migration does not block the next one.
+            path.write_text(yaml.safe_dump({"schema_version": 2, "docker": {"mounts": [{"source": "/mnt/e/hf", "target": "/workspace/cache/huggingface"}]}}), encoding="utf-8")
+            with patch("sys.stdout", io.StringIO()), patch("kura.cli.datetime") as clock:
+                clock.now.return_value.strftime.return_value = "20991231-000000"
+                self.assertEqual(cmd_workspace_migrate(argparse.Namespace(yes=True)), 0)
+            self.assertEqual(yaml.safe_load(path.read_text(encoding="utf-8"))["docker"], {"hf_cache": "/mnt/e/hf"})
             require_workspace()
 
 

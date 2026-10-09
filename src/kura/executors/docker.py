@@ -333,17 +333,6 @@ def _container_name(run_id: str, realization_id: str) -> str:
     return f"kura-{clean_run}-{realization_id}"[:200]
 
 
-def _effective_mounts(mounts: list[dict[str, str]], workspace_target: str) -> list[dict[str, str]]:
-    """Map the legacy root-only HF cache target into the workspace namespace."""
-    effective: list[dict[str, str]] = []
-    for mount in mounts:
-        item = dict(mount)
-        if item.get("target") == "/root/.cache/huggingface":
-            item["target"] = f"{workspace_target.rstrip('/')}/cache/huggingface"
-        effective.append(item)
-    return effective
-
-
 def _host_user() -> str | None:
     getuid = getattr(os, "getuid", None)
     getgid = getattr(os, "getgid", None)
@@ -367,7 +356,6 @@ def docker_command(
     """Build a detached Docker command and direct container output into the run mount."""
     name = _container_name(run_dir.name, realization_id)
     log_path = f"{workspace_target}/runs/{run_dir.name}/logs/stdout.log"
-    mounts = _effective_mounts(mounts, workspace_target)
     command = [
         "docker", "run", "-d", "--init", "--stop-timeout", "30", "--name", name,
         # Docker's default /dev/shm is 64 MiB; PyTorch data loaders pass whole images
@@ -454,7 +442,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
                 "link_count": sum(len(view.get("links", [])) for view in input_lock.get("views", [])),
             }
     else:
-        effective_mounts = _effective_mounts(mounts, workspace_target)
+        effective_mounts = mounts
     preflight = {} if dry_run else docker_preflight(workspace, effective_mounts)
     command, runtime_env, name = docker_command(
         workspace,
