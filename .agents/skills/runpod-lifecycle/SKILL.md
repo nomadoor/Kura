@@ -170,6 +170,10 @@ kura run pull <run-id> --since-step 1000
 kura run stop <run-id>
 ```
 
+`kura run stop` refuses while the Pod holds work not collected yet (outputs of
+an ended job, or checkpoints of one still training) and says how to collect
+it. Tell the user what would be lost; add `--yes` only on their instruction.
+
 ## Resume on a replacement Pod
 
 Resume is available only from a training-state artifact that completed local

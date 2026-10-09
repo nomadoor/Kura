@@ -118,8 +118,9 @@ training state. A missing or corrupt required artifact leaves the run in
 `publication_state: blocked` keep the two facts distinct. `run execute` then
 returns failure without rerunning the trainer. On RunPod, snapshot-transfer
 integrity is checked separately from the adapter-content requirement, and a
-publication failure leaves `recovery_required: true` so the Pod is not stopped
-as a completed run. Runs compiled before this output contract remain
+publication failure leaves the run in state `recovery_required` with its
+outputs downloaded. When the controller collected the run, it then deletes the
+Pod; after a manual `kura run download`, delete it with `kura run stop`. Runs compiled before this output contract remain
 `legacy-unverified` rather than acquiring retroactive verification.
 Backend-native output validators remain responsible for adapter-specific tensor
 keys and compatibility; this structural publication check does not judge LoRA
@@ -181,7 +182,7 @@ situation-dependent decision, not a safe universal `recover` action.
 | `uv run kura run pull <run-id>` | Copy the latest completed intermediate checkpoint from a running RunPod run without stopping training |
 | `uv run kura run pull <run-id> --step <step>` | Copy one completed intermediate checkpoint for evaluation, such as a local ComfyUI render |
 | `uv run kura run download <run-id> --force` | Retry downloading a RunPod snapshot after inspecting remote state |
-| `uv run kura run stop <run-id>` | Explicitly stop the associated Pod/container |
+| `uv run kura run stop <run-id> [--yes]` | Explicitly stop the associated Pod/container; a RunPod Pod holding work not collected yet is stopped only with `--yes` |
 | `uv run kura run lease <run-id> <duration>` | Set how long a running RunPod Pod may live from now (shows the change and its price, then asks; `--yes` only on the user's instruction) |
 
 ## Execution flags

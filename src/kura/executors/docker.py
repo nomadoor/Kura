@@ -27,6 +27,7 @@ from kura.dataset_handoff import (
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import publish_completed_training_states, training_state_capture_required, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.executors.common import (
+    host_time,
     kura_container_env,
     CREATE_INTENT_SUFFIX,
     PROGRESS_FIELDS,
@@ -186,7 +187,7 @@ def _finalize_dataset_handoff(
 
     cleanup_allowed = (
         current.get("publication_state") in {"completed", "not-required", "legacy-unverified"}
-        and not current.get("recovery_required", False)
+        and current.get("state") != "recovery_required"
     )
     cleanup_ref = f"realizations/{realization_id}.dataset-view-cleanup.json"
     cleanup_path = run_dir / cleanup_ref
@@ -645,16 +646,10 @@ def resolve_docker_create_intents(run_dir: Path) -> list[str]:
 
 
 def _docker_timestamp(value: Any) -> str | None:
-    """Docker reports nanoseconds; keep microseconds so the value parses everywhere."""
+    """A Docker time in the host's zone; None for Docker's empty `0001-01-01` and for text that is no time."""
     if not isinstance(value, str) or not value or value.startswith("0001-"):
         return None
-    match = re.fullmatch(r"(.*T\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)", value)
-    if match is None:
-        return None
-    fraction = (match.group(2) or "")[:7]
-    zone = "+00:00" if match.group(3) == "Z" else match.group(3)
-    return f"{match.group(1)}{fraction}{zone}"
-
+    return host_time(value)
 
 def _record_container_times(run_dir: Path, realization_id: str, docker_state: dict[str, Any]) -> None:
     """Record Docker's own start/finish once, on the first terminal observation."""
@@ -724,9 +719,7 @@ def reconcile_docker(
                 state = "completed" if exit_code == 0 else "failed"
                 finished_at = docker_state.get("FinishedAt")
                 if isinstance(finished_at, str) and finished_at and not finished_at.startswith("0001-"):
-                    # Docker reports UTC with nanoseconds; Kura writes every time in the host's zone.
-                    parsed = _docker_timestamp(finished_at)
-                    ended = datetime.fromisoformat(parsed).astimezone().isoformat() if parsed else finished_at
+                    ended = host_time(finished_at) or finished_at
                     ended_source = "docker_finished_at"
                     _record_container_times(run_dir, realization["id"], docker_state)
                 else:
@@ -849,7 +842,6 @@ def reconcile_docker(
                         latest["outputs"] = published_outputs
                     blocked = (capture_required and not published) or output_error is not None
                     latest["state"] = "recovery_required" if blocked else "completed"
-                    latest["recovery_required"] = blocked
                     latest["publication_state"] = "blocked" if blocked else "completed" if contract else "legacy-unverified"
                     if not blocked and not contract:
                         record_unverified_publication(run_dir, realization["id"], list(latest.get("outputs") or []))

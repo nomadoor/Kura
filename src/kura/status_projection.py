@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from kura.executors.common import TERMINAL_STATES
+from kura.executors.common import TERMINAL_STATES, host_time
 
 COVERED_FIELDS = (
     "state", "started", "ended", "exit_code", "last_realization", "last_observation",
@@ -223,7 +223,8 @@ def _apply_download(projected: dict[str, Any], run_dir: Path, directory: Path, r
     if exit_record is None or not isinstance(exit_record.get("exit_code"), int):
         return False
     code = exit_record["exit_code"]
-    projected.update({"state": "completed" if code == 0 else "failed", "exit_code": code, "ended": exit_record.get("timestamp")})
+    projected.update({"state": "completed" if code == 0 else "failed", "exit_code": code,
+                      "ended": host_time(exit_record.get("timestamp")) or exit_record.get("timestamp")})
     return True
 
 

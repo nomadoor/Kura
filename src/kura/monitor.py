@@ -837,7 +837,7 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
         job_state=_string(status.get("state")),
         remote_state=_string(status.get("remote_state")),
         downloaded=bool(status.get("downloaded_run")),
-        recovery_required=bool(status.get("recovery_required")),
+        recovery_required=status.get("state") == "recovery_required",
         pod_stopped=bool(status.get("pod_stopped_at")),
         mirrored_checkpoint_step=mirrored_step,
         checkpoint_sync_error=_string(status.get("checkpoint_sync_error")),

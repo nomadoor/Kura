@@ -117,9 +117,9 @@ class TuiMetricsTests(unittest.TestCase):
                 provider="runpod",
                 pod=PodInfo(id="pod-1", state="RUNNING"),
                 remote_state="completed",
-                recovery_required=True,
             ),
         )
+        # Awaiting download is not needing a person: only the run's state says that.
         self.assertEqual(_remote_execution_phase(summary), "● job complete · awaiting download and pod stop")
 
     def test_parse_nvidia_smi_csv(self) -> None:

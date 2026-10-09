@@ -125,7 +125,7 @@ class LocalOutputPublicationTests(unittest.TestCase):
             blocked = self._reconcile(run_dir)
 
             self.assertEqual(blocked["publication_state"], "blocked")
-            self.assertTrue(blocked["recovery_required"])
+            self.assertEqual(blocked["state"], "recovery_required")
             self.assertEqual(blocked["dataset_input_postflight"]["view_cleanup"], "deferred")
             self.assertNotIn("cleanup_record", blocked["dataset_input_postflight"])
             self.assertTrue(view.exists())
@@ -136,7 +136,7 @@ class LocalOutputPublicationTests(unittest.TestCase):
             recovered = self._reconcile(run_dir)
 
             self.assertEqual(recovered["publication_state"], "completed")
-            self.assertFalse(recovered["recovery_required"])
+            self.assertNotEqual(recovered["state"], "recovery_required")
             self.assertEqual(recovered["dataset_input_postflight"]["view_cleanup"], "removed")
             self.assertFalse(view.parent.parent.exists())
 
@@ -146,7 +146,7 @@ class LocalOutputPublicationTests(unittest.TestCase):
             run_dir = self._run(workspace)
             _, view = self._manifest_view(run_dir)
             blocked = self._reconcile(run_dir)
-            self.assertTrue(blocked["recovery_required"])
+            self.assertEqual(blocked["state"], "recovery_required")
             self.assertEqual(blocked["dataset_input_postflight"]["view_cleanup"], "deferred")
 
             def remnants() -> list[str]:
@@ -171,7 +171,7 @@ class LocalOutputPublicationTests(unittest.TestCase):
 
             observation = json.loads((run_dir / status["last_observation"]).read_text(encoding="utf-8"))
             self.assertIs(observation["container_missing"], True)
-            self.assertTrue(status["recovery_required"])
+            self.assertEqual(status["state"], "recovery_required")
             self.assertEqual(remnants(), ["example"])
             self.assertTrue(view.exists())
 
@@ -512,7 +512,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertEqual(status["execution_state"], "completed")
             self.assertEqual(status["exit_code"], 0)
             self.assertEqual(status["publication_state"], "blocked")
-            self.assertTrue(status["recovery_required"])
+            self.assertEqual(status["state"], "recovery_required")
             self.assertIn("frozen backend command", status["publication_error"])
 
     @posix_only(POSIX_PATHS)
@@ -639,7 +639,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             self.assertEqual(status["execution_state"], "completed")
             self.assertEqual(status["exit_code"], 0)
             self.assertEqual(status["publication_state"], "blocked")
-            self.assertTrue(status["recovery_required"])
+            self.assertEqual(status["state"], "recovery_required")
             self.assertIn("invalid safetensors", status["publication_error"])
             self.assertEqual(
                 json.loads((run_dir / status["last_publication_attempt"]).read_text(encoding="utf-8"))["result"],
@@ -656,7 +656,7 @@ class RunPodOutputPublicationTests(unittest.TestCase):
             recovered = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             self.assertEqual(recovered["state"], "completed")
             self.assertEqual(recovered["publication_state"], "completed")
-            self.assertFalse(recovered["recovery_required"])
+            self.assertNotEqual(recovered["state"], "recovery_required")
 
 
 if __name__ == "__main__":
