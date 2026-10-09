@@ -153,10 +153,6 @@ def _validate_torch_archive(path: Path) -> None:
         raise ValueError(f"training-state has an invalid torch archive: {path.name}") from exc
 
 
-def _manifest_bytes(manifest: dict[str, Any]) -> bytes:
-    return (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-
-
 def _artifact_root(workspace: Path) -> Path:
     return workspace / "artifacts" / "training-state"
 

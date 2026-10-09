@@ -35,7 +35,7 @@ def main() -> int:
 
     required_tests = [
         "test_run_remote_does_not_stop_pod_when_download_is_unconfirmed",
-        "test_runpod_ssh_can_disable_pod_side_max_lease_guard",
+        "test_runpod_ssh_always_arms_the_pod_side_max_lease_guard",
         "test_launch_runpod_training_pod_arms_the_max_lease_at_start",
     ]
     for item in required_tests:

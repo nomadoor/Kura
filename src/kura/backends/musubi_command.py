@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
 
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
@@ -126,14 +125,6 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
     train = training_commands[0]
     if run is None:
         raise ValueError("Musubi training command assembly requires the frozen run envelope")
-    state_flags = {"--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", "--resume"}
-    duplicated_state = sorted(
-        arg.split("=", 1)[0]
-        for arg in _extra_args(override)
-        if arg.split("=", 1)[0] in state_flags
-    )
-    if duplicated_state:
-        raise ValueError("Musubi backend.config.extra_args duplicates adapter-owned Resume flag(s): " + ", ".join(duplicated_state))
     continuation = resume_intent(run)
     additional_steps = None
     if continuation is not None:
@@ -477,19 +468,6 @@ def _backend_env(backend_name: str, override: dict[str, Any]) -> dict[str, str]:
 def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     """Return a Musubi Tuner command spec without executing it."""
     override = _musubi_backend_override(run)
-    aliases = [pair for pair in (("architecture", "model_arch"), ("output_compatibility", "output_format")) if all(key in override for key in pair)]
-    if aliases:
-        raise ValueError(
-            "Musubi backend.config contains ambiguous aliases: "
-            + ", ".join(" and ".join(pair) for pair in aliases)
-            + "; keep only the first spelling shown by `kura run capabilities musubi-tuner`"
-        )
-    duplicated = sorted({"max_train_steps", "seed"} & set(override))
-    extra_args = _extra_args(override)
-    if any(arg in {"--max_train_steps", "--seed"} or arg.startswith(("--max_train_steps=", "--seed=")) for arg in extra_args):
-        duplicated.append("extra_args")
-    if duplicated:
-        raise ValueError("Musubi backend.config duplicates common recipe field(s): " + ", ".join(duplicated))
     explicit = override.get("command")
     if explicit is not None:
         combined = sorted(set(override) - {"command"})
@@ -1110,8 +1088,6 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         _append_flag(train_argv, override, "gradient_checkpointing")
         _append_flag(train_argv, override, "fp8_base")
         _append_flag(train_argv, override, "fp8_scaled")
-        _append_flag(train_argv, override, "flash_attn")
-        _append_flag(train_argv, override, "skip_t2i_visual_dummy")
         train_argv.extend(_extra_args(override))
         commands = _musubi_start_commands(dataset_config, download_commands)
         if override.get("validate_models", True):

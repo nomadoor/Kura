@@ -33,7 +33,7 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, kura_docker_volumes, stopped_kura_containers, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
-from kura.executors.common import OBSERVABLE_STATES, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_quiet_since
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, OBSERVABLE_STATES, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
@@ -55,6 +55,7 @@ from kura.run_commands import _sync_runpod_remote_stdout
 from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
+from kura.run_commands.plan import docker_build_cache_limit_gib
 from kura.run_commands import cmd_run_execute
 from kura.run_commands import cmd_render_launch
 from kura.run_commands import cmd_run_logs
@@ -73,7 +74,6 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.workspace import migrate_workspace_config
 from kura.run_commands.common import _backend_image_name
-from kura.workspace import workspace_relative_path as _workspace_relative_path
 
 
 def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -1391,10 +1391,18 @@ def cmd_image_build(args: argparse.Namespace) -> int:
         return 1
     checkout, tag = development
     if not getattr(args, "allow_large_build_cache", False):
+        # A development checkout may build outside any workspace; there the default limit applies.
+        try:
+            config = _workspace_config() if (_workspace() / "workspace.yaml").is_file() else {}
+            docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+            limit_gib = docker_build_cache_limit_gib(docker_config)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"cannot build image: {_safe_error(exc)}", file=sys.stderr)
+            return 1
         storage = _docker_storage_summary()
         for item in storage.get("usage", []):
-            if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * 1024**3:
-                print("cannot build image: Docker build cache exceeds 30GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
+            if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > limit_gib * 1024**3:
+                print(f"cannot build image: Docker build cache exceeds {limit_gib}GiB; run `kura cleanup docker-cache --yes` or pass --allow-large-build-cache", file=sys.stderr)
                 return 1
     ref_arg, default_ref = BUILD_SOURCES[args.name]
     dockerfile = checkout / "docker" / args.name / "Dockerfile"
@@ -1588,7 +1596,7 @@ def main() -> None:
     execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run; for a RunPod run whose job is already running, follow it and collect instead")
     execute.add_argument("run_id")
     execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
-    execute.add_argument("--max-lease", default="12h", help="RunPod only: the Pod deletes itself this long after it starts, whatever happens locally, e.g. 12h; 0 disables it.")
+    execute.add_argument("--max-lease", default=f"{DEFAULT_MAX_LEASE_SEC // 3600}h", help="RunPod only: the Pod deletes itself this long after it starts, whatever happens locally, e.g. 12h; it must be longer than zero, since Kura never starts a Pod without it.")
     execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after training, how long the Pod waits for Kura to collect outputs before deleting itself: auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
     execute.set_defaults(func=cmd_run_execute)
     logs = run_sub.add_parser("logs", help="Print the last 200 lines (at most 50 KB) of a run log, naming the full log, or follow it")
@@ -1661,7 +1669,7 @@ def main() -> None:
     build = image_sub.add_parser("build", help="Build a runtime image from the Kura checkout")
     build.add_argument("name", choices=tuple(PINNED_IMAGES))
     build.add_argument("--ref")
-    build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds the safety threshold")
+    build.add_argument("--allow-large-build-cache", action="store_true", help="Allow build even when Docker build cache exceeds docker.build_cache_limit_gb (default 30)")
     build.set_defaults(func=cmd_image_build)
     inspect = image_sub.add_parser("inspect", help="Inspect a runtime image")
     inspect.add_argument("name", choices=tuple(PINNED_IMAGES))

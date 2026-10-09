@@ -737,6 +737,7 @@ def _record_render_interrupted(workspace: Path, run_dir: Path, request: Path, st
 def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
     """Render once on a Pod whose billing the writer confirmed; a render cut short is recorded, its Pod deleted."""
     from kura.executors.common import set_stop_check
+    from kura.run_commands.plan import request_max_lease_seconds
     from kura.run_commands.render_runpod import launch_render_runpod
 
     details = _read_json(request)
@@ -766,7 +767,7 @@ def _work_render_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         # It notifies on completion and failure itself, on the request's channels or Kura's defaults.
         launch_render_runpod(
             run_dir.name, dry_run=False, image=details.get("remote_image"), notify_channels=details.get("notify"), yes=True,
-            max_lease_sec=int(options.get("max_lease_sec") or 12 * 3600), controlled_by=controlled_by,
+            max_lease_sec=request_max_lease_seconds(options.get("max_lease_sec")), controlled_by=controlled_by,
             runpod_config_override=details.get("runpod_config"),
         )
     finally:
@@ -885,9 +886,11 @@ RETIRED_REQUEST_OPTIONS = frozenset({"hold_for", "notify_repeat_interval"})
 
 def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: bool) -> int:
     from kura.run_commands.launch import _run_remote_locked
+    from kura.run_commands.plan import request_max_lease_seconds
 
     # Requests written by older Kura may carry options that no longer exist (the review hold).
     options = {key: value for key, value in (details.get("options") or {}).items() if key not in RETIRED_REQUEST_OPTIONS}
+    options["max_lease"] = request_max_lease_seconds(options.get("max_lease"))
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
                      "billing_confirmed_at": details.get("billing_confirmed_at")}
     return _run_remote_locked(
@@ -898,7 +901,7 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
 
 def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int:
     """Pick up a launch an earlier follower started, from its records."""
-    from kura.executors.common import remote_job_record, remote_job_started
+    from kura.executors.common import remote_job_started
     from kura.run_commands.runpod_ssh import remote_job_pid
 
     from kura.executors.common import end_run
@@ -945,7 +948,7 @@ def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details
         return 1
     end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
-                 f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Launch it again with `kura run execute {run_dir.name}`.")
+                 f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Start it again as a new run with `kura run new --from {run_dir.name} --slug <words>`.")
     return 0
 
 

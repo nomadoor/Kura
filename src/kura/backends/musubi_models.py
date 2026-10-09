@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from kura.container_scripts import script_source
@@ -447,7 +446,7 @@ def _musubi_model_lock(run: dict[str, Any]) -> dict[str, Any]:
 
 def _musubi_output_compatibility(run: dict[str, Any]) -> dict[str, str]:
     override = _musubi_backend_override(run)
-    value = override.get("output_compatibility") or override.get("output_format") or "comfyui"
+    value = override.get("output_compatibility") or "comfyui"
     return {"lora_format": str(value)}
 
 

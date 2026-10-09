@@ -24,7 +24,7 @@ import stat
 import sys
 import tarfile
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 CHUNK = 1024 * 1024
 CONTAINER_WORKSPACE = "/workspace/"

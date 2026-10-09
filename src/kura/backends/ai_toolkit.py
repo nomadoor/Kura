@@ -1459,7 +1459,7 @@ def compile_ai_toolkit(run: dict[str, Any], destination: Path) -> dict[str, Any]
         for dataset in process.get("datasets", []):
             if isinstance(dataset, dict):
                 dataset["resolution"] = deepcopy(override["resolution"])
-    policy = training_state_policy(run)
+    training_state_policy(run)
     continuation = resume_intent(run)
     state_contract = training_state_contract_ai_toolkit(run)
     if training_state_managed(run, state_contract):

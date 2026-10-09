@@ -195,7 +195,8 @@ completing starts again, as a new run from its settings:
 `kura run new --from <run-id> --slug <words>`.
 
 - `--max-lease 12h` deletes the Pod from inside after that long, whatever the
-  local controller does. It is a billing fuse, not output preservation.
+  local controller does. It is a billing fuse, not output preservation, and
+  it cannot be turned off: zero is refused.
 - `--unattended-wait auto` bounds a Pod whose controller is gone when training
   ends: unless Kura collects the outputs first, the Pod deletes itself after the
   longer of 2 hours and the job time (from remote job start, including model

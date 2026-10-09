@@ -113,7 +113,7 @@ CONFIG_KEYS = {
     "network_dim", "network_alpha", "learning_rate", "optimizer_type", "lr_scheduler", "mixed_precision",
     "gradient_checkpointing", "gradient_accumulation_steps", "network_train_unet_only", "fp8_base", "blocks_to_swap",
     "cache_latents", "cache_latents_to_disk", "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk",
-    "disk_cache_estimate_gb", "cpu_offload_checkpointing", "unsloth_offload_checkpointing", "deepspeed", "fused_backward_pass",
+    "disk_cache_estimate_gb", "cpu_offload_checkpointing", "unsloth_offload_checkpointing",
     "save_every_n_steps", "save_last_n_steps", "timestep_sampling", "discrete_flow_shift", "sigmoid_scale", "guidance_scale",
     "model_prediction_type", "attn_mode", "qwen_image_vae_2d", "vae_chunk_size", "unet_lr", "text_encoder_lr1", "text_encoder_lr2",
     "cond_emb_dim", "lllite_mlp_dim", "lllite_target_layers", "lllite_cond_dim", "lllite_cond_resblocks", "lllite_dropout",
@@ -125,7 +125,7 @@ ANIMA_ATTENTION_MODES = {"torch", "sdpa", "flash"}
 BOOLEAN_CONFIG_KEYS = {
     "gradient_checkpointing", "network_train_unet_only", "fp8_base", "cache_latents", "cache_latents_to_disk",
     "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk", "qwen_image_vae_2d", "cpu_offload_checkpointing",
-    "unsloth_offload_checkpointing", "deepspeed", "fused_backward_pass", "lllite_use_aspp", "flatten_groups",
+    "unsloth_offload_checkpointing", "lllite_use_aspp", "flatten_groups",
 }
 
 
@@ -159,9 +159,6 @@ def _positive_int(value: Any, *, field: str) -> int:
 
 
 def _validate_config(native: dict[str, Any], architecture: str, mode: str) -> None:
-    unknown = sorted(set(native) - CONFIG_KEYS)
-    if unknown:
-        raise ValueError("sd-scripts backend.config contains unsupported key(s): " + ", ".join(unknown))
     for key in ("learning_rate", "network_alpha", "unet_lr", "text_encoder_lr1", "text_encoder_lr2", "discrete_flow_shift", "sigmoid_scale", "guidance_scale"):
         if native.get(key) is not None:
             _number(native[key], field=key, positive=key != "guidance_scale")
@@ -236,7 +233,7 @@ def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> 
     if mode == "controlnet_lllite":
         if native.get("fp8_base") is True:
             raise ValueError("sd-scripts Anima LLLite does not support fp8_base")
-        incompatible = [name for name in ("blocks_to_swap", "cpu_offload_checkpointing", "unsloth_offload_checkpointing", "deepspeed", "fused_backward_pass") if native.get(name) not in (None, False, 0, "0", "false")]
+        incompatible = [name for name in ("blocks_to_swap", "cpu_offload_checkpointing", "unsloth_offload_checkpointing") if native.get(name) not in (None, False, 0, "0", "false")]
         if incompatible:
             raise ValueError("sd-scripts Anima LLLite does not support: " + ", ".join(incompatible))
         channels = native.get("lllite_cond_in_channels", 3)
@@ -262,8 +259,6 @@ def _validate_selector(native: dict[str, Any], architecture: str, mode: str) -> 
                 raise ValueError("sd-scripts FLUX.1 blocks_to_swap must be a positive integer")
             if _truthy(native.get("cpu_offload_checkpointing")):
                 raise ValueError("sd-scripts FLUX.1 cannot combine blocks_to_swap with cpu_offload_checkpointing")
-    if mode != "controlnet_lllite" and any(_truthy(native.get(key)) for key in ("deepspeed", "fused_backward_pass")):
-        raise ValueError("sd-scripts built-in LoRA selectors do not own deepspeed/fused_backward_pass; use a reviewed explicit command")
     if architecture in {"sdxl", "flux1"} and (_truthy(native.get("cache_text_encoder_outputs")) or _truthy(native.get("cache_text_encoder_outputs_to_disk"))) and not _truthy(native.get("network_train_unet_only")):
         raise ValueError(f"sd-scripts {architecture} text-encoder caching requires network_train_unet_only=true")
 
@@ -533,7 +528,6 @@ def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     architecture, mode = sd_scripts_architecture(run), sd_scripts_mode(run)
     config = native.get("dataset_config") if isinstance(native.get("dataset_config"), dict) else {}
     general = config.get("general") if isinstance(config.get("general"), dict) else {}
-    datasets = config.get("datasets") if isinstance(config.get("datasets"), list) else []
     dataset_display = display_sd_scripts_dataset_config(native)
     displayed_datasets = dataset_display["datasets"]
 

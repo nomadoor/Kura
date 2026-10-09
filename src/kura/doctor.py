@@ -29,7 +29,7 @@ from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storage, probe_storages
-from kura.run_commands.plan import _configured_gib, local_min_free_gib
+from kura.run_commands.plan import docker_build_cache_limit_gib, local_min_free_gib
 from kura.workspace import comfyui_endpoint, validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
@@ -270,7 +270,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         config = _workspace_config()
         docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
         min_free_gib = local_min_free_gib(docker_config)
-        build_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
+        build_cache_limit_gib = docker_build_cache_limit_gib(docker_config)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"disk: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1

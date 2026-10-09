@@ -62,7 +62,7 @@ digest moves only after compatibility checks.
 | `docker.hf_cache` | Host directory for the Hugging Face cache of local Docker runs; a relative path is relative to the workspace | `./cache/huggingface` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs; a mount over the Hugging Face cache is refused (use `docker.hf_cache`) | none |
 | `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch; `kura doctor disk` warns below it | `100` |
-| `docker.build_cache_limit_gb` | Docker build cache size above which `kura doctor disk` warns; it does not stop a launch | `30` |
+| `docker.build_cache_limit_gb` | Docker build cache size above which `kura doctor disk` warns and `kura image build` stops (unless `--allow-large-build-cache`); it does not stop a launch. Outside a workspace, `kura image build` uses the default | `30` |
 
 ## Agents
 

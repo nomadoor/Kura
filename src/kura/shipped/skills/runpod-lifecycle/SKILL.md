@@ -40,7 +40,7 @@ stop Pod
   its settings: `kura run new --from <run-id> --slug <words>`.
 - The compiled `compute.capacity` applies: by default the run waits for its
   GPU (no Pod, no billing while waiting); `mode: immediate` fails at once.
-- `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does.
+- `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does. It cannot be turned off; zero is refused.
   If Kura warns that training looks longer than the lease, tell the user the
   estimate and ask before running `kura run lease <run-id> <duration>`, which
   shows the change and its price; a longer lease is a billing decision, and
@@ -54,7 +54,7 @@ stop Pod
 - An explicit `kura run reconcile` records a Pod that no longer exists (it
   deleted itself or was deleted elsewhere) as `interrupted` with
   `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
-  does. Before relaunching such a run, confirm in the RunPod console that the
+  does. Before starting a new run from such a run, confirm in the RunPod console that the
   Pod is really gone.
 - Kura records its intent before creating a Pod. If a launch dies, or RunPod
   does not confirm a create, Kura never creates again on its own: launch and

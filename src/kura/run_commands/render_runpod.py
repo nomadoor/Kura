@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
-from kura.executors.common import check_stop
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
@@ -43,8 +43,6 @@ def _render_runpod_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _format_duration(seconds: int) -> str:
-    if seconds <= 0:
-        return "disabled"
     if seconds % 3600 == 0:
         return f"{seconds // 3600}h"
     if seconds % 60 == 0:
@@ -230,7 +228,7 @@ def launch_render_runpod(
     image: str | None = None,
     notify_channels: Any = None,
     yes: bool = False,
-    max_lease_sec: int = 12 * 3600,
+    max_lease_sec: int = DEFAULT_MAX_LEASE_SEC,
     controlled_by: dict[str, Any] | None = None,
     runpod_config_override: dict[str, Any] | None = None,
     check_only: bool = False,

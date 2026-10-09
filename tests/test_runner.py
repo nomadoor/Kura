@@ -530,7 +530,7 @@ class RunPodFollowerTests(unittest.TestCase):
             with patch("kura.run_commands.launch._run_remote_locked", side_effect=launched) as remote:
                 self.assertEqual(runner.work(root, "example", request.name), 0)
             kwargs = remote.call_args.kwargs
-            self.assertEqual((kwargs["yes"], kwargs["reattach"], kwargs["max_lease"]), (True, False, "3h"))
+            self.assertEqual((kwargs["yes"], kwargs["reattach"], kwargs["max_lease"]), (True, False, 3 * 3600))
             self.assertEqual(kwargs["runpod_config_override"], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertEqual(kwargs["controlled_by"]["request"], request.name)
 
@@ -869,7 +869,7 @@ class LocalRenderTests(unittest.TestCase):
                 through_runner.assert_called_once()
                 runpod = through_runner.call_args.kwargs.get("runpod")
                 if name == "runpod":
-                    self.assertEqual((runpod["yes"], runpod["max_lease"]), (True, "12h"))
+                    self.assertEqual((runpod["yes"], runpod["max_lease"]), (True, launch.DEFAULT_MAX_LEASE_SEC))
                 else:
                     self.assertIsNone(runpod)
 

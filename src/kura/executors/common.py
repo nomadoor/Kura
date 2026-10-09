@@ -39,15 +39,29 @@ RUN_STATES = frozenset({
 
 ACTIVE_STATES = frozenset({"queued", "staged", "launching", "running"})
 
-# A run in one of these may be launched again; `recovery_required` waits for a person.
-RELAUNCHABLE_STATES = frozenset({"compiled", "failed", "interrupted", "unknown", "launch_failed"})
-
-
 def can_start(status: dict[str, Any]) -> bool:
-    """Whether a launch may stage and start this run: it has not started, or it ended without
-    a Pod, or it is a capacity wait whose follower stopped (the runner resumes that wait)."""
+    """Whether a launch may stage and start this run: a run starts once, from `compiled`, or
+    resumes its own capacity wait whose follower stopped (the runner resumes that wait)."""
     state = status.get("state")
-    return state in RELAUNCHABLE_STATES or (state == "queued" and isinstance(status.get("capacity_wait"), dict))
+    return state == "compiled" or (state == "queued" and isinstance(status.get("capacity_wait"), dict))
+
+
+def start_refusal(run_id: str, status: dict[str, Any], *, action: str) -> str:
+    """Why `can_start` refused this run; an ended run starts again only as a new run from its settings."""
+    state = status.get("state")
+    if state in TERMINAL_STATES and state != "recovery_required":
+        message = (
+            f"run {run_id} ended {state}, and a run starts only once; start a new run from its settings "
+            f"with `kura run new --from {run_id} --slug <words>`"
+        )
+        if state == "unknown":
+            # An exited RunPod Pod reads as unknown while it still exists and bills for its disk.
+            message += (
+                f"; its Pod or container may still exist, so first refresh it with `kura run reconcile {run_id}` "
+                f"or end it with `kura run stop {run_id}`"
+            )
+        return message
+    return f"run must be compiled before {action}"
 
 # Finished runs whose artifacts `kura cleanup` may offer; unknown and recovery_required wait for a person.
 CLEANUP_ELIGIBLE_STATES = frozenset({"completed", "failed", "interrupted", "launch_failed"})
@@ -60,6 +74,10 @@ EXIT_CODE_FOR_STATE = {"completed": 0, "failed": 1, "launch_failed": 1, "interru
 
 
 OBSERVABLE_STATES = frozenset({"running"})
+
+
+# A RunPod Pod deletes itself this long after it starts unless the launch sets another maximum lease.
+DEFAULT_MAX_LEASE_SEC = 12 * 3600
 
 
 # A run that shows no progress this long is worth a look; status, the follower, and the monitor all say so at this age.

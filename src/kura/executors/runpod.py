@@ -5,15 +5,12 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import platform
 import secrets
 import shlex
 import shutil
-import subprocess
 import sys
 import tarfile
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -31,7 +28,7 @@ from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
 from kura.secrets import MissingSecret, declared_secret
 from kura.storage import ensure_free_bytes
-from kura.executors.common import PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
 from kura.records import record as as_record
 
@@ -267,11 +264,7 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, 
     return {"status": "ok", "checked_at": _now(), "gpu_count": settings["gpu_count"], "candidates": candidates}
 
 
-def _format_lease_limit(max_lease_sec: int | None) -> str:
-    if max_lease_sec is None:
-        return "none (this command does not install an automatic stop limit)"
-    if max_lease_sec <= 0:
-        return "disabled"
+def _format_lease_limit(max_lease_sec: int) -> str:
     if max_lease_sec % 3600 == 0:
         return f"{max_lease_sec // 3600}h"
     if max_lease_sec % 60 == 0:
@@ -284,7 +277,7 @@ def _confirm_runpod_launch(
     settings: dict[str, Any],
     *,
     yes: bool,
-    max_lease_sec: int | None,
+    max_lease_sec: int,
     wait_for_capacity_sec: int = 0,
     unattended_wait: str | None = None,
     min_cuda_version: str | None = None,
@@ -580,7 +573,7 @@ PER_LAUNCH_STATUS_FIELDS = (
 
 
 def confirm_runpod_billing(
-    config: dict[str, Any], image: str, *, yes: bool, max_lease_sec: int | None,
+    config: dict[str, Any], image: str, *, yes: bool, max_lease_sec: int,
     wait_for_capacity_sec: int = 0, unattended_wait: str | None = None,
 ) -> dict[str, Any]:
     """Show the launch's cost and take the user's confirmation without creating anything.
@@ -635,7 +628,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     intents = unresolved_create_intents(run_dir, "runpod")
     if not intents:
         return []
-    settings = _runpod_settings(config)
+    _runpod_settings(config)
     api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
     lines = []
     for intent_path in intents:
@@ -693,7 +686,7 @@ def _runpod_training_env(
     return {**spec_env, **kura_container_env(workspace_path=workspace_path, run_id=run_id, realization_id=realization_id)}
 
 
-def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = 12 * 3600) -> dict[str, str]:
+def _runpod_session_env(*, workspace_path: str, run_id: str, max_lease_sec: int = DEFAULT_MAX_LEASE_SEC) -> dict[str, str]:
     return {**kura_container_env(workspace_path=workspace_path, run_id=run_id), "KURA_MAX_LEASE_SEC": str(max_lease_sec)}
 
 
@@ -724,17 +717,6 @@ def _object_store_settings(config: dict[str, Any]) -> dict[str, str]:
         "access_key": access_key,
         "secret_key": secret_key,
     }
-
-
-def _object_store_client(config: dict[str, Any]) -> tuple[Any, dict[str, str]]:
-    settings = _object_store_settings(config)
-    try:
-        import boto3
-        from botocore.config import Config
-    except ImportError as exc:
-        raise ValueError("runpod.storage_mode=object_staging requires optional dependency: pip install 'kura[object-staging]'") from exc
-    client = boto3.client("s3", endpoint_url=settings["endpoint_url"], region_name=settings["region"], aws_access_key_id=settings["access_key"], aws_secret_access_key=settings["secret_key"], config=Config(retries={"max_attempts": 10, "mode": "standard"}, read_timeout=7200))
-    return client, settings
 
 
 def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -1067,7 +1049,7 @@ def launch_runpod(
     wait_for_capacity_sec: int = 0,
     capacity_poll_interval_sec: int = 30,
     yes: bool = False,
-    max_lease_sec: int | None = None,
+    max_lease_sec: int,
     unattended_wait: str | None = None,
     controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
@@ -1456,8 +1438,6 @@ LEASE_DEADLINE_PATH = "/tmp/kura-lease-deadline"
 
 def _runpod_lease_guard_shell(*, max_lease_sec: int, pod_id: str, log_path: str) -> str:
     """The maximum lease: delete the Pod after ``max_lease_sec`` whatever the controller does."""
-    if max_lease_sec <= 0:
-        return ""
     pod_export = f"RUNPOD_POD_ID={shlex.quote(pod_id)}; export RUNPOD_POD_ID" if pod_id else ":"
     deadline_file = shlex.quote(LEASE_DEADLINE_PATH)
     # The deadline lives in a file, so `kura run lease` can move it; an unreadable
@@ -1484,14 +1464,14 @@ kura_lease_initial=$(( $(date +%s) + {int(max_lease_sec)} ))
 """.strip()
 
 
-def _pod_start_script(script: str, *, max_lease_sec: int | None, log_path: str) -> str:
+def _pod_start_script(script: str, *, max_lease_sec: int, log_path: str) -> str:
     """Every start command Kura writes arms the maximum lease before anything else.
 
     A Pod whose controller never reaches it is then still bounded, and a later
     guard started over SSH keeps the deadline set here.
     """
-    guard = "" if max_lease_sec is None else _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
-    return "\n".join(part for part in (POD_SELF_DELETE_FUNCTION, guard, script) if part)
+    guard = _runpod_lease_guard_shell(max_lease_sec=max_lease_sec, pod_id="", log_path=log_path)
+    return "\n".join((POD_SELF_DELETE_FUNCTION, guard, script))
 
 
 def launch_runpod_session(
@@ -1502,7 +1482,7 @@ def launch_runpod_session(
     purpose: str,
     dry_run: bool = False,
     yes: bool = False,
-    max_lease_sec: int = 12 * 3600,
+    max_lease_sec: int = DEFAULT_MAX_LEASE_SEC,
     controlled_by: dict[str, Any] | None = None,
 ) -> str | None:
     """Create a thin disposable RunPod session without Kura training staging.
@@ -1641,7 +1621,7 @@ def reconcile_runpod(
     source: str = "explicit",
 ) -> dict[str, Any]:
     with _run_operation_lock(run_dir, "observe", blocking=blocking):
-        settings = _runpod_settings(config)
+        _runpod_settings(config)
         api_key = runpod_api_key("needed to reconcile a RunPod run")
         status = _load_status(run_dir)
         realization_ref = status.get("last_realization")
@@ -1705,7 +1685,7 @@ def reconcile_runpod(
 
 
 def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
-    settings = _runpod_settings(config)
+    _runpod_settings(config)
     status = _load_status(run_dir)
     if status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict):
         raise ValueError(

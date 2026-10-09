@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import posixpath
 import re
@@ -19,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors.common import can_start
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, can_start, start_refusal
 from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
@@ -79,40 +78,10 @@ def _count_dataset_items(path: Path | None) -> int | None:
         return None
 
 
-def _nested_get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
-    current: Any = mapping
-    for key in path:
-        if not isinstance(current, dict) or key not in current:
-            return None
-        current = current[key]
-    return current
-
-
 def _plan_value(value: Any) -> Any:
     if value is None or value == "":
         return NOT_SET
     return value
-
-
-def _extra_args_value(extra_args: Any, name: str) -> Any:
-    if not isinstance(extra_args, list):
-        return NOT_SET
-    index = 0
-    while index < len(extra_args):
-        item = extra_args[index]
-        if not isinstance(item, str):
-            index += 1
-            continue
-        flag, sep, inline_value = item.partition("=")
-        if flag != name:
-            index += 1
-            continue
-        if sep:
-            return inline_value or True
-        if index + 1 < len(extra_args) and isinstance(extra_args[index + 1], str) and not extra_args[index + 1].startswith("--"):
-            return extra_args[index + 1]
-        return True
-    return NOT_SET
 
 
 def _local_gpu_payload() -> dict[str, Any]:
@@ -878,6 +847,11 @@ def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | Non
 def local_min_free_gib(docker_config: dict[str, Any]) -> int:
     """The free space a local Docker run keeps on every backing store; `kura doctor disk` warns below it."""
     return _configured_gib(docker_config.get("min_free_gb"), default=100)
+
+
+def docker_build_cache_limit_gib(docker_config: dict[str, Any]) -> int:
+    """The Docker build cache size above which `kura doctor disk` warns and `kura image build` stops."""
+    return _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
 
 
 def _local_launch_disk_preflight(
@@ -1698,6 +1672,27 @@ def _parse_duration_seconds(value: Any) -> int:
     return amount * scale
 
 
+def max_lease_seconds(value: Any) -> int:
+    """The maximum lease in seconds; Kura never starts a RunPod Pod without its self-delete timer."""
+    if value is None:
+        return DEFAULT_MAX_LEASE_SEC
+    seconds = _parse_duration_seconds(value)
+    if seconds <= 0:
+        raise ValueError(
+            f"--max-lease must be a positive duration such as {DEFAULT_MAX_LEASE_SEC // 3600}h (got {value!r}); "
+            "Kura never starts a Pod without its self-delete timer"
+        )
+    return seconds
+
+
+def request_max_lease_seconds(value: Any) -> int:
+    """The maximum lease a runner request carries; one written before Kura refused a zero lease may
+    carry none or zero, and runs with the default, never without one. Anything else is read as a lease."""
+    if value is None or value == 0 or (isinstance(value, str) and _parse_duration_seconds(value) == 0):
+        return DEFAULT_MAX_LEASE_SEC
+    return max_lease_seconds(value)
+
+
 def _stop_through_runner(run_dir: Path, *, timeout_sec: float = 90.0) -> int | None:
     """Hand the stop to the runner's follower when one will see it; None when the CLI should act."""
     import time
@@ -1821,7 +1816,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         if status.get("state") == "running":
             raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")
         if not can_start(status):
-            raise ValueError("run must be compiled before staging")
+            raise ValueError(start_refusal(run_id, status, action="staging"))
         dataset_ids = [item.get("id") for item in _run_datasets(locked)]
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]
         if not dataset_ids:

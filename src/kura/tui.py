@@ -1984,25 +1984,6 @@ def _dataset_summary(datasets: tuple[RunDataset, ...]) -> str:
     return " / ".join((dataset.role + ":" if dataset.role else "") + (dataset.id or "-") for dataset in datasets)
 
 
-def _params(summary: RunSummary) -> str:
-    config = summary.key_config
-    parts = []
-    for key in ("rank", "batch_size", "lr", "steps"):
-        if config.get(key) not in (None, ""):
-            label = "batch" if key == "batch_size" else key
-            parts.append(f"{label}={config[key]}")
-    conv = _conv_rank_alpha(summary)
-    if conv != "-":
-        parts.append(f"conv={conv}")
-    save_precision = config.get("save_precision")
-    if save_precision not in (None, ""):
-        parts.append(f"save={save_precision}")
-    grad_accum = config.get("gradient_accumulation_steps")
-    if grad_accum not in (None, "", 1):
-        parts.append(f"accum={grad_accum}")
-    return " · ".join(parts) or "-"
-
-
 def _rank_alpha(summary: RunSummary) -> str:
     rank = summary.key_config.get("rank")
     alpha = summary.key_config.get("alpha")
