@@ -18,7 +18,7 @@ import yaml
 
 from kura.fsio import atomic_write_json, file_lock
 from kura.install_source import kura_continuity
-from kura.run_envelope import resume_intent, training_state_policy
+from kura.run_envelope import common_recipe, resume_intent, training_state_policy
 
 
 ARTIFACT_SCHEMA_VERSION = 1
@@ -763,6 +763,79 @@ def missing_training_state_error(capture_required: bool, *, trainer_completed: b
     return MISSING_STATE_SYNC_ERROR if capture_required and trainer_completed else None
 
 
+# Native save flags that count epochs; managed state is retained by steps, so they are refused.
+EPOCH_SAVE_FLAGS = frozenset({"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"})
+
+
+def managed_state_cadence(run: dict[str, Any], configured_cadence: int | None, *, contract: dict[str, Any] | None = None) -> int | None:
+    """How many native steps apart the trainer saves state: the configured cadence, else the
+    recipe's steps; a process-local Resume saves at least once within the steps it adds."""
+    cadence = configured_cadence if configured_cadence is not None else common_recipe(run).get("steps")
+    steps = resume_steps(run, contract=contract)
+    if isinstance(cadence, int) and steps is not None and steps["native_progress"] == "process_local":
+        cadence = min(cadence, steps["additional_steps"])
+    return cadence
+
+
+def managed_state_save_args(
+    run: dict[str, Any],
+    configured_cadence: int | None,
+    extra_args: list[str],
+    *,
+    contract: dict[str, Any] | None = None,
+) -> list[str]:
+    """The save flags of an accelerate trainer (Musubi Tuner, sd-scripts) whose state Kura manages.
+
+    The trainer saves state every `managed_state_cadence` steps and at the end, and keeps the
+    states of the last cadence (two generations) or only the newest (one generation).
+    `configured_cadence` is the backend's validated `save_every_n_steps`; a backend building
+    its own command passes its training-state contract.
+    """
+    epoch_flags = sorted({arg.split("=", 1)[0] for arg in extra_args} & EPOCH_SAVE_FLAGS)
+    if epoch_flags:
+        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+        raise ValueError(
+            f"{backend.get('name')} epoch save flags are incompatible with managed training-state retention; "
+            "use backend.config.save_every_n_steps instead: " + ", ".join(epoch_flags)
+        )
+    cadence = managed_state_cadence(run, configured_cadence, contract=contract)
+    window = cadence if training_state_policy(run)["keep_generations"] == 2 else 1
+    return ["--save_every_n_steps", str(cadence), "--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(window)]
+
+
+def run_output_name(run: dict[str, Any]) -> str:
+    """The name a run's trainer gives its outputs: the run ID on a Resume, which owns a new
+    output namespace, else the configured `output_name`, else the run ID."""
+    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
+    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
+    if resume_intent(run) is not None:
+        return str(run["id"])
+    return str(config.get("output_name") or run["id"])
+
+
+# What `state_directory_step` gives the final state directory, whose name carries no step:
+# only a verified step marker inside it can place it (`publish_training_state_candidate`).
+FINAL_STATE_STEP = -1
+
+
+def state_directory_step(name: str, output_name: str, *, allow_final: bool) -> int | None:
+    """The native step a run's state directory name gives, for every executor.
+
+    `{output_name}-stepNNNN-state` (four or more digits) gives NNNN; `{output_name}-state`
+    gives FINAL_STATE_STEP when the final state may be published; anything else, including
+    another output name's directories, gives None.
+    """
+    prefix = f"{output_name}-"
+    if not name.startswith(prefix) or not name.endswith("-state"):
+        return None
+    middle = name[len(prefix):-len("-state")]
+    if middle.startswith("step") and len(middle) >= 8 and middle[4:].isdigit() and middle[4:].isascii():
+        return int(middle[4:])
+    if allow_final and name == f"{output_name}-state":
+        return FINAL_STATE_STEP
+    return None
+
+
 def training_state_managed(run: dict[str, Any], contract: dict[str, Any] | None = None, *, frozen: bool = False) -> bool:
     """The one rule for whether Kura manages a run's training state.
 
@@ -831,6 +904,12 @@ def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any
 
 
 def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: Path, observed_step: int) -> dict[str, Any] | None:
+    """Publish one complete state directory at its logical step, or return None.
+
+    `observed_step` is the native step its name gives (`state_directory_step`). A backend's
+    verified step marker decides the step when it has one, and is the only way to place the
+    final state directory (FINAL_STATE_STEP), whose name carries no step.
+    """
     run, status, runtime_identity = _published_run_context(run_dir)
     policy = training_state_policy(run)
     contract = training_state_contract(run)
@@ -845,10 +924,13 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     marked_step = _read_candidate_step(candidate, marker) if marker is not None else None
     if marker is not None and marked_step is None:
         return None
+    native_step = marked_step if observed_step == FINAL_STATE_STEP else observed_step
+    if native_step is None:
+        return None
     if marker is not None and marker.get("space") == "logical":
         step = marked_step
     else:
-        step = logical_step(observed_step, frozen_resume_steps(run_dir, run))
+        step = logical_step(native_step, frozen_resume_steps(run_dir, run))
     if not isinstance(step, int):
         return None
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
@@ -917,25 +999,12 @@ def publish_completed_training_states(
     contract = training_state_contract(run)
     if not training_state_managed(run, contract):
         return []
-    backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-    config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
-    continuation = resume_intent(run)
-    output_name = str((run.get("id") if continuation is not None else config.get("output_name")) or run.get("id") or run_dir.name)
-    pattern = re.compile(rf"^{re.escape(output_name)}-step(?P<step>\d{{4,}})-state$")
+    output_name = run_output_name(run)
     published: list[dict[str, Any]] = []
     outputs = run_dir / "outputs"
     for candidate in sorted(outputs.glob("*-state")) if outputs.is_dir() else []:
-        match = pattern.fullmatch(candidate.name)
-        if not candidate.is_dir():
-            continue
-        if match is not None:
-            observed_step = int(match.group("step"))
-        elif allow_final_state and candidate.name == f"{output_name}-state":
-            marker = contract.get("state_step") if isinstance(contract.get("state_step"), dict) else None
-            observed_step = _read_candidate_step(candidate, marker)
-            if observed_step is None:
-                continue
-        else:
+        observed_step = state_directory_step(candidate.name, output_name, allow_final=allow_final_state)
+        if observed_step is None or not candidate.is_dir():
             continue
         manifest = publish_training_state_candidate(workspace, run_dir, candidate, observed_step)
         if manifest is not None:

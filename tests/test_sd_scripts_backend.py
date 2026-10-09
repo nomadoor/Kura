@@ -153,7 +153,9 @@ class SdScriptsBackendTests(unittest.TestCase):
         script = command_sd_scripts(run)["argv"][2]
         self.assertIn("--save_state", script)
         self.assertIn("--save_state_on_train_end", script)
-        self.assertIn('"--save_last_n_steps_state","100"', script)
+        # A Resume saves state at least once within the 50 steps it adds.
+        self.assertIn('"--save_every_n_steps","50"', script)
+        self.assertIn('"--save_last_n_steps_state","50"', script)
         self.assertIn('"--resume","/workspace/artifacts/training-state/state-1/payload"', script)
         self.assertIn("--skip_until_initial_step", script)
         self.assertIn('"--max_train_steps","150"', script)

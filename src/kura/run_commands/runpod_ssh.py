@@ -44,7 +44,7 @@ from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
-from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, run_output_name, state_directory_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -890,19 +890,15 @@ python - <<'PY'
 import glob
 import json
 import os
-import re
 
 directory = {remote_outputs!r}
 items = []
-for state_dir in sorted(glob.glob(os.path.join(directory, "*-step*-state"))):
+# The controller decides which of these are the run's states, with the rule every executor uses.
+for state_dir in sorted(glob.glob(os.path.join(directory, "*-state"))):
     if not os.path.isdir(state_dir) or os.path.islink(state_dir):
         continue
     name = os.path.basename(state_dir)
-    match = re.search(r"-step(\\d{{4,}})-state$", name)
-    if not match:
-        continue
     files = []
-    logical_step = None
     for root, dirs, names in os.walk(state_dir):
         dirs[:] = sorted(item for item in dirs if not os.path.islink(os.path.join(root, item)))
         for filename in sorted(names):
@@ -911,17 +907,7 @@ for state_dir in sorted(glob.glob(os.path.join(directory, "*-step*-state"))):
                 continue
             stat = os.stat(path)
             files.append({{"path": os.path.relpath(path, state_dir), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
-    for marker_name in ("kura-state-info.json", "state-info.json"):
-        marker_path = os.path.join(state_dir, marker_name)
-        try:
-            with open(marker_path, encoding="utf-8") as handle:
-                marked = json.load(handle).get("logical_step")
-        except (OSError, ValueError, AttributeError):
-            continue
-        if isinstance(marked, int) and not isinstance(marked, bool) and marked >= 0:
-            logical_step = marked
-            break
-    items.append({{"path": state_dir, "name": name, "step": int(match.group(1)), "logical_step": logical_step, "files": files}})
+    items.append({{"path": state_dir, "name": name, "files": files}})
 print(json.dumps(items))
 PY
 """.strip()
@@ -948,26 +934,27 @@ def _pull_remote_training_state_items(
     try:
         run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
         steps = frozen_resume_steps(run_dir, run)
+        output_name = run_output_name(run)
         retention_floor = training_state_retention_floor(
             host_workspace,
             run_dir.name,
             training_state_policy(run)["keep_generations"],
         )
     except (OSError, ValueError, yaml.YAMLError):
-        steps = None
-        retention_floor = None
+        # Without the frozen run there is no output name, so no directory is the run's state.
+        return published
     for item in items:
-        name, remote_path, step, files = item.get("name"), item.get("path"), item.get("step"), item.get("files")
+        name, remote_path, files = item.get("name"), item.get("path"), item.get("files")
         if not isinstance(name, str) or Path(name).name != name or not isinstance(remote_path, str):
             continue
-        if isinstance(step, bool) or not isinstance(step, int) or not isinstance(files, list) or not files:
+        # Mid-run: the final state directory is collected with the run's outputs.
+        step = state_directory_step(name, output_name, allow_final=False)
+        if step is None or not isinstance(files, list) or not files:
             continue
-        marked_step = item.get("logical_step")
-        if isinstance(marked_step, bool) or not isinstance(marked_step, int):
-            marked_step = logical_step(step, steps)
-        if retention_floor is not None and marked_step < retention_floor:
+        run_step = logical_step(step, steps)
+        if retention_floor is not None and run_step < retention_floor:
             continue
-        existing = training_state_at_step(host_workspace, run_dir.name, marked_step, verify_payload=False)
+        existing = training_state_at_step(host_workspace, run_dir.name, run_step, verify_payload=False)
         if existing is not None:
             published.append(existing)
             continue
