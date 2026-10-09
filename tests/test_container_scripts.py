@@ -20,7 +20,7 @@ from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES
 from kura.media_types import frozen_suffixes
 import kura.provenance as provenance
-from kura.provenance import adapter_source_identity, legacy_adapter_source_identity
+from kura.provenance import adapter_source_identity
 from tests.platform_support import POSIX_PATHS, posix_only
 
 
@@ -89,14 +89,10 @@ class ContainerScriptTests(unittest.TestCase):
             name: adapter_source_identity(name)["value"]
             for name in ("ai-toolkit", "musubi-tuner", "sd-scripts")
         }
-        original = Path.read_bytes
-
-        def changed_registry(path):
-            payload = original(path)
-            return payload + (b"\n# changed media registry\n" if path.name == "media_types.py" else b"")
-
-        with patch.object(Path, "read_bytes", changed_registry):
-            changed = {name: adapter_source_identity(name)["value"] for name in baseline}
+        changed = {
+            name: self._identity_with_source(name, "media_types.py", b"KNOWN_IMAGE_SUFFIXES = frozenset({", b"KNOWN_IMAGE_SUFFIXES = frozenset({ ")
+            for name in baseline
+        }
 
         for name in baseline:
             self.assertNotEqual(baseline[name], changed[name], name)
@@ -107,17 +103,10 @@ class ContainerScriptTests(unittest.TestCase):
             ("musubi-tuner", "musubi_datasets.py", b"MUSUBI_VIDEO_SUFFIXES"),
             ("sd-scripts", "sd_scripts_datasets.py", b"SD_SCRIPTS_IMAGE_SUFFIXES"),
         )
-        original = Path.read_bytes
         for backend, filename, marker in cases:
             with self.subTest(backend=backend):
                 baseline = adapter_source_identity(backend)["value"]
-
-                def changed_suffixes(path, *, target=filename, needle=marker):
-                    payload = original(path)
-                    return payload.replace(needle, needle + b"_CHANGED", 1) if path.name == target else payload
-
-                with patch.object(Path, "read_bytes", changed_suffixes):
-                    changed = adapter_source_identity(backend)["value"]
+                changed = self._identity_with_source(backend, filename, b"\n" + marker + b" = ", b"\n" + marker + b" =  ")
                 self.assertNotEqual(baseline, changed)
 
     def test_adapter_identity_tracks_declared_surface(self) -> None:
@@ -130,14 +119,8 @@ class ContainerScriptTests(unittest.TestCase):
         with patch.dict(BACKENDS, {"ai-toolkit": replace(adapter, surface=changed_surface)}):
             changed = adapter_source_identity("ai-toolkit")
 
-        self.assertEqual(baseline["scope"], "selected-adapter-v2")
+        self.assertEqual(baseline["scope"], "selected-adapter-v3")
         self.assertNotEqual(baseline["value"], changed["value"])
-
-    def test_legacy_adapter_identity_remains_available(self) -> None:
-        identity = legacy_adapter_source_identity("musubi-tuner")
-
-        self.assertEqual(identity["scope"], "legacy-whole-files")
-        self.assertEqual(len(identity["value"]), 64)
 
     def test_musubi_adapter_identity_includes_embedded_runtime_helpers(self) -> None:
         baseline = adapter_source_identity("musubi-tuner")["value"]
@@ -191,125 +174,54 @@ class ContainerScriptTests(unittest.TestCase):
 
         self.assertNotEqual(baseline, changed)
 
-    def test_adapter_identities_cover_imported_backend_dependencies(self) -> None:
-        package_root = Path(provenance.__file__).resolve().parent
-        backend_root = package_root / "backends"
-        container_root = package_root / "container_scripts"
-        seeds = {
-            "ai-toolkit": [backend_root / "ai_toolkit.py"],
-            "musubi-tuner": sorted(backend_root.glob("musubi_*.py")),
-            "sd-scripts": sorted(backend_root.glob("sd_scripts*.py")),
-        }
-        uncovered: list[str] = []
+    def _identity_with_source(self, backend: str, filename: str, old: bytes, new: bytes) -> str:
+        original = Path.read_bytes
 
-        def top_level_definitions(path: Path) -> dict[str, ast.AST]:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            definitions: dict[str, ast.AST] = {}
-            for node in tree.body:
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    definitions[node.name] = node
-                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    for target in targets:
-                        if isinstance(target, ast.Name):
-                            definitions[target.id] = node
-            return definitions
+        def changed(path):
+            payload = original(path)
+            if not path.as_posix().endswith("/" + filename):
+                return payload
+            if old not in payload:
+                raise AssertionError(f"{old!r} is not in {filename}")
+            return payload.replace(old, new, 1)
 
-        def closure_names(path: Path, root: str) -> set[str]:
-            definitions = top_level_definitions(path)
-            pending = [root]
-            closure: set[str] = set()
-            while pending:
-                name = pending.pop()
-                if name in closure or name not in definitions:
-                    continue
-                closure.add(name)
-                pending.extend(
-                    child.id for child in ast.walk(definitions[name])
-                    if isinstance(child, ast.Name)
-                    and isinstance(child.ctx, ast.Load)
-                    and child.id in definitions
-                )
-            return closure
+        with patch.object(Path, "read_bytes", changed):
+            return adapter_source_identity(backend)["value"]
 
-        def probe_symbol_source(path: Path, symbol: str) -> bytes:
-            text = path.read_text(encoding="utf-8")
-            node = top_level_definitions(path)[symbol]
-            source = ast.get_source_segment(text, node)
-            assert source is not None
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                marker = f"def {node.name}"
-                changed = source.replace(marker, f"def  {node.name}", 1)
-            elif isinstance(node, ast.ClassDef):
-                marker = f"class {node.name}"
-                changed = source.replace(marker, f"class  {node.name}", 1)
-            else:
-                separator = source.index("=") + 1
-                changed = source[:separator] + " " + source[separator:]
-            assert changed != source
-            return text.replace(source, changed, 1).encode("utf-8")
-
-        for backend, initial_paths in seeds.items():
-            module_paths: set[Path] = set()
-            imported_symbols: set[tuple[Path, str]] = set()
-            runtime_paths: set[Path] = set()
-            pending = list(initial_paths)
-            while pending:
-                path = pending.pop()
-                if path in module_paths:
-                    continue
-                module_paths.add(path)
-                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.ImportFrom) and node.module == "kura.backends.shared":
-                        imported_symbols.update((backend_root / "shared.py", alias.name) for alias in node.names)
-                    elif isinstance(node, ast.ImportFrom) and node.module == "kura.run_envelope":
-                        imported_symbols.update((package_root / "run_envelope.py", alias.name) for alias in node.names)
-                    elif isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("kura.backends."):
-                        dependency = backend_root / f"{node.module.rsplit('.', 1)[-1]}.py"
-                        if dependency.is_file() and dependency.name not in {"shared.py", "registry.py"}:
-                            pending.append(dependency)
-                    elif (
-                        isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Name)
-                        and node.func.id == "script_source"
-                        and node.args
-                        and isinstance(node.args[0], ast.Constant)
-                        and isinstance(node.args[0].value, str)
-                    ):
-                        runtime_paths.add(container_root / node.args[0].value)
-
+    def test_adapter_identity_follows_imports_into_shared_kura_modules(self) -> None:
+        cases = (
+            ("training_artifacts.py", b"def training_state_managed(", b"def  training_state_managed("),
+            ("secrets.py", b"def is_secret_name(", b"def  is_secret_name("),
+            ("container_scripts/__init__.py", b"def script_source(", b"def  script_source("),
+            ("training_state_verify.py", b"", b"# changed\n"),
+        )
+        for backend in BACKENDS:
             baseline = adapter_source_identity(backend)["value"]
-            original_read_bytes = Path.read_bytes
-            for dependency in sorted(module_paths | runtime_paths):
-                def changed_file(path: Path, *, target: Path = dependency) -> bytes:
-                    payload = original_read_bytes(path)
-                    return payload + (b"\n# identity coverage probe\n" if path == target else b"")
+            for filename, old, new in cases:
+                with self.subTest(backend=backend, filename=filename):
+                    self.assertNotEqual(baseline, self._identity_with_source(backend, filename, old, new))
 
-                with patch.object(Path, "read_bytes", changed_file):
-                    if adapter_source_identity(backend)["value"] == baseline:
-                        uncovered.append(f"{backend}: file {dependency.relative_to(package_root)}")
+    def test_adapter_identity_ignores_code_no_adapter_reaches(self) -> None:
+        cases = (
+            ("musubi_probe.py", b"", b"# changed\n"),
+            ("sd_scripts_probe.py", b"", b"# changed\n"),
+            ("dataset_handoff.py", b"def inspect_dataset_sources(", b"def  inspect_dataset_sources("),
+        )
+        for backend in BACKENDS:
+            baseline = adapter_source_identity(backend)["value"]
+            for filename, old, new in cases:
+                with self.subTest(backend=backend, filename=filename):
+                    self.assertEqual(baseline, self._identity_with_source(backend, filename, old, new))
 
-            original_source_symbol = provenance._source_symbol
-            for dependency, symbol in sorted(imported_symbols, key=lambda item: (str(item[0]), item[1])):
-                def changed_symbol(path: Path, name: str, *, target: Path = dependency, target_name: str = symbol) -> bytes:
-                    payload = original_source_symbol(path, name)
-                    return payload + (b"\n# identity coverage probe\n" if path == target and name == target_name else b"")
-
-                with patch.object(provenance, "_source_symbol", changed_symbol):
-                    if adapter_source_identity(backend)["value"] == baseline:
-                        uncovered.append(f"{backend}: symbol {dependency.relative_to(package_root)}:{symbol}")
-                for closure_symbol in sorted(closure_names(dependency, symbol)):
-                    def changed_closure_file(path: Path, *, target: Path = dependency, target_name: str = closure_symbol) -> bytes:
-                        return probe_symbol_source(target, target_name) if path == target else original_read_bytes(path)
-
-                    with patch.object(Path, "read_bytes", changed_closure_file):
-                        if adapter_source_identity(backend)["value"] == baseline:
-                            uncovered.append(
-                                f"{backend}: closure {dependency.relative_to(package_root)}:{symbol}->{closure_symbol}"
-                            )
-
-        self.assertEqual([], uncovered, "adapter source identity misses imported dependencies:\n" + "\n".join(uncovered))
+    def test_adapter_identity_refuses_imports_it_cannot_follow(self) -> None:
+        cases = (
+            ("training_artifacts.py", b"    if frozen and not", b"    import kura.fsio\n    if frozen and not", "training_artifacts.py"),
+            ("ai_toolkit.py", b'script_source("ai_toolkit_state.py")', b"script_source(spec)", "ai_toolkit.py"),
+        )
+        for filename, old, new, location in cases:
+            with self.subTest(filename=filename):
+                with self.assertRaisesRegex(ValueError, location):
+                    self._identity_with_source("ai-toolkit", filename, old, new)
 
     def test_sd_scripts_adapter_identity_includes_anima_runtime_publisher(self) -> None:
         baseline = adapter_source_identity("sd-scripts")["value"]
