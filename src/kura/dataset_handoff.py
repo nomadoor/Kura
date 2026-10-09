@@ -460,6 +460,32 @@ def _validate_native_string_classification(
     return list(declared)
 
 
+def trainer_captions(lock: dict[str, Any]) -> list[dict[str, str]]:
+    """The caption text each trainer receives, per captioned sample, read from a frozen input lock.
+
+    Generated caption files carry their projected text; native JSONL rows carry
+    it at the pointer their caption reference names. Samples without a caption
+    are absent.
+    """
+    _, input_index = _selection_from_lock(lock)
+    received: dict[str, str] = {}
+    for view in lock.get("views", []):
+        for item in view.get("files", []):
+            received[item["input_id"]] = item["text"]
+        for native in view.get("native_files") or []:
+            context = f"frozen native file {native['path']!r}"
+            for line, row in zip(_jsonl_rows(native["text"], context=context), native["rows"], strict=True):
+                parsed = json.loads(line)
+                for reference in row["references"]:
+                    if reference["kind"] in {"caption-text", "caption-text-strip"}:
+                        received[reference["input_id"]] = _pointer_value(parsed, reference["pointer"], context=context)
+    return [
+        {"dataset": identity["dataset"], "sample": identity["sample"], "text": received[input_id]}
+        for input_id, identity in input_index.items()
+        if identity.get("kind") == "caption" and input_id in received
+    ]
+
+
 def _jsonl_rows(text: str, *, context: str) -> list[str]:
     """Split JSONL only at LF row separators, never at Unicode line characters."""
     if "\r" in text:

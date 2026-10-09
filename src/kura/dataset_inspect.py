@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from kura.dataset_jsonl import items_jsonl_rows
+from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_VIDEO_SUFFIXES
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
@@ -33,7 +34,7 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
     records = _load_items_jsonl(dataset_path / "items.jsonl")
     images = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_IMAGE_SUFFIXES]
     videos = [path for path in _iter_files(dataset_path) if path.suffix.lower() in KNOWN_VIDEO_SUFFIXES]
-    trigger_word = metadata.get("trigger_word") if isinstance(metadata.get("trigger_word"), str) else None
+    trigger_word = dataset_trigger_word(dataset_path)
     from kura.dataset_observations import observe_dataset
 
     observation = observe_dataset(dataset_path)
@@ -143,6 +144,12 @@ def format_dataset_inspect(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def dataset_trigger_word(dataset_path: Path) -> str | None:
+    """The trigger word a dataset declares in dataset.yaml, if any."""
+    value = _load_dataset_yaml(dataset_path / "dataset.yaml").get("trigger_word")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _load_dataset_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -202,7 +209,7 @@ def _v2_target_count(samples: list[Any], suffixes: frozenset[str]) -> int:
 
 def _caption_summary(captions: list[str], *, trigger_word: str | None) -> dict[str, Any]:
     stripped = [caption.strip() for caption in captions]
-    non_empty = [caption for caption in stripped if caption]
+    non_empty = [caption for caption in stripped if not caption_is_empty(caption)]
     duplicate_exact_count = sum(count for count in Counter(non_empty).values() if count > 1)
     first_tokens = [_first_token(caption) for caption in non_empty]
     first_tokens = [token for token in first_tokens if token]
@@ -215,7 +222,7 @@ def _caption_summary(captions: list[str], *, trigger_word: str | None) -> dict[s
         trigger = {
             "declared": True,
             "value": trigger_word,
-            "caption_count": sum(1 for caption in stripped if trigger_word in caption),
+            "caption_count": sum(1 for caption in stripped if caption_has_trigger(caption, trigger_word)),
             "occurrences": sum(caption.count(trigger_word) for caption in stripped),
             "first_matches": sum(1 for caption in stripped if caption.startswith(trigger_word)),
         }

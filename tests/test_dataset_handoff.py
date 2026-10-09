@@ -53,10 +53,10 @@ from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architectu
 from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views
-from kura.dataset_handoff import _digest, local_training_mounts
+from kura.dataset_handoff import _digest, local_training_mounts, trainer_captions
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
-from kura.run_commands.plan import _dataset_layout_preflight_report, _dataset_runtime_checks, _disk_cache_estimate, _general_resolution, format_run_plan, plan_run
+from kura.run_commands.plan import _caption_preflight_report, _dataset_layout_preflight_report, _dataset_runtime_checks, _disk_cache_estimate, _general_resolution, format_run_plan, plan_run
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handoff_fixtures import freeze_fixture  # noqa: E402
@@ -103,6 +103,61 @@ def _musubi_video_preflight_env(run: dict, destination: Path) -> dict[str, str]:
 
 # The pinned AI-Toolkit UI baseline dataset keys (docs/adr/upstream-training-baseline.md).
 BASELINE_DATASET = {"cache_latents_to_disk": False}
+
+CAPTION_RUNS = {
+    "ai-toolkit": {"backend": {"name": "ai-toolkit", "config": {"model_arch": "sdxl"}}},
+    "musubi-tuner": {"backend": {"name": "musubi-tuner", "config": {"architecture": "flux2"}}},
+    "sd-scripts": {
+        "type": "train",
+        "backend": {"name": "sd-scripts", "config": {
+            "architecture": "sdxl", "mode": "lora", "model_paths": {"base": "/workspace/models/sdxl.safetensors"},
+            "dataset_config": {
+                "general": {"caption_extension": ".txt", "resolution": [256, 256]},
+                "datasets": [{"batch_size": 1, "subsets": [{"dataset_id": "tiny", "num_repeats": 1}]}],
+            },
+        }},
+        "model": {"base": "sdxl"},
+        "recipe": {"steps": 1, "seed": 1},
+    },
+}
+
+
+@posix_only(DATASET_IO)
+class TrainerCaptionTests(unittest.TestCase):
+    """What each trainer receives is read from the frozen lock, by one owner, for every backend."""
+
+    def _freeze(self, directory: str, backend: str, caption: str, *, trigger_word: str | None = None) -> dict:
+        run = {"id": "example", "datasets": [{"id": "tiny"}], **CAPTION_RUNS[backend]}
+        resolved = Path(directory) / backend / "runs" / "example" / "resolved"
+        resolved.mkdir(parents=True)
+        freeze_fixture(run, resolved, caption=caption)
+        if trigger_word is not None:
+            dataset_yaml = resolved / "fixture-workspace" / "datasets" / "tiny" / "dataset.yaml"
+            dataset_yaml.write_text(dataset_yaml.read_text(encoding="utf-8") + f"trigger_word: {trigger_word}\n", encoding="utf-8")
+        return json.loads((resolved / "dataset-input.lock.json").read_text(encoding="utf-8"))
+
+    def test_each_backend_reports_the_caption_its_trainer_receives(self) -> None:
+        expected = {"ai-toolkit": " a photo\nsks ", "musubi-tuner": "a photo\nsks", "sd-scripts": "a photo"}
+        for backend, text in expected.items():
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                lock = self._freeze(directory, backend, " a photo\nsks ")
+                self.assertEqual(trainer_captions(lock), [{"dataset": "tiny", "sample": "sample", "text": text}])
+
+    def test_plan_warns_about_empty_captions_and_a_missing_trigger_without_stopping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            empty = _caption_preflight_report(self._freeze(directory, "musubi-tuner", " \n "))
+            # sd-scripts reads only the first line, so a trigger on the second line never reaches it.
+            dropped = _caption_preflight_report(self._freeze(directory, "sd-scripts", "a photo\nsks", trigger_word="sks"))
+            kept = _caption_preflight_report(self._freeze(directory, "ai-toolkit", "sks, a photo", trigger_word="sks"))
+        self.assertEqual([item["severity"] for item in empty], ["warning", "info"])
+        self.assertIn("1 of 1 caption(s) the trainer receives are empty: tiny/sample", empty[0]["fact"])
+        self.assertIn("trigger word: not declared for tiny", empty[1]["fact"])
+        self.assertEqual([item["severity"] for item in dropped], ["warning"])
+        self.assertIn("trigger word 'sks' is missing from 1 of 1 caption(s) the trainer receives for tiny: tiny/sample", dropped[0]["fact"])
+        self.assertEqual([item["severity"] for item in kept], ["info"])
+        self.assertIn("trigger word 'sks' is in all 1 caption(s)", kept[0]["fact"])
+        self.assertNotIn("error", [item["severity"] for item in [*empty, *dropped, *kept]])
+
 
 @posix_only(DATASET_IO)
 class FrozenDatasetProjectionReaderTests(unittest.TestCase):
@@ -6605,6 +6660,8 @@ class DatasetHandoffTests(unittest.TestCase):
 
             self.assertEqual(records[0]["severity"], "info")
             self.assertIn("stat matches", records[0]["fact"])
+            # The compiled plan also reports what the trainer reads as captions.
+            self.assertIn("captions", [record["check"] for record in records])
             self.assertFalse((workspace / lock["views"][0]["root"]).exists())
             (workspace / "datasets" / "tiny" / "a.txt").write_text("changed", encoding="utf-8")
             changed = _dataset_layout_preflight_report(run, workspace)

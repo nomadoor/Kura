@@ -40,6 +40,24 @@ class DatasetObservationTests(unittest.TestCase):
         self.assertEqual(result["observations"]["condition_counts"], {"control": 1})
         self.assertEqual(result["observations"]["aspect_ratio_mismatches"], {"control": 1})
 
+    def test_a_folder_reads_the_same_caption_files_the_draft_does(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stem in ("a", "b", "c"):
+                (root / f"{stem}.png").write_bytes(PNG_1X1)
+            (root / "a.caption").write_text("from caption file", encoding="utf-8")
+            (root / "b.txt").write_text("from txt", encoding="utf-8")
+            (root / "c.txt").write_text("one", encoding="utf-8")
+            (root / "c.caption").write_text("two", encoding="utf-8")
+
+            result = observe_dataset(root)
+
+        captions = {sample["id"]: sample["caption"] for sample in result["samples"]}
+        self.assertEqual(captions, {"a": "from caption file", "b": "from txt", "c": None})
+        # Two caption files for one image: the author chooses, as `kura dataset draft` asks.
+        self.assertIn({"code": "ambiguous_caption", "sample": "c", "paths": ["c.caption", "c.txt"]}, result["structural_findings"])
+        self.assertEqual(result["observations"]["captions_missing"], 1)
+
     def test_v2_observation_preserves_unicode_line_separator_in_caption(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

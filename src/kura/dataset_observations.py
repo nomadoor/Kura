@@ -11,6 +11,7 @@ import yaml
 
 from kura.dataset_inspect import _image_size
 from kura.dataset_jsonl import items_jsonl_rows
+from kura.dataset_manifest import CAPTION_SUFFIXES, caption_is_empty
 from kura.media_types import KNOWN_IMAGE_SUFFIXES
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 CONDITION_KEYS = {
@@ -60,7 +61,7 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
     missing_captions = 0
     aspect_mismatches: dict[str, int] = defaultdict(int)
     for sample in samples:
-        if not (sample.get("caption") or "").strip():
+        if caption_is_empty(sample.get("caption")):
             missing_captions += 1
         target_aspect = _aspect(sample.get("target_size"))
         condition_files = sample.pop("_condition_files", None)
@@ -165,17 +166,30 @@ def _indexed_images(path: Path | None) -> dict[str, Path]:
     return result
 
 
-def _indexed_captions(path: Path | None) -> dict[str, Path]:
+def _indexed_captions(path: Path | None) -> dict[str, list[Path]]:
     if path is None or not path.is_dir():
         return {}
-    return {item.stem: item for item in sorted(path.iterdir()) if item.is_file() and item.suffix.lower() == ".txt"}
+    result: dict[str, list[Path]] = defaultdict(list)
+    for item in sorted(path.iterdir()):
+        if item.is_file() and item.suffix.lower() in CAPTION_SUFFIXES:
+            result[item.stem].append(item)
+    return dict(result)
+
+
+def _caption_file(root: Path, caption_files: dict[str, list[Path]], stem: str, sample_id: str, issues: list[dict[str, Any]]) -> Path | None:
+    """The one caption file beside an image; with several, the author chooses (as `kura dataset draft` asks)."""
+    found = caption_files.get(stem, [])
+    if len(found) > 1:
+        issues.append({"code": "ambiguous_caption", "sample": sample_id, "paths": [_relative(root, path) for path in found]})
+        return None
+    return found[0] if found else None
 
 
 def _sample_from_record(
     root: Path,
     numbered: tuple[int, dict[str, Any]],
     directory_files: dict[str, dict[str, Path]],
-    caption_files: dict[str, Path],
+    caption_files: dict[str, list[Path]],
 ) -> dict[str, Any]:
     number, item = numbered
     raw_target = _first_string(item, TARGET_KEYS)
@@ -192,7 +206,7 @@ def _sample_from_record(
         if path is not None:
             conditions[role] = {"path": _relative(root, path), "size": _size_list(path)}
     caption = item.get("caption") if isinstance(item.get("caption"), str) else None
-    caption_path = _record_path(root, item.get("caption_path"), sample_id, "caption", issues) if isinstance(item.get("caption_path"), str) else caption_files.get(stem)
+    caption_path = _record_path(root, item.get("caption_path"), sample_id, "caption", issues) if isinstance(item.get("caption_path"), str) else _caption_file(root, caption_files, stem, sample_id, issues)
     if not caption and caption_path is not None:
         caption = _caption_file_text(root, caption_path, sample_id, issues)
     if target is None:
@@ -263,8 +277,9 @@ def _sample_from_v2_record(
     }
 
 
-def _sample_from_stem(root: Path, stem: str, target: Path, directory_files: dict[str, dict[str, Path]], caption_files: dict[str, Path]) -> dict[str, Any]:
+def _sample_from_stem(root: Path, stem: str, target: Path, directory_files: dict[str, dict[str, Path]], caption_files: dict[str, list[Path]]) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
+    caption_path = _caption_file(root, caption_files, stem, stem, issues)
     conditions = {
         role: {"path": _relative(root, files[stem]), "size": _size_list(files[stem])}
         for role, files in directory_files.items()
@@ -275,8 +290,8 @@ def _sample_from_stem(root: Path, stem: str, target: Path, directory_files: dict
         "target": _relative(root, target),
         "target_size": _size_list(target),
         "conditions": conditions,
-        "caption": _caption_file_text(root, caption_files[stem], stem, issues) if stem in caption_files else None,
-        "caption_path": _relative(root, caption_files[stem]) if stem in caption_files else None,
+        "caption": _caption_file_text(root, caption_path, stem, issues) if caption_path is not None else None,
+        "caption_path": _relative(root, caption_path) if caption_path is not None else None,
         "_issues": issues,
     }
 

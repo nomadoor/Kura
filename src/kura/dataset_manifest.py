@@ -20,6 +20,19 @@ from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_MEDIA_SUFFIXES
 
 
 ORDINARY_DATASET_SUFFIXES = {".caption", ".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"}
+# A caption file beside an image, in the order `kura dataset draft` lists them;
+# an image with more than one is ambiguous and its author chooses.
+CAPTION_SUFFIXES = (".txt", ".caption")
+
+
+def caption_is_empty(text: str | None) -> bool:
+    """True when a caption carries no words: absent, empty, or whitespace only."""
+    return text is None or not text.strip()
+
+
+def caption_has_trigger(text: str, trigger_word: str) -> bool:
+    """True when a caption contains the dataset's trigger word."""
+    return trigger_word in text
 IGNORED_DATASET_DIRECTORIES = {"_latent_cache", ".git", ".cache", "cache"}
 
 
@@ -441,7 +454,7 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
         for image in choices[0][1]:
             relative = image.relative_to(root).as_posix()
             legacy = legacy_by_path.get(relative)
-            candidates = [image.with_suffix(suffix) for suffix in (".txt", ".caption")]
+            candidates = [image.with_suffix(suffix) for suffix in CAPTION_SUFFIXES]
             captions = [candidate for candidate in candidates if candidate.is_file()]
             caption = _draft_caption(root, relative, legacy, captions, issues)
             default_id = PurePosixPath(relative).with_suffix("").name

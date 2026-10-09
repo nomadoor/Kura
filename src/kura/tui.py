@@ -26,6 +26,7 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Static
 
+from kura.dataset_manifest import CAPTION_SUFFIXES
 from kura.executors.common import UNSUCCESSFUL_STATES
 from kura.monitor import ACTIVE_STATES, DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline
 
@@ -1468,7 +1469,7 @@ def _dataset_stats(path: Path | None) -> DatasetStats:
             suffix = child.suffix.lower()
             if suffix in IMAGE_EXTS:
                 images += 1
-            elif suffix == ".txt":
+            elif suffix in CAPTION_SUFFIXES:
                 captions += 1
     except OSError:
         pass
