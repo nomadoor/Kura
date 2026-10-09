@@ -32,11 +32,11 @@ records:
     - ai-toolkit-flex2-2026-09-29-2323
     previous:
       kind: source-tree-sha256
-      scope: selected-adapter-v2
+      scope: selected-adapter-v3
       value: 72a62baef125ff2e8fd4eb1c2a933115adac0f3d04145e1e530ad61a11e76054
     replacement:
       kind: source-tree-sha256
-      scope: selected-adapter-v2
+      scope: selected-adapter-v3
       value: d931a9f04b076336f8ae94d145f1b382d5bf9606a0857a462cf784e878d10c5b
   - id: dead-code-and-one-lease-default-musubi-tuner-2026-10-08
     backend: musubi-tuner
@@ -61,11 +61,11 @@ records:
     - musubi-wan-video-jsonl-docker-2026-09-29
     previous:
       kind: source-tree-sha256
-      scope: selected-adapter-v2
+      scope: selected-adapter-v3
       value: 7d7d6b6ec6bfff620dd822617b423b5a9f0b49c14b5c0accfd5e2d0c29d5358b
     replacement:
       kind: source-tree-sha256
-      scope: selected-adapter-v2
+      scope: selected-adapter-v3
       value: 7c8c151ec6fcbe171477ca993177dc7782c9eef99d5b090e187e7e47ddc3d6ac
   - id: dead-code-and-one-lease-default-sd-scripts-2026-10-08
     backend: sd-scripts
@@ -86,11 +86,11 @@ records:
     - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
     previous:
       kind: source-tree-sha256
-      scope: selected-adapter-v2
+      scope: selected-adapter-v3
       value: e0de3fc84a8dd556e8b4bc098b0873b5a01c7d59a6c9440a6134a787ff2f435d
     replacement:
       kind: source-tree-sha256
-      scope: selected-adapter-v2
+      scope: selected-adapter-v3
       value: 791e449da265db2718f8353cb2c1179b423b6b34fb9019e7d7d87be0c826c59c
   - id: runpod-executor-dead-code-and-one-lease-default-2026-10-08
     executor: runpod
