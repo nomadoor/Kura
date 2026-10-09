@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 
 from kura.secrets import declared_secret
+from kura.storage import ensure_free_bytes
 from kura.container_scripts import script_source
 from kura.executors.runpod import project_runpod_dataset_handoff
 from kura.dataset_transfer import StagedTransferChanged, TransferRefused, verify_pinned_transfer
@@ -42,7 +43,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_envelope import common_recipe, resume_intent, training_state_policy
 from kura.executors.common import _OperationBusy, host_time, _mutate_run_status, _record_progress, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
-from kura.run_commands.plan import _configured_download_min_free_bytes, _ensure_free_bytes
+from kura.run_commands.plan import _configured_download_min_free_bytes
 from kura.training_artifacts import checkpoint_step, is_training_state_output, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_contract, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
@@ -71,6 +72,7 @@ def _link_or_copy_snapshot_file(
     *,
     free_space_root: Path,
     required_free_bytes: int,
+    config: dict[str, Any],
 ) -> None:
     """Reuse immutable bytes, accounting for disk only when linking is unavailable."""
 
@@ -79,10 +81,11 @@ def _link_or_copy_snapshot_file(
         # artifacts; linking avoids duplicating large protected state payloads.
         os.link(source, target)
     except OSError:
-        _ensure_free_bytes(
+        ensure_free_bytes(
             free_space_root,
             required_free_bytes + source.stat().st_size,
             context="RunPod delta download reusable copy fallback",
+            config=config,
         )
         shutil.copy2(source, target)
 
@@ -690,10 +693,11 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             "transferred_bytes": pending_size,
         }
         required_free_bytes = max(min_download_free, pending_size * 2 + 5 * 1024**3)
-        _ensure_free_bytes(
+        ensure_free_bytes(
             destination,
             required_free_bytes,
             context="RunPod delta download",
+            config=config,
         )
         staging = destination / f".{run_id}.partial-{secrets.token_hex(6)}"
         backup: Path | None = None
@@ -709,6 +713,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     target,
                     free_space_root=destination,
                     required_free_bytes=required_free_bytes,
+                    config=config,
                 )
             _transfer_runpod_snapshot_delta(
                 details,
@@ -1025,7 +1030,7 @@ def _pull_remote_training_state_items(
             published.append(existing)
             continue
         total_size = sum(entry.get("size") for entry in files if isinstance(entry, dict) and isinstance(entry.get("size"), int))
-        _ensure_free_bytes(pending_root, total_size + 1024**3, context="RunPod training-state pull")
+        ensure_free_bytes(pending_root, total_size + 1024**3, context="RunPod training-state pull", config=_workspace_config())
         partial = pending_root / f".{name}.partial"
         if partial.exists():
             shutil.rmtree(partial)
@@ -1114,7 +1119,7 @@ def _pull_remote_output_items(
         pending.append(item)
     pending_size = sum(item.get("size") for item in pending if isinstance(item.get("size"), int))
     if pending:
-        _ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), pending_size + 5 * 1024**3), context="RunPod output pull")
+        ensure_free_bytes(destination, max(min(10 * 1024**3, min_download_free), pending_size + 5 * 1024**3), context="RunPod output pull", config=config)
     for item in pending:
         name = item.get("name")
         remote_path = item.get("path")

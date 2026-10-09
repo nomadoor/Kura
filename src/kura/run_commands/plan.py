@@ -7,7 +7,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -860,6 +859,11 @@ def _runpod_input_transfer_estimate(run: dict[str, Any]) -> dict[str, int] | Non
     return estimate_transfer(inventory)
 
 
+def local_min_free_gib(docker_config: dict[str, Any]) -> int:
+    """The free space a local Docker run keeps on every backing store; `kura doctor disk` warns below it."""
+    return _configured_gib(docker_config.get("min_free_gb"), default=100)
+
+
 def _local_launch_disk_preflight(
     workspace: Path,
     run: dict[str, Any],
@@ -871,7 +875,7 @@ def _local_launch_disk_preflight(
     download_estimate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    required_gib = _configured_gib(docker_config.get("min_free_gb"), default=100)
+    required_gib = local_min_free_gib(docker_config)
     if safety.get("max_run_disk_gb") is not None:
         required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
     floor_bytes = required_gib * 1024**3
@@ -932,7 +936,6 @@ def _local_launch_disk_preflight(
             )
     if errors:
         raise ValueError("; ".join(errors))
-    docker_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
     try:
         # Bounded and outside the workspace, as the daemon probe is: the plan reads this too.
         docker_system_df = subprocess.run(
@@ -953,15 +956,6 @@ def _local_launch_disk_preflight(
                 continue
             if isinstance(item, dict):
                 docker_storage.append(item)
-                if str(item.get("Type", "")).lower() == "build cache":
-                    size_text = str(item.get("Size") or "0B")
-                    match = re.fullmatch(r"\s*([0-9.]+)\s*([KMGT]?B?)\s*", size_text, re.IGNORECASE)
-                    if match:
-                        amount = float(match.group(1))
-                        unit = match.group(2).lower().rstrip("b")
-                        scale = {"": 1, "k": 1000, "m": 1000**2, "g": 1000**3, "t": 1000**4}.get(unit, 1)
-                        if amount * scale > docker_cache_limit_gib * 1024**3:
-                            raise ValueError(f"Docker build cache exceeds {docker_cache_limit_gib} GiB; run `kura cleanup docker-cache --yes` before local launch")
     return {
         "required_gib": required_gib,
         "floor_bytes": floor_bytes,
@@ -969,14 +963,6 @@ def _local_launch_disk_preflight(
         "paths": checked,
         "docker_storage": docker_storage,
     }
-
-
-def _ensure_free_bytes(path: Path, required_bytes: int, *, context: str) -> dict[str, Any]:
-    path.mkdir(parents=True, exist_ok=True)
-    usage = shutil.disk_usage(path)
-    if usage.free < required_bytes:
-        raise ValueError(f"{context} needs about {required_bytes // 1024**3} GiB free at {path}, but only {usage.free // 1024**3} GiB is available")
-    return {"path": str(path), "free_bytes": usage.free, "required_bytes": required_bytes}
 
 
 def _configured_download_min_free_bytes(config: dict[str, Any]) -> int:
@@ -1826,7 +1812,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]
         if not dataset_ids:
             raise ValueError("compiled run has no dataset IDs")
-        print(json.dumps(stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config().get("runpod", {})), indent=2))
+        print(json.dumps(stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config()), indent=2))
     except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
         print(f"cannot stage run: {_safe_error(exc)}", file=sys.stderr)
         return 1

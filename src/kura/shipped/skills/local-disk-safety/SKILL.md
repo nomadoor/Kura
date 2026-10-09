@@ -117,16 +117,18 @@ or WSL/VHDX/Windows-side operations.
   space, Docker storage, root-owned Kura files, and cache-related environment
   variables. Warnings are blocking-risk findings; advisories are cleanup
   hygiene that does not by itself make the operation unsafe.
-- Local Docker launch, Docker build cache, and RunPod download/pull checks use
-  configurable disk gates. `kura doctor workspace` lists the settings and their
+- Local Docker launch and RunPod stage/download/pull checks use configurable
+  disk gates, and `kura doctor disk` warns against the same local floor and
+  build cache limit. `kura doctor workspace` lists the settings and their
   accepted values.
 - Local Docker launch adds known write estimates to the configured free-space
   floor. Musubi Hugging Face downloads use HEAD metadata when available, and
   explicitly allowed many-checkpoint runs add a conservative checkpoint budget.
-- On WSL2, Kura treats Linux `df` as only one signal. It tries to detect the
-  Windows backing drive and uses effective free space. If backing confidence is
-  unknown, local Docker launch fails safe unless the run explicitly sets
-  `safety.allow_storage_risk: true`.
+- On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
+  detect the Windows backing drive (`storage.host_drive` names it) and uses
+  effective free space. If backing confidence is unknown, local Docker launch
+  fails safe unless the run explicitly sets `safety.allow_storage_risk: true`;
+  RunPod stage, download, and pull fall back to Linux free space.
 - Lower those gates only when the user understands the trade-off.
 - `safety.allow_large_model_downloads` accepts only the measured download-size
   risk. It does not waive DNS, timeout, HTTP, authentication, or missing-file
