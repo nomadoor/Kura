@@ -23,8 +23,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.images import image_cuda_version, runpod_min_cuda_version
 from kura.run_commands.common import _effective_image, _safe_error, requested_gpu_types
-from kura.executors.runpod import LEASE_DEADLINE_PATH
-from kura.run_commands.runpod_ssh import record_lease_deadline
+from kura.run_commands.runpod_ssh import record_pod_lease_deadline
 from kura.run_commands.runpod_ssh import _free_local_port, _runpod_secret_env_payload, _runpod_ssh_details, _scp_to_runpod, _ssh_base, _start_runpod_session_lease_guard, _sync_runpod_remote_stdout, _wait_http_ready
 
 
@@ -327,7 +326,7 @@ def launch_render_runpod(
         # The Pod armed its lease when it started; this second guard never moves that deadline
         # and stays for Pods whose start script predates it.
         _start_runpod_session_lease_guard(details, workspace=remote_workspace, run_id=run_dir.name, max_lease_sec=max_lease_sec)
-        _record_session_lease(run_dir, details)
+        record_pod_lease_deadline(run_dir, details)
         check_stop()
         workspace_ready = subprocess.run([*_ssh_base(details), f"mkdir -p {shlex.quote(remote_run_dir + '/resolved')} /opt/ComfyUI/models/loras/Kura_tmp /opt/ComfyUI/input/Kura_tmp"], check=False, timeout=600)
         if workspace_ready.returncode:
@@ -433,13 +432,3 @@ def _settle_unfinished(run_dir: Path, state: str, *, error: str | None = None) -
 
     end_run(run_dir, state, reason="the RunPod render ended before its cases finished", error=error, unless_finished=True)
 
-
-def _record_session_lease(run_dir: Path, details: dict[str, Any]) -> None:
-    """Record the deadline the Pod set when it started, so `kura run status` and `kura run lease` see it; best effort."""
-    try:
-        result = subprocess.run([*_ssh_base(details), f"cat {shlex.quote(LEASE_DEADLINE_PATH)}"], text=True, capture_output=True, check=False, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return
-    value = result.stdout.strip()
-    if result.returncode == 0 and value.isdigit():
-        record_lease_deadline(run_dir, int(value), reason="armed")

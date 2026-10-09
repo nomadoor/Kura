@@ -40,12 +40,12 @@ stop Pod
   its settings: `kura run new --from <run-id> --slug <words>`.
 - The compiled `compute.capacity` applies: by default the run waits for its
   GPU (no Pod, no billing while waiting); `mode: immediate` fails at once.
-- `--max-lease 12h`: the Pod deletes itself this long after Kura first reaches it, whatever the local controller does.
+- `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does.
   If Kura warns that training looks longer than the lease, tell the user the
   estimate and ask before running `kura run lease <run-id> <duration>`, which
   shows the change and its price; a longer lease is a billing decision, and
-  Kura never extends it on its own. A render Pod's lease runs from the
-  Pod's start and changes the same way.
+  Kura never extends it on its own. A render Pod's lease changes the same
+  way.
 - `--unattended-wait auto`: after training, if the outputs were not collected,
   the Pod deletes itself after the longer of 2 hours and the job time
   (from remote job start, including model download). Collecting the outputs marks the

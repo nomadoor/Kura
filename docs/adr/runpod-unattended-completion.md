@@ -4,6 +4,9 @@ Status: accepted owner decision.
 
 Date: 2026-10-02
 
+Updated: 2026-10-10 — a training Pod arms its maximum lease when the Pod
+starts, like a render session Pod, instead of when Kura first reaches it.
+
 Updated: 2026-10-08 — a person or agent can move the lease deadline of a running
 Pod, and Kura warns when training looks unlikely to finish inside it; see
 "Changing the lease".
@@ -37,9 +40,14 @@ loses little, while losing a 24-hour run is severe.
   post-training timer.
 - The training time is measured from the remote job start, so it includes
   input transfer and model download.
-- The maximum lease starts as soon as Kura reaches the Pod over SSH, before
-  anything is uploaded, and still ends everything (amended 2026-10-07: a Pod
-  that failed before its job started used to have no timer at all).
+- The maximum lease starts when the Pod starts: the start command Kura gives
+  every training Pod sets the deadline and starts the guard before anything
+  else, and the lease still ends everything (amended 2026-10-10: it used to
+  start when Kura first reached the Pod over SSH, so a Pod whose controller or
+  job runner stopped before that contact had no timer; amended 2026-10-07: a
+  Pod that failed before its job started used to have no timer at all). The
+  guard Kura starts again over SSH never moves a deadline already set, and the
+  run records the deadline the Pod holds.
   The wait therefore never outlasts the lease time remaining when training
   ends: the lease can end the Pod before the wait finishes, so a run expected
   to take longer than the lease needs a lease covering training plus the wait.
@@ -73,9 +81,10 @@ confirmation a launch takes; it is recorded in the run. Kura never moves the
 deadline on its own: a longer lease is a billing decision.
 
 A render session Pod keeps its deadline in the same file (2026-10-08), so the
-same command changes it. Its lease starts when the Pod starts rather than at
-first contact: the Pod sets the deadline itself, and a second guard started
-over SSH never moves a deadline already set.
+same command changes it. Its lease starts when the Pod starts, as a training
+Pod's does (2026-10-10): the Pod sets the deadline itself from the same start
+command guard, and a second guard started over SSH never moves a deadline
+already set.
 
 While it follows a job, Kura estimates the time left from the training
 progress. When training plus collection looks unlikely to finish before the

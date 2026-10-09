@@ -124,6 +124,17 @@ class LeaseGuardShellTests(unittest.TestCase):
             self.assertTrue((directory / "deleted").exists())
             self.assertIn("the maximum lease ended", (directory / "stdout.log").read_text(encoding="utf-8"))
 
+    def test_a_second_guard_never_moves_a_deadline_already_set(self) -> None:
+        # The Pod arms its lease at start; the guard Kura starts again at first contact keeps that deadline.
+        with tempfile.TemporaryDirectory() as name:
+            directory = Path(name)
+            held = str(int(time.time()) + 3600)
+            (directory / "deadline").write_text(held, encoding="utf-8")
+            subprocess.run(["bash", "-c", self._guard(directory, 1)], check=True, timeout=10)
+            time.sleep(3)
+            self.assertEqual((directory / "deadline").read_text(encoding="utf-8"), held)
+            self.assertFalse((directory / "deleted").exists())
+
     def test_a_moved_deadline_keeps_the_pod(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             directory = Path(name)
