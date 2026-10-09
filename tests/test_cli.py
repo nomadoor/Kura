@@ -47,10 +47,10 @@ from kura.fsio import FileLockBusy, file_lock
 from kura.images import NEWEST_KNOWN_CUDA, PINNED_IMAGES
 from kura.monitor import collect_run_summaries, _read_activity_from_stdout
 from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_application, insert_lora_loader, _materialize_stage, _safe_stage_name, compile_render, launch_render
-from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _ensure_free_bytes, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
+from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
-from kura.storage import StorageStatus, probe_storage
+from kura.storage import StorageStatus, ensure_free_bytes, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -88,6 +88,17 @@ def tearDownModule() -> None:
     _READINESS_OFF.stop()
     _RUNPOD_MARKS_OFF.stop()
     _SSH_REUSE_OFF.stop()
+
+
+def _wsl_with_short_host_drive(*, linux_free_gib: int = 900, host_free_gib: int = 5) -> contextlib.ExitStack:
+    """A WSL host whose Linux disk looks roomy while the Windows drive behind it is nearly full."""
+    stack = contextlib.ExitStack()
+    stack.enter_context(patch("kura.storage.is_wsl", return_value=True))
+    stack.enter_context(patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "target": "/", "source": "/dev/sdd"}))
+    stack.enter_context(patch("kura.storage._auto_wsl_host_drive", return_value="C:"))
+    stack.enter_context(patch("kura.storage._windows_drive_free_bytes", return_value=host_free_gib * 1024**3))
+    stack.enter_context(patch("kura.storage.shutil.disk_usage", return_value=Mock(total=1000 * 1024**3, used=100 * 1024**3, free=linux_free_gib * 1024**3)))
+    return stack
 
 
 def _run_remote_in_process(args: argparse.Namespace) -> int:
@@ -818,7 +829,6 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["workspace_root"], str(root))
             self.assertEqual(payload["sizes"]["huggingface_cache"]["path"], str(root / "cache" / "huggingface"))
             self.assertEqual(payload["issues"][0]["severity"], "warning")
-            self.assertIn("workspace filesystem has less than 100GiB free", payload["warnings"])
             self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
 
@@ -1035,6 +1045,38 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertEqual(payload["storage"]["workspace"]["effective_free_bytes"], 90 * 1024**3)
             self.assertIn("workspace backing store has less than 100GiB effective free (F:)", payload["warnings"])
+
+    def test_doctor_disk_and_local_launch_share_one_free_space_floor(self) -> None:
+        for min_free_gb, short in ((40, False), (60, True)):
+            with self.subTest(min_free_gb=min_free_gb), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                (root / "workspace.yaml").write_text(yaml.safe_dump({"docker": {"mounts": [], "min_free_gb": min_free_gb}}), encoding="utf-8")
+                (root / "cache").mkdir()
+                (root / "runs").mkdir()
+                previous = Path.cwd()
+                os.chdir(root)
+                try:
+                    with (
+                        _wsl_with_short_host_drive(linux_free_gib=900, host_free_gib=50),
+                        patch("kura.doctor._path_size_bytes", return_value=0),
+                        patch("kura.doctor._docker_storage_summary", return_value={"daemon_reachable": True, "usage": [], "kura_managed": {}}),
+                        patch("kura.doctor._root_owned_files", return_value={"supported": True, "count": 0, "samples": [], "truncated": False}),
+                        patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
+                        patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
+                    ):
+                        code = cmd_doctor_disk(argparse.Namespace())
+                        launch = contextlib.nullcontext() if not short else self.assertRaisesRegex(ValueError, f"requires at least {min_free_gb} GiB")
+                        with launch:
+                            _local_launch_disk_preflight(root, {"type": "train"}, {"min_free_gb": min_free_gb}, [])
+                finally:
+                    os.chdir(previous)
+                payload = json.loads(stdout.getvalue())
+                low = [issue for issue in payload["issues"] if issue["code"] == "workspace_effective_free_low"]
+                self.assertEqual(code, 1 if short else 0)
+                self.assertEqual(bool(low), short)
+                if short:
+                    self.assertEqual(low[0]["threshold_bytes"], min_free_gb * 1024**3)
+                    self.assertIn(f"workspace backing store has less than {min_free_gb}GiB effective free (C:)", payload["warnings"])
 
     def test_doctor_docker_reports_kura_managed_resources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3570,18 +3612,20 @@ class RunPodPullSelectionTests(unittest.TestCase):
             target.parent.mkdir()
 
             with patch("kura.run_commands.runpod_ssh.os.link", side_effect=OSError("cross-device link")), \
-                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes") as ensure_free:
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes") as ensure_free:
                 _link_or_copy_snapshot_file(
                     source,
                     target,
                     free_space_root=root,
                     required_free_bytes=123,
+                    config={"storage": {"host_drive": "D"}},
                 )
 
             ensure_free.assert_called_once_with(
                 root,
                 127,
                 context="RunPod delta download reusable copy fallback",
+                config={"storage": {"host_drive": "D"}},
             )
             self.assertEqual(target.read_bytes(), b"data")
 
@@ -3687,7 +3731,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
             item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": 10, "mtime_ns": 10}
             with patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[item]), \
                  patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
-                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes", side_effect=ValueError("insufficient free disk")):
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes", side_effect=ValueError("insufficient free disk")):
                 synced = _try_sync_runpod_checkpoints(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", run_id="example")
 
             self.assertFalse(synced)
@@ -3781,7 +3825,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
-                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
                  patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer), \
                  patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(item)]):
                 pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
@@ -3795,6 +3839,18 @@ class RunPodPullSelectionTests(unittest.TestCase):
             _record_pulled_outputs(run_dir, pulled, emit_event=False)
             events = [json.loads(line) for line in (run_dir / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual([event["event"] for event in events], ["run_outputs_pulled"])
+
+    def test_pull_refuses_when_the_wsl_backing_drive_is_short(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            item = {"name": "model-step00000250.safetensors", "path": "/workspace/model.safetensors", "step": 250, "size": 1024**3, "mtime_ns": 10}
+            with _wsl_with_short_host_drive(linux_free_gib=900, host_free_gib=5), \
+                 patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
+                 patch("kura.run_commands.runpod_ssh._run_bounded") as transfer:
+                with self.assertRaisesRegex(ValueError, "RunPod output pull needs about .* only 5 GiB is available on C:"):
+                    _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
+            transfer.assert_not_called()
 
     def test_pull_skips_only_valid_local_copy_with_matching_remote_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3826,7 +3882,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
-                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
                  patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer) as transfer, \
                  patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(item)]):
                 pulled = _pull_remote_output_items(run_dir, {"ip": "host", "port": 22, "key": "key"}, workspace="/workspace", items=[item])
@@ -3849,7 +3905,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 1, "", "failed")
 
             with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
-                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
                  patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=transfer), \
                  patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[dict(first), dict(second)]):
                 with self.assertRaisesRegex(ValueError, "00000500"):
@@ -3871,7 +3927,7 @@ class RunPodPullSelectionTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with patch("kura.run_commands.runpod_ssh._workspace_config", return_value={"safety": {}}), \
-                 patch("kura.run_commands.runpod_ssh._ensure_free_bytes"), \
+                 patch("kura.run_commands.runpod_ssh.ensure_free_bytes"), \
                  patch("kura.run_commands.runpod_ssh._run_bounded", side_effect=fake_transfer), \
                  patch("kura.run_commands.runpod_ssh._runpod_remote_outputs", return_value=[{**item, "mtime_ns": 11}]):
                 with self.assertRaisesRegex(ValueError, "changed while"):
@@ -5827,17 +5883,22 @@ class DockerLifecycleTests(unittest.TestCase):
                 payload = _local_launch_disk_preflight(root, {"safety": {"allow_storage_risk": True}}, {}, [])
         self.assertEqual(payload["paths"]["workspace"]["confidence"], "unknown")
 
-    def test_download_disk_guard_rejects_when_free_space_is_too_low(self) -> None:
-        class Usage:
-            total = 100 * 1024**3
-            used = 95 * 1024**3
-            free = 5 * 1024**3
-
+    def test_free_space_gate_measures_the_wsl_backing_drive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
-            with patch("kura.run_commands.plan.shutil.disk_usage", return_value=Usage()):
-                with self.assertRaisesRegex(ValueError, "needs about 10 GiB free"):
-                    _ensure_free_bytes(target, 10 * 1024**3, context="test download")
+            with _wsl_with_short_host_drive(linux_free_gib=900, host_free_gib=5):
+                with self.assertRaisesRegex(ValueError, "test download needs about 10 GiB free .* only 5 GiB is available on C:"):
+                    ensure_free_bytes(target, 10 * 1024**3, context="test download", config={})
+                ensure_free_bytes(target, 4 * 1024**3, context="test download", config={})
+
+    def test_large_docker_build_cache_does_not_stop_a_local_launch(self) -> None:
+        build_cache = json.dumps({"Type": "Build Cache", "Size": "120GB"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(500)), \
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, build_cache + "\n")):
+                payload = _local_launch_disk_preflight(root, {"type": "train"}, {"build_cache_limit_gb": 30}, [])
+        self.assertEqual(payload["docker_storage"], [{"Type": "Build Cache", "Size": "120GB"}])
 
     def test_docker_command_keeps_hf_token_value_out_of_argv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -7112,7 +7173,7 @@ class RunPodLifecycleTests(unittest.TestCase):
         dataset = root / "datasets" / "tiny" / "images"
         dataset.mkdir(parents=True)
         (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
-        stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._config())
+        stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config={"runpod": self._config()})
 
     def test_launch_runpod_non_tty_requires_yes_before_any_runpod_api_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -8605,7 +8666,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
-                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                     patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
             finally:
                 os.chdir(previous)
@@ -8675,7 +8736,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[first, changed]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
-                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                     patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
             finally:
                 os.chdir(previous)
@@ -8724,7 +8785,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
-                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                     patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
             finally:
                 os.chdir(previous)
@@ -8777,7 +8838,7 @@ class RunPodLifecycleTests(unittest.TestCase):
                      patch("kura.run_commands.runpod_ssh._runpod_ssh_details", return_value={"ip": "host", "port": 22, "key": "key"}), \
                      patch("kura.run_commands.runpod_ssh._runpod_remote_snapshot_manifest", side_effect=[manifest, manifest]), \
                      patch("kura.run_commands.runpod_ssh._transfer_runpod_snapshot_delta", side_effect=transfer_delta), \
-                     patch("kura.run_commands.runpod_ssh._ensure_free_bytes"):
+                     patch("kura.run_commands.runpod_ssh.ensure_free_bytes"):
                     code = cmd_run_download(argparse.Namespace(run_id="example", force=True))
             finally:
                 os.chdir(previous)
@@ -9556,14 +9617,14 @@ class RunPodLifecycleTests(unittest.TestCase):
             (dataset / "one.txt").write_text("caption\n", encoding="utf-8")
             with patch.dict(os.environ, {"R2_ACCESS_KEY_ID": "r2-access", "R2_SECRET_ACCESS_KEY": "r2-secret"}, clear=False):
                 with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
-                    stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config=self._object_config())
+                    stage_runpod(workspace=root, run_dir=run_dir, dataset_id="tiny", config={"runpod": self._object_config()})
 
     def test_stage_runpod_object_staging_fails_before_source_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "missing"
             with self.assertRaisesRegex(ValueError, "object_staging is experimental and disabled"):
-                stage_runpod(workspace=root, run_dir=run_dir, dataset_id="missing-dataset", config=self._object_config())
+                stage_runpod(workspace=root, run_dir=run_dir, dataset_id="missing-dataset", config={"runpod": self._object_config()})
 
     def test_stop_runpod_terminates_disposable_pod(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

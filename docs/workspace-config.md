@@ -63,8 +63,8 @@ digest moves only after compatibility checks.
 | `docker.workspace_target` | Container path for the mounted workspace. Kura currently supports only `/workspace`; other values are rejected at launch because backend artifacts compile `/workspace/...` paths. | `/workspace` |
 | `docker.gpu` | Add `--gpus all` for local Docker training | `true` |
 | `docker.mounts[]` | Extra host mounts for local Docker runs | HF cache mount |
-| `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch | `100` |
-| `docker.build_cache_limit_gb` | Docker build cache limit checked before local Docker launch | `30` |
+| `docker.min_free_gb` | Minimum free space Kura keeps after estimated local writes before Docker launch; `kura doctor disk` warns below it | `100` |
+| `docker.build_cache_limit_gb` | Docker build cache size above which `kura doctor disk` warns; it does not stop a launch | `30` |
 
 ## Agents
 

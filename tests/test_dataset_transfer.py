@@ -39,6 +39,10 @@ class _CompiledRunFixture:
     def _config() -> dict:
         return {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}
 
+    @classmethod
+    def _workspace_config(cls) -> dict:
+        return {"runpod": cls._config()}
+
     def _compiled(self, root: Path, *, resume: bool = False, link_target: bool = False) -> tuple[Path, dict]:
         run = {
             "id": "example",
@@ -224,7 +228,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             root = Path(directory)
             run_dir, run = self._compiled(root, link_target=True)
 
-            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
 
             with tarfile.open(run_dir / record["archive"]) as archive:
                 names = archive.getnames()
@@ -252,7 +256,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             root = Path(directory)
             run_dir, run = self._compiled(root)
 
-            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
 
             for key in ("input_sha256", "projection_sha256", "archive_sha256", "tar_bytes", "payload_bytes"):
                 self.assertIn(key, record)
@@ -271,7 +275,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir, run = self._compiled(root)
-            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
             archive = run_dir / record["archive"]
             manifest = run_dir / record["manifest"]
             original = archive.read_bytes()
@@ -304,7 +308,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir, run = self._compiled(root)
-            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
             archive = run_dir / record["archive"]
             original = archive.read_bytes()
 
@@ -355,10 +359,15 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
             root = Path(directory)
             run_dir, _ = self._compiled(root)
             with (
-                patch("kura.executors.runpod.shutil.disk_usage", return_value=SimpleNamespace(free=10)),
-                self.assertRaisesRegex(ValueError, "RunPod stage needs"),
+                # WSL: the Linux disk looks roomy, the Windows drive behind it is full.
+                patch("kura.storage.is_wsl", return_value=True),
+                patch("kura.storage._findmnt_for", return_value={"available": True, "fstype": "ext4", "source": "/dev/sdd"}),
+                patch("kura.storage._auto_wsl_host_drive", return_value="C:"),
+                patch("kura.storage._windows_drive_free_bytes", side_effect=lambda drive: 10 if drive == "D:" else 900 * 1024**3),
+                patch("kura.storage.shutil.disk_usage", return_value=SimpleNamespace(free=900 * 1024**3, total=1000 * 1024**3)),
+                self.assertRaisesRegex(ValueError, "RunPod stage needs about .* on D:"),
             ):
-                stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+                stage_runpod(workspace=root, run_dir=run_dir, config={**self._workspace_config(), "storage": {"host_drive": "D"}})
             self.assertFalse(any((run_dir / "transfer").iterdir()))
 
 
@@ -436,13 +445,13 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir, run = self._compiled(root)
-            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
             pinned = run_dir / "realizations" / "real-1.transfer-manifest.json"
             digest = pin_transfer_manifest(root, run_dir, run, record, pinned)
             self.assertEqual(hashlib.sha256(pinned.read_bytes()).hexdigest(), digest)
 
             # A deterministic restage of the same compile still equals the pin.
-            again = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            again = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
             self.assertEqual(verify_pinned_transfer(root, run_dir, run, again, pinned, digest), pinned.read_bytes())
 
             # A consistent forgery that adds an unselected file is refused.
@@ -492,7 +501,7 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
 
         def prepared(root: Path) -> Path:
             run_dir, run = self._compiled(root)
-            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._config())
+            record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             pinned = "realizations/real-1.transfer-manifest.json"
             digest = pin_transfer_manifest(root, run_dir, run, record, run_dir / pinned)
@@ -538,7 +547,7 @@ class RunPodInputVerifyTests(_CompiledRunFixture, unittest.TestCase):
 
     def _pod(self, root: Path) -> tuple[Path, Path, dict]:
         run_dir, run = self._compiled(root / "local")
-        record = stage_runpod(workspace=root / "local", run_dir=run_dir, config=self._config())
+        record = stage_runpod(workspace=root / "local", run_dir=run_dir, config=self._workspace_config())
         pod = root / "pod"
         remote_dir = pod / ".kura-transfer" / "example"
         remote_dir.mkdir(parents=True)

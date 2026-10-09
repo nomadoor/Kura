@@ -2250,7 +2250,7 @@ class ResumeRunTests(unittest.TestCase):
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
 
-            record = stage_runpod(workspace=root, run_dir=run_dir, dataset_ids=[], config={"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]})
+            record = stage_runpod(workspace=root, run_dir=run_dir, dataset_ids=[], config={"runpod": {"storage_mode": "upload", "gpu_type_ids": ["NVIDIA A40"]}})
             archive_path = run_dir / record["archive"]
             with tarfile.open(archive_path, "r:gz") as archive:
                 names = set(archive.getnames())

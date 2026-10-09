@@ -180,7 +180,6 @@ def _auto_wsl_host_drive() -> str | None:
     return None
 
 
-@lru_cache(maxsize=16)
 def _windows_drive_free_bytes(drive: str) -> int | None:
     powershell = _windows_executable("powershell.exe")
     if not powershell:
@@ -272,3 +271,14 @@ def probe_storage(path: Path, config: dict[str, Any] | None = None, *, role: str
 
 def probe_storages(paths: dict[str, Path], config: dict[str, Any] | None = None) -> dict[str, StorageStatus]:
     return {name: probe_storage(path, config, role=name) for name, path in paths.items()}
+
+
+def ensure_free_bytes(path: Path, required_bytes: int, *, context: str, config: dict[str, Any] | None) -> None:
+    """The one host free-space gate: measures the physical backing store, not only Linux's view of it."""
+    path.mkdir(parents=True, exist_ok=True)
+    status = probe_storage(path, config)
+    if status.effective_free_bytes < required_bytes:
+        raise ValueError(
+            f"{context} needs about {-(-required_bytes // 1024**3)} GiB free at {path}, "
+            f"but only {status.effective_free_bytes // 1024**3} GiB is available on {status.backing_id}"
+        )

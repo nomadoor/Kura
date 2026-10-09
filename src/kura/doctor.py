@@ -29,6 +29,7 @@ from kura.images import effective_image, image_names, mutable_override_warning
 from kura.paths import inspect_workspace_symlinks
 from kura.storage import is_wsl as _is_wsl
 from kura.storage import probe_storages
+from kura.run_commands.plan import _configured_gib, local_min_free_gib
 from kura.workspace import validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
 from kura.workspace import workspace as _workspace
@@ -267,6 +268,9 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
         config = _workspace_config()
+        docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+        min_free_gib = local_min_free_gib(docker_config)
+        build_cache_limit_gib = _configured_gib(docker_config.get("build_cache_limit_gb"), default=30)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"disk: configuration error: {_safe_error(exc)}", file=sys.stderr)
         return 1
@@ -282,7 +286,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "downloads": workspace_root / "downloads",
         "tmp": Path(os.environ.get("TMPDIR") or "/tmp"),
     }
-    docker_mounts = config.get("docker", {}).get("mounts", []) if isinstance(config.get("docker"), dict) else []
+    docker_mounts = docker_config.get("mounts", [])
     if not isinstance(docker_mounts, list):
         docker_mounts = []
     mounted_hf = next(
@@ -313,25 +317,16 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
 
     gib = 1024**3
     issues: list[dict[str, Any]] = []
-    workspace_free = filesystems["workspace"].get("free_bytes")
-    if isinstance(workspace_free, int) and workspace_free < 100 * gib:
-        issues.append(_disk_issue(
-            code="workspace_free_low",
-            severity="warning",
-            message="workspace filesystem has less than 100GiB free",
-            free_bytes=workspace_free,
-            threshold_bytes=100 * gib,
-        ))
     workspace_storage = storage_statuses.get("workspace")
-    if workspace_storage is not None and workspace_storage.effective_free_bytes < 100 * gib:
+    if workspace_storage is not None and workspace_storage.effective_free_bytes < min_free_gib * gib:
         issues.append(_disk_issue(
             code="workspace_effective_free_low",
             severity="warning",
-            message=f"workspace backing store has less than 100GiB effective free ({workspace_storage.backing_id})",
+            message=f"workspace backing store has less than {min_free_gib}GiB effective free ({workspace_storage.backing_id})",
             backing_id=workspace_storage.backing_id,
             backing_kind=workspace_storage.backing_kind,
             effective_free_bytes=workspace_storage.effective_free_bytes,
-            threshold_bytes=100 * gib,
+            threshold_bytes=min_free_gib * gib,
         ))
     cache_runs = (sizes["cache"].get("size_bytes") or 0) + (sizes["runs"].get("size_bytes") or 0)
     if cache_runs > 30 * gib:
@@ -343,13 +338,13 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
             threshold_bytes=30 * gib,
         ))
     for item in docker_storage.get("usage", []):
-        if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > 30 * gib:
+        if str(item.get("Type", "")).lower() == "build cache" and (item.get("size_bytes") or 0) > build_cache_limit_gib * gib:
             issues.append(_disk_issue(
                 code="docker_build_cache_large",
                 severity="warning",
-                message="Docker build cache exceeds 30GiB",
+                message=f"Docker build cache exceeds {build_cache_limit_gib}GiB",
                 size_bytes=item.get("size_bytes"),
-                threshold_bytes=30 * gib,
+                threshold_bytes=build_cache_limit_gib * gib,
             ))
         if str(item.get("Type", "")).lower() == "images" and (item.get("size_bytes") or 0) > 50 * gib:
             issues.append(_disk_issue(
