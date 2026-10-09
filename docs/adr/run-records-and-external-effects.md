@@ -68,7 +68,9 @@ creates nothing, so only decisions 3 to 7 apply to it.
   whose records show the remote job never started (no remote-job intent, or an
   intent whose pid file the Pod does not have), it deletes the Pod, records the
   run as interrupted, and notifies. Nothing on that Pod can be collected, and
-  waiting for a person only bills.
+  waiting for a person only bills. A failed delete there is retried with the
+  runner's backoff until it succeeds, notified once, and never counted toward
+  the collection failures that hand a run to a person (2026-10-10).
 - A create that fails with a timeout or a transient error ends the attempt
   loop and goes to discovery. Only an explicit refusal, such as no capacity,
   may try the next GPU candidate.

@@ -862,7 +862,7 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
                     return 0
                 # With no create intent no Pod exists, so a confirmed launch simply continues (run-records ADR).
                 _first_attempt(request)
-                code = _remote(run_dir, request, details, reattach=False)
+                code: int | None = _remote(run_dir, request, details, reattach=False)
             else:
                 code = _continue_runpod(workspace, run_dir, request, details, realization)
         except (OSError, ValueError) as exc:
@@ -899,7 +899,7 @@ def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: 
     )
 
 
-def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int:
+def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any], realization: dict[str, Any]) -> int | None:
     """Pick up a launch an earlier follower started, from its records."""
     from kura.executors.common import remote_job_started
     from kura.run_commands.runpod_ssh import remote_job_pid
@@ -941,25 +941,42 @@ def _continue_runpod(workspace: Path, run_dir: Path, request: Path, details: dic
     return _delete_unstarted_pod(workspace, run_dir, request, details)
 
 
-def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> int:
+def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> int | None:
+    """Delete a Pod whose job never started; None when the delete failed and is retried uncounted."""
     from kura.executors.common import end_run
 
     if not _delete_pod(workspace, run_dir, details, why="its job never started"):
-        return 1
+        # Nothing on the Pod can be lost and the delete accepts "already gone", so the
+        # runner keeps retrying it; holding the run for a person would only keep it billing.
+        retries_path = _sibling(request, ".delete-failures.json")
+        retries = int(_read_json(retries_path).get("count", 0)) + 1
+        atomic_write_json(retries_path, record("pod_delete_failures", {"count": retries, "at": _now()}))
+        if retries == 1:
+            _notify_text(details, f"Kura run's Pod could not be deleted: {run_dir.name}",
+                         f"Run {run_dir.name}'s Pod never started its job and could not be deleted yet, so it may still be billing. "
+                         f"The runner keeps trying (see runs/{run_dir.name}/logs/runner.log); "
+                         f"`kura run stop {run_dir.name}` deletes it too.")
+        return None
     end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
                  f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Start it again as a new run with `kura run new --from {run_dir.name} --slug <words>`.")
     return 0
 
 
-def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any], code: int) -> int:
-    """A finished run ends the follower; repeated failures to collect hand the run to a person."""
+def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any], code: int | None) -> int:
+    """A finished run ends the follower; repeated failures to collect hand the run to a person.
+
+    `code` None is a retry-safe step that failed (nothing on the Pod can be lost):
+    the runner retries it with its backoff, and it never counts as a failed collection.
+    """
     from kura.executors.common import end_run
 
     status = _status(run_dir)
     if run_finished(status) and not _pod_left_running(status):
         # The RunPod controller already notified completion with the request's channels.
         return 0
+    if code is None:
+        return 1
     failures_path = _sibling(request, ".failures.json")
     failures = int(_read_json(failures_path).get("count", 0)) + 1
     atomic_write_json(failures_path, record("follower_failures", {"count": failures, "at": _now()}))
