@@ -559,11 +559,18 @@ def _write_create_intent(run_dir: Path, realization_id: str, *, pod_name: str, r
 
     def mutate(latest: dict[str, Any]) -> None:
         latest.update({"state": "launching", "host": "runpod", "started": None, "ended": None, "exit_code": None})
-        # A previous realization's Pod must never be mistaken for this one.
-        for key in ("pod_id", "last_observation", "pod_stopped_at", "pod_missing_at"):
+        # A previous realization's Pod, exit, and collection must never be mistaken for this one's.
+        for key in PER_LAUNCH_STATUS_FIELDS:
             latest.pop(key, None)
 
     _mutate_run_status(run_dir, mutate)
+
+
+# Status fields that describe one launch's Pod; a new launch starts without them.
+PER_LAUNCH_STATUS_FIELDS = (
+    "pod_id", "last_observation", "pod_stopped_at", "pod_missing_at",
+    "remote_state", "remote_exit_code", "remote_ended", "remote_exit", "last_remote_exit_observation", "downloaded_run",
+)
 
 
 def confirm_runpod_billing(

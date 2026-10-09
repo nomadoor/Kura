@@ -84,6 +84,28 @@ class StateVerificationErrorTests(unittest.TestCase):
         self.assertIn("state manifest does not verify", status["publication_error"])
 
 
+class FailedRunStateErrorTests(unittest.TestCase):
+    def test_a_failed_runpod_run_with_a_bad_state_stays_failed_as_on_docker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = _runpod_run(root, exit_code=1, state_dir=True)
+            with patch("kura.run_commands.runpod_ssh.training_state_capture_required", return_value=True), \
+                    patch("kura.run_commands.runpod_ssh.publish_completed_training_states", side_effect=ValueError("state manifest does not verify")):
+                _download(root)
+            status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+        self.assertEqual((status["state"], status["publication_state"]), ("failed", "blocked"))
+        self.assertIn("state manifest does not verify", status["training_state_sync_error"])
+
+
+class RelaunchTests(unittest.TestCase):
+    def test_a_new_launch_forgets_the_last_launchs_exit_and_collection(self) -> None:
+        # Otherwise a stop of the new Pod would skip its confirmation as if it were collected.
+        from kura.executors.runpod import PER_LAUNCH_STATUS_FIELDS
+
+        for field in ("pod_id", "downloaded_run", "remote_state", "remote_exit_code", "remote_ended"):
+            self.assertIn(field, PER_LAUNCH_STATUS_FIELDS)
+
+
 class EndTimeTests(unittest.TestCase):
     def test_a_runpod_end_is_written_in_the_hosts_zone(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

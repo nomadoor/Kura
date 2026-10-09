@@ -118,8 +118,8 @@ training state. A missing or corrupt required artifact leaves the run in
 `publication_state: blocked` keep the two facts distinct. `run execute` then
 returns failure without rerunning the trainer. On RunPod, snapshot-transfer
 integrity is checked separately from the adapter-content requirement, and a
-publication failure leaves `recovery_required: true` so the Pod is not stopped
-as a completed run. Runs compiled before this output contract remain
+publication failure leaves the run in state `recovery_required`, with its
+outputs downloaded and its Pod deleted. Runs compiled before this output contract remain
 `legacy-unverified` rather than acquiring retroactive verification.
 Backend-native output validators remain responsible for adapter-specific tensor
 keys and compatibility; this structural publication check does not judge LoRA

@@ -1746,7 +1746,7 @@ def _uncollected_pod_work(run_dir: Path) -> str | None:
     if status.get("remote_state"):  # recorded only once the remote job has exited
         return (f"its job has ended and its outputs are not collected; `kura run execute {run_dir.name}` collects them "
                 "and then deletes the Pod")
-    return (f"it is still training, and the checkpoints it has saved are only on the Pod; `kura run pull {run_dir.name}` "
+    return (f"any checkpoints it has saved so far are only on the Pod; `kura run pull {run_dir.name}` "
             "copies them first")
 
 

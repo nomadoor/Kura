@@ -646,7 +646,6 @@ class DoctorDockerTests(unittest.TestCase):
                 }, True),
                 "deferred": ({
                     "state": "completed", "ended": "2026-01-02T00:00:00+00:00",
-                    "recovery_required": True,
                     "dataset_input_postflight": {"view_cleanup": "deferred"},
                 }, False),
                 "running": ({"state": "running", "started": "2026-01-01T00:00:00+00:00"}, False),

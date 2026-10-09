@@ -554,10 +554,14 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
             # everything the Pod had, so collecting again cannot change them: the run is
             # recorded as needing a person, as on Docker, and the Pod is not kept for it.
             blocked: list[str] = []
-            state_sync_error = state_error or missing_training_state_error(state_capture_required and not published_states, trainer_completed=exit_code == 0)
+            # As on Docker: a state error blocks a completed run's publication; a failed run stays
+            # failed with its publication blocked; a missing state matters only for a completed run.
+            missing_state = None if state_error else missing_training_state_error(
+                state_capture_required and not published_states, trainer_completed=exit_code == 0)
+            state_sync_error = state_error or missing_state
             if state_error and exit_code == 0:
                 blocked.append(state_error)
-            elif state_sync_error:
+            elif missing_state:
                 blocked.append(MISSING_STATE_PUBLICATION_ERROR)
             try:
                 outputs = materialize_primary_outputs(output_dir)
@@ -609,6 +613,7 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                 }))
                 if input_postflight is not None:
                     status["dataset_input_postflight"] = input_postflight
+                status.pop("recovery_required", None)  # a flag older Kura wrote; the state says it now
                 status.update({"state": "completed" if exit_code == 0 else "failed", "exit_code": exit_code, "ended": host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp"), "outputs": outputs, "recovery_artifacts": recovery_artifacts, "downloaded_run": str(downloaded_run.relative_to(run_dir)), "remote_exit": str(exits[-1].relative_to(run_dir)), "remote_state": "completed" if exit_code == 0 else "failed", "remote_exit_code": exit_code, "remote_ended": host_time(remote_exit.get("timestamp")) or remote_exit.get("timestamp")})
                 status["execution_state"] = "completed" if exit_code == 0 else "failed"
                 if state_sync_error is not None:
@@ -617,7 +622,9 @@ def _download_run_unlocked(run_id: str, *, force: bool = False) -> int:
                     # A final download that obtained (or never needed) state
                     # supersedes any error recorded by an earlier mid-run sync.
                     status.pop("training_state_sync_error", None)
-                status["publication_state"] = "completed" if contract else "legacy-unverified" if exit_code == 0 else "not-required"
+                status["publication_state"] = (
+                    "completed" if contract else "legacy-unverified" if exit_code == 0 else "blocked" if state_error else "not-required"
+                )
                 if exit_code == 0 and not contract and realization_id is not None:
                     record_unverified_publication(run_dir, realization_id, list(outputs or []))
                 status.pop("publication_error", None)
