@@ -43,7 +43,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
+from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -55,14 +55,11 @@ from kura.run_commands import _try_observe_runpod_remote_exit
 from kura.run_commands import _try_sync_runpod_remote_stdout
 from kura.run_commands import cmd_run_download
 from kura.run_commands import cmd_run_execute
-from kura.run_commands import cmd_run_launch
+from kura.run_commands import cmd_render_launch
 from kura.run_commands import cmd_run_logs
 from kura.run_commands import cmd_run_plan
 from kura.run_commands import cmd_run_pull
-from kura.run_commands import cmd_run_remote
-from kura.run_commands import cmd_run_stage
 from kura.run_commands import cmd_run_stop
-from kura.run_commands import cmd_run_upload
 from kura.tui import run_textual_monitor
 from kura.training_artifacts import compile_resume_lock, recipe_fingerprint, select_training_state, training_state_contract, training_state_reference_lock
 from kura.workspace import dump_yaml as _dump_yaml
@@ -141,19 +138,14 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
     if adapter.project_dataset is None and adapter.validate_dataset is not None:
         adapter.validate_dataset(run, _workspace())
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
-    capacity = compute.get("capacity")
-    if capacity is not None:
-        if run_executor(run) != "runpod":
-            raise ValueError("compute.capacity is only valid for RunPod runs")
-        if not isinstance(capacity, dict):
-            raise ValueError("compute.capacity must be a mapping")
-        mode = capacity.get("mode", "immediate")
-        if mode not in {"immediate", "wait"}:
-            raise ValueError("compute.capacity.mode must be immediate or wait")
-        if mode == "wait":
-            if _parse_duration_seconds(capacity.get("timeout", "24h")) <= 0:
+    if compute.get("capacity") is not None and run_executor(run) != "runpod":
+        raise ValueError("compute.capacity is only valid for RunPod runs")
+    if run_executor(run) == "runpod":
+        policy = capacity_policy(run)
+        if policy["mode"] == "wait":
+            if _parse_duration_seconds(policy["timeout"]) <= 0:
                 raise ValueError("compute.capacity.timeout must be greater than zero when mode=wait")
-            if _parse_duration_seconds(capacity.get("poll_interval", "30s")) <= 0:
+            if _parse_duration_seconds(policy["poll_interval"]) <= 0:
                 raise ValueError("compute.capacity.poll_interval must be greater than zero when mode=wait")
 
 
@@ -265,7 +257,6 @@ def cmd_run_new(args: argparse.Namespace) -> int:
             "compute": {
                 "executor": executor,
                 "gpu": args.gpu,
-                **({"capacity": {"mode": "immediate"}} if executor == "runpod" else {}),
             },
             "sampling": {"cadence_steps": None},
         }
@@ -363,9 +354,7 @@ def _create_resume_derived_run(
     compute = deepcopy(source_run.get("compute") if isinstance(source_run.get("compute"), dict) else {})
     if args.executor is not None:
         compute["executor"] = args.executor
-        if args.executor == "runpod":
-            compute.setdefault("capacity", {"mode": "immediate"})
-        else:
+        if args.executor != "runpod":
             compute.pop("capacity", None)
     if args.gpu is not None:
         compute["gpu"] = args.gpu
@@ -1581,12 +1570,9 @@ def main() -> None:
     execute = run_sub.add_parser("execute", help="Execute using the executor frozen in the compiled run; for a RunPod run whose job is already running, follow it and collect instead")
     execute.add_argument("run_id")
     execute.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
+    execute.add_argument("--max-lease", default="12h", help="RunPod only: the Pod deletes itself this long after Kura first reaches it, whatever happens locally, e.g. 12h; 0 disables it.")
     execute.add_argument("--unattended-wait", default="auto", help="RunPod only: after training, how long the Pod waits for Kura to collect outputs before deleting itself: auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
     execute.set_defaults(func=cmd_run_execute)
-    stage = run_sub.add_parser("stage", help="Stage compiled inputs for a remote executor")
-    stage.add_argument("run_id")
-    stage.add_argument("--executor", default="runpod", choices=("runpod",))
-    stage.set_defaults(func=cmd_run_stage)
     logs = run_sub.add_parser("logs", help="Print the last 200 lines (at most 50 KB) of a run log, naming the full log, or follow it")
     logs.add_argument("run_id")
     logs.add_argument("--follow", action="store_true")
@@ -1599,9 +1585,6 @@ def main() -> None:
     discard.add_argument("run_id")
     discard.add_argument("--yes", action="store_true")
     discard.set_defaults(func=cmd_run_discard)
-    upload = run_sub.add_parser("upload", help="Upload a staged RunPod bundle")
-    upload.add_argument("run_id")
-    upload.set_defaults(func=cmd_run_upload)
     download = run_sub.add_parser("download", help="Download a completed RunPod run snapshot")
     download.add_argument("run_id")
     download.add_argument("--force", action="store_true")
@@ -1614,22 +1597,6 @@ def main() -> None:
     pull.add_argument("--force", action="store_true", help="Copy even when a same-size local file already exists")
     pull.add_argument("--ssh-timeout", type=int, default=60)
     pull.set_defaults(func=cmd_run_pull)
-    remote = run_sub.add_parser("remote", help="Run on RunPod, download outputs, then auto-stop")
-    remote.add_argument("run_id")
-    remote.add_argument("--upload-timeout", type=int, default=600)
-    remote.add_argument("--job-timeout", type=int, default=0, help="Optional controller wait limit in seconds; 0 means wait until the remote job exits")
-    remote.add_argument("--download-attempts", type=int, default=60)
-    remote.add_argument("--download-interval", type=int, default=20)
-    remote.add_argument("--image", help="Override the RunPod image for this run only")
-    remote.add_argument("--wait-for-capacity", default="0", help="Retry capacity-only launch failures for this long, e.g. 6h. Defaults to 0 (do not wait).")
-    remote.add_argument("--capacity-poll-interval", default="30s", help="How often to retry RunPod capacity while waiting, e.g. 30s")
-    remote.add_argument("--hold-for", default="30m", help="Keep the Pod running for review after confirmed download, e.g. 30m. Defaults to 30m; use 0 to stop immediately.")
-    remote.add_argument("--max-lease", default="12h", help="Best-effort Pod-side billing safety lease, e.g. 12h. Use 0 to disable.")
-    remote.add_argument("--unattended-wait", default="auto", help="After training, how long the Pod waits for Kura to collect outputs before deleting itself: auto (longer of 2h and the job time, including model download), a duration such as 3h, or 0 to disable.")
-    remote.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
-    remote.add_argument("--notify-repeat-interval", default="10m", help="Repeat completion notifications while the Pod is held for review; use 0 to disable")
-    remote.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
-    remote.set_defaults(func=cmd_run_remote)
     stop = run_sub.add_parser("stop", help="Stop the associated Pod or container")
     stop.add_argument("run_id")
     stop.set_defaults(func=cmd_run_stop)
@@ -1649,16 +1616,6 @@ def main() -> None:
     lease.add_argument("duration", help="For example 18h: the Pod deletes itself this long from now at the latest")
     lease.add_argument("--yes", action="store_true", help="Confirm without a prompt; use only on the user's instruction")
     lease.set_defaults(func=cmd_run_lease)
-    launch = run_sub.add_parser("launch", help="Launch a compiled run locally or on RunPod")
-    launch.add_argument("run_id")
-    launch.add_argument("--executor", default="docker", choices=("docker", "runpod"))
-    launch.add_argument("--dry-run", action="store_true")
-    launch.add_argument("--image", help="Override the runtime image for this run only")
-    launch.add_argument("--wait", action="store_true", help="Follow the run until it finishes, as `kura run execute` does; without it the job runner continues alone")
-    launch.add_argument("--wait-for-capacity", default="0", help="For RunPod, retry capacity-only launch failures for this long, e.g. 6h. Defaults to 0 (do not wait).")
-    launch.add_argument("--capacity-poll-interval", default="30s", help="How often to retry RunPod capacity while waiting, e.g. 30s")
-    launch.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
-    launch.set_defaults(func=cmd_run_launch)
 
     render = sub.add_parser("render", help="Create and launch ComfyUI render runs")
     render_sub = render.add_subparsers(dest="render_command", required=True)
@@ -1675,7 +1632,7 @@ def main() -> None:
     render_launch.add_argument("--image", help="Override the runtime image for this render only")
     render_launch.add_argument("--notify", help="Override notification channels: desktop,ntfy, or none. Defaults to auto-detection")
     render_launch.add_argument("--yes", action="store_true", help="Confirm billed RunPod creation non-interactively; use only after explicit user instruction")
-    render_launch.set_defaults(func=cmd_run_launch)
+    render_launch.set_defaults(func=cmd_render_launch)
     render_status = render_sub.add_parser("status", help="Print the latest render status")
     render_status.add_argument("run_id")
     render_status.set_defaults(func=cmd_run_status)

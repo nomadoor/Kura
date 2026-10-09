@@ -201,8 +201,8 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 | `runpod.country_codes` | Ordered RunPod country candidates; Kura tries each configured country within each data-center attempt | unset |
 | `runpod.interruptible` | Whether to allow interruptible Pods | `false` |
 
-`--hold-for` and `--max-lease` are not `workspace.yaml` keys. They are
-`kura run remote` flags; see [commands.md](commands.md).
+`--max-lease` and `--unattended-wait` are not `workspace.yaml` keys. They are
+`kura run execute` flags; see [commands.md](commands.md).
 
 If a run needs a specific GPU, set `compute.gpu` in that run. Kura will use that
 GPU before the workspace-level candidates.
@@ -213,11 +213,14 @@ RunPod capacity behavior belongs to the run intent, not `workspace.yaml`:
 compute:
   executor: runpod
   gpu: NVIDIA RTX A5000
-  capacity:
-    mode: immediate  # or wait
-    timeout: 6h      # required only for wait; defaults to 24h
+  capacity:          # optional; this is the default
+    mode: wait         # or immediate: fail at once when the GPU is taken
+    timeout: 24h       # for wait
     poll_interval: 30s
 ```
+
+RunPod GPUs are often taken, so a run waits for one by default. While it waits
+there is no Pod and no billing.
 
 `kura run plan` measures live stock and price before approval. `run execute`
 uses the compiled capacity policy without asking again.

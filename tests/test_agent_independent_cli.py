@@ -16,7 +16,8 @@ from unittest.mock import Mock, patch
 
 import yaml
 
-from kura.cli import cmd_init, cmd_run_compile, cmd_run_launch, cmd_run_new, cmd_run_plan, cmd_run_status
+from kura.cli import cmd_init, cmd_run_compile, cmd_run_new, cmd_run_plan, cmd_run_status
+from kura.run_commands.launch import launch_run
 from kura.model_requirements import model_requirements
 from kura.run_envelope import backend_config, common_recipe
 from kura.backends import BACKENDS
@@ -95,7 +96,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 command_was_recomputed = Mock(side_effect=AssertionError("launch recomputed adapter command"))
                 with patch.dict(BACKENDS, {backend: replace(BACKENDS[backend], command=command_was_recomputed)}), contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id=run_id, executor="docker", json=False)), 0)
-                    self.assertEqual(cmd_run_launch(argparse.Namespace(run_id=run_id, executor="docker", dry_run=True, image=None, notify=None, wait=False)), 0)
+                    self.assertEqual(launch_run(run_id, executor="docker", dry_run=True, image=None), 0)
                     self.assertEqual(cmd_run_status(argparse.Namespace(run_id=run_id)), 0)
                 command_was_recomputed.assert_not_called()
                 manifest = yaml.safe_load((root / "runs" / run_id / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))

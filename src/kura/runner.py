@@ -638,7 +638,7 @@ def _work_docker(workspace: Path, run_dir: Path, request: Path, *, sleep: Callab
             if not any(_read_json(path).get("realization", {}).get("controlled_by", {}).get("request") == request.name
                        for path in (run_dir / "realizations").glob("*.create-intent.json")):
                 _record_request_outcome(request, ".not-launched.json", "not_launched",
-                                        error=f"the runner stopped before launching; start a new launch with `kura run launch {run_dir.name}`")
+                                        error=f"the runner stopped before launching; start a new run from its settings with `kura run new --from {run_dir.name} --slug <words>`")
                 return 0
         if any(_read_json(path).get("realization", {}).get("controlled_by", {}).get("request") == request.name
                for path in (run_dir / "realizations").glob("*.create-intent.json")):
@@ -879,10 +879,15 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
         set_stop_check(None)
 
 
+# Launch-request options older Kura wrote that nothing reads now.
+RETIRED_REQUEST_OPTIONS = frozenset({"hold_for", "notify_repeat_interval"})
+
+
 def _remote(run_dir: Path, request: Path, details: dict[str, Any], *, reattach: bool) -> int:
     from kura.run_commands.launch import _run_remote_locked
 
-    options = dict(details.get("options") or {})
+    # Requests written by older Kura may carry options that no longer exist (the review hold).
+    options = {key: value for key, value in (details.get("options") or {}).items() if key not in RETIRED_REQUEST_OPTIONS}
     controlled_by = {"request": request.name, "epoch": int(os.environ.get("KURA_RUNNER_EPOCH", "0") or 0),
                      "billing_confirmed_at": details.get("billing_confirmed_at")}
     return _run_remote_locked(
@@ -1048,7 +1053,6 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
     # The follower's own messages (capacity wait, transfer, download, stop) are part of what the user sees.
     runner_log = run_dir / "logs" / "runner.log"
     runner_offset = runner_log.stat().st_size if runner_log.exists() else 0
-    held_for_review = str((_read_json(request).get("options") or {}).get("hold_for") or "0") not in ("0", "0s", "")
     while True:
         outcome = request_outcome(request)
         if outcome is not None:
@@ -1074,9 +1078,7 @@ def follow(workspace: Path, run_dir: Path, request: Path, *, poll_sec: float = 2
             said_state, said_at = status.get("state"), clock()
         realization = _realization(run_dir, status.get("last_realization"))
         launched = realization is not None and realization.get("controlled_by", {}).get("request") == request.name
-        if launched and run_finished(status) and (not _held(run_dir) or (held_for_review and status.get("downloaded_run"))):
-            if _held(run_dir):
-                print("outputs are collected; the Pod is held for review, then the runner deletes it", file=out)
+        if launched and run_finished(status) and not _held(run_dir):
             state = str(status.get("state"))
             if state != "completed":
                 _print_log_end(run_dir, out, after_line=log_start_line)

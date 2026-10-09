@@ -4,7 +4,7 @@ Kura's local Docker training runtime and ComfyUI render runtime have both been e
 
 ```bash
 uv run kura doctor docker
-uv run kura run launch <docker-smoke-run> --executor docker
+uv run kura run execute <docker-smoke-run>
 uv run kura render launch <comfyui-render-run>
 ```
 

@@ -98,6 +98,23 @@ def run_executor(run: dict[str, Any]) -> str:
     return "runpod" if compute.get("provider") == "runpod" else "docker"
 
 
+def capacity_policy(run: dict[str, Any]) -> dict[str, Any]:
+    """How a RunPod run gets its GPU: by default it waits for one (no Pod, so no billing,
+    while it waits), because RunPod GPUs are often taken; `mode: immediate` fails at once."""
+    compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
+    capacity = compute.get("capacity")
+    if capacity is None:
+        capacity = {}
+    if not isinstance(capacity, dict):
+        raise ValueError("compute.capacity must be a mapping")
+    mode = capacity.get("mode", "wait")
+    if not isinstance(mode, str) or mode not in {"immediate", "wait"}:
+        raise ValueError("compute.capacity.mode must be immediate or wait")
+    if mode == "immediate":
+        return {"mode": "immediate", "timeout": None, "poll_interval": None}
+    return {"mode": "wait", "timeout": capacity.get("timeout", "24h"), "poll_interval": capacity.get("poll_interval", "30s")}
+
+
 def backend_config(run: dict[str, Any], name: str | None = None) -> dict[str, Any]:
     """Return the selected backend's opaque primary config."""
 

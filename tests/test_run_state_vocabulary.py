@@ -15,8 +15,9 @@ class RunStateVocabularyTests(unittest.TestCase):
         from kura.executors import common
         from kura.run_commands import launch, plan
 
-        self.assertIs(launch.RELAUNCHABLE_STATES, common.RELAUNCHABLE_STATES)
-        self.assertIs(plan.RELAUNCHABLE_STATES, common.RELAUNCHABLE_STATES)
+        # Whether a run may stage and start is decided by one function over the shared set.
+        self.assertIs(launch.can_start, common.can_start)
+        self.assertIs(plan.can_start, common.can_start)
         self.assertIs(runner.EXIT_FOR_STATE, common.EXIT_CODE_FOR_STATE)
         for name in ("ACTIVE_STATES", "OBSERVABLE_STATES", "TERMINAL_STATES", "UNFINISHED_STATES", "RELAUNCHABLE_STATES", "CLEANUP_ELIGIBLE_STATES", "UNSUCCESSFUL_STATES"):
             with self.subTest(name=name):

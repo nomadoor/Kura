@@ -38,7 +38,7 @@ def main() -> int:
 
     run([sys.executable, "-c", "import kura.cli, kura.backends, kura.executors, kura.monitor, kura.render, kura.tui"])
     run(["uv", "run", "kura", "--help"])
-    run(["uv", "run", "kura", "run", "remote", "--help"])
+    run(["uv", "run", "kura", "run", "execute", "--help"])
     return 0
 
 

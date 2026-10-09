@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from kura.executors.common import RELAUNCHABLE_STATES
+from kura.executors.common import can_start
 from kura.secrets import declared_secret
 from kura.backends import get_backend, validate_backend_config
 from kura.dataset_handoff import (
@@ -43,7 +43,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types, runpod_settings_for_adapter
 from kura.run_commands.experiment import experiment_context, format_experiment_context
-from kura.run_envelope import backend_config, common_recipe, resume_intent, run_executor, training_state_policy
+from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state, training_state_managed
 
 
@@ -181,13 +181,7 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
     except ValueError:
         min_cuda_version = runpod_min_cuda_version("")
     selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)
-    capacity = compute.get("capacity") if isinstance(compute.get("capacity"), dict) else {}
-    mode = capacity.get("mode", "immediate")
-    policy = {
-        "mode": mode,
-        "timeout": capacity.get("timeout", "24h") if mode == "wait" else None,
-        "poll_interval": capacity.get("poll_interval", "30s") if mode == "wait" else None,
-    }
+    policy = capacity_policy({"compute": compute})
     runpod_config = dict(config.get("runpod", {})) if isinstance(config.get("runpod"), dict) else {}
     runpod_config.setdefault("gpu_type_ids", gpu_type_ids)
     if gpu_type_ids:
@@ -1252,7 +1246,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
         "compute": {
             "executor": plan_executor,
             "gpu": compute.get("gpu") if isinstance(compute, dict) else None,
-            "capacity": compute.get("capacity") if isinstance(compute.get("capacity"), dict) else None,
+            "capacity": capacity_policy(run) if plan_executor == "runpod" else None,
         },
         "resume": resume_payload,
         "training_state": training_state_payload,
@@ -1388,7 +1382,7 @@ def format_run_plan(payload: dict[str, Any]) -> str:
         lines.append("")
         lines.append("RunPod capacity")
         policy = runpod_capacity.get("policy") if isinstance(runpod_capacity.get("policy"), dict) else {}
-        _append_kv(lines, "policy", policy.get("mode", "immediate"))
+        _append_kv(lines, "policy", policy.get("mode"))
         if policy.get("timeout"):
             _append_kv(lines, "timeout", policy.get("timeout"))
         if policy.get("poll_interval"):
@@ -1801,7 +1795,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         status = observe_run(run_dir, config=_workspace_config().get("runpod", {}))
         if status.get("state") == "running":
             raise ValueError("run is running; to follow its job and collect, run `kura run execute <run-id>`; to discard it, stop it first")
-        if status.get("state") not in RELAUNCHABLE_STATES:
+        if not can_start(status):
             raise ValueError("run must be compiled before staging")
         dataset_ids = [item.get("id") for item in _run_datasets(locked)]
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]
@@ -1812,7 +1806,3 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         print(f"cannot stage run: {_safe_error(exc)}", file=sys.stderr)
         return 1
     return 0
-
-
-def cmd_run_stage(args: argparse.Namespace) -> int:
-    return stage_run(args.run_id, executor=args.executor)

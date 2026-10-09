@@ -184,40 +184,31 @@ situation-dependent decision, not a safe universal `recover` action.
 | `uv run kura run stop <run-id>` | Explicitly stop the associated Pod/container |
 | `uv run kura run lease <run-id> <duration>` | Set how long a running RunPod Pod may live from now (shows the change and its price, then asks; `--yes` only on the user's instruction) |
 
-## Low-level execution commands
+## Execution flags
 
-These are retained for diagnosis, recovery, and Kura development. They are not
-additional steps in the normal workflow.
+`kura run execute <run-id>` is the one way to start a training run, and the
+way to follow one again after its session or controller was lost: it follows
+the running job and collects it, and never starts a second Pod. A render
+starts with `kura render launch <run-id>`. Only a run that has ended without
+completing starts again, as a new run from its settings:
+`kura run new --from <run-id> --slug <words>`.
 
-| Command | Purpose |
-| --- | --- |
-| `uv run kura run compile <run-id>` | Freeze `run.yaml` into resolved inputs |
-| `uv run kura run launch <run-id> --executor docker --dry-run` | Preview a local Docker launch |
-| `uv run kura run launch <run-id> --executor docker --wait` | Launch locally and wait in the foreground |
-| `uv run kura run stage <run-id>` | Build the transfer bundle for a remote executor |
-| `uv run kura run upload <run-id>` | Upload a staged bundle to an existing RunPod Pod |
-| `uv run kura run remote <run-id>` | Invoke the RunPod lifecycle directly with advanced flags |
-
-Useful low-level `run remote` flags:
-
-- `--wait-for-capacity 6h --capacity-poll-interval 30s` opts this low-level
-  invocation into bounded capacity waiting. Unlike normal `run execute`,
-  `run remote` does not inherit `compute.capacity` from the compiled run.
-- `--hold-for 30m` keeps a completed Pod briefly after confirmed download so you
-  can inspect results. Use `--hold-for 0` to stop immediately.
 - `--max-lease 12h` deletes the Pod from inside after that long, whatever the
   local controller does. It is a billing fuse, not output preservation.
-- `--unattended-wait auto` (on `run remote` and `run execute`) bounds a Pod whose
-  controller is gone when training ends: unless Kura collects the outputs first,
-  the Pod deletes itself after the longer of 2 hours and the job time (from
-  remote job start, including model download). Pass
-  a duration to change the wait or `0` to rely on the maximum lease alone.
+- `--unattended-wait auto` bounds a Pod whose controller is gone when training
+  ends: unless Kura collects the outputs first, the Pod deletes itself after the
+  longer of 2 hours and the job time (from remote job start, including model
+  download). Pass a duration to change the wait or `0` to rely on the maximum
+  lease alone.
 - `--yes` confirms Pod creation in a non-interactive session. Use it only after
   the user explicitly approves the billed RunPod launch. Interactive terminals
   show GPU, current hourly price, and maximum lease and ask once before creation.
-  `--yes` skips only the question; the cost summary is still printed. A bounded
-  capacity wait is approved once before waiting, and its displayed price may
-  change before capacity becomes available.
+  `--yes` skips only the question; the cost summary is still printed. A capacity
+  wait is approved once before waiting, and its displayed price may change
+  before capacity becomes available.
+- The compiled `compute.capacity` decides what happens when the GPU is taken:
+  by default the run waits for one, without a Pod and so without billing (see
+  [workspace-config.md](workspace-config.md)).
 
 ## Monitoring
 
