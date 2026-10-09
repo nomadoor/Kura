@@ -13,6 +13,7 @@ from kura.backends import command_musubi_tuner
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_PROJECTION_PROFILES, MUSUBI_VIDEO_SUFFIXES
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, command_ai_toolkit
 from kura.executors.docker import docker_command
+from kura.paths import local_docker_mounts
 from kura.executors.runpod import _runpod_session_env, _runpod_training_env
 from kura.run_commands.common import _load_frozen_command
 from kura.run_commands.runpod_ssh import _runpod_remote_job_script
@@ -275,7 +276,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             workspace = Path(directory)
             (workspace / "cache" / "huggingface").mkdir(parents=True)
             run_dir = workspace / "runs" / "contract-run"
-            mounts = [{"source": "./cache/huggingface", "target": "/root/.cache/huggingface"}]
+            mounts = local_docker_mounts(workspace, {})
             _, runtime_env, _ = docker_command(
                 workspace,
                 run_dir,

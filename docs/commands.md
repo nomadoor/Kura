@@ -386,7 +386,7 @@ facts compile writes itself, such as `lora_insert`.
 
 | Command | Purpose |
 | --- | --- |
-| `uv run kura workspace migrate [--yes]` | Show and apply the `workspace.yaml` schema migration; the previous file is kept as `workspace.yaml.v1`, and comments are not carried into the new file |
+| `uv run kura workspace migrate [--yes]` | Show and apply the `workspace.yaml` schema migration; the previous file is kept as `workspace.yaml.<timestamp>.bak`, and comments are not carried into the new file |
 
 ## Images
 

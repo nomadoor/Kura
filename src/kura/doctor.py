@@ -26,9 +26,9 @@ from kura.executors import _redact_secret_text, _redact_secrets
 from kura.secrets import is_secret_name
 from kura.executors.docker import docker_daemon_problem
 from kura.images import effective_image, image_names, mutable_override_warning
-from kura.paths import inspect_workspace_symlinks
+from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache
 from kura.storage import is_wsl as _is_wsl
-from kura.storage import probe_storages
+from kura.storage import probe_storage, probe_storages
 from kura.run_commands.plan import _configured_gib, local_min_free_gib
 from kura.workspace import validate_workspace_config, workspace_schema_description
 from kura.workspace import require_workspace as _require_workspace
@@ -278,7 +278,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
     paths = {
         "workspace": workspace_root,
         "cache": workspace_root / "cache",
-        "huggingface_cache": workspace_root / "cache" / "huggingface",
+        "huggingface_cache": local_hf_cache(workspace_root, config),
         "model_cache": workspace_root / "cache" / "models",
         "runs": workspace_root / "runs",
         "datasets": workspace_root / "datasets",
@@ -286,21 +286,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "downloads": workspace_root / "downloads",
         "tmp": Path(os.environ.get("TMPDIR") or "/tmp"),
     }
-    docker_mounts = docker_config.get("mounts", [])
-    if not isinstance(docker_mounts, list):
-        docker_mounts = []
-    mounted_hf = next(
-        (
-            _workspace_relative_path(item["source"])
-            for item in docker_mounts
-            if isinstance(item, dict)
-            and isinstance(item.get("source"), str)
-            and item.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"}
-        ),
-        None,
-    )
-    if mounted_hf is not None:
-        paths["docker_hf_mount"] = mounted_hf
+    docker_mounts = local_docker_mounts(workspace_root, config)
 
     sizes = {name: {"path": str(path), "exists": path.exists(), "size_bytes": _path_size_bytes(path)} for name, path in paths.items()}
     filesystems = {name: _disk_usage_for(path) for name, path in paths.items()}
@@ -415,6 +401,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
 def cmd_doctor_docker(_: argparse.Namespace) -> int:
     try:
         workspace_root = _require_workspace()
+        config = _workspace_config()
         image = _image_reference("ai-toolkit")
     except (OSError, ValueError, yaml.YAMLError) as exc:
         print(f"docker: configuration error: {_safe_error(exc)}", file=sys.stderr)
@@ -470,22 +457,14 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
                         runtime = {"runtime_metadata": "invalid"}
                 if not checks["gpu_available"]:
                     diagnosis = "The local image cannot access a GPU. In WSL, confirm Docker Desktop WSL integration and NVIDIA Container Toolkit support."
-    mounts = _workspace_config().get("docker", {}).get("mounts", [])
-    cache_path = next((_workspace_relative_path(item["source"]) for item in mounts if isinstance(item, dict) and isinstance(item.get("source"), str) and item.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"}), None)
-    cache: dict[str, Any] = {"path": str(cache_path) if cache_path else None, "exists": bool(cache_path and cache_path.exists()), "default_path": str(_workspace_relative_path("./cache/huggingface"))}
-    if cache_path:
-        try:
-            filesystem_path = cache_path
-            while not filesystem_path.exists() and filesystem_path != filesystem_path.parent:
-                filesystem_path = filesystem_path.parent
-            usage = shutil.disk_usage(filesystem_path)
-            cache["free_bytes"] = usage.free
-        except OSError:
-            cache["free_bytes"] = None
-        if not cache_path.exists():
-            cache["note"] = "Kura will create this cache directory before local Docker launch. Change docker.mounts[].source in workspace.yaml if you want another location."
-    else:
-        cache["note"] = "No Hugging Face cache mount is configured. Add docker.mounts source ./cache/huggingface target /workspace/cache/huggingface to reuse downloads across local Docker runs."
+    cache_path = local_hf_cache(workspace_root, config)
+    cache: dict[str, Any] = {"path": str(cache_path), "exists": cache_path.exists()}
+    try:
+        cache["free_bytes"] = probe_storage(cache_path, config).effective_free_bytes
+    except OSError:
+        cache["free_bytes"] = None
+    if not cache_path.exists():
+        cache["note"] = "Kura creates this cache directory before a local Docker launch. Set docker.hf_cache in workspace.yaml to keep it elsewhere."
     if checks["daemon_reachable"] and not diagnosis:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
     print(json.dumps({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))

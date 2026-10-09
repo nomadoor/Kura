@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -12,6 +13,7 @@ import yaml
 
 from kura.fsio import atomic_write_yaml
 from kura.images import PINNED_IMAGES
+from kura.paths import DEFAULT_HF_CACHE, HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH, overlaps_hf_cache
 
 
 def dump_yaml(path: Path, value: Any) -> None:
@@ -139,6 +141,7 @@ WORKSPACE_SCHEMA = _mapping({
     "docker": _mapping({
         "workspace_target": _STRING,
         "gpu": _BOOLEAN,
+        "hf_cache": _STRING,
         "mounts": _sequence(_DOCKER_MOUNT),
         "min_free_gb": _NUMBER,
         "build_cache_limit_gb": _NUMBER,
@@ -288,6 +291,13 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
     for name, reference in (images.items() if isinstance(images, dict) else ()):
         if not reference.strip():
             raise ValueError(f"{source} images.{name} must name an image; delete the line to use the pinned image")
+    docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    for index, mount in enumerate(docker.get("mounts") or []):
+        if overlaps_hf_cache(mount.get("target", "")):
+            raise ValueError(
+                f"{source} docker.mounts[{index}] mounts over the Hugging Face cache; set docker.hf_cache to choose where "
+                "the cache lives, or run `kura workspace migrate` to move this entry there"
+            )
 
 
 def workspace_config() -> dict[str, Any]:
@@ -326,6 +336,39 @@ def workspace_relative_path(value: str) -> Path:
     return path.resolve()
 
 
+def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
+    """Turn a docker.mounts entry for the Hugging Face cache into docker.hf_cache, in place.
+
+    Only a writable mount of the whole cache moves; anything else stays for the
+    loader to refuse, so its meaning is never changed silently.
+    """
+    docker = config.get("docker")
+    mounts = docker.get("mounts") if isinstance(docker, dict) else None
+    if not isinstance(mounts, list):
+        return []
+    notes: list[str] = []
+    kept: list[Any] = []
+    for mount in mounts:
+        target = mount.get("target") if isinstance(mount, dict) else None
+        source = mount.get("source") if isinstance(mount, dict) else None
+        whole_cache = isinstance(target, str) and posixpath.normpath(target.replace("\\", "/")) in {HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH}
+        if not isinstance(target, str) or not overlaps_hf_cache(target):
+            kept.append(mount)
+        elif not whole_cache or not isinstance(source, str) or mount.get("mode", "rw") != "rw" or "hf_cache" in docker:
+            kept.append(mount)
+        elif posixpath.normpath(source.replace("\\", "/")) == DEFAULT_HF_CACHE:
+            notes.append("removed the docker.mounts entry for the Hugging Face cache: it named the default location")
+        else:
+            docker["hf_cache"] = source
+            notes.append(f"moved the Hugging Face cache mount to docker.hf_cache ({source})")
+    if len(kept) < len(mounts):
+        if kept:
+            docker["mounts"] = kept
+        else:
+            docker.pop("mounts")
+    return notes
+
+
 def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Turn a schema-1 `workspace.yaml` into the current schema.
 
@@ -340,16 +383,18 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     from kura.images import PINNED_IMAGES, is_mutable
 
     version = config.get("schema_version")
-    if version == WORKSPACE_SCHEMA_VERSION:
-        return deepcopy(config), []
-    if version == str(WORKSPACE_SCHEMA_VERSION):
+    if version in (WORKSPACE_SCHEMA_VERSION, str(WORKSPACE_SCHEMA_VERSION)):
         fixed = deepcopy(config)
-        fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
-        return fixed, ["schema_version was the string '2'; it is now the integer 2"]
+        notes = _move_hf_cache_mount(fixed)
+        if version != WORKSPACE_SCHEMA_VERSION:
+            fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
+            notes.insert(0, "schema_version was the string '2'; it is now the integer 2")
+        _validate_migrated(fixed)
+        return fixed, notes
     if version not in (None, 1):
         raise ValueError(f"cannot migrate workspace schema {version!r}; this Kura migrates schema 1 to {WORKSPACE_SCHEMA_VERSION}")
     migrated = deepcopy(config)
-    notes: list[str] = []
+    notes: list[str] = _move_hf_cache_mount(migrated)
     candidates: dict[str, list[tuple[str, str]]] = {}
 
     docker = migrated.get("docker") if isinstance(migrated.get("docker"), dict) else None
@@ -398,8 +443,12 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     migrated["schema_version"] = WORKSPACE_SCHEMA_VERSION
     if overrides:
         migrated["images"] = overrides
+    _validate_migrated(migrated)
+    return migrated, notes
+
+
+def _validate_migrated(migrated: dict[str, Any]) -> None:
     try:
         validate_workspace_config(migrated, source="migrated workspace.yaml")
     except ValueError as exc:
         raise ValueError(f"{exc} Edit workspace.yaml by hand for these lines, then run `kura workspace migrate` again.") from exc
-    return migrated, notes

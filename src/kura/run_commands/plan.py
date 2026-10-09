@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -32,7 +33,7 @@ from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version, runpod_min_cuda_for
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
-from kura.paths import to_workspace_relative
+from kura.paths import local_docker_mounts, local_hf_cache, to_host_path
 from kura.storage import probe_storages
 from kura.workspace import load_yaml as _load_yaml
 from kura.workspace import require_workspace as _require_workspace
@@ -337,15 +338,6 @@ def _resolve_local_path(workspace: Path, value: str) -> Path:
     return path
 
 
-def _hf_cache_path(workspace: Path, mounts: list[dict[str, Any]]) -> Path:
-    for mount in mounts:
-        if not isinstance(mount, dict) or mount.get("mode") == "ro":
-            continue
-        if mount.get("target") in {"/root/.cache/huggingface", "/workspace/cache/huggingface"} and isinstance(mount.get("source"), str):
-            return _resolve_local_path(workspace, mount["source"])
-    return workspace / "cache" / "huggingface"
-
-
 def _hf_file_size_probe(item: dict[str, str], *, timeout_sec: int = 20) -> dict[str, Any]:
     repo_id = item.get("repo_id")
     filename = item.get("filename")
@@ -386,19 +378,25 @@ def _hf_file_size_bytes(item: dict[str, str], *, timeout_sec: int = 20) -> int |
     return _hf_file_size_probe(item, timeout_sec=timeout_sec).get("size_bytes")
 
 
-def _workspace_cache_file(workspace: Path | None, container_path: str | None) -> Path | None:
-    if workspace is None or not container_path:
+def _cached_host_file(container_link: str | None, *, workspace: Path | None, mounts: list[dict[str, Any]]) -> Path | None:
+    """The host file a container's model link reaches, read in the container's namespace."""
+    if workspace is None or not container_link:
         return None
-    prefix = "/workspace/"
-    if not container_path.startswith(prefix):
-        return None
-    return workspace / container_path[len(prefix):]
+    link = to_host_path(container_link, workspace=workspace, mounts=mounts)
+    if link is None or not link.is_symlink():
+        return link
+    try:
+        target = os.readlink(link)
+    except OSError:
+        return link
+    # Containers write these links; a relative one is relative to the link's container directory.
+    container_target = target if posixpath.isabs(target) else posixpath.normpath(posixpath.join(posixpath.dirname(container_link), target))
+    return to_host_path(container_target, workspace=workspace, mounts=mounts) or link
 
 
-def _cached_file_size(path: Path | None, *, workspace: Path | None = None) -> int | None:
-    if path is None:
+def _cached_file_size(candidate: Path | None) -> int | None:
+    if candidate is None:
         return None
-    candidate = _host_cache_target(path, workspace=workspace)
     try:
         if not candidate.exists() or not candidate.is_file():
             return None
@@ -407,22 +405,7 @@ def _cached_file_size(path: Path | None, *, workspace: Path | None = None) -> in
         return None
 
 
-def _host_cache_target(path: Path, *, workspace: Path | None = None) -> Path:
-    if workspace is not None and path.is_symlink():
-        try:
-            target = os.readlink(path)
-        except OSError:
-            return path
-        config = _workspace_config()
-        docker = config.get("docker", {}) if isinstance(config.get("docker"), dict) else {}
-        mounts = docker.get("mounts", []) if isinstance(docker.get("mounts"), list) else []
-        mapped = to_workspace_relative(target, workspace=workspace, mounts=mounts)
-        if mapped is not None:
-            return workspace / mapped
-    return path
-
-
-def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | None = None) -> dict[str, Any]:
+def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
     backend = run.get("backend")
     backend_name = backend.get("name") if isinstance(backend, dict) else None
     if backend_name is None:
@@ -452,9 +435,10 @@ def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | N
     items: list[dict[str, Any]] = []
     unknown: list[str] = []
     probe_failures: list[dict[str, str]] = []
+    mounts = local_docker_mounts(workspace, config or {}) if workspace is not None else []
     for item in specs:
-        cache_path = _workspace_cache_file(workspace, item.get("link_path"))
-        cached_size = _cached_file_size(cache_path, workspace=workspace)
+        cache_path = _cached_host_file(item.get("link_path"), workspace=workspace, mounts=mounts)
+        cached_size = _cached_file_size(cache_path)
         cached = cached_size is not None
         probe = {"status": "cached", "size_bytes": cached_size} if cached else _hf_file_size_probe(item)
         size = probe.get("size_bytes")
@@ -744,7 +728,7 @@ def collect_run_preflight(
 ) -> list[dict[str, Any]]:
     workspace_config = config if isinstance(config, dict) else {}
     resolved_executor = executor or run_executor(run)
-    estimate = download_estimate or _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)))
+    estimate = download_estimate or _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor=str(resolved_executor)), config=workspace_config)
     records: list[dict[str, Any]] = []
     records.extend(_dataset_layout_preflight_report(run, workspace))
     records.extend(_checkpoint_preflight_report(run))
@@ -765,11 +749,9 @@ def _local_disk_preflight_report(
     run: dict[str, Any], workspace: Path, workspace_config: dict[str, Any], download_estimate: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """The verdict the local launch will reach, from the same check it runs."""
-    docker = workspace_config.get("docker") if isinstance(workspace_config.get("docker"), dict) else {}
-    mounts = docker.get("mounts") if isinstance(docker.get("mounts"), list) else []
     try:
         payload = _local_launch_disk_preflight(
-            workspace, run, docker, mounts, workspace_config, enforce_model_download_safety=False, download_estimate=download_estimate,
+            workspace, run, workspace_config, enforce_model_download_safety=False, download_estimate=download_estimate,
         )
     except ValueError as exc:
         return [_preflight_record("disk", "error", str(exc), "workspace.yaml")]
@@ -867,27 +849,25 @@ def local_min_free_gib(docker_config: dict[str, Any]) -> int:
 def _local_launch_disk_preflight(
     workspace: Path,
     run: dict[str, Any],
-    docker_config: dict[str, Any],
-    mounts: list[dict[str, Any]],
-    storage_config: dict[str, Any] | None = None,
+    config: dict[str, Any],
     *,
     enforce_model_download_safety: bool = True,
     download_estimate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = local_min_free_gib(docker_config)
     if safety.get("max_run_disk_gb") is not None:
         required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
     floor_bytes = required_gib * 1024**3
-    paths = {"workspace": workspace}
-    for mount in mounts:
+    paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
+    for mount in local_docker_mounts(workspace, config):
         if isinstance(mount, dict) and mount.get("mode") != "ro" and isinstance(mount.get("source"), str):
             source = _resolve_local_path(workspace, mount["source"])
-            paths[f"mount:{mount.get('target', mount['source'])}"] = source
-    hf_cache_path = _hf_cache_path(workspace, mounts)
-    paths.setdefault("hf_cache", hf_cache_path)
+            if source not in paths.values():
+                paths[f"mount:{mount.get('target', mount['source'])}"] = source
     if download_estimate is None:
-        download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"))
+        download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace, executor="docker"), config=config)
     if enforce_model_download_safety:
         _model_download_safety_preflight(run, download_estimate)
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
@@ -898,7 +878,7 @@ def _local_launch_disk_preflight(
     }
     checked: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
-    storage_statuses = probe_storages(paths, storage_config)
+    storage_statuses = probe_storages(paths, config)
     backing_write_estimates: dict[tuple[str, str], int] = {}
     for name, status in storage_statuses.items():
         backing = (status.backing_kind, status.backing_id)
@@ -1156,10 +1136,10 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
             else None
         ),
     }
-    download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace))
+    workspace_config = _workspace_config()
+    download_estimate = _estimate_backend_download_bytes(run, workspace=_download_estimate_workspace(run, workspace), config=workspace_config)
     display_path = run_dir / "resolved" / "backend-display.lock.json"
     frozen_display = _load_yaml(display_path) if display_path.is_file() else None
-    workspace_config = _workspace_config()
     resources = _resources_payload(run, workspace_config, download_estimate, adapter_display=frozen_display)
     preflight = collect_run_preflight(run, workspace, config=workspace_config, download_estimate=download_estimate)
     if run_executor(run) == "docker":

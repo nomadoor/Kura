@@ -13,6 +13,13 @@ from typing import Any
 
 
 DEFAULT_CONTAINER_ROOT = "/workspace"
+# Every container reads the Hugging Face cache here (HF_HOME); `docker.hf_cache`
+# says where it lives on the host.
+HF_CACHE_CONTAINER_PATH = "/workspace/cache/huggingface"
+DEFAULT_HF_CACHE = "cache/huggingface"
+# Before `docker.hf_cache`, workspaces could mount the cache here; links that
+# containers wrote then still point at it.
+LEGACY_HF_CACHE_CONTAINER_PATH = "/root/.cache/huggingface"
 
 
 def _clean_relative(value: str) -> str | None:
@@ -28,34 +35,69 @@ def _container_prefix(value: str) -> str:
     return "/" + value.strip("/")
 
 
-def to_workspace_relative(
+def local_hf_cache(workspace: Path, config: dict[str, Any]) -> Path:
+    """Where a local Docker run's Hugging Face cache lives on the host."""
+    docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    value = docker.get("hf_cache")
+    path = Path(value if isinstance(value, str) and value.strip() else DEFAULT_HF_CACHE).expanduser()
+    if not path.is_absolute():
+        path = workspace / path
+    return path.resolve(strict=False)
+
+
+def local_docker_mounts(workspace: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
+    """The configured local Docker mounts plus the Hugging Face cache, as every reader sees them."""
+    docker = config.get("docker") if isinstance(config.get("docker"), dict) else {}
+    configured = docker.get("mounts") if isinstance(docker.get("mounts"), list) else []
+    cache = local_hf_cache(workspace, config)
+    default = Path(DEFAULT_HF_CACHE)
+    if cache == (workspace / default.parent).resolve() / default.name:
+        # Already inside the workspace's cache/ mount; a second mount would only
+        # stop hard links between cache/models and the cache (they cannot cross mounts).
+        return list(configured)
+    return [*configured, {"source": str(cache), "target": HF_CACHE_CONTAINER_PATH, "mode": "rw"}]
+
+
+def overlaps_hf_cache(target: str) -> bool:
+    """True for a mount target that would decide where the Hugging Face cache lives.
+
+    That is the cache path or anything inside it (also under the legacy target),
+    or a directory containing it, such as /workspace/cache.
+    """
+    raw = posixpath.normpath(target.replace("\\", "/"))
+    if any(raw == prefix or raw.startswith(prefix + "/") for prefix in (HF_CACHE_CONTAINER_PATH, LEGACY_HF_CACHE_CONTAINER_PATH)):
+        return True
+    return HF_CACHE_CONTAINER_PATH.startswith(raw.rstrip("/") + "/")
+
+
+def to_host_path(
     path: str | Path,
     *,
     workspace: Path,
     mounts: list[dict[str, Any]] | None = None,
     container_root: str = DEFAULT_CONTAINER_ROOT,
-) -> str | None:
-    """Return a workspace-relative POSIX path, or None when no safe mapping exists."""
+) -> Path | None:
+    """Return the host path a workspace-relative, host, or container path names, or None when none is safe."""
     raw = str(path)
     if not raw:
         return None
-    if not PurePosixPath(raw).is_absolute() and not Path(raw).is_absolute():
-        return _clean_relative(raw)
-
     resolved_workspace = workspace.resolve()
+    if not PurePosixPath(raw).is_absolute() and not Path(raw).is_absolute():
+        clean = _clean_relative(raw)
+        return None if clean is None else resolved_workspace / clean
+
     host_path = Path(raw).expanduser()
     if host_path.is_absolute():
-        try:
-            return host_path.resolve(strict=False).relative_to(resolved_workspace).as_posix()
-        except ValueError:
-            pass
+        resolved = host_path.resolve(strict=False)
+        if resolved == resolved_workspace or resolved_workspace in resolved.parents:
+            return resolved
 
     posix_raw = posixpath.normpath(raw.replace("\\", "/"))
-    root = _container_prefix(container_root)
-    if posix_raw == root or posix_raw.startswith(root + "/"):
-        suffix = posix_raw[len(root):].lstrip("/")
-        return _clean_relative(suffix)
+    legacy = LEGACY_HF_CACHE_CONTAINER_PATH
+    if posix_raw == legacy or posix_raw.startswith(legacy + "/"):
+        posix_raw = HF_CACHE_CONTAINER_PATH + posix_raw[len(legacy):]
 
+    targets: list[tuple[str, Path]] = []
     for mount in mounts or []:
         if not isinstance(mount, dict):
             continue
@@ -66,15 +108,34 @@ def to_workspace_relative(
         source_path = Path(source).expanduser()
         if not source_path.is_absolute():
             source_path = workspace / source_path
-        try:
-            source_rel = source_path.resolve(strict=False).relative_to(resolved_workspace).as_posix()
-        except ValueError:
-            continue
-        target_prefix = _container_prefix(target)
-        if posix_raw == target_prefix or posix_raw.startswith(target_prefix + "/"):
-            suffix = posix_raw[len(target_prefix):].lstrip("/")
-            return _clean_relative(posixpath.join(source_rel, suffix))
+        targets.append((_container_prefix(target), source_path.resolve(strict=False)))
+    targets.append((_container_prefix(container_root), resolved_workspace))
+    # The most specific container path wins: a mount inside /workspace hides what is under it.
+    for prefix, source_path in sorted(targets, key=lambda item: len(item[0]), reverse=True):
+        if posix_raw == prefix:
+            return source_path
+        if posix_raw.startswith(prefix + "/"):
+            clean = _clean_relative(posix_raw[len(prefix):].lstrip("/"))
+            return None if clean is None else source_path / clean
     return None
+
+
+def to_workspace_relative(
+    path: str | Path,
+    *,
+    workspace: Path,
+    mounts: list[dict[str, Any]] | None = None,
+    container_root: str = DEFAULT_CONTAINER_ROOT,
+) -> str | None:
+    """Return a workspace-relative POSIX path, or None when no safe mapping exists."""
+    host = to_host_path(path, workspace=workspace, mounts=mounts, container_root=container_root)
+    if host is None:
+        return None
+    try:
+        relative = host.relative_to(workspace.resolve()).as_posix()
+    except ValueError:
+        return None
+    return None if relative == "." else relative
 
 
 def to_host(relative: str | Path, workspace: Path) -> Path:
@@ -150,7 +211,7 @@ def inspect_workspace_symlinks(
     unsafe: list[dict[str, Any]] = []
     scanned = 0
     skipped_dirs = {".git", ".venv", "venv", "__pycache__"}
-    excluded_rel_prefixes = ("cache/huggingface",)
+    excluded_rel_prefixes = (DEFAULT_HF_CACHE,)
     for root_text, dirs, files in os.walk(workspace, followlinks=False):
         root = Path(root_text)
         try:
