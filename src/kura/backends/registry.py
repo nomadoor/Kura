@@ -108,7 +108,6 @@ class BackendAdapter:
     runtime_checks: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None
     disk_cache_estimate: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     general_resolution: Callable[[dict[str, Any]], Any] | None = None
-    runpod_template_compatible: bool = False
     default_ports: tuple[str, ...] = ("22/tcp",)
 
 

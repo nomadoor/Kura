@@ -22,7 +22,6 @@ import unittest
 import json
 from pathlib import Path
 from typing import Any
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import yaml
@@ -1753,14 +1752,6 @@ class RunPlanTests(unittest.TestCase):
             with patch("kura.run_commands.plan.runpod_gpu_availability", return_value=unavailable) as measure:
                 _runpod_capacity_payload(run, override, run_dir)
                 _runpod_capacity_payload(run, override)
-        self.assertEqual(measure.call_args_list[0].kwargs["min_cuda_version"], "12.8")
-        self.assertEqual(measure.call_args_list[1].kwargs["min_cuda_version"], NEWEST_KNOWN_CUDA)
-        templated = {"runpod": {"template_id": "tpl"}}
-        with patch("kura.run_commands.plan.runpod_gpu_availability", return_value=unavailable) as measure:
-            _runpod_capacity_payload(run, templated)
-            with patch("kura.run_commands.plan.get_backend", return_value=SimpleNamespace(image_name="sd-scripts", runpod_template_compatible=True)):
-                _runpod_capacity_payload(run, templated)
-        # Launch drops the template for adapters that do not accept one, and keeps the image's filter.
         self.assertEqual(measure.call_args_list[0].kwargs["min_cuda_version"], "12.8")
         self.assertEqual(measure.call_args_list[1].kwargs["min_cuda_version"], NEWEST_KNOWN_CUDA)
 
@@ -7176,6 +7167,8 @@ class RunPodLifecycleTests(unittest.TestCase):
         self.assertEqual(gql_input["env"], [{"key": "KURA_RUN_ID", "value": "example"}])
         self.assertEqual(gql_input["dockerArgs"], "sh -lc 'sleep infinity'")
         self.assertTrue(gql_input["startSsh"])
+        # Kura never starts a Pod from a RunPod template.
+        self.assertNotIn("templateId", _runpod_graphql_create_input({**payload, "templateId": "tpl"}))
 
     def test_runpod_control_plane_rejects_multi_location_create_attempts(self) -> None:
         payload = {
@@ -7457,7 +7450,8 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(phases[1]["pod_id"], "pod-1")
             self.assertLessEqual(phases[0]["at"], phases[1]["at"])
 
-    def test_launch_runpod_can_use_template_and_ports(self) -> None:
+    def test_launch_runpod_starts_every_pod_from_its_image_with_the_lease_guard(self) -> None:
+        log_path = "/workspace/runs/example/logs/stdout.log"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = self._run_dir(root)
@@ -7465,19 +7459,19 @@ class RunPodLifecycleTests(unittest.TestCase):
             config = {
                 "storage_mode": "upload",
                 "gpu_type_ids": ["NVIDIA A40"],
-                "template_id": "0fqzfjy6f3",
                 "ports": ["8675/http", "22/tcp"],
             }
             with patch.dict(os.environ, {"RUNPOD_API_KEY": "api-secret"}, clear=False):
                 with patch("kura.executors.runpod.runpod_gpu_availability", return_value=self._availability(available=True)), \
                      patch("kura.executors.runpod._runpod_request", return_value={"id": "pod-1", "desiredStatus": "RUNNING"}) as request:
-                    launch_runpod(max_lease_sec=3600, run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, yes=True)
+                    launch_runpod(run_dir=run_dir, spec={"cwd": "/app/ai-toolkit", "argv": ["python", "run.py"], "env": {}}, image="ostris/aitoolkit:latest", config=config, yes=True, max_lease_sec=3 * 3600)
             payload = request.call_args.args[3]
-            self.assertEqual(payload["templateId"], "0fqzfjy6f3")
+            # No template path: the Pod runs Kura's start script, which arms the lease first.
+            self.assertNotIn("templateId", payload)
+            self.assertEqual(payload["imageName"], "ostris/aitoolkit:latest")
+            self._assert_arms_lease_first(payload["dockerStartCmd"][2], max_lease_sec=3 * 3600, log_path=log_path)
             self.assertEqual(payload["ports"], ["8675/http", "22/tcp"])
             self.assertEqual(payload["volumeInGb"], 0)
-            self.assertNotIn("imageName", payload)
-            self.assertNotIn("dockerStartCmd", payload)
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             record = json.loads((run_dir / status["last_realization"]).read_text(encoding="utf-8"))
             self.assertEqual(record["container_cwd"], "/app/ai-toolkit")
@@ -8068,7 +8062,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             (root / "runs" / "example" / "resolved" / "backend-command.lock.json").write_text(json.dumps({"backend": "ai-toolkit", "adapter_source": {"kind": "test", "value": "test"}, "cwd": "/app/ai-toolkit", "argv": ["python", "-c", "print(1)"], "env": {}}), encoding="utf-8")
             (root / "workspace.yaml").write_text(
                 yaml.safe_dump(
-                    {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA RTX A5000', 'NVIDIA A40'], 'cloud_type': 'COMMUNITY', 'template_id': 'mutable-template'}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
+                    {'runpod': {'storage_mode': 'upload', 'gpu_type_ids': ['NVIDIA RTX A5000', 'NVIDIA A40'], 'cloud_type': 'COMMUNITY'}, 'docker': {}, 'images': {'ai-toolkit': 'local'}}
                 ),
                 encoding="utf-8",
             )
@@ -8082,7 +8076,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_ids"], ["NVIDIA A40"])
             self.assertTrue(launch.call_args.kwargs["yes"])
             self.assertEqual(launch.call_args.kwargs["config"]["gpu_type_priority"], "custom")
-            self.assertNotIn("template_id", launch.call_args.kwargs["config"])
             self.assertEqual(launch.call_args.kwargs["config"]["ports"], ["8675/http", "22/tcp"])
 
     def test_run_launch_rejects_a_second_capacity_wait_controller(self) -> None:
@@ -8126,7 +8119,6 @@ class RunPodLifecycleTests(unittest.TestCase):
             config = {
                 "storage_mode": "upload",
                 "gpu_type_ids": ["NVIDIA A40"],
-                "template_id": "0fqzfjy6f3",
                 "ports": ["8675/http", "22/tcp", "22/udp"],
             }
             with self.assertRaisesRegex(ValueError, "only supports /http and /tcp"):

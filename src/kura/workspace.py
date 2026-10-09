@@ -106,7 +106,6 @@ _OBJECT_STORE = _mapping({
     for name in ("endpoint_url", "bucket", "region", "prefix", "access_key_env", "secret_key_env")
 })
 _RUNPOD_FIELDS: dict[str, Any] = {
-    "template_id": _STRING,
     "storage_mode": _value("string", choices=("upload", "container_disk", "object_staging")),
     "object_store": _OBJECT_STORE,
     "gpu_type_ids": _STRING_LIST,
@@ -147,12 +146,12 @@ WORKSPACE_SCHEMA = _mapping({
         **{name: _value("string", choices=("auto", "symlink", "copy")) for name in ("lora_stage_mode", "model_patch_stage_mode", "input_stage_mode")},
         **{name: _value("string", choices=("remove_after_render", "keep")) for name in ("lora_stage_cleanup", "model_patch_stage_cleanup", "input_stage_cleanup")},
         "model_registry": _MODEL_REGISTRY,
-        # Render sessions use RunPod compute/network settings, but do not use a
-        # training template, object staging, or the later download-space check.
+        # Render sessions use RunPod compute/network settings, but do not use
+        # object staging or the later download-space check.
         "runpod": _mapping({
             name: schema
             for name, schema in _RUNPOD_FIELDS.items()
-            if name not in {"template_id", "storage_mode", "object_store", "download_min_free_gb"}
+            if name not in {"storage_mode", "object_store", "download_min_free_gb"}
         }),
     }),
     "runpod": _mapping(_RUNPOD_FIELDS),
@@ -177,6 +176,7 @@ WORKSPACE_OBSOLETE_KEYS = {
     "storage.docker_data_drive": "nothing read it",
     "runpod.api_key_env": _RUNPOD_KEY,
     "comfyui.runpod.api_key_env": _RUNPOD_KEY,
+    "runpod.template_id": "Kura starts every Pod from its own start script so the maximum lease is armed at start",
 }
 
 _WORKSPACE_ALIASES = {

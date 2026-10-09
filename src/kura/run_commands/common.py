@@ -37,17 +37,14 @@ def requested_gpu_types(compute: Any) -> list[str] | None:
 def runpod_settings_for_adapter(source: Any, adapter: Any, image_name: str) -> dict[str, Any]:
     """The workspace's RunPod settings as a launch of this adapter uses them.
 
-    A template is kept only for an adapter that accepts one; otherwise the
-    adapter's ports apply. The plan and the launch both start from here.
+    The adapter's ports apply unless `runpod.backend_ports` names this image.
     """
     settings = dict(source) if isinstance(source, dict) else {}
-    if not adapter.runpod_template_compatible:
-        settings.pop("template_id", None)
-        backend_ports = settings.get("backend_ports")
-        if isinstance(backend_ports, dict) and isinstance(backend_ports.get(image_name), list):
-            settings["ports"] = backend_ports[image_name]
-        else:
-            settings["ports"] = list(adapter.default_ports)
+    backend_ports = settings.get("backend_ports")
+    if isinstance(backend_ports, dict) and isinstance(backend_ports.get(image_name), list):
+        settings["ports"] = backend_ports[image_name]
+    else:
+        settings["ports"] = list(adapter.default_ports)
     return settings
 
 

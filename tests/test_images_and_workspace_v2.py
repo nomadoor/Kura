@@ -154,7 +154,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             self.assertEqual(config["schema_version"], WORKSPACE_SCHEMA_VERSION)
             self.assertNotIn("images", config.get("docker", {}))
             self.assertNotIn("mounts", config.get("docker", {}))
-            for section, key in (("docker", "gpu"), ("docker", "workspace_target"), ("storage", "docker_data_drive"), ("runpod", "api_key_env")):
+            for section, key in (("docker", "gpu"), ("docker", "workspace_target"), ("storage", "docker_data_drive"), ("runpod", "api_key_env"), ("runpod", "template_id")):
                 self.assertNotIn(key, config.get(section, {}))
             self.assertNotIn("default_image", config.get("runpod", {}))
             self.assertFalse(list(Path(directory).rglob("Dockerfile")))
@@ -249,6 +249,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             ({"storage": {"docker_data_drive": ""}}, "storage.docker_data_drive"),
             ({"runpod": {"api_key_env": "RUNPOD_API_KEY"}}, "runpod.api_key_env"),
             ({"comfyui": {"runpod": {"api_key_env": "RUNPOD_API_KEY"}}}, "comfyui.runpod.api_key_env"),
+            ({"runpod": {"template_id": "0fqzfjy6f3"}}, "runpod.template_id"),
         )
         for section, name in retired:
             with self.subTest(name=name):
@@ -258,7 +259,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
             "schema_version": 2,
             "storage": {"host_drive": "E", "docker_data_drive": ""},
             "docker": {"workspace_target": "/workspace", "gpu": False},
-            "runpod": {"api_key_env": "MY_RUNPOD_KEY", "gpu_type_ids": ["NVIDIA A40"]},
+            "runpod": {"api_key_env": "MY_RUNPOD_KEY", "template_id": "0fqzfjy6f3", "gpu_type_ids": ["NVIDIA A40"]},
         })
         self.assertEqual(migrated, {
             "schema_version": 2, "storage": {"host_drive": "E"}, "docker": {}, "runpod": {"gpu_type_ids": ["NVIDIA A40"]},
@@ -266,6 +267,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
         joined = "\n".join(notes)
         self.assertIn("docker.gpu", joined)
         self.assertIn("kura secrets set RUNPOD_API_KEY", joined)
+        self.assertIn("dropped runpod.template_id: Kura starts every Pod from its own start script", joined)
         # A value Kura never honoured is dropped too: launch refused it already.
         dropped, notes = migrate_workspace_config({"schema_version": 2, "docker": {"workspace_target": "/ws"}})
         self.assertEqual(dropped, {"schema_version": 2, "docker": {}})
