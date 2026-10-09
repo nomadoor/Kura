@@ -417,19 +417,7 @@ def _estimate_backend_download_bytes(run: dict[str, Any], *, workspace: Path | N
     if adapter.download_specs is None:
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
     try:
-        override = backend_config(run, backend_name)
-    except ValueError:
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid backend model download spec"], "probe_failures": []}
-    model = run.get("model") if isinstance(run.get("model"), dict) else {}
-    if not model.get("base") and not override.get("model_downloads") and not override.get("model_paths"):
-        return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": [], "probe_failures": []}
-    existing_paths = {}
-    if isinstance(override, dict):
-        paths = override.get("model_paths")
-        if isinstance(paths, dict):
-            existing_paths = {key: value for key, value in paths.items() if isinstance(key, str) and isinstance(value, str)}
-    try:
-        specs, _ = adapter.download_specs(run, existing_paths=existing_paths)
+        specs, _ = adapter.download_specs(run)
     except ValueError:
         return {"bytes": 0, "total_bytes": 0, "cached_bytes": 0, "items": [], "unknown": ["invalid backend model download spec"], "probe_failures": []}
     download_total = 0

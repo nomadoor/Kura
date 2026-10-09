@@ -14,6 +14,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -101,6 +102,81 @@ class BackendSurfaceContractTests(unittest.TestCase):
             with self.subTest(backend=backend):
                 self.assertTrue(read)
                 self.assertEqual(sorted((read & surface.fields) - surface.boolean_fields), [])
+
+    def _model_download_runs(self, downloads: dict, model_paths: dict | None = None) -> dict:
+        """The same download declaration for each backend that reads model_downloads, under each one's role name."""
+        runs = {}
+        for backend, role, config in (
+            ("musubi-tuner", "dit", {"architecture": "flux2", "model_version": "dev"}),
+            ("sd-scripts", "base", {"architecture": "sdxl", "mode": "lora"}),
+        ):
+            native = {**config, "model_downloads": {role: deepcopy(downloads)}}
+            if model_paths is not None:
+                native["model_paths"] = {role: model_paths}
+            runs[backend] = (role, {"id": "r", "type": "train", "backend": {"name": backend, "config": native}})
+        return runs
+
+    def test_model_downloads_are_read_one_way_for_every_backend(self) -> None:
+        from kura.backends.musubi_models import _musubi_model_lock
+        from kura.backends.sd_scripts_models import sd_scripts_model_lock
+
+        locks = {"musubi-tuner": _musubi_model_lock, "sd-scripts": sd_scripts_model_lock}
+        both = {"repo_id": "org/model", "filename": "a.safetensors", "filenames": ["b.safetensors"]}
+        for backend, (role, run) in self._model_download_runs(both).items():
+            with self.subTest(backend=backend, case="filename and filenames"):
+                specs, paths = BACKENDS[backend].download_specs(run)
+                # The file the trainer is pointed at is always one Kura downloads.
+                self.assertEqual([item["filename"] for item in specs if item["key"] == role], ["a.safetensors", "b.safetensors"])
+                self.assertTrue(paths[role].endswith("/a.safetensors"))
+                recorded = next(item for item in locks[backend](run)["models"] if item["role"] == role)
+                self.assertEqual((recorded["repo_id"], recorded["filename"], recorded["path"]), ("org/model", "a.safetensors", paths[role]))
+        for backend, (role, run) in self._model_download_runs({"repo": "org/model", "filenames": ["x.safetensors"]}).items():
+            with self.subTest(backend=backend, case="filenames only"):
+                recorded = next(item for item in locks[backend](run)["models"] if item["role"] == role)
+                self.assertEqual(recorded["filename"], "x.safetensors")
+        for key in ("filname", "local_dir"):
+            for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filename": "a.safetensors", key: "x"}).items():
+                with self.subTest(backend=backend, case=key):
+                    with self.assertRaisesRegex(ValueError, f"model_downloads.{role} contains unsupported key.*{key}"):
+                        BACKENDS[backend].download_specs(run)
+
+    def test_the_plan_counts_every_model_the_adapter_fetches(self) -> None:
+        from kura.run_commands.plan import _estimate_backend_download_bytes
+
+        # A Musubi bundle can come from the architecture alone, with no model.base.
+        run = {"id": "r", "type": "train", "backend": {"name": "musubi-tuner", "config": {"architecture": "krea2"}}}
+        specs, _ = BACKENDS["musubi-tuner"].download_specs(run)
+        with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 7}):
+            estimate = _estimate_backend_download_bytes(run)
+        self.assertTrue(specs)
+        self.assertEqual([(item["key"], item["filename"]) for item in estimate["items"]], [(item["key"], item["filename"]) for item in specs])
+
+    def test_both_backends_read_model_downloads_through_the_owner(self) -> None:
+        from kura.backends import shared
+
+        for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filename": "a.safetensors"}).items():
+            module = "kura.backends.musubi_models" if backend == "musubi-tuner" else "kura.backends.sd_scripts_models"
+            with self.subTest(backend=backend), patch(f"{module}.model_downloads", wraps=shared.model_downloads) as owner:
+                BACKENDS[backend].download_specs(run)
+            owner.assert_called()
+
+    def test_a_download_mapping_is_checked_even_when_model_paths_names_the_role(self) -> None:
+        for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filname": "a.safetensors"}, model_paths="/workspace/models/a.safetensors").items():
+            with self.subTest(backend=backend), self.assertRaisesRegex(ValueError, "unsupported key.*filname"):
+                BACKENDS[backend].download_specs(run)
+        with self.assertRaisesRegex(ValueError, "model_paths must be a mapping"):
+            BACKENDS["musubi-tuner"].download_specs({"backend": {"name": "musubi-tuner", "config": {"architecture": "krea2", "model_paths": ["x"]}}})
+
+    def test_an_empty_model_path_is_not_a_model_the_plan_skips(self) -> None:
+        from kura.run_commands.plan import _estimate_backend_download_bytes
+
+        for backend, (role, run) in self._model_download_runs({"repo_id": "org/model", "filename": "a.safetensors"}, model_paths="").items():
+            with self.subTest(backend=backend):
+                specs, _ = BACKENDS[backend].download_specs(run)
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 7}):
+                    estimate = _estimate_backend_download_bytes(run)
+                self.assertEqual([item["key"] for item in specs], [role])
+                self.assertEqual([item["key"] for item in estimate["items"]], [role])
 
     def test_every_registered_backend_rejects_unknown_top_level_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

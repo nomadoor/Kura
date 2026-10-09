@@ -19,7 +19,7 @@ from kura.backends.musubi_datasets import (
     _musubi_h3_effective_task,
     _write_musubi_dataset_config,
 )
-from kura.backends.musubi_models import _musubi_explicit_model_paths, _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
+from kura.backends.musubi_models import _musubi_flux2_model_version, _musubi_lora_validation_command, _musubi_model_downloads, _musubi_model_lock, _musubi_model_paths, _musubi_model_validation_command, _musubi_model_version, _musubi_output_compatibility, _unsupported_musubi_adapter_error
 from kura.backends.musubi_native_selectors import musubi_native_task, wan_native_selector
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
@@ -510,9 +510,8 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     architecture = _musubi_architecture(run)
     _validate_musubi_resource_flags(run, override, architecture)
     recipe = validated_recipe(run, required=True)
-    explicit_paths = _musubi_explicit_model_paths(override)
     paths = _musubi_model_paths(run)
-    download_commands, _ = _musubi_model_downloads(run, existing_paths=explicit_paths)
+    download_commands, _ = _musubi_model_downloads(run)
     dataset_config = f"/workspace/runs/{run['id']}/resolved/musubi/dataset.toml"
     output_dir = f"/workspace/runs/{run['id']}/outputs"
     output_name = run["id"]

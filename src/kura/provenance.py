@@ -181,6 +181,8 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
             for name in (
                 "_datasets", "_toml_scalar", "_script_command", "_truthy",
                 "_extra_args", "_reject_owned_extra_args", "_append_flag", "_int_or_none",
+                "MODEL_DOWNLOAD_KEYS", "explicit_model_paths", "_safe_hf_filename", "model_downloads",
+                "download_specs_for", "recorded_model_source",
             )
         ]
         symbols.extend((run_envelope, name) for name in (
@@ -200,6 +202,8 @@ def adapter_source_identity(backend_name: str) -> dict[str, str]:
             for name in (
                 "_datasets", "_toml_scalar", "_script_command", "_truthy",
                 "_extra_args", "_reject_owned_extra_args", "_int_or_none", "_append_flag",
+                "MODEL_DOWNLOAD_KEYS", "explicit_model_paths", "_safe_hf_filename", "model_downloads",
+                "download_specs_for", "recorded_model_source",
             )
         ]
         symbols.extend((run_envelope, name) for name in (
