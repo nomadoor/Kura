@@ -13,7 +13,7 @@ from kura.backends.musubi_command import command_musubi_tuner, compile_musubi_tu
 from kura.backends.musubi_models import requirements_musubi
 from kura.backends.musubi_models import musubi_model_download_specs
 from kura.backends.musubi_datasets import MUSUBI_DATASET_OPTION_CAPABILITIES, musubi_general_resolution, project_musubi_dataset, runtime_checks_musubi, validate_musubi_authored_config
-from kura.backends.sd_scripts import CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
+from kura.backends.sd_scripts import BOOLEAN_CONFIG_KEYS, CONFIG_KEYS, command_sd_scripts, compile_sd_scripts, display_sd_scripts, sd_scripts_disk_cache_estimate, training_state_contract_sd_scripts
 from kura.backends.sd_scripts_datasets import SD_SCRIPTS_DATASET_CAPABILITIES, project_sd_scripts_dataset, validate_sd_scripts_dataset_config
 from kura.backends.sd_scripts_models import requirements_sd_scripts, sd_scripts_model_download_specs
 from kura.run_envelope import COMMON_RECIPE_FIELDS, backend_config
@@ -56,6 +56,8 @@ class BackendSurface:
 
     fields: frozenset[str]
     escape_hatches: frozenset[str] = frozenset()
+    # Fields that take YAML true or false only; validate_backend_config refuses anything else.
+    boolean_fields: frozenset[str] = frozenset()
     conditions: tuple[FieldCondition, ...] = ()
     selector_defaults: tuple[tuple[str, Any], ...] = ()
     unavailable: tuple[tuple[str, str], ...] = ()
@@ -64,6 +66,8 @@ class BackendSurface:
     selector_normalizations: tuple[SelectorNormalization, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.boolean_fields - self.fields:
+            raise ValueError("boolean backend fields are not declared: " + ", ".join(sorted(self.boolean_fields - self.fields)))
         overlap = self.fields & self.escape_hatches
         if overlap:
             raise ValueError("backend surface fields and escape hatches overlap: " + ", ".join(sorted(overlap)))
@@ -136,6 +140,9 @@ AI_TOOLKIT_SURFACE = BackendSurface(
         _when("model_edit", model_arch=("krea2",)),
     ),
     escape_hatches=frozenset({"command", "native_config"}),
+    boolean_fields=frozenset({
+        "bypass_guidance_embedding", "flatten_groups", "gradient_checkpointing", "low_vram", "model_edit", "quantize", "quantize_te",
+    }),
     unavailable=((
         "dataset_folder",
         "AI-Toolkit backend.config.dataset_folder was replaced by the dataset manifest; "
@@ -170,6 +177,13 @@ MUSUBI_SURFACE = BackendSurface(
         "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only", "weighting_scheme",
     }),
     escape_hatches=frozenset({"command", "extra_args"}),
+    boolean_fields=frozenset({
+        "allow_a40_large_micro_batch", "allow_a40_uncheckpointed_9b", "block_swap_h2d_only", "convrot_int8", "f1",
+        "flatten_groups", "fp8", "fp8_base", "fp8_llm", "fp8_scaled", "fp8_t5", "fp8_te", "fp8_text_encoder", "fp8_vl",
+        "gradient_checkpointing", "gradient_checkpointing_cpu_offload", "include_turbo_dit", "one_frame",
+        "one_frame_no_2x", "one_frame_no_4x", "precache", "quantized_qwen", "remove_first_image_from_target",
+        "use_pinned_memory_for_block_swap", "vae_tiling", "validate_models", "video_only",
+    }),
     selector_normalizations=(SelectorNormalization(
         field="architecture",
         aliases=("model_arch",),
@@ -260,6 +274,7 @@ MUSUBI_SURFACE = BackendSurface(
 SD_SCRIPTS_SURFACE = BackendSurface(
     fields=frozenset(CONFIG_KEYS - {"command", "extra_args", "deepspeed", "fused_backward_pass"}),
     escape_hatches=frozenset({"command", "extra_args"}),
+    boolean_fields=frozenset(BOOLEAN_CONFIG_KEYS - {"deepspeed", "fused_backward_pass"}),
     selector_defaults=(("mode", "lora"),),
     unavailable=(
         ("batch", "sd-scripts batch size is configured at backend.config.dataset_config.general.batch_size or backend.config.dataset_config.datasets[].batch_size"),
@@ -384,6 +399,12 @@ def validate_backend_config(run: dict[str, Any]) -> None:
             f"{adapter.name} backend.config contains unsupported key(s): " + ", ".join(details)
             + f". Run `kura run capabilities {adapter.name}` for accepted fields."
         )
+    not_boolean = sorted(key for key in adapter.surface.boolean_fields if key in native and not isinstance(native[key], bool))
+    if not_boolean:
+        raise ValueError(
+            f"{adapter.name} backend.config field(s) must be true or false: "
+            + ", ".join(f"{key}={native[key]!r}" for key in not_boolean)
+        )
     resolved = dict(native)
     for normalization in adapter.surface.selector_normalizations:
         authored = [
@@ -461,6 +482,7 @@ def backend_capabilities(name: Any) -> dict[str, Any]:
         },
         "nested_config_fields": deepcopy(adapter.surface.nested_config_fields or {}),
         "config_value_choices": {field: list(values) for field, values in adapter.surface.config_value_choices},
+        "boolean_fields": sorted(adapter.surface.boolean_fields),
         "selector_aliases": {
             item.field: {
                 "fields": list(item.aliases),

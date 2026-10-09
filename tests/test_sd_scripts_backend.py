@@ -294,8 +294,8 @@ class SdScriptsBackendTests(unittest.TestCase):
         self.assertIn("flatten_groups", capabilities["config_fields"])
         run = base_run()
         run["backend"]["config"]["flatten_groups"] = "yes"
-        with self.assertRaisesRegex(ValueError, r"flatten_groups must be true or false"):
-            validate_sd_scripts_dataset_config(run)
+        with self.assertRaisesRegex(ValueError, r"must be true or false: flatten_groups='yes'"):
+            validate_backend_config(run)
 
     def test_sd_scripts_capabilities_expose_nested_dataset_contract(self) -> None:
         nested = backend_capabilities("sd-scripts")["nested_config_fields"]
@@ -709,7 +709,7 @@ class SdScriptsBackendTests(unittest.TestCase):
                 run = base_run("anima", "controlnet_lllite") if key == "lllite_use_aspp" else base_run()
                 run["backend"]["config"][key] = 1
                 with self.assertRaisesRegex(ValueError, "must be true or false"):
-                    command_sd_scripts(run)
+                    validate_backend_config(run)
 
     def test_unknown_builtin_config_key_is_rejected(self) -> None:
         run = base_run()

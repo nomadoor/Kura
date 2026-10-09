@@ -471,8 +471,6 @@ def _validated_dataset_config(
 
 
 def _sd_scripts_flatten_groups(native: dict[str, Any]) -> bool:
-    if native.get("flatten_groups") not in (None, True, False):
-        raise ValueError("sd-scripts backend.config.flatten_groups must be true or false")
     return native.get("flatten_groups") is True
 
 

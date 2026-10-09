@@ -906,8 +906,6 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
     }
     dataset_options = _musubi_dataset_options(run)
     flatten_groups = override.get("flatten_groups") is True
-    if override.get("flatten_groups") not in (None, True, False):
-        raise ValueError("Musubi backend.config.flatten_groups must be boolean")
     projected: list[dict[str, Any]] = []
     for dataset in selection.get("datasets", []):
         dataset_id = str(dataset.get("id"))

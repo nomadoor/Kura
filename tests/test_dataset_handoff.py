@@ -53,6 +53,7 @@ from kura.backends.common import MUSUBI_ARCHITECTURE_ALIASES, _musubi_architectu
 from kura.backends.registry import MUSUBI_SURFACE
 from kura.cli import cmd_run_compile
 from kura.dataset_handoff import freeze_dataset_handoff, inspect_dataset_handoff, inspect_dataset_sources, load_frozen_dataset_projection, materialize_dataset_view, remove_dataset_views
+from kura.backends import validate_backend_config
 from kura.dataset_handoff import _digest, local_training_mounts, trainer_captions
 from kura.executors.docker import docker_command, launch_docker
 from kura.paths import inspect_workspace_symlinks
@@ -1642,11 +1643,9 @@ class DatasetHandoffTests(unittest.TestCase):
                 )
             run["backend"]["config"].pop("dataset_options")
             run["backend"]["config"]["flatten_groups"] = "yes"
-            with self.assertRaisesRegex(ValueError, "flatten_groups must be true or false"):
-                freeze_dataset_handoff(
-                    run, workspace, resolved, backend="ai-toolkit",
-                    project=lambda selection: project_ai_toolkit_dataset(run, selection),
-                )
+            # The shared validator refuses it before any projection runs.
+            with self.assertRaisesRegex(ValueError, "must be true or false: flatten_groups='yes'"):
+                validate_backend_config(run)
 
     def test_shared_partition_resolver_preserves_authored_order_and_flattening(self) -> None:
         dataset = {

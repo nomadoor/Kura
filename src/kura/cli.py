@@ -427,6 +427,8 @@ def cmd_run_capabilities(args: argparse.Namespace) -> int:
         print("backend.config accepted values (from the pinned upstream; Kura accepts any of them, though not every one has been run end to end):")
         for field, choices in payload["config_value_choices"].items():
             print(f"  {field}: " + ", ".join(choices))
+    if payload["boolean_fields"]:
+        print("backend.config fields that take true or false (not quoted): " + ", ".join(payload["boolean_fields"]))
     if payload["selector_aliases"]:
         print("backend.config selector aliases:")
         for field, aliases in payload["selector_aliases"].items():
