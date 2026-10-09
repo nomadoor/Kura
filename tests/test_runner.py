@@ -636,6 +636,21 @@ class RunPodFollowerTests(unittest.TestCase):
             self.assertEqual(stop.call_args.args[1], {"gpu_type_ids": ["NVIDIA A40"]})
             self.assertTrue(runner.stop_done(run_dir))
 
+    def test_a_stop_whose_delete_fails_is_retried_with_backoff(self) -> None:
+        from kura.executors.common import StopRequested
+
+        with _workspace() as (root, run_dir):
+            request = _runpod_request(run_dir)
+            runner.claim_request(request, 1)
+            _runpod_launched(run_dir, request, state="running")
+            (run_dir / "realizations" / "r1.remote-job.json").write_text(json.dumps({"pid": "42"}), encoding="utf-8")
+            with patch("kura.run_commands.launch._run_remote_locked", side_effect=StopRequested()), \
+                 patch("kura.executors.runpod.reconcile_runpod", side_effect=lambda run_dir_arg, *_a, **_k: json.loads((run_dir_arg / "status.json").read_text(encoding="utf-8"))), \
+                 patch("kura.executors.runpod.stop_runpod", side_effect=ValueError("RunPod API returned 500")):
+                # Non-zero, so the runner waits its backoff before the next try instead of polling every 2 s.
+                self.assertEqual(runner.work(root, "example", request.name), 1)
+            self.assertFalse(runner.stop_done(run_dir))
+
     def test_a_pod_whose_job_never_started_is_deleted_however_often_the_delete_fails(self) -> None:
         # Deleting a Pod with nothing to collect is retry-safe, so a failing delete never hands the run to a person.
         with _workspace() as (root, run_dir):

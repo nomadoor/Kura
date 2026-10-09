@@ -870,12 +870,11 @@ def _work_runpod(workspace: Path, run_dir: Path, request: Path) -> int:
             code = 1
         if _sibling(request, ".stop.json").exists() and not _sibling(request, ".stop-done.json").exists():
             # A stop that ended a step inside the launch (a wait, a hold) is finished here.
-            _stop_runpod_on_request(workspace, run_dir, request, details)
-            return 0
+            # A delete that failed is retried after the runner's backoff, not every poll.
+            return 0 if _stop_runpod_on_request(workspace, run_dir, request, details) else 1
         return _settle_runpod_attempt(run_dir, request, details, code)
     except StopRequested:
-        _stop_runpod_on_request(workspace, run_dir, request, details)
-        return 0
+        return 0 if _stop_runpod_on_request(workspace, run_dir, request, details) else 1
     finally:
         set_stop_check(None)
 
@@ -954,8 +953,9 @@ def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details
         if retries == 1:
             _notify_text(details, f"Kura run's Pod could not be deleted: {run_dir.name}",
                          f"Run {run_dir.name}'s Pod never started its job and could not be deleted yet, so it may still be billing. "
-                         f"The runner keeps trying (see runs/{run_dir.name}/logs/runner.log); "
-                         f"`kura run stop {run_dir.name}` deletes it too.")
+                         f"The runner keeps trying; runs/{run_dir.name}/logs/runner.log says why it failed. "
+                         "If the RunPod key changed, the runner still holds the old one: run `kura runner stop`, then "
+                         "`kura runner start` to read the current key. You can also delete the Pod in the RunPod console.")
         return None
     end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
@@ -991,11 +991,13 @@ def _settle_runpod_attempt(run_dir: Path, request: Path, details: dict[str, Any]
     return 0
 
 
-def _stop_runpod_on_request(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> None:
+def _stop_runpod_on_request(workspace: Path, run_dir: Path, request: Path, details: dict[str, Any]) -> bool:
+    """Delete the Pod a `kura run stop` asked for; False when the delete failed and is retried."""
     if not _delete_pod(workspace, run_dir, details, why="`kura run stop`"):
-        return
+        return False
     _record_request_outcome(request, ".stop-done.json", "stop_done")
     _log(f"{run_dir.name}: stopped on request")
+    return True
 
 
 def _notify_text(details: dict[str, Any], subject: str, body: str, *, auto: bool = False) -> None:
