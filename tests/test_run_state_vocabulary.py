@@ -94,5 +94,19 @@ class RunStateVocabularyTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
 
+class StartRefusalTests(unittest.TestCase):
+    def test_every_ended_run_is_sent_to_a_new_run(self) -> None:
+        from kura.executors.common import can_start, start_refusal
+
+        for state in ("completed", "stopped", "failed", "interrupted", "unknown", "launch_failed"):
+            with self.subTest(state=state):
+                self.assertFalse(can_start({"state": state}))
+                self.assertIn("kura run new --from r1", start_refusal("r1", {"state": state}, action="launch"))
+        # A run waiting for a person, or not yet compiled, is not "ended".
+        for state in ("recovery_required", "draft"):
+            with self.subTest(state=state):
+                self.assertNotIn("run new --from", start_refusal("r1", {"state": state}, action="launch"))
+
+
 if __name__ == "__main__":
     unittest.main()

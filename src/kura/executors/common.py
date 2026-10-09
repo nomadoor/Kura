@@ -49,7 +49,7 @@ def can_start(status: dict[str, Any]) -> bool:
 def start_refusal(run_id: str, status: dict[str, Any], *, action: str) -> str:
     """Why `can_start` refused this run; an ended run starts again only as a new run from its settings."""
     state = status.get("state")
-    if state in UNSUCCESSFUL_STATES or state == "unknown":
+    if state in TERMINAL_STATES and state != "recovery_required":
         return (
             f"run {run_id} ended {state}, and a run starts only once; start a new run from its settings "
             f"with `kura run new --from {run_id} --slug <words>`"

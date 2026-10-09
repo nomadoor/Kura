@@ -23,7 +23,7 @@ this skill holds the contracts code in `src/kura/` must keep.
   runner-epoch fence). The status projection runs in shadow mode
   (`kura.status_projection`); a status field without a record behind it is a bug.
 - Run states and the decisions over them are declared once in
-  `executors.common` (`RUN_STATES`, `TERMINAL_STATES`, `RELAUNCHABLE_STATES`, …).
+  `executors.common` (`RUN_STATES`, `TERMINAL_STATES`, `can_start`, …).
 
 ## Authored surfaces are closed
 

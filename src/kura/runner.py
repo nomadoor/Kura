@@ -953,7 +953,7 @@ def _delete_unstarted_pod(workspace: Path, run_dir: Path, request: Path, details
         return 1
     end_run(run_dir, "interrupted", reason="the Pod's job never started, so the follower deleted the Pod")
     _notify_text(details, f"Kura run interrupted: {run_dir.name}",
-                 f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Launch it again with `kura run execute {run_dir.name}`.")
+                 f"Run {run_dir.name}'s Pod was deleted because its job never started; nothing was lost. Start it again as a new run with `kura run new --from {run_dir.name} --slug <words>`.")
     return 0
 
 
