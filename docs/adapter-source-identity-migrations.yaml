@@ -3,11 +3,95 @@ description: >-
   Mechanical identity transitions for backend adapters (keyed by backend) and
   executors (keyed by executor). These records explain source-identity
   changes only; they do not transfer runtime evidence to behavior changes.
-  The legacy helper applies the old algorithm to the current tree and therefore
-  cannot reproduce these previous values without the corresponding historical
-  tree. Evidence older than the listed transition pairs remains stale for its
+  A previous value is reproducible only from its historical source tree with
+  the algorithm of its scope; the current tree computes only the current
+  scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: adapter-identity-from-imports-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      Adapter source identity is derived from the import graph at symbol level, starting at the
+      adapter's registry entry, instead of hand-maintained file and symbol lists; Kura's code,
+      the compiled native configuration, trainer commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 4a50121058f7f94bd543580fe16536ed8c90ceefd292dd4dbda037b28f7c536b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 72a62baef125ff2e8fd4eb1c2a933115adac0f3d04145e1e530ad61a11e76054
+  - id: adapter-identity-from-imports-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      Adapter source identity is derived from the import graph at symbol level, starting at the
+      adapter's registry entry, instead of hand-maintained file and symbol lists; Kura's code,
+      the compiled native configuration, trainer commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: fd05ecc8d1089b4b3b29b38af38266e1fc89f6e6f8ef9cb548e58a3b90203f5c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 7d7d6b6ec6bfff620dd822617b423b5a9f0b49c14b5c0accfd5e2d0c29d5358b
+  - id: adapter-identity-from-imports-sd-scripts-2026-10-08
+    backend: sd-scripts
+    reason: >-
+      Adapter source identity is derived from the import graph at symbol level, starting at the
+      adapter's registry entry, instead of hand-maintained file and symbol lists; Kura's code,
+      the compiled native configuration, trainer commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v2
+      value: 569bcaf60a4674da3c986f5fb0785e65d18b2d1f315a9e51d2148995c5aa7421
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: e0de3fc84a8dd556e8b4bc098b0873b5a01c7d59a6c9440a6134a787ff2f435d
   - id: runpod-executor-windows-lock-seed-race-2026-10-08
     executor: runpod
     reason: >-
