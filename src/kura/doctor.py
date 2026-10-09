@@ -1024,5 +1024,5 @@ def readiness_gaps(root: Path) -> list[str]:
         with urllib.request.urlopen(f"{endpoint}/system_stats", timeout=2):
             pass
     except (OSError, ValueError, http.client.HTTPException):
-        gaps.append(f"ComfyUI is not reachable at {endpoint}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
+        gaps.append(f"ComfyUI is not reachable at {_redact_url_userinfo(endpoint)}: local renders need it; set comfyui.endpoint in workspace.yaml. See `kura doctor comfyui`.")
     return gaps

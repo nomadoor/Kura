@@ -90,8 +90,9 @@ container, measures free space on its drive before launch, and counts the models
 already in it. `kura cleanup cache` reports a cache outside the workspace but
 never deletes it, since other workspaces may share it.
 
-Local Docker training always requests the GPU (`--gpus all`) and mounts the
-workspace at `/workspace`; the RunPod API key is always read from
+Local Docker training always requests the GPU (`--gpus all`) and sees the
+workspace paths it uses under `/workspace` (only the selected ones for a
+manifest-v2 dataset); the RunPod API key is always read from
 `RUNPOD_API_KEY`. Older workspaces that still set `docker.gpu`,
 `docker.workspace_target`, `storage.docker_data_drive`, `runpod.api_key_env`, or
 `comfyui.runpod.api_key_env` are refused with a pointer to `kura workspace migrate`, which drops them.

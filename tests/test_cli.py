@@ -205,6 +205,17 @@ class InitCommandTests(unittest.TestCase):
         self.assertEqual(run["generator"]["endpoint"], "http://10.0.0.5:8188")
         self.assertEqual(opened.call_args.args[0], "http://10.0.0.5:8188/system_stats")
 
+    def test_readiness_never_prints_credentials_from_the_comfyui_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\ncomfyui:\n  endpoint: http://user:hunter2-secret@10.0.0.5:8188\n", encoding="utf-8")
+            with patch("kura.doctor.shutil.which", return_value=None), patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")):
+                gaps = readiness_gaps(root)
+        comfy = [gap for gap in gaps if gap.startswith("ComfyUI")]
+        self.assertEqual(len(comfy), 1)
+        self.assertNotIn("hunter2-secret", comfy[0])
+        self.assertIn("10.0.0.5:8188", comfy[0])
+
     def test_render_new_creates_only_draft_files(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
