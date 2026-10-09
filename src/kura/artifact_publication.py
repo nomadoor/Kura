@@ -11,7 +11,7 @@ from typing import Any
 
 from kura.fsio import atomic_write_json
 from kura.records import record, without_record_fields
-from kura.training_artifacts import _validate_safetensors_file, is_training_state_output
+from kura.training_artifacts import is_training_state_output, validate_safetensors_file
 
 
 def _sha256(path: Path) -> str:
@@ -147,7 +147,7 @@ def publish_outputs(
                 continue
             if path.suffix == ".safetensors":
                 try:
-                    _validate_safetensors_file(path)
+                    validate_safetensors_file(path)
                 except ValueError as exc:
                     raise ValueError(f"invalid safetensors output: {path.relative_to(run_dir)}: {exc}") from exc
                 adapter_count += 1

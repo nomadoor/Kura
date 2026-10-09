@@ -34,7 +34,7 @@ from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SU
 from kura.backends.musubi_command import display_musubi_tuner
 from kura.backends.musubi_models import requirements_musubi
 from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_launch, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_status
-from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, _validate_safetensors_file, _validated_snapshot_manifest
+from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
 from kura.executors import _redact_secret_text, docker_command, docker_preflight, launch_runpod, launch_runpod_session, observe_run, reconcile_docker, reconcile_runpod, runpod_gpu_availability, stage_runpod, stop_runpod
 from kura.executors.common import _safe_env, format_launch_phases, launch_phases, record_launch_phase, unresolved_create_intents
@@ -3853,27 +3853,28 @@ class RunPodPullSelectionTests(unittest.TestCase):
             path = Path(directory) / "broken.safetensors"
             path.write_bytes((100).to_bytes(8, "little") + b"{}")
             with self.assertRaisesRegex(ValueError, "header size"):
-                _validate_safetensors_file(path)
+                validate_safetensors_file(path)
 
     def test_safetensors_requires_dtype_and_shape(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "broken.safetensors"
             header = json.dumps({"weight": {"data_offsets": [0, 4]}}).encode()
             path.write_bytes(len(header).to_bytes(8, "little") + header + b"\0" * 4)
-            with self.assertRaisesRegex(ValueError, "invalid tensor entry"):
-                _validate_safetensors_file(path)
+            with self.assertRaisesRegex(ValueError, "invalid safetensors tensor entry"):
+                validate_safetensors_file(path)
 
     def test_safetensors_rejects_overlapping_or_gapped_data(self) -> None:
-        for offsets in (([0, 4], [2, 8]), ([0, 4], [5, 8])):
+        # Each tensor has the right length for its dtype, so only the layout is wrong.
+        for offsets, data_length in ((([0, 4], [2, 6]), 6), (([0, 4], [5, 9]), 9)):
             with self.subTest(offsets=offsets), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "broken.safetensors"
                 header = json.dumps({
                     "first": {"dtype": "F32", "shape": [1], "data_offsets": offsets[0]},
                     "second": {"dtype": "F32", "shape": [1], "data_offsets": offsets[1]},
                 }).encode()
-                path.write_bytes(len(header).to_bytes(8, "little") + header + b"\0" * 8)
+                path.write_bytes(len(header).to_bytes(8, "little") + header + b"\0" * data_length)
                 with self.assertRaisesRegex(ValueError, "not contiguous"):
-                    _validate_safetensors_file(path)
+                    validate_safetensors_file(path)
 
     def test_status_mutations_preserve_fields_across_threads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
