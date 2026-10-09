@@ -16,7 +16,7 @@ import yaml
 
 from kura.executors import _redact_secret_text, launch_docker, launch_runpod, observe_run, reconcile_docker, reconcile_runpod
 from kura.executors.runpod import RunPodAPIError
-from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, sleep_checking_stop, RELAUNCHABLE_STATES
+from kura.executors.common import _OperationBusy, _run_operation_lock, append_run_event, record_launch_phase, remote_job_started, sleep_checking_stop, can_start
 from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notification_channels as _notification_channels
@@ -428,9 +428,7 @@ def launch_run(
             raise ValueError("run already has a running realization; reconcile or stop it first")
         if status.get("state") == "launching":
             raise ValueError(f"a launch of this run is in progress or stopped midway; if none is running, run `kura run reconcile {run_id}`")
-        allowed_states = RELAUNCHABLE_STATES
-        stale_capacity_wait = status.get("state") == "queued" and isinstance(status.get("capacity_wait"), dict)
-        if status.get("state") not in allowed_states and not stale_capacity_wait:
+        if not can_start(status):
             raise ValueError("run must be compiled before launch")
         input_lock = None
         input_path = run_dir / "resolved" / "dataset-input.lock.json"

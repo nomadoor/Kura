@@ -66,5 +66,29 @@ class OneWayToStartTests(unittest.TestCase):
         self.assertNotIn("notify_repeat_interval", remote.call_args.kwargs)
         self.assertEqual(remote.call_args.kwargs["max_lease"], "3h")
 
+    def test_a_run_waiting_for_its_gpu_can_be_staged_and_launched_again(self) -> None:
+        # A follower that stops mid-wait leaves the run queued; the runner resumes it by staging and launching.
+        from kura.executors.common import can_start
+
+        waiting = {"state": "queued", "capacity_wait": {"started_at": "2026-10-09T00:00:00+09:00"}}
+        self.assertTrue(can_start(waiting))
+        self.assertTrue(can_start({"state": "compiled"}))
+        self.assertFalse(can_start({"state": "queued"}))
+        self.assertFalse(can_start({"state": "running"}))
+        self.assertFalse(can_start({"state": "completed"}))
+
+    def test_stage_and_launch_ask_the_same_rule(self) -> None:
+        from kura.executors import common
+        from kura.run_commands import launch, plan
+
+        self.assertIs(plan.can_start, common.can_start)
+        self.assertIs(launch.can_start, common.can_start)
+
+    def test_a_capacity_mode_that_is_not_a_word_is_a_clear_error(self) -> None:
+        from kura.run_envelope import capacity_policy
+
+        with self.assertRaisesRegex(ValueError, "compute.capacity.mode must be immediate or wait"):
+            capacity_policy({"compute": {"capacity": {"mode": ["wait"]}}})
+
 if __name__ == "__main__":
     unittest.main()

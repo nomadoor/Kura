@@ -32,9 +32,12 @@ stop Pod
   approval, an agent runs `kura run execute <run-id> --yes`. The flag carries
   that approval through the non-interactive launch gate; it must not cause a
   second user prompt.
-- It is the only way to start a training run. A run that did not complete,
-  such as a launch that lost its network, starts again as a new run from its
-  settings: `kura run new --from <run-id> --slug <words>`.
+- It is the only way to start a training run, and the way to follow one: if
+  the session or the controller was lost while the run goes on, run
+  `kura run execute <run-id>` again; it follows the job and collects it, and
+  never starts a second Pod. Only a run that has ended without completing (its
+  launch failed, or it failed or was stopped) starts again, as a new run from
+  its settings: `kura run new --from <run-id> --slug <words>`.
 - The compiled `compute.capacity` applies: by default the run waits for its
   GPU (no Pod, no billing while waiting); `mode: immediate` fails at once.
 - `--max-lease 12h`: the Pod deletes itself this long after Kura first reaches it, whatever the local controller does.

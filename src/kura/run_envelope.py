@@ -108,7 +108,7 @@ def capacity_policy(run: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(capacity, dict):
         raise ValueError("compute.capacity must be a mapping")
     mode = capacity.get("mode", "wait")
-    if mode not in {"immediate", "wait"}:
+    if not isinstance(mode, str) or mode not in {"immediate", "wait"}:
         raise ValueError("compute.capacity.mode must be immediate or wait")
     if mode == "immediate":
         return {"mode": "immediate", "timeout": None, "poll_interval": None}

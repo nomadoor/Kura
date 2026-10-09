@@ -186,9 +186,11 @@ situation-dependent decision, not a safe universal `recover` action.
 
 ## Execution flags
 
-`kura run execute <run-id>` is the one way to start a training run; a render
-starts with `kura render launch <run-id>`. A run that did not complete is
-started again as a new run from its settings with
+`kura run execute <run-id>` is the one way to start a training run, and the
+way to follow one again after its session or controller was lost: it follows
+the running job and collects it, and never starts a second Pod. A render
+starts with `kura render launch <run-id>`. Only a run that has ended without
+completing starts again, as a new run from its settings:
 `kura run new --from <run-id> --slug <words>`.
 
 - `--max-lease 12h` deletes the Pod from inside after that long, whatever the

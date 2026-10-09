@@ -42,6 +42,13 @@ ACTIVE_STATES = frozenset({"queued", "staged", "launching", "running"})
 # A run in one of these may be launched again; `recovery_required` waits for a person.
 RELAUNCHABLE_STATES = frozenset({"compiled", "failed", "interrupted", "unknown", "launch_failed"})
 
+
+def can_start(status: dict[str, Any]) -> bool:
+    """Whether a launch may stage and start this run: it has not started, or it ended without
+    a Pod, or it is a capacity wait whose follower stopped (the runner resumes that wait)."""
+    state = status.get("state")
+    return state in RELAUNCHABLE_STATES or (state == "queued" and isinstance(status.get("capacity_wait"), dict))
+
 # Finished runs whose artifacts `kura cleanup` may offer; unknown and recovery_required wait for a person.
 CLEANUP_ELIGIBLE_STATES = frozenset({"completed", "failed", "interrupted", "launch_failed"})
 
