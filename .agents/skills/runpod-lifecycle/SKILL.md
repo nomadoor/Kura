@@ -94,8 +94,8 @@ stop Pod
   single launch approval.
 - `compute.capacity.mode=wait` is a bounded foreground policy. The default
   upload path cannot safely use RunPod's provider-side Deploy When Available
-  subscription because the controller must still upload inputs, start training,
-  and install the max-lease guard after Pod creation.
+  subscription because the controller must still upload inputs and start
+  training after Pod creation.
 - Confirm a bounded capacity wait once before entering its wait loop so it can
   acquire unattended. The confirmation covers the configured creation-attempt
   sequence and must warn that the displayed hourly price may change while
