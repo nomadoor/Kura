@@ -475,10 +475,6 @@ def launch_run(
             env_lock = {}
         selected = launch_image(config, image_name, env_lock)
         if executor == "docker":
-            docker = config.get("docker", {})
-            workspace_target = str(docker.get("workspace_target", "/workspace"))
-            if workspace_target != "/workspace":
-                raise ValueError("docker.workspace_target must be /workspace; backend artifacts currently compile container paths against /workspace")
             mounts = local_docker_mounts(_workspace(), config)
             if not dry_run:
                 _local_launch_disk_preflight(_workspace(), locked, config, enforce_model_download_safety=False)
@@ -498,8 +494,6 @@ def launch_run(
                 spec=spec,
                 image=local_image,
                 mounts=mounts,
-                gpu=bool(docker.get("gpu", False)),
-                workspace_target=workspace_target,
                 dry_run=dry_run,
                 controlled_by=controlled_by,
             )

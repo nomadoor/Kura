@@ -347,15 +347,13 @@ def docker_command(
     spec: dict[str, Any],
     image: str,
     mounts: list[dict[str, str]],
-    gpu: bool,
     realization_id: str,
-    workspace_target: str = CONTAINER_WORKSPACE,
     *,
     mount_workspace: bool = True,
 ) -> tuple[list[str], dict[str, str], str]:
     """Build a detached Docker command and direct container output into the run mount."""
     name = _container_name(run_dir.name, realization_id)
-    log_path = f"{workspace_target}/runs/{run_dir.name}/logs/stdout.log"
+    log_path = f"{CONTAINER_WORKSPACE}/runs/{run_dir.name}/logs/stdout.log"
     command = [
         "docker", "run", "-d", "--init", "--stop-timeout", "30", "--name", name,
         # Docker's default /dev/shm is 64 MiB; PyTorch data loaders pass whole images
@@ -371,23 +369,23 @@ def docker_command(
         command.extend(["--user", host_user])
     command.extend(["--workdir", spec["cwd"]])
     if mount_workspace:
-        command.extend(["--volume", f"{workspace.resolve()}:{workspace_target}"])
+        command.extend(["--volume", f"{workspace.resolve()}:{CONTAINER_WORKSPACE}"])
     for mount in mounts:
         source = _resolve_mount_source(workspace, mount["source"])
         suffix = ":ro" if mount.get("mode") == "ro" else ""
         command.extend(["--volume", f"{source}:{mount['target']}{suffix}"])
-    if gpu:
-        command.extend(["--gpus", "all"])
+    # Local training is GPU training; a host without GPU access fails here, and `kura doctor docker` says why.
+    command.extend(["--gpus", "all"])
     runtime_env = dict(spec["env"])
     spec_secret_keys = [key for key in runtime_env if _is_secret(key)]
     if spec_secret_keys:
         raise ValueError("Docker command env must not contain secrets; use the process environment for " + ", ".join(sorted(spec_secret_keys)))
-    runtime_env.update(kura_container_env(workspace_path=workspace_target, run_id=run_dir.name, realization_id=realization_id))
+    runtime_env.update(kura_container_env(workspace_path=CONTAINER_WORKSPACE, run_id=run_dir.name, realization_id=realization_id))
     runtime_env["KURA_WORKSPACE_PATH_MAPS"] = json.dumps(
         workspace_mount_mappings(
             workspace,
             mounts,
-            container_root=workspace_target,
+            container_root=CONTAINER_WORKSPACE,
             include_workspace_root=mount_workspace,
         ),
         ensure_ascii=False,
@@ -398,7 +396,7 @@ def docker_command(
     hf_token = declared_secret("HF_TOKEN")
     if hf_token:
         runtime_env["HF_TOKEN"] = hf_token
-    write_roots = validated_write_roots(spec, workspace_path=workspace_target)
+    write_roots = validated_write_roots(spec, workspace_path=CONTAINER_WORKSPACE)
     for key, value in sorted(runtime_env.items()):
         if _is_secret(key):
             command.extend(["--env", key])
@@ -406,7 +404,7 @@ def docker_command(
             command.extend(["--env", f"{key}={value}"])
     # The wrapper runs inside the container, so Docker's detached stdout is never
     # the source of truth. The mounted run log survives Docker log rotation.
-    quoted_root = workspace_target.rstrip("/")
+    quoted_root = CONTAINER_WORKSPACE.rstrip("/")
     mkdir_targets = [
         '"$HOME"', '"$(dirname "$KURA_LOG_PATH")"',
         *(
@@ -421,7 +419,7 @@ def docker_command(
     return command, runtime_env, name
 
 
-def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, mounts: list[dict[str, str]], gpu: bool, workspace_target: str = CONTAINER_WORKSPACE, dry_run: bool = False, controlled_by: dict[str, Any] | None = None) -> tuple[list[str], str | None]:
+def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image: str, mounts: list[dict[str, str]], dry_run: bool = False, controlled_by: dict[str, Any] | None = None) -> tuple[list[str], str | None]:
     """Start a detached Docker realization; completion is recovered by reconcile."""
     realization_id = _realization_id()
     mount_workspace = True
@@ -450,9 +448,7 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         spec,
         image,
         effective_mounts,
-        gpu,
         realization_id,
-        workspace_target,
         mount_workspace=mount_workspace,
     )
     output_baseline = existing_output_snapshot(run_dir) if spec.get("output_contract") is not None else {}
@@ -473,12 +469,12 @@ def launch_docker(*, workspace: Path, run_dir: Path, spec: dict[str, Any], image
         **({"controlled_by": controlled_by} if controlled_by else {}),
         "container": {"id": None, "name": name, "labels": {"io.kura.run_id": run_dir.name, "io.kura.realization_id": realization_id}},
         "docker_command": safe_command,
-        "workspace_mount": ({"source": str(workspace.resolve()), "target": workspace_target} if mount_workspace else None),
+        "workspace_mount": ({"source": str(workspace.resolve()), "target": CONTAINER_WORKSPACE} if mount_workspace else None),
         "mounts": [{**mount, "source": str(_resolve_mount_source(workspace, mount["source"]))} for mount in effective_mounts],
         "container_cwd": spec["cwd"], "backend_command": spec["argv"], "env": _safe_env(runtime_env),
         "output_baseline": output_baseline,
         **({"dataset_view": dataset_view} if dataset_view is not None else {}),
-        "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": gpu,
+        "logs_path": f"runs/{run_dir.name}/logs/stdout.log", "gpu": True,
         "secrets": {"HF_TOKEN": "present" if os.environ.get("HF_TOKEN") else "absent"},
         "platform": platform.platform(), "host": platform.node(), **kura_provenance(), "preflight": preflight,
     }

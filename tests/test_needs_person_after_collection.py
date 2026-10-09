@@ -43,7 +43,7 @@ class NeedsPersonTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             previous = Path.cwd()

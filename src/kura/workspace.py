@@ -108,7 +108,6 @@ _OBJECT_STORE = _mapping({
 })
 _RUNPOD_FIELDS: dict[str, Any] = {
     "template_id": _STRING,
-    "api_key_env": _STRING,
     "storage_mode": _value("string", choices=("upload", "container_disk", "object_staging")),
     "object_store": _OBJECT_STORE,
     "gpu_type_ids": _STRING_LIST,
@@ -134,13 +133,11 @@ WORKSPACE_SCHEMA_VERSION = 2
 WORKSPACE_SCHEMA = _mapping({
     "schema_version": _value("integer", choices=(WORKSPACE_SCHEMA_VERSION,)),
     "name": _STRING,
-    "storage": _mapping({"host_drive": _STRING, "docker_data_drive": _STRING}),
+    "storage": _mapping({"host_drive": _STRING}),
     # One override per Kura image, used by local and RunPod runs alike; the
     # pinned digests in `kura.images` apply when a name is absent.
     "images": _mapping({name: _STRING for name in PINNED_IMAGES}),
     "docker": _mapping({
-        "workspace_target": _STRING,
-        "gpu": _BOOLEAN,
         "hf_cache": _STRING,
         "mounts": _sequence(_DOCKER_MOUNT),
         "min_free_gb": _NUMBER,
@@ -170,11 +167,17 @@ WORKSPACE_SCHEMA = _mapping({
 # separately from a typo: the file is not wrong, it is stale, and the fix is to
 # delete the line rather than to look for the right spelling.
 _MIGRATE = "images are pinned by Kura and overridden with images.<name>; run `kura workspace migrate`"
+_RUNPOD_KEY = "the RunPod API key is always RUNPOD_API_KEY"
 WORKSPACE_OBSOLETE_KEYS = {
     "runpod.container_cwd": "the container working directory now comes from the selected backend adapter",
     "docker.images": _MIGRATE,
     "runpod.default_image": _MIGRATE,
     "comfyui.runpod.default_image": _MIGRATE,
+    "docker.gpu": "local Docker training always uses the GPU",
+    "docker.workspace_target": "the container workspace is always /workspace",
+    "storage.docker_data_drive": "nothing read it",
+    "runpod.api_key_env": _RUNPOD_KEY,
+    "comfyui.runpod.api_key_env": _RUNPOD_KEY,
 }
 
 _WORKSPACE_ALIASES = {
@@ -243,7 +246,10 @@ def _validate_workspace_value(value: Any, schema: dict[str, Any], *, source: str
         obsolete = [name for name in unknown if isinstance(name, str) and f"{path}.{name}" in WORKSPACE_OBSOLETE_KEYS]
         if obsolete:
             reasons = ", ".join(f"{path}.{name} ({WORKSPACE_OBSOLETE_KEYS[f'{path}.{name}']})" for name in obsolete)
-            raise ValueError(f"{source} contains obsolete setting(s) that Kura no longer reads: {reasons}. Delete these lines.")
+            raise ValueError(
+                f"{source} contains obsolete setting(s) that Kura no longer reads: {reasons}. "
+                "Delete these lines, or run `kura workspace migrate`."
+            )
         details = []
         for name in unknown:
             alias = _WORKSPACE_ALIASES.get(name) if isinstance(name, str) else None
@@ -300,6 +306,13 @@ def validate_workspace_config(config: Any, *, source: str = "workspace.yaml") ->
             )
 
 
+def comfyui_endpoint(config: dict[str, Any]) -> str:
+    """The ComfyUI endpoint a new render starts from and the doctor checks."""
+    comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
+    value = comfyui.get("endpoint")
+    return (value if isinstance(value, str) and value.strip() else "http://127.0.0.1:8188").strip().rstrip("/")
+
+
 def workspace_config() -> dict[str, Any]:
     path = require_workspace() / "workspace.yaml"
     config = load_yaml(path)
@@ -334,6 +347,26 @@ def workspace_relative_path(value: str) -> Path:
     if not path.is_absolute():
         path = require_workspace() / path
     return path.resolve()
+
+
+def _drop_obsolete_keys(config: dict[str, Any]) -> list[str]:
+    """Remove settings Kura no longer reads, in place. Image settings are left to the schema-1 image migration."""
+    notes: list[str] = []
+    for dotted, reason in WORKSPACE_OBSOLETE_KEYS.items():
+        if reason == _MIGRATE:
+            continue
+        *parents, name = dotted.split(".")
+        section: Any = config
+        for part in parents:
+            section = section.get(part) if isinstance(section, dict) else None
+        if not isinstance(section, dict) or name not in section:
+            continue
+        value = section.pop(name)
+        note = f"dropped {dotted}: {reason}"
+        if name == "api_key_env" and value != "RUNPOD_API_KEY":
+            note += f"; run `kura secrets set RUNPOD_API_KEY` with the key you kept in {value}, then delete {value} from your secrets file"
+        notes.append(note)
+    return notes
 
 
 def _move_hf_cache_mount(config: dict[str, Any]) -> list[str]:
@@ -385,7 +418,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     version = config.get("schema_version")
     if version in (WORKSPACE_SCHEMA_VERSION, str(WORKSPACE_SCHEMA_VERSION)):
         fixed = deepcopy(config)
-        notes = _move_hf_cache_mount(fixed)
+        notes = [*_drop_obsolete_keys(fixed), *_move_hf_cache_mount(fixed)]
         if version != WORKSPACE_SCHEMA_VERSION:
             fixed["schema_version"] = WORKSPACE_SCHEMA_VERSION
             notes.insert(0, "schema_version was the string '2'; it is now the integer 2")
@@ -394,7 +427,7 @@ def migrate_workspace_config(config: dict[str, Any]) -> tuple[dict[str, Any], li
     if version not in (None, 1):
         raise ValueError(f"cannot migrate workspace schema {version!r}; this Kura migrates schema 1 to {WORKSPACE_SCHEMA_VERSION}")
     migrated = deepcopy(config)
-    notes: list[str] = _move_hf_cache_mount(migrated)
+    notes: list[str] = [*_drop_obsolete_keys(migrated), *_move_hf_cache_mount(migrated)]
     candidates: dict[str, list[tuple[str, str]]] = {}
 
     docker = migrated.get("docker") if isinstance(migrated.get("docker"), dict) else None

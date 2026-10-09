@@ -18,7 +18,7 @@ from kura.run_commands import launch
 def _runpod_run(status: dict):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "workspace.yaml").write_text("schema_version: 2\nrunpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+        (root / "workspace.yaml").write_text("schema_version: 2\nrunpod: {}\n", encoding="utf-8")
         run_dir = root / "runs" / "example"
         (run_dir / "resolved").mkdir(parents=True)
         (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump({"id": "example", "executor": {"name": "runpod"}, "compute": {"executor": "runpod"}}), encoding="utf-8")

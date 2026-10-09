@@ -26,7 +26,7 @@ class HfTokenParityTests(unittest.TestCase):
         for name in HF_NAMES:
             with self.subTest(name=name), patch.dict(os.environ, _environment_with(name), clear=True), tempfile.TemporaryDirectory() as directory:
                 workspace = Path(directory)
-                _, docker_env, _ = docker_command(workspace, workspace / "runs" / "r", {"cwd": "/opt", "argv": ["x"], "env": {}}, "image", [], False, "r1")
+                _, docker_env, _ = docker_command(workspace, workspace / "runs" / "r", {"cwd": "/opt", "argv": ["x"], "env": {}}, "image", [], "r1")
                 self.assertEqual(docker_env.get("HF_TOKEN"), "example-value")
                 self.assertIn("export HF_TOKEN=example-value", _runpod_secret_env_payload() or "")
                 seen = {}

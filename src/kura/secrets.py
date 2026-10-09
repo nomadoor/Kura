@@ -136,7 +136,7 @@ def known_names() -> list[str]:
 
 
 def _configured_names() -> list[str]:
-    """Secret names workspace.yaml chooses: the RunPod key and the object-store keys."""
+    """Secret names workspace.yaml chooses: the object-store keys."""
     try:
         config = yaml.safe_load((workspace() / "workspace.yaml").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
@@ -145,7 +145,7 @@ def _configured_names() -> list[str]:
     if not isinstance(runpod, dict):
         return []
     store = runpod.get("object_store") if isinstance(runpod.get("object_store"), dict) else {}
-    candidates = (runpod.get("api_key_env"), store.get("access_key_env"), store.get("secret_key_env"))
+    candidates = (store.get("access_key_env"), store.get("secret_key_env"))
     return [name for name in candidates if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)]
 
 

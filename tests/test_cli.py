@@ -50,6 +50,7 @@ from kura.render import _cleanup_stage, _ensure_lora_stage_visible, checkpoint_a
 from kura.run_commands import _as_positive_int, _checkpoint_safety_preflight, _configured_gib, _estimate_backend_download_bytes, _local_launch_disk_preflight, _runpod_launch_disk_preflight, _runpod_ssh_details, _scp_to_runpod, _start_runpod_comfyui, _start_runpod_session_lease_guard, execute_run, launch_run, plan_run, stop_run
 from kura.run_commands.plan import _disk_warnings, _hf_file_size_probe, _model_download_preflight_report, _model_download_safety_preflight, _runpod_capacity_payload, _image_preflight_report
 from kura.run_commands.runpod_ssh import _record_remote_exit_observation, _run_operation_lock, _runpod_remote_job_script
+from kura.doctor import readiness_gaps
 from kura.paths import local_docker_mounts
 from kura.storage import StorageStatus, ensure_free_bytes, probe_storage
 from kura.tui import KuraMonitorApp, RunRow, _compact_path
@@ -150,7 +151,7 @@ class InitCommandTests(unittest.TestCase):
                 for relative in ("experiments", "backends", "executors", "docker"):
                     self.assertFalse((root / relative).exists(), relative)
                 workspace = yaml.safe_load((root / "workspace.yaml").read_text(encoding="utf-8"))
-                self.assertNotIn("mounts", workspace["docker"])
+                self.assertNotIn("mounts", workspace.get("docker", {}))
                 self.assertEqual(workspace["runpod"]["gpu_type_ids"], ["NVIDIA RTX A5000", "NVIDIA A40"])
                 self.assertEqual(workspace["runpod"]["gpu_type_priority"], "custom")
                 self.assertNotIn("images", workspace)
@@ -186,6 +187,24 @@ class InitCommandTests(unittest.TestCase):
                 ["notes.md", "plan.md", "run.yaml", "status.json"],
             )
 
+    def test_render_new_and_doctor_use_the_configured_comfyui_endpoint(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                Path("workspace.yaml").write_text("schema_version: 2\ncomfyui:\n  endpoint: http://10.0.0.5:8188/\n", encoding="utf-8")
+                stdout = io.StringIO()
+                with patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_render_new(argparse.Namespace(slug="remote-comfy")), 0)
+                with patch("kura.doctor.shutil.which", return_value=None), \
+                        patch("kura.doctor.urllib.request.urlopen", side_effect=OSError("offline")) as opened:
+                    readiness_gaps(Path(directory))
+            finally:
+                os.chdir(previous)
+            run = yaml.safe_load((Path(directory) / "runs" / stdout.getvalue().strip() / "run.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(run["generator"]["endpoint"], "http://10.0.0.5:8188")
+        self.assertEqual(opened.call_args.args[0], "http://10.0.0.5:8188/system_stats")
+
     def test_render_new_creates_only_draft_files(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -202,6 +221,7 @@ class InitCommandTests(unittest.TestCase):
             run = yaml.safe_load((Path(directory) / "runs" / run_id / "run.yaml").read_text(encoding="utf-8"))
             self.assertIn("cases", run["inputs"])
             self.assertNotIn("promptset", run["inputs"])
+            self.assertEqual(run["generator"]["endpoint"], "http://127.0.0.1:8188")
             status = json.loads((Path(directory) / "runs" / run_id / "status.json").read_text(encoding="utf-8"))
             self.assertIsNone(status["last_step"])
             self.assertEqual(
@@ -5710,7 +5730,7 @@ class DockerLifecycleTests(unittest.TestCase):
             (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
-            command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
+            command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], "r1")
         self.assertIn("-d", command)
         self.assertIn("--init", command)
         self.assertIn("--stop-timeout", command)
@@ -5738,10 +5758,10 @@ class DockerLifecycleTests(unittest.TestCase):
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             spec = {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}
-            command, runtime_env, _ = docker_command(root, run_dir, spec, "example:image", local_docker_mounts(root, {}), True, "r1")
+            command, runtime_env, _ = docker_command(root, run_dir, spec, "example:image", local_docker_mounts(root, {}), "r1")
             with tempfile.TemporaryDirectory() as elsewhere:
                 outside = Path(elsewhere).resolve() / "hf"
-                moved, _, _ = docker_command(root, run_dir, spec, "example:image", local_docker_mounts(root, {"docker": {"hf_cache": str(outside)}}), True, "r1")
+                moved, _, _ = docker_command(root, run_dir, spec, "example:image", local_docker_mounts(root, {"docker": {"hf_cache": str(outside)}}), "r1")
         # The default cache is reached through the workspace mount; a moved one gets its own mount.
         self.assertFalse([item for item in command if item.endswith(":/workspace/cache/huggingface")])
         self.assertIn(f"{outside}:/workspace/cache/huggingface", moved)
@@ -5953,7 +5973,7 @@ class DockerLifecycleTests(unittest.TestCase):
             run_dir = root / "runs" / "example"
             run_dir.mkdir(parents=True)
             with patch.dict(os.environ, {"HF_TOKEN": "hf-secret"}, clear=False):
-                command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], True, "r1")
+                command, runtime_env, _ = docker_command(root, run_dir, {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}}, "example:image", [], "r1")
         self.assertEqual(runtime_env["HF_TOKEN"], "hf-secret")
         self.assertIn("HF_TOKEN", command)
         self.assertNotIn("HF_TOKEN=hf-secret", command)
@@ -6210,7 +6230,7 @@ class DockerLifecycleTests(unittest.TestCase):
                     "pinning": {"strength": "content-hash", "value": "sha256:compiled-image"},
                 },
             }), encoding="utf-8")
-            (root / "workspace.yaml").write_text(yaml.safe_dump({'docker': {'gpu': False, 'mounts': []}, 'images': {'ai-toolkit': 'mutable-local:dev'}}), encoding="utf-8")
+            (root / "workspace.yaml").write_text(yaml.safe_dump({'docker': {'mounts': []}, 'images': {'ai-toolkit': 'mutable-local:dev'}}), encoding="utf-8")
             previous = Path.cwd()
             try:
                 os.chdir(root)
@@ -6285,7 +6305,8 @@ class DockerLifecycleTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             launch.assert_not_called()
-            self.assertIn("docker.workspace_target must be /workspace", stderr.getvalue())
+            self.assertIn("docker.workspace_target", stderr.getvalue())
+            self.assertIn("kura workspace migrate", stderr.getvalue())
 
 
 class LaunchPhaseTests(unittest.TestCase):
@@ -6559,7 +6580,7 @@ class RunPodUnattendedCompletionTests(unittest.TestCase):
     def test_a_failed_download_clears_the_collecting_mark(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "pod_id": "pod-1"}), encoding="utf-8")
@@ -8516,7 +8537,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_cli_reconcile_runpod_syncs_remote_log_without_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             run_dir = self._run_dir(root)
             (run_dir / "run.yaml").write_text("id: example\n", encoding="utf-8")
             realization = {
@@ -8547,7 +8568,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_remote_does_not_stop_pod_when_download_is_unconfirmed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             (root / "runs" / "example").mkdir(parents=True)
             previous = Path.cwd()
             os.chdir(root)
@@ -8568,7 +8589,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_remote_notifies_loudly_on_controller_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             (root / "runs" / "example").mkdir(parents=True)
             previous = Path.cwd()
             os.chdir(root)
@@ -8611,7 +8632,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_remote_stops_pod_immediately_when_hold_is_zero(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             (root / "runs" / "example").mkdir(parents=True)
             previous = Path.cwd()
             os.chdir(root)
@@ -8630,7 +8651,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_run_remote_records_download_phases(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
             run_dir = root / "runs" / "example"
             (run_dir / "realizations").mkdir(parents=True)
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_realization": "realizations/r1.json"}), encoding="utf-8")
@@ -9191,7 +9212,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -9215,7 +9236,7 @@ class RunPodLifecycleTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:
@@ -9234,7 +9255,7 @@ class RunPodLifecycleTests(unittest.TestCase):
     def test_doctor_runpod_labels_process_permission_denial_without_blame(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "workspace.yaml").write_text("runpod: {api_key_env: RUNPOD_API_KEY}\n", encoding="utf-8")
+            (root / "workspace.yaml").write_text("runpod: {}\n", encoding="utf-8")
             previous = Path.cwd()
             os.chdir(root)
             try:

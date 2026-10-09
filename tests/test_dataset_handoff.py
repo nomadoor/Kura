@@ -6296,7 +6296,6 @@ class DatasetHandoffTests(unittest.TestCase):
                 {"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                 "example:image",
                 mounts,
-                False,
                 "r1",
                 mount_workspace=False,
             )
@@ -6509,7 +6508,6 @@ class DatasetHandoffTests(unittest.TestCase):
                     spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                     image="example:image",
                     mounts=[],
-                    gpu=False,
                     dry_run=True,
                 )
 
@@ -6549,7 +6547,6 @@ class DatasetHandoffTests(unittest.TestCase):
                     spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                     image="example:image",
                     mounts=[],
-                    gpu=False,
                     dry_run=False,
                 )
 
@@ -6604,7 +6601,6 @@ class DatasetHandoffTests(unittest.TestCase):
                     spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                     image="example:image",
                     mounts=[],
-                    gpu=False,
                     dry_run=True,
                 )
 
@@ -6639,7 +6635,6 @@ class DatasetHandoffTests(unittest.TestCase):
                         spec={"cwd": "/opt/ai-toolkit", "argv": ["python", "run.py"], "env": {}},
                         image="example:image",
                         mounts=[],
-                        gpu=False,
                         dry_run=False,
                     )
             preflight.assert_not_called()

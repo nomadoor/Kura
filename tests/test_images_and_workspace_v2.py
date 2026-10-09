@@ -154,6 +154,8 @@ class WorkspaceSchemaTests(unittest.TestCase):
             self.assertEqual(config["schema_version"], WORKSPACE_SCHEMA_VERSION)
             self.assertNotIn("images", config.get("docker", {}))
             self.assertNotIn("mounts", config.get("docker", {}))
+            for section, key in (("docker", "gpu"), ("docker", "workspace_target"), ("storage", "docker_data_drive"), ("runpod", "api_key_env")):
+                self.assertNotIn(key, config.get(section, {}))
             self.assertNotIn("default_image", config.get("runpod", {}))
             self.assertFalse(list(Path(directory).rglob("Dockerfile")))
 
@@ -172,9 +174,9 @@ class WorkspaceSchemaTests(unittest.TestCase):
         self.assertEqual(migrated["schema_version"], WORKSPACE_SCHEMA_VERSION)
         self.assertEqual(migrated["images"], {"sd-scripts": "nomadoor/kura-sd-scripts@sha256:" + "f" * 64})
         self.assertNotIn("images", migrated["docker"])
-        self.assertEqual(migrated["docker"]["workspace_target"], "/workspace")
+        self.assertNotIn("workspace_target", migrated["docker"])
         self.assertNotIn("default_image", migrated["runpod"])
-        self.assertEqual(migrated["runpod"]["api_key_env"], "RUNPOD_API_KEY")
+        self.assertNotIn("api_key_env", migrated["runpod"])
         joined = "\n".join(notes)
         self.assertIn("nomadoor/kura-musubi-tuner:resume-e2e-20260827", joined)
         self.assertIn("dockerfile", joined)
@@ -199,8 +201,9 @@ class WorkspaceSchemaTests(unittest.TestCase):
             self.assertIn("default_image: it was not a mapping", "\n".join(notes))
         string_version, notes = migrate_workspace_config({"schema_version": "2"})
         self.assertEqual(string_version["schema_version"], WORKSPACE_SCHEMA_VERSION)
-        with self.assertRaisesRegex(ValueError, "Edit workspace.yaml by hand"):
-            migrate_workspace_config({"schema_version": 1, "runpod": {"container_cwd": "/x"}})
+        stale, notes = migrate_workspace_config({"schema_version": 1, "runpod": {"container_cwd": "/x"}})
+        self.assertEqual(stale["runpod"], {})
+        self.assertIn("dropped runpod.container_cwd", "\n".join(notes))
         again, notes = migrate_workspace_config(migrated := migrate_workspace_config(V1_WORKSPACE)[0])
         self.assertEqual((again, notes), (migrated, []))
 
@@ -215,7 +218,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
         default, notes = migrate_workspace_config({"schema_version": 2, "docker": {"gpu": True, "mounts": [
             {"source": "./cache/huggingface", "target": "/workspace/cache/huggingface", "mode": "rw"},
         ]}})
-        self.assertEqual(default, {"schema_version": 2, "docker": {"gpu": True}})
+        self.assertEqual(default, {"schema_version": 2, "docker": {}})
         self.assertIn("removed the docker.mounts entry for the Hugging Face cache", "\n".join(notes))
         moved, notes = migrate_workspace_config({"schema_version": 2, "docker": {"mounts": [
             {"source": "/mnt/e/hf", "target": "/root/.cache/huggingface", "mode": "rw"},
@@ -226,7 +229,7 @@ class WorkspaceSchemaTests(unittest.TestCase):
         from_v1, _ = migrate_workspace_config({"schema_version": 1, "docker": {"mounts": [{"source": "/mnt/e/hf", "target": "/workspace/cache/huggingface"}]}})
         self.assertEqual(from_v1["docker"], {"hf_cache": "/mnt/e/hf"})
         self.assertEqual(migrate_workspace_config(moved), (moved, []))
-        untouched = {"schema_version": 2, "docker": {"gpu": True, "mounts": []}}
+        untouched = {"schema_version": 2, "docker": {"mounts": []}}
         self.assertEqual(migrate_workspace_config(untouched), (untouched, []))
         # A read-only mount, a mount of part of the cache, or a second location is never reinterpreted.
         for mount, hf_cache in (
@@ -238,6 +241,35 @@ class WorkspaceSchemaTests(unittest.TestCase):
                 docker = {"mounts": [mount], **({"hf_cache": hf_cache} if hf_cache else {})}
                 with self.assertRaisesRegex(ValueError, "Edit workspace.yaml by hand"):
                     migrate_workspace_config({"schema_version": 2, "docker": docker})
+
+    def test_settings_without_a_choice_are_refused_and_migrated_away(self) -> None:
+        retired = (
+            ({"docker": {"gpu": True}}, "docker.gpu"),
+            ({"docker": {"workspace_target": "/workspace"}}, "docker.workspace_target"),
+            ({"storage": {"docker_data_drive": ""}}, "storage.docker_data_drive"),
+            ({"runpod": {"api_key_env": "RUNPOD_API_KEY"}}, "runpod.api_key_env"),
+            ({"comfyui": {"runpod": {"api_key_env": "RUNPOD_API_KEY"}}}, "comfyui.runpod.api_key_env"),
+        )
+        for section, name in retired:
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, f"{name}.*kura workspace migrate"):
+                    validate_workspace_config({"schema_version": 2, **section})
+        migrated, notes = migrate_workspace_config({
+            "schema_version": 2,
+            "storage": {"host_drive": "E", "docker_data_drive": ""},
+            "docker": {"workspace_target": "/workspace", "gpu": False},
+            "runpod": {"api_key_env": "MY_RUNPOD_KEY", "gpu_type_ids": ["NVIDIA A40"]},
+        })
+        self.assertEqual(migrated, {
+            "schema_version": 2, "storage": {"host_drive": "E"}, "docker": {}, "runpod": {"gpu_type_ids": ["NVIDIA A40"]},
+        })
+        joined = "\n".join(notes)
+        self.assertIn("docker.gpu", joined)
+        self.assertIn("kura secrets set RUNPOD_API_KEY", joined)
+        # A value Kura never honoured is dropped too: launch refused it already.
+        dropped, notes = migrate_workspace_config({"schema_version": 2, "docker": {"workspace_target": "/ws"}})
+        self.assertEqual(dropped, {"schema_version": 2, "docker": {}})
+        self.assertIn("dropped docker.workspace_target", "\n".join(notes))
 
     def test_migrate_previews_then_applies_only_when_confirmed(self) -> None:
         with tempfile.TemporaryDirectory() as directory, _inside(Path(directory)):

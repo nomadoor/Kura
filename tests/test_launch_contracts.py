@@ -159,7 +159,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             workspace = Path(directory)
             run_dir = workspace / "runs" / "contract-run"
             run_dir.mkdir(parents=True)
-            docker_argv, _, _ = docker_command(workspace, run_dir, spec, "example:image", [], True, "r1")
+            docker_argv, _, _ = docker_command(workspace, run_dir, spec, "example:image", [], "r1")
         wrapper = docker_argv[docker_argv.index("kura-job") - 1]
         self.assertIn('"/workspace/cache/ai-toolkit/models"', wrapper)
         self.assertIn('test -w "/workspace/cache/ai-toolkit/models"', wrapper)
@@ -225,7 +225,7 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
             run_dir = workspace / "runs" / "h3-run"
             run_dir.mkdir(parents=True)
             argv, _, _ = docker_command(
-                workspace, run_dir, spec, "example:image", [], False, "r1",
+                workspace, run_dir, spec, "example:image", [], "r1",
             )
         wrapper = argv[argv.index("kura-job") - 1]
         self.assertIn(f'mkdir -p "$HOME"', wrapper)
@@ -283,7 +283,6 @@ class LaunchEnvironmentContractTests(unittest.TestCase):
                 {"cwd": "/opt/tool", "argv": ["python", "train.py"], "env": {}},
                 "example:image",
                 mounts,
-                True,
                 "r1",
             )
         self.assertTrue(required_env_names(CONTAINER_SCRIPT_PATHS) <= set(runtime_env))

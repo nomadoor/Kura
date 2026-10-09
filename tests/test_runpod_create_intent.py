@@ -17,7 +17,7 @@ from kura.run_commands.plan import stop_run
 
 RID = "20261004-101010-000001"
 NAME = f"kura-example-{RID}"
-CONFIG = {"api_key_env": "RUNPOD_API_KEY", "gpu_type_ids": ["NVIDIA A40"]}
+CONFIG = {"gpu_type_ids": ["NVIDIA A40"]}
 
 
 @contextmanager
@@ -25,7 +25,7 @@ def _crashed_launch(previous_pod: str | None = None):
     """A run whose launch wrote its create intent and then died."""
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "workspace.yaml").write_text("schema_version: 2\nrunpod: {api_key_env: RUNPOD_API_KEY, gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
+        (root / "workspace.yaml").write_text("schema_version: 2\nrunpod: {gpu_type_ids: [NVIDIA A40]}\n", encoding="utf-8")
         run_dir = root / "runs" / "example"
         (run_dir / "realizations").mkdir(parents=True)
         (run_dir / "realizations" / f"{RID}.create-intent.json").write_text(

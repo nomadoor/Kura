@@ -150,12 +150,6 @@ class SetTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertFalse(user_file.exists())
 
-    def test_the_configured_runpod_key_name_is_accepted(self) -> None:
-        with _setup("schema_version: 2\nrunpod:\n  api_key_env: MY_RUNPOD_KEY\n") as (_, user_file):
-            code, output = _set("MY_RUNPOD_KEY", "rk")
-            self.assertEqual(code, 0, output)
-            self.assertIn("MY_RUNPOD_KEY", sources())
-
     def test_configured_object_store_key_names_are_accepted(self) -> None:
         with _setup("schema_version: 2\nrunpod:\n  object_store: {access_key_env: MY_R2_KEY}\n"):
             code, output = _set("MY_R2_KEY", "r2")

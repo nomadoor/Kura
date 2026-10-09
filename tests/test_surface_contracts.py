@@ -109,7 +109,7 @@ class SurfaceContractTests(unittest.TestCase):
 
     def test_interpreted_values_are_type_checked_at_workspace_load(self) -> None:
         malformed = (
-            ({"docker": {"gpu": "true"}}, "must be boolean"),
+            ({"runpod": {"interruptible": "true"}}, "must be boolean"),
             ({"docker": {"mounts": [{"source": ".", "target": "/workspace", "mode": "write"}]}}, "'ro', 'rw'"),
             ({"comfyui": {"input_stage_mode": "hardlink"}}, "'symlink', 'copy'"),
             ({"comfyui": {"model_registry": {"checkpoints": {"model.safetensors": {"repo": 7}}}}}, "must be string"),

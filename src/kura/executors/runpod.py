@@ -29,7 +29,7 @@ from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, p
 from kura.provenance import image_reference_identity
 from kura.training_artifacts import resume_artifact_directory
 from kura.runtime_io import validated_write_roots
-from kura.secrets import MissingSecret, missing
+from kura.secrets import MissingSecret, declared_secret
 from kura.storage import ensure_free_bytes
 from kura.executors.common import PROGRESS_FIELDS, kura_container_env, CONTAINER_WORKSPACE, sleep_checking_stop, CREATE_INTENT_SUFFIX, TERMINAL_STATES, append_capacity_wait, settle_status_from_realization, unresolved_create_intents, write_create_unconfirmed, write_stop_record, _event_exists, append_run_event, dataset_input_drift_warning, _is_secret, _load_status, _materialize_stdout_progress, _mutate_run_status, _now, _realization_id, _redact_secret_text, _run_operation_lock, _safe_env, _write_json, _write_observation, _write_status, record_launch_phase
 from kura.container_scripts import script_source
@@ -193,9 +193,10 @@ def runpod_gpu_availability(config: dict[str, Any], gpu_type_ids: list[str], *, 
     """
 
     settings = _runpod_settings(config)
-    api_key = os.environ.get(settings["api_key_env"])
-    if not api_key:
-        return {"status": "unavailable", "reason": missing(settings["api_key_env"], "needed to list RunPod GPUs"), "candidates": []}
+    try:
+        api_key = runpod_api_key("needed to list RunPod GPUs")
+    except MissingSecret as exc:
+        return {"status": "unavailable", "reason": str(exc), "candidates": []}
     aliases: list[str] = []
     cuda_filter = f", minCudaVersion: {json.dumps(min_cuda_version)}" if min_cuda_version else ""
     for index, gpu_type_id in enumerate(gpu_type_ids):
@@ -349,6 +350,14 @@ def _confirm_runpod_launch(
     return measurement
 
 
+def runpod_api_key(purpose: str) -> str:
+    """The RunPod API key, or a MissingSecret that tells the user how to set it."""
+    api_key = declared_secret("RUNPOD_API_KEY")
+    if not api_key:
+        raise MissingSecret("RUNPOD_API_KEY", purpose)
+    return api_key
+
+
 def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     storage_mode = config.get("storage_mode", "upload")
     if storage_mode not in ("upload", "container_disk", "object_staging"):
@@ -360,9 +369,6 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
     gpu_types = config["gpu_type_ids"]
     if not isinstance(gpu_types, list) or not all(isinstance(value, str) and value for value in gpu_types):
         raise ValueError("runpod.gpu_type_ids must be a non-empty list of GPU type IDs")
-    api_key_env = config.get("api_key_env", "RUNPOD_API_KEY")
-    if not isinstance(api_key_env, str) or not api_key_env:
-        raise ValueError("runpod.api_key_env must be a non-empty environment variable name")
     ports = config.get("ports")
     if ports is not None:
         if not isinstance(ports, list) or not all(isinstance(port, str) for port in ports):
@@ -414,7 +420,6 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
         else:
             raise ValueError("runpod.cloud_type must be SECURE, COMMUNITY, ANY, or AUTO")
     return {
-        "api_key_env": api_key_env,
         "storage_mode": storage_mode,
         "template_id": config.get("template_id"),
         "gpu_type_ids": gpu_types,
@@ -631,9 +636,7 @@ def resolve_runpod_create_intents(run_dir: Path, config: dict[str, Any]) -> list
     if not intents:
         return []
     settings = _runpod_settings(config)
-    api_key = os.environ.get(settings["api_key_env"])
-    if not api_key:
-        raise MissingSecret(settings["api_key_env"], "needed to look for a Pod a crashed launch may have created")
+    api_key = runpod_api_key("needed to look for a Pod a crashed launch may have created")
     lines = []
     for intent_path in intents:
         intent = json.loads(intent_path.read_text(encoding="utf-8"))
@@ -1189,9 +1192,7 @@ sleep infinity
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
         return None
-    api_key = os.environ.get(settings["api_key_env"])
-    if not api_key:
-        raise MissingSecret(settings["api_key_env"], "needed to launch a RunPod run")
+    api_key = runpod_api_key("needed to launch a RunPod run")
     if wait_for_capacity_sec < 0:
         raise ValueError("wait_for_capacity_sec must be zero or greater")
     if wait_for_capacity_sec and capacity_poll_interval_sec <= 0:
@@ -1552,9 +1553,7 @@ sleep infinity
     if dry_run:
         print(json.dumps({"runpod_create_request": safe_request, "logs_path": log_path}, ensure_ascii=False, indent=2))
         return None
-    api_key = os.environ.get(settings["api_key_env"])
-    if not api_key:
-        raise MissingSecret(settings["api_key_env"], "needed to launch a RunPod session")
+    api_key = runpod_api_key("needed to launch a RunPod session")
     _confirm_runpod_launch(config, settings, yes=yes, max_lease_sec=max_lease_sec, min_cuda_version=request_body["minCudaVersion"],
                            confirmed_at=(controlled_by or {}).get("billing_confirmed_at"))
     pod: dict[str, Any] | None = None
@@ -1636,9 +1635,7 @@ def reconcile_runpod(
 ) -> dict[str, Any]:
     with _run_operation_lock(run_dir, "observe", blocking=blocking):
         settings = _runpod_settings(config)
-        api_key = os.environ.get(settings["api_key_env"])
-        if not api_key:
-            raise MissingSecret(settings["api_key_env"], "needed to reconcile a RunPod run")
+        api_key = runpod_api_key("needed to reconcile a RunPod run")
         status = _load_status(run_dir)
         realization_ref = status.get("last_realization")
         if not isinstance(realization_ref, str):
@@ -1715,9 +1712,7 @@ def stop_runpod(run_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
             f"a launch of this run stopped before recording whether its Pod was created; run `kura run reconcile {run_dir.name}` "
             "first, which finds the Pod by name so this command can delete it"
         )
-    api_key = os.environ.get(settings["api_key_env"])
-    if not api_key:
-        raise MissingSecret(settings["api_key_env"], "needed to stop a RunPod run")
+    api_key = runpod_api_key("needed to stop a RunPod run")
     pod_id = status.get("pod_id")
     if not isinstance(pod_id, str):
         raise ValueError("run has no RunPod pod ID")
