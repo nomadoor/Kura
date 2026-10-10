@@ -340,6 +340,78 @@ class ResumeExecutorParityTests(unittest.TestCase):
                 self.assertNotIn(150, observed)
 
 
+class SdScriptsLogicalResumeTests(unittest.TestCase):
+    """The pinned sd-scripts image continues the logical step on Resume
+    (docker/sd-scripts/patches/0002-resume-continues-the-logical-step.patch): its step
+    counter, checkpoint and state names, save cadence, stop, and progress bar all count
+    logical steps, also when the source step is not at an epoch boundary."""
+
+    def _run_dir(self, root: Path) -> tuple[dict[str, Any], Path]:
+        # Six items train six steps per epoch; Resume 15 -> 32 starts in the third epoch
+        # and stops in the sixth, which is not a multiple of the steps per epoch.
+        source = sd_scripts_run()
+        source["recipe"]["steps"] = 15
+        source["backend"]["config"]["save_every_n_steps"] = 5
+        source["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+        manifest = publish_source(root, source, step=15)
+        run = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"], source_step=15, additional=17)
+        run_dir = root / "runs" / "derived"
+        (run_dir / "logs").mkdir(parents=True)
+        (run_dir / "resolved").mkdir()
+        (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+        (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
+        compile_resume_lock(root, run, run_dir / "resolved")
+        return run, run_dir
+
+    def _progress(self, run_dir: Path, line: str) -> dict[str, Any]:
+        (run_dir / "logs" / "stdout.log").write_text(line + "\n", encoding="utf-8")
+        status: dict[str, Any] = {}
+        _materialize_stdout_progress(run_dir, status, state="running")
+        return status
+
+    def test_a_multi_epoch_resume_saves_on_logical_multiples_and_stops_at_its_target(self) -> None:
+        from kura.training_artifacts import peak_checkpoints
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, run_dir = self._run_dir(root)
+            script = command_sd_scripts(run)["argv"][2]
+            # The trainer is given the logical target and the configured cadence, uncapped.
+            self.assertIn('"--max_train_steps","32"', script)
+            self.assertIn('"--save_every_n_steps","5"', script)
+            self.assertIn('"--save_last_n_steps_state","5"', script)
+            self.assertIn("--skip_until_initial_step", script)
+            steps = resume_steps(run)
+            self.assertEqual(
+                (steps["native_progress"], steps["native_start"], steps["native_end"]), ("logical", 15, 32),
+            )
+            # Saves at logical steps 20, 25, and 30, then the final weights at 32.
+            self.assertEqual(peak_checkpoints(run, {"save_every_n_steps": 5}), {"count": 4, "trainer_default_saves": False})
+            self.assertEqual([logical_step(step, steps) for step in (20, 25, 30)], [20, 25, 30])
+            lock = json.loads((run_dir / "resolved" / "training-state-source.lock.json").read_text(encoding="utf-8"))
+            self.assertEqual(lock["native_progress"], "logical")
+            # The patched progress bar counts logical steps toward the logical target.
+            status = self._progress(run_dir, "steps:  62%|██████    | 20/32 [00:10<00:06, 2.0it/s, avr_loss=0.5]")
+            self.assertEqual((status["last_step"], status["total_steps"]), (20, 32))
+            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (5, 17))
+
+    def test_a_run_compiled_under_the_process_local_contract_is_read_as_before(self) -> None:
+        # A lock frozen before the patched image counted the trainer's progress from zero.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run, run_dir = self._run_dir(root)
+            lock_path = run_dir / "resolved" / "training-state-source.lock.json"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock["native_progress"] = "process_local"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            steps = resume_steps(run, lock=lock)
+            self.assertEqual((steps["native_progress"], steps["native_end"]), ("process_local", 32))
+            self.assertEqual(logical_step(5, steps), 20)
+            status = self._progress(run_dir, "steps:  29%|███       | 5/17 [00:10<00:24, 2.0it/s, avr_loss=0.5]")
+            self.assertEqual((status["last_step"], status["total_steps"]), (20, 32))
+            self.assertEqual((status["current_run_step"], status["current_run_total_steps"]), (5, 17))
+
+
 class ResumeSourceVerificationTests(unittest.TestCase):
     def _workspace(self, root: Path, *, mutate) -> tuple[dict[str, Any], Path]:
         source = sd_scripts_run()

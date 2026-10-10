@@ -388,9 +388,10 @@ class PeakCheckpointsTests(unittest.TestCase):
     def test_a_logical_progress_resume_counts_saves_on_logical_multiples(self) -> None:
         # Resume +170 from step 1030 to 1200 with a cadence of 100. AI-Toolkit's progress is
         # logical: it saves on 1100 and leaves 1200 to its final file: 2 (170 // 100 + 1 counted
-        # from 1030 would land on 1130). sd-scripts and Musubi Tuner count progress from zero in
-        # their process, 0..170: a save on 100 and the final file: 2.
-        for build, expected in ((ai_toolkit_run, 2), (sd_scripts_run, 2), (musubi_run, 2)):
+        # from 1030 would land on 1130). sd-scripts' progress is logical too, and it saves on its
+        # last step: 1100, 1200, and the final file: 3. Musubi Tuner counts progress from zero in
+        # its process, 0..170: a save on 100 and the final file: 2.
+        for build, expected in ((ai_toolkit_run, 2), (sd_scripts_run, 3), (musubi_run, 2)):
             source = build()
             source["backend"]["config"]["save_every_n_steps"] = 100
             run = as_resume(source, source_step=1030, additional=170)
@@ -399,18 +400,19 @@ class PeakCheckpointsTests(unittest.TestCase):
                 self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], expected)
 
     def test_a_process_local_resume_caps_the_cadence_as_the_trainer_is_given(self) -> None:
-        # Resume +50 with no cadence set: Kura gives Musubi Tuner and sd-scripts a cadence of
-        # 50 (the steps added), so each saves once and writes its final file.
-        for build in (musubi_run, sd_scripts_run):
+        # Resume +50 with no cadence set: Kura gives Musubi Tuner a cadence of 50 (the steps
+        # added), so it saves once and writes its final file. sd-scripts counts logical steps
+        # on Resume, is given no cadence, and writes only its final file.
+        for build, cadence, count in ((musubi_run, 50, 2), (sd_scripts_run, None, 1)):
             run = as_resume(build(), source_step=1000, additional=50)
             checkpoint = plan._adapter_display(run)["checkpoint"]
             with self.subTest(backend=run["backend"]["name"]):
-                self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps")), 50)
-                self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], 2)
+                self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps")), cadence)
+                self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], count)
 
     def test_the_resume_cap_applies_only_when_kura_manages_state(self) -> None:
         for build in (musubi_run, sd_scripts_run):
-            for configured, managed, expected in ((None, False, {"musubi-tuner": 1000, "sd-scripts": None}), (30, False, 30), (500, True, 50), (500, False, 500)):
+            for configured, managed, expected in ((None, False, {"musubi-tuner": 1000, "sd-scripts": None}), (30, False, 30), (500, True, {"musubi-tuner": 50, "sd-scripts": 500}), (500, False, 500)):
                 source = build()
                 source["recovery"] = {"training_state": {"enabled": managed}}
                 run = as_resume(source, source_step=1000, additional=50)

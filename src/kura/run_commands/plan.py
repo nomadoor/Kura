@@ -1032,13 +1032,13 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
 def _training_state_cadence(run: dict[str, Any]) -> Any:
     """The steps between training-state saves the plan shows: `checkpoint_save_cadence`, formatted.
     A trainer saving at its own default shows "trainer default"; one given no cadence
-    (sd-scripts) saves state only at the end, shown as the recipe's steps."""
+    (sd-scripts) saves state only at the end, shown as the steps the run trains (`trained_steps`)."""
     # The configured cadence is what the backend's display reads from its own config.
     checkpoint = _adapter_display(run).get("checkpoint") or {}
     cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
     if cadence == "trainer_default":
         return "trainer default"
-    return common_recipe(run).get("steps") if cadence is None else cadence
+    return trained_steps(run) if cadence is None else cadence
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:

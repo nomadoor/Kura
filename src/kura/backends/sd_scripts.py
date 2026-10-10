@@ -36,7 +36,9 @@ def training_state_contract_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
         return {
             "native_format": "accelerate-state-directory",
             "required_files": (*common, "train_state.json", "kura-state-info.json"),
-            "native_progress": "process_local",
+            # The pinned image's patch 0002 keeps sd-scripts' step counter and progress bar at
+            # the logical step on Resume; a lock compiled before it froze `process_local`.
+            "native_progress": "logical",
             "native_target": "logical",
             "state_step": {
                 "path": "kura-state-info.json", "field": "logical_step", "space": "logical",
