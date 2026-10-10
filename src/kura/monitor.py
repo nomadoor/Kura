@@ -14,11 +14,11 @@ from typing import Any, Iterable
 
 import yaml
 
-from kura.training_artifacts import checkpoint_files, trained_steps
+from kura.training_artifacts import checkpoint_files, displayed_final_step, expected_checkpoints, trained_steps
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
-from kura.run_envelope import common_recipe, final_step, run_executor
+from kura.run_envelope import common_recipe, run_executor
 
 
 DRAFT_STATE = "draft"
@@ -390,7 +390,7 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
         "alpha": display.get("alpha"),
         "lr": display.get("learning_rate"),
         "scheduler": display.get("scheduler"),
-        "steps": _logical_total_steps(config),
+        "steps": displayed_final_step(config),
         "batch_size": micro_batch,
         "gradient_accumulation_steps": grad_accum,
         "effective_batch_size": effective_batch,
@@ -403,7 +403,7 @@ def _key_config(run_type: str | None, config: dict[str, Any], run_dir: Path) -> 
 def _progress(status: dict[str, Any], config: dict[str, Any]) -> RunProgress:
     recipe = common_recipe(config)
     step = _int_or_none(_first_present(status.get("last_step"), status.get("step"), status.get("current_step")))
-    total = _int_or_none(_first_present(status.get("total_steps"), _logical_total_steps(config)))
+    total = _int_or_none(_first_present(status.get("total_steps"), displayed_final_step(config)))
     seconds_per_iter = _float_or_none(status.get("seconds_per_iter"))
     return RunProgress(
         step=step,
@@ -413,14 +413,6 @@ def _progress(status: dict[str, Any], config: dict[str, Any]) -> RunProgress:
         current_run_step=_int_or_none(status.get("current_run_step")),
         current_run_total=_int_or_none(status.get("current_run_total_steps")),
     )
-
-
-def _logical_total_steps(config: dict[str, Any]) -> Any:
-    # The run's final step has one owner; an invalid continuation shows no total, as status does.
-    try:
-        return final_step(config)
-    except ValueError:
-        return None
 
 
 def _read_training_stdout(path: Path, *, loss_tail: int) -> list[float]:
@@ -772,17 +764,14 @@ def _checkpoint_count(outputs: Path) -> int:
 
 
 def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:
-    # The steps the run trains have one owner; an invalid continuation shows no expectation.
+    # The steps the run trains and the count over them each have one owner; an invalid continuation shows no expectation.
     try:
         steps = trained_steps(config)
     except ValueError:
         return None
     display = _read_mapping(run_dir / "resolved" / "backend-display.lock.json")
     checkpoint = display.get("checkpoint") if isinstance(display.get("checkpoint"), dict) else {}
-    every = _int_or_none(checkpoint.get("save_every_n_steps"))
-    if not steps or not every or checkpoint.get("prune_before_step") is not None or checkpoint.get("keep_last") is not None or checkpoint.get("retention_window_steps") is not None:
-        return None
-    return max(steps // every, 1)
+    return expected_checkpoints(checkpoint, steps)
 
 
 def _downloaded_run_dir(run_dir: Path, status: dict[str, Any]) -> Path | None:

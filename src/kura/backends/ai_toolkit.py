@@ -1074,6 +1074,7 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             "required_files": ("model.safetensors", "optimizer.pt", "rng.pt", "state-info.json"),
             "native_progress": "logical",
             "native_target": "logical",
+            "unset_save_cadence": "trainer_default",
             "state_step": {
                 "path": "state-info.json", "field": "logical_step", "space": "logical",
                 "schema_version": 1, "backend": "ai-toolkit",
@@ -1097,6 +1098,9 @@ def training_state_contract_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         "required_files": ("model.safetensors", "optimizer.pt", "rng.pt", "state-info.json"),
         "native_progress": "logical",
         "native_target": "logical",
+        # Kura passes `save: {}`, so with no save_every set the trainer saves (and Kura captures
+        # state) at its own default cadence, not only at the end.
+        "unset_save_cadence": "trainer_default",
         "state_step": {
             "path": "state-info.json", "field": "logical_step", "space": "logical",
             "schema_version": 1, "backend": "ai-toolkit",
@@ -1173,7 +1177,9 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
         },
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps") or _nested(config, "save", "save_every"),
-            "keep_last": native.get("save_last_n_steps") or _nested(config, "save", "max_step_saves_to_keep"),
+            # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
+            "keep_last": native["save_last_n_steps"] if native.get("save_last_n_steps") is not None else _nested(config, "save", "max_step_saves_to_keep"),
+            "unset_keep_last": "trainer_default",
         },
     }
 

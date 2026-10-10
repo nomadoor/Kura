@@ -114,9 +114,10 @@ The plan's **Training state** block says what a run leaves to resume from:
   (`recovery.training_state.keep_generations`, default 2).
 - `cadence`: steps between state saves, from `backend.config.save_every_n_steps`
   (or AI-Toolkit's `native_config.save.save_every`); on a process-local Resume,
-  capped at the steps the run adds. When none is set the plan shows the
-  recipe's steps: sd-scripts and Musubi Tuner then save state only at the end,
-  while AI-Toolkit keeps its own default of every 1000 steps.
+  capped at the steps the run adds. When none is set, sd-scripts and Musubi
+  Tuner save state at the recipe's steps, which the plan shows, while
+  AI-Toolkit saves at its own default cadence, which the plan shows as
+  `trainer default`.
 - `capability`: how far the backend can restore this architecture and mode:
   `partial_resume`, `best_effort_resume`, or `unsupported`.
 - `saved`: whether Kura manages the state: enabled, Kura builds the command
