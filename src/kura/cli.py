@@ -121,9 +121,6 @@ def _validate_train_compile_intent(run: dict[str, Any]) -> None:
         raise ValueError("training run schema_version must be 2")
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = backend.get("name")
-    model = run.get("model") if isinstance(run.get("model"), dict) else {}
-    if not isinstance(model.get("base"), str) or not model.get("base").strip():
-        raise ValueError("training run model.base must be set before compile")
     native = backend_config(run, backend_name)
     state_policy = training_state_policy(run)
     if native.get("command") is not None and state_policy["enabled"]:
