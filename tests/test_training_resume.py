@@ -2055,10 +2055,13 @@ class ResumeRunTests(unittest.TestCase):
                 "type": "train",
                 "backend": {"name": "musubi-tuner", "config": {}},
                 "recipe": {"steps": 100, "seed": 1},
+                "parent_run": "source",
                 "continuation": {
                     "mode": "resume",
-                    "source": {"observed_step": 100},
+                    "source": {"artifact_id": "state-1", "manifest_sha256": "a" * 64, "observed_step": 100, "recipe_sha256": "b" * 64},
+                    "additional_steps": 50,
                     "target_step": 150,
+                    "restoration_contract": {"level": "best_effort_resume", "restored": [], "not_restored": []},
                 },
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
@@ -2182,6 +2185,45 @@ class ResumeRunTests(unittest.TestCase):
         (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
         return run_dir
 
+    def test_resume_step_request_errors_name_the_flag_and_create_no_run(self) -> None:
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+            self._source_run(root)
+            os.chdir(root)
+            try:
+                # Checked before any training state is looked up: none is published yet.
+                for additional, to_step, flag in ((0, None, "--additional-steps"), (None, 0, "--to-step"), (None, None, "--additional-steps")):
+                    stderr = io.StringIO()
+                    with self.subTest(additional=additional, to_step=to_step), patch("sys.stderr", stderr):
+                        code = cmd_run_resume(argparse.Namespace(source_run="source", additional_steps=additional, to_step=to_step, artifact=None, slug="more", executor=None, gpu=None))
+                    self.assertEqual(code, 1)
+                    self.assertIn(flag, stderr.getvalue())
+                candidate = root / "state"
+                candidate.mkdir()
+                (candidate / "optimizer.bin").write_bytes(_torch_archive_bytes(b"optimizer"))
+                publish_training_state(
+                    root,
+                    source_run="source",
+                    source_realization=None,
+                    backend="sd-scripts",
+                    observed_step=2000,
+                    candidate=candidate,
+                    native_format="accelerate-state-directory",
+                    restoration_contract={"level": "best_effort_resume", "restored": ["optimizer"], "not_restored": ["data_position"]},
+                )
+                for to_step in (1500, 2000):
+                    stderr = io.StringIO()
+                    with self.subTest(to_step=to_step), patch("sys.stderr", stderr):
+                        code = cmd_run_resume(argparse.Namespace(source_run="source", additional_steps=None, to_step=to_step, artifact=None, slug="more", executor=None, gpu=None))
+                    self.assertEqual(code, 1)
+                    self.assertIn("--to-step", stderr.getvalue())
+                    self.assertIn("2000", stderr.getvalue())
+            finally:
+                os.chdir(previous)
+            self.assertEqual([path.name for path in (root / "runs").iterdir()], ["source"])
+
     def test_resume_creates_derived_run_and_freezes_latest_artifact(self) -> None:
         previous = Path.cwd()
         with tempfile.TemporaryDirectory() as directory:
@@ -2246,7 +2288,13 @@ class ResumeRunTests(unittest.TestCase):
                 native_format="accelerate-state-directory",
                 restoration_contract={"level": "best_effort_resume", "restored": ["optimizer"], "not_restored": []},
             )
-            run = {"id": "derived", "continuation": {"mode": "resume", "source": {"artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"]}}}
+            run = {"id": "derived", "parent_run": "source", "continuation": {
+                "mode": "resume",
+                "source": {"artifact_id": manifest["id"], "manifest_sha256": manifest["manifest_sha256"], "observed_step": 10, "recipe_sha256": "b" * 64},
+                "additional_steps": 5,
+                "target_step": 15,
+                "restoration_contract": manifest["restoration_contract"],
+            }}
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
 

@@ -23,7 +23,7 @@ from kura.backends.musubi_native_selectors import musubi_native_task, wan_native
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.secrets import is_secret_name
-from kura.training_artifacts import training_state_managed
+from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
 from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
 
 
@@ -126,11 +126,12 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
     if run is None:
         raise ValueError("Musubi training command assembly requires the frozen run envelope")
     continuation = resume_intent(run)
+    steps = resume_steps(run, contract=training_state_contract_musubi(run))
     additional_steps = None
-    if continuation is not None:
-        additional_steps = continuation["target_step"] - continuation["source"]["observed_step"]
+    if steps is not None:
+        additional_steps = steps["additional_steps"]
         target_index = train.index("--max_train_steps") + 1
-        train[target_index] = str(additional_steps)
+        train[target_index] = str(steps["native_end"])
     policy = training_state_policy(run)
     if training_state_managed(run, training_state_contract_musubi(run)):
         epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
@@ -167,7 +168,7 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         if scheduler != "constant":
             raise ValueError("Musubi State Resume initially requires the constant scheduler")
         artifact_id = continuation["source"]["artifact_id"]
-        train.extend(["--resume", f"/workspace/artifacts/training-state/{artifact_id}/payload"])
+        train.extend(["--resume", training_state_payload(artifact_id)])
         commands.insert(
             commands.index(train),
             [

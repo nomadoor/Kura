@@ -45,8 +45,16 @@ class MonitorProjectionTests(unittest.TestCase):
             run = {
                 "id": "derived",
                 "type": "train",
+                "parent_run": "source",
                 "recipe": {"steps": 1000, "seed": 1},
-                "continuation": {"mode": "resume", "target_step": 1500},
+                # A valid Resume +500 from 1000: the monitor reads the total through run_envelope.final_step.
+                "continuation": {
+                    "mode": "resume",
+                    "source": {"artifact_id": "ts-source", "manifest_sha256": "a" * 64, "observed_step": 1000, "recipe_sha256": "b" * 64},
+                    "additional_steps": 500,
+                    "target_step": 1500,
+                    "restoration_contract": {"level": "best_effort_resume", "restored": ["model", "optimizer", "scheduler", "rng"], "not_restored": ["exact_dataloader_position"]},
+                },
             }
             (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running", "last_step": 1001}), encoding="utf-8")

@@ -17,8 +17,8 @@ import yaml
 from kura.secrets import is_secret_name, secret_values
 from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, file_lock
 from kura.records import record, without_record_fields
-from kura.run_envelope import common_recipe
-from kura.training_artifacts import is_training_state_output
+from kura.run_envelope import final_step, resume_intent
+from kura.training_artifacts import is_training_state_output, logical_step, read_resume_lock, resume_steps
 
 
 CONTAINER_WORKSPACE = "/workspace"
@@ -779,26 +779,20 @@ def _materialize_stdout_progress(run_dir: Path, status: dict[str, Any], *, state
 
 
 def _configured_final_step(run_dir: Path) -> tuple[int | None, int | None]:
-    """The step a finished run ends at by its frozen recipe (the Resume target, else the recipe's
-    steps) and, for a Resume, the source step it started from."""
+    """The step a finished run ends at by its frozen recipe (`final_step`) and, for a Resume,
+    the source step it started from. An unreadable manifest or invalid continuation gives neither."""
     try:
         run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return None, None
     if not isinstance(run, dict):
         return None, None
-    continuation = run.get("continuation") if isinstance(run.get("continuation"), dict) else {}
-    resume = continuation.get("mode") == "resume"
-    target = continuation.get("target_step") if resume else None
-    source = continuation.get("source") if resume and isinstance(continuation.get("source"), dict) else {}
-    source_step = source.get("observed_step") if isinstance(source.get("observed_step"), int) else None
-    if not isinstance(target, int):
-        try:
-            target = common_recipe(run).get("steps")
-        except ValueError:
-            return None, None
-    valid = isinstance(target, int) and not isinstance(target, bool) and target > 0
-    return (target if valid else None), source_step
+    try:
+        total = final_step(run)
+        continuation = resume_intent(run)
+    except ValueError:
+        return None, None
+    return total, (continuation["source"]["observed_step"] if continuation is not None else None)
 
 
 def _apply_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str) -> None:
@@ -811,39 +805,16 @@ def _apply_stdout_progress(run_dir: Path, status: dict[str, Any], *, state: str)
         if isinstance(total, int) and isinstance(configured_source, int) and not (run_dir / "resolved" / "training-state-source.lock.json").is_file():
             # A Resume whose source lock is absent still reports the steps this run added.
             status["current_run_step"] = status["current_run_total_steps"] = total - configured_source
-    resume_lock: dict[str, Any] = {}
-    lock_path = run_dir / "resolved" / "training-state-source.lock.json"
-    if lock_path.is_file():
-        try:
-            loaded = json.loads(lock_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            loaded = None
-        if isinstance(loaded, dict):
-            resume_lock = loaded
-    source_step = resume_lock.get("source_step")
-    target_step = resume_lock.get("target_step")
-    additional_steps = resume_lock.get("additional_steps")
-    if (
-        isinstance(step, int)
-        and isinstance(source_step, int)
-        and isinstance(target_step, int)
-        and isinstance(additional_steps, int)
-    ):
-        current_step = step if resume_lock.get("native_progress") == "process_local" else max(0, step - source_step)
-        status["current_run_step"] = min(current_step, additional_steps)
-        status["current_run_total_steps"] = additional_steps
-        step = source_step + current_step if resume_lock.get("native_progress") == "process_local" else step
-        total = target_step
-    if (
-        state == "completed"
-        and isinstance(source_step, int)
-        and isinstance(target_step, int)
-        and isinstance(additional_steps, int)
-    ):
-        status["current_run_step"] = additional_steps
-        status["current_run_total_steps"] = additional_steps
-        step = target_step
-        total = target_step
+    lock = read_resume_lock(run_dir)
+    steps = resume_steps({}, lock=lock) if lock is not None else None
+    if steps is not None and isinstance(step, int):
+        step = logical_step(step, steps)
+        status["current_run_step"] = min(max(0, step - steps["source_step"]), steps["additional_steps"])
+        status["current_run_total_steps"] = steps["additional_steps"]
+        total = steps["target_step"]
+    if steps is not None and state == "completed":
+        status["current_run_step"] = status["current_run_total_steps"] = steps["additional_steps"]
+        step = total = steps["target_step"]
     if total is not None:
         existing_total = status.get("total_steps")
         status["total_steps"] = max(existing_total, total) if isinstance(existing_total, int) else total

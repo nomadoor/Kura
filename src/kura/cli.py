@@ -44,7 +44,7 @@ from kura.notifications import notification_channels as _notification_channels
 from kura.notifications import notify as _notify
 from kura.paths import inspect_workspace_symlinks, local_docker_mounts, local_hf_cache, relative_symlink_target, to_workspace_relative
 from kura.render import compile_render
-from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
+from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, resume_step_request, resume_target_step, run_executor, training_state_policy, validate_train_run_fields, validated_recipe, without_retired_train_run_keys
 from kura.provenance import adapter_source_identity, image_reference_identity, training_runtime_contract
 from kura.run_commands import _parse_duration_seconds
 from kura.run_commands import _runpod_run_over_ssh
@@ -280,12 +280,10 @@ def cmd_run_resume(args: argparse.Namespace) -> int:
         return 1
     additional_steps = args.additional_steps
     to_step = args.to_step
-    if (additional_steps is None) == (to_step is None):
-        print("cannot create Resume run: specify exactly one of --additional-steps or --to-step", file=sys.stderr)
-        return 1
-    requested = additional_steps if additional_steps is not None else to_step
-    if isinstance(requested, bool) or not isinstance(requested, int) or requested <= 0:
-        print("cannot create Resume run: step target must be a positive integer", file=sys.stderr)
+    try:
+        resume_step_request(additional_steps, to_step)
+    except ValueError as exc:
+        print(f"cannot create Resume run: {exc}", file=sys.stderr)
         return 1
     safe_slug = re.sub(r"[^a-z0-9-]+", "-", str(args.slug or "resume").lower()).strip("-")
     if not safe_slug:
@@ -337,8 +335,7 @@ def _create_resume_derived_run(
     source_step = artifact.get("observed_step")
     if isinstance(source_step, bool) or not isinstance(source_step, int) or source_step < 0:
         raise ValueError("training-state artifact has no valid observed step")
-    if to_step is not None and to_step <= source_step:
-        raise ValueError(f"--to-step must be greater than the source step {source_step}")
+    target_step = resume_target_step(source_step, additional_steps, to_step)
 
     timestamp = _now()
     run_id = f"{timestamp:%Y%m%d-%H%M}_{safe_slug}_{secrets.token_hex(2)}"
@@ -361,7 +358,6 @@ def _create_resume_derived_run(
     if args.gpu is not None:
         compute["gpu"] = args.gpu
     derived["compute"] = compute
-    target_step = to_step if to_step is not None else source_step + additional_steps
     source_fingerprint = recipe_fingerprint(source_run)
     continuation: dict[str, Any] = {
         "mode": "resume",
@@ -379,6 +375,7 @@ def _create_resume_derived_run(
     else:
         continuation["to_step"] = to_step
     derived["continuation"] = continuation
+    resume_intent(derived)
 
     try:
         run_dir.mkdir(parents=True, exist_ok=False)

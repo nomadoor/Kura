@@ -18,6 +18,7 @@ from kura.dataset_manifest import measure_manifest
 from kura.fsio import atomic_write_json
 from kura.media_types import KNOWN_MEDIA_SUFFIXES
 from kura.paths import to_workspace_relative
+from kura.training_artifacts import training_state_location, training_state_payload
 
 
 Project = Callable[[dict[str, Any]], dict[str, Any]]
@@ -1561,11 +1562,7 @@ def _resume_state_mount(workspace: Path, run_dir: Path) -> dict[str, str] | None
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("cannot read the frozen training-state source lock") from exc
     artifact_id = lock.get("artifact_id") if isinstance(lock, dict) else None
-    expected = (
-        f"/workspace/artifacts/training-state/{artifact_id}/payload"
-        if isinstance(artifact_id, str) and artifact_id
-        else None
-    )
+    expected = training_state_payload(artifact_id) if isinstance(artifact_id, str) and artifact_id else None
     if expected is None or lock.get("native_state_path") != expected:
         raise ValueError("training-state source lock has an invalid native state path")
     source = workspace / "artifacts" / "training-state" / artifact_id
@@ -1574,7 +1571,7 @@ def _resume_state_mount(workspace: Path, run_dir: Path) -> dict[str, str] | None
         raise ValueError(f"required training-state payload does not exist: {payload}")
     return {
         "source": str(source.resolve(strict=True)),
-        "target": f"/workspace/artifacts/training-state/{artifact_id}",
+        "target": training_state_location(artifact_id),
         "mode": "ro",
     }
 

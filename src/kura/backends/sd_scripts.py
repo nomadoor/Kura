@@ -18,7 +18,7 @@ from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
 from kura.secrets import is_secret_name
-from kura.training_artifacts import training_state_managed
+from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
 
 
@@ -275,7 +275,7 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
             raise ValueError("sd-scripts State Resume initially requires the constant scheduler")
         if native.get("gradient_accumulation_steps", 1) != 1:
             raise ValueError("sd-scripts State Resume initially requires gradient_accumulation_steps=1")
-        native_steps = continuation["target_step"]
+        native_steps = resume_steps(run, contract=training_state_contract_sd_scripts(run))["native_end"]
     args = [
         ENTRYPOINTS[(architecture, mode)],
         "--dataset_config", f"/workspace/runs/{run['id']}/resolved/sd-scripts/dataset.toml",
@@ -338,7 +338,7 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
         args.extend(["--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_window)])
     if continuation is not None:
         artifact_id = continuation["source"]["artifact_id"]
-        args.extend(["--resume", f"/workspace/artifacts/training-state/{artifact_id}/payload", "--skip_until_initial_step"])
+        args.extend(["--resume", training_state_payload(artifact_id), "--skip_until_initial_step"])
     if _truthy(native.get("cache_latents")) or _truthy(native.get("cache_latents_to_disk")):
         args.append("--cache_latents")
     if _truthy(native.get("cache_latents_to_disk")):

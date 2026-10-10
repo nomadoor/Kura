@@ -18,7 +18,7 @@ import yaml
 
 from kura.fsio import atomic_write_json, file_lock
 from kura.install_source import kura_continuity
-from kura.run_envelope import common_recipe, resume_intent, training_state_policy
+from kura.run_envelope import resume_intent, training_state_policy
 
 
 ARTIFACT_SCHEMA_VERSION = 1
@@ -192,7 +192,7 @@ def verify_training_state(workspace: Path, manifest: dict[str, Any]) -> Path:
     if isinstance(expected_manifest, str) and stored["manifest_sha256"] != expected_manifest:
         raise ValueError(f"training-state manifest digest mismatch: {artifact_id}")
     payload_value = stored.get("payload")
-    expected_payload = f"artifacts/training-state/{artifact_id}/payload"
+    expected_payload = training_state_payload(artifact_id, root=None)
     if payload_value != expected_payload:
         raise ValueError(f"training-state payload path is invalid: {artifact_id}")
     payload = workspace / expected_payload
@@ -396,7 +396,7 @@ def publish_training_state(
             "source_realization": source_realization,
             "save_event_id": save_event_id or f"{source_run}:step:{observed_step}",
             "observed_step": observed_step,
-            "payload": f"artifacts/training-state/{artifact_id}/payload",
+            "payload": training_state_payload(artifact_id, root=None),
             "files": inventory,
             "runtime_identity": runtime_identity or {},
             "compatibility": compatibility or {},
@@ -466,20 +466,114 @@ def recipe_fingerprint(run: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def resume_artifact_directory(workspace: Path, run: dict[str, Any]) -> Path | None:
-    continuation = run.get("continuation")
-    if not isinstance(continuation, dict) or continuation.get("mode") != "resume":
+def training_state_location(artifact_id: str, root: str | None = "/workspace") -> str:
+    """Where a training-state artifact lives below a workspace root; `root=None` gives the relative path."""
+    relative = f"artifacts/training-state/{artifact_id}"
+    return relative if root is None else f"{root.rstrip('/')}/{relative}"
+
+
+def training_state_payload(artifact_id: str, root: str | None = "/workspace") -> str:
+    """The artifact's native state directory, which a trainer resumes from."""
+    return f"{training_state_location(artifact_id, root)}/payload"
+
+
+def verified_resume_source(workspace: Path, run: dict[str, Any], *, verify: bool = True) -> dict[str, Any] | None:
+    """The training-state manifest a Resume run names, checked against its frozen digest.
+
+    The one place every reader (compile, plan, staging, transfer) loads the source; a
+    malformed continuation fails with `resume_intent`'s message. `verify=False` skips
+    re-hashing the payload, for display-only sizing.
+    """
+    continuation = resume_intent(run)
+    if continuation is None:
         return None
-    source = continuation.get("source")
-    artifact_id = source.get("artifact_id") if isinstance(source, dict) else None
-    expected = source.get("manifest_sha256") if isinstance(source, dict) else None
-    if not isinstance(artifact_id, str) or not isinstance(expected, str):
-        raise ValueError("Resume continuation requires source artifact_id and manifest_sha256")
-    manifest = load_training_state(workspace, artifact_id)
-    if manifest["manifest_sha256"] != expected:
-        raise ValueError(f"training-state manifest digest mismatch: {artifact_id}")
-    verify_training_state(workspace, manifest)
-    return _artifact_dir(workspace, artifact_id)
+    source = continuation["source"]
+    manifest = load_training_state(workspace, source["artifact_id"])
+    if manifest["manifest_sha256"] != source["manifest_sha256"]:
+        raise ValueError(f"training-state manifest digest mismatch: {source['artifact_id']}")
+    if verify:
+        verify_training_state(workspace, manifest)
+    return manifest
+
+
+def resume_steps(
+    run: dict[str, Any],
+    *,
+    lock: dict[str, Any] | None = None,
+    contract: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The one Resume step arithmetic: logical source and target, and the trainer's native range.
+
+    `native_progress` says whether the trainer counts its steps from zero in this process
+    (`process_local`) or continues the logical count; `native_target` says the same for the
+    target the trainer is given, which runs from `native_start` to `native_end`. Read from a
+    frozen source lock when one is given, else from the run's continuation and its backend's
+    training-state contract (a backend building its own command passes its contract).
+    """
+    if lock is not None:
+        source_step, target_step = lock.get("source_step"), lock.get("target_step")
+        if not all(isinstance(value, int) and not isinstance(value, bool) for value in (source_step, target_step)):
+            raise ValueError("the frozen training-state source lock has no integer source_step and target_step; recompile the run")
+        progress = lock.get("native_progress", "logical")
+        space = lock.get("native_target", "logical")
+    else:
+        continuation = resume_intent(run)
+        if continuation is None:
+            return None
+        contract = training_state_contract(run) if contract is None else contract
+        source_step, target_step = continuation["source"]["observed_step"], continuation["target_step"]
+        progress = contract.get("native_progress", "logical")
+        space = contract.get("native_target", "logical")
+    process_local = space == "process_local"
+    return {
+        "source_step": source_step,
+        "target_step": target_step,
+        "additional_steps": target_step - source_step,
+        "native_progress": progress,
+        "native_target": space,
+        "native_start": 0 if process_local else source_step,
+        "native_end": target_step - source_step if process_local else target_step,
+    }
+
+
+def logical_step(native_step: int, steps: dict[str, Any] | None) -> int:
+    """A trainer-reported step as a logical step: process-local progress starts at the source step.
+
+    `steps` is a frozen source lock or `resume_steps`; None (not a Resume) leaves the step as is.
+    """
+    if steps is not None and steps.get("native_progress") == "process_local":
+        return steps["source_step"] + native_step
+    return native_step
+
+
+def frozen_resume_steps(run_dir: Path, run: dict[str, Any]) -> dict[str, Any] | None:
+    """A run's Resume steps, from its frozen source lock when compile wrote a readable one."""
+    lock = read_resume_lock(run_dir)
+    return resume_steps(run, lock=lock) if lock is not None else resume_steps(run)
+
+
+def read_resume_lock(run_dir: Path) -> dict[str, Any] | None:
+    """The run's frozen training-state source lock, or None when it has none.
+
+    A lock that exists but cannot be read raises: reading it as no lock would treat a
+    Resume as a fresh run and record its native steps as logical ones.
+    """
+    path = run_dir / "resolved" / "training-state-source.lock.json"
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("cannot read the frozen training-state source lock; recompile the run") from exc
+    if not isinstance(loaded, dict):
+        raise ValueError("the frozen training-state source lock is not a mapping; recompile the run")
+    return loaded
+
+
+def resume_artifact_directory(workspace: Path, run: dict[str, Any]) -> Path | None:
+    if verified_resume_source(workspace, run) is None:
+        return None
+    return _artifact_dir(workspace, run["continuation"]["source"]["artifact_id"])
 
 
 def compile_resume_lock(
@@ -497,10 +591,7 @@ def compile_resume_lock(
     current_fingerprint = recipe_fingerprint(run)
     if current_fingerprint != source["recipe_sha256"]:
         raise ValueError("Resume training recipe changed after the derived run was created; create a Fork from Weight instead")
-    manifest = load_training_state(workspace, source["artifact_id"])
-    if manifest["manifest_sha256"] != source["manifest_sha256"]:
-        raise ValueError(f"training-state manifest digest mismatch: {source['artifact_id']}")
-    verify_training_state(workspace, manifest)
+    manifest = verified_resume_source(workspace, run)
     if manifest.get("source_run") != run.get("parent_run"):
         raise ValueError("Resume artifact source run does not match parent_run")
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
@@ -558,7 +649,7 @@ def compile_resume_lock(
             if not isinstance(source_contract, str) or source_contract != target_contract:
                 raise ValueError("Resume cross-executor runtime pair is not verified compatible")
     artifact_id = manifest["id"]
-    contract = training_state_contract(run)
+    steps = resume_steps(run)
     lock = {
         "schema_version": 1,
         "mode": "resume",
@@ -566,12 +657,12 @@ def compile_resume_lock(
         "artifact_id": artifact_id,
         "manifest_sha256": manifest["manifest_sha256"],
         "source_realization": manifest.get("source_realization"),
-        "source_step": manifest["observed_step"],
-        "target_step": continuation["target_step"],
-        "additional_steps": continuation["target_step"] - manifest["observed_step"],
-        "native_progress": contract.get("native_progress", "logical"),
-        "native_target": contract.get("native_target", "logical"),
-        "native_state_path": f"/workspace/artifacts/training-state/{artifact_id}/payload",
+        "source_step": steps["source_step"],
+        "target_step": steps["target_step"],
+        "additional_steps": steps["additional_steps"],
+        "native_progress": steps["native_progress"],
+        "native_target": steps["native_target"],
+        "native_state_path": training_state_payload(artifact_id),
         "restoration_contract": manifest["restoration_contract"],
         "runtime_identity": manifest.get("runtime_identity") or {},
         "compatibility": compatibility,
@@ -712,7 +803,6 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     native_format = contract["native_format"]
     required = contract["required_files"]
     restoration = contract["restoration_contract"]
-    continuation = resume_intent(run)
     if any(not (candidate / name).is_file() for name in required):
         return None
     marker = contract.get("state_step") if isinstance(contract.get("state_step"), dict) else None
@@ -720,12 +810,10 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     if marker is not None and marked_step is None:
         return None
     if marker is not None and marker.get("space") == "logical":
-        logical_step = marked_step
+        step = marked_step
     else:
-        logical_step = observed_step
-        if continuation is not None and contract.get("native_progress") == "process_local":
-            logical_step = continuation["source"]["observed_step"] + observed_step
-    if not isinstance(logical_step, int):
+        step = logical_step(observed_step, frozen_resume_steps(run_dir, run))
+    if not isinstance(step, int):
         return None
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = str(backend.get("name"))
@@ -734,14 +822,14 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
             train_state = json.loads((candidate / "train_state.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        if not isinstance(train_state, dict) or train_state.get("current_step") != logical_step:
+        if not isinstance(train_state, dict) or train_state.get("current_step") != step:
             return None
     return publish_training_state(
         workspace,
         source_run=run_dir.name,
         source_realization=status.get("last_realization") if isinstance(status.get("last_realization"), str) else None,
         backend=backend_name,
-        observed_step=logical_step,
+        observed_step=step,
         candidate=candidate,
         native_format=native_format,
         restoration_contract=restoration,
@@ -798,7 +886,6 @@ def publish_completed_training_states(
     continuation = resume_intent(run)
     output_name = str((run.get("id") if continuation is not None else config.get("output_name")) or run.get("id") or run_dir.name)
     pattern = re.compile(rf"^{re.escape(output_name)}-step(?P<step>\d{{4,}})-state$")
-    final_step = continuation["target_step"] if continuation is not None else common_recipe(run).get("steps")
     published: list[dict[str, Any]] = []
     outputs = run_dir / "outputs"
     for candidate in sorted(outputs.glob("*-state")) if outputs.is_dir() else []:
@@ -807,7 +894,7 @@ def publish_completed_training_states(
             continue
         if match is not None:
             observed_step = int(match.group("step"))
-        elif allow_final_state and candidate.name == f"{output_name}-state" and isinstance(final_step, int):
+        elif allow_final_state and candidate.name == f"{output_name}-state":
             marker = contract.get("state_step") if isinstance(contract.get("state_step"), dict) else None
             observed_step = _read_candidate_step(candidate, marker)
             if observed_step is None:
