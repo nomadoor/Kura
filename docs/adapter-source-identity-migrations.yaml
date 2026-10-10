@@ -11,9 +11,10 @@ records:
   - id: musubi-flux2-variant-one-owner-musubi-tuner-2026-10-08
     backend: musubi-tuner
     reason: >-
-      A FLUX.2 Klein variant is decided by one rule with one name table; every recorded evidence
-      run names a recognized variant without conflicting values, so its trainer command,
-      downloaded files, and outputs are unchanged.
+      A FLUX.2 Klein variant is decided by one rule with one name table, and a model_version
+      Musubi Tuner does not accept is refused at compile; every recorded evidence run names a
+      recognized variant without conflicting values, so its trainer command, downloaded files,
+      and outputs are unchanged.
     behavior_changed: false
     evidence_ids:
     - musubi-framepack-2026-09-30-0201
@@ -36,7 +37,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 56e30e5b9ebbbdbb46835f749159bec6c2a8135d3fd79ad284efefc6d3f75643
+      value: 0b94ab255fa5b2e8356c1899b0887f9cfdae8e790adbea9fbbe48bbefc151d58
   - id: state-dirs-and-cadence-display-revert-sd-scripts-2026-10-10
     backend: sd-scripts
     reason: >-
