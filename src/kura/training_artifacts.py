@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, NamedTuple
 
 import yaml
 
@@ -708,6 +708,42 @@ def checkpoint_step(name: str) -> int | None:
         return None
     step_form, underscore_form = matches[-1]
     return int(step_form or underscore_form)
+
+
+class CheckpointFiles(NamedTuple):
+    """The weight files a run saved: step-named checkpoints and the unstepped final weights."""
+
+    stepped: list[Path]
+    final: list[Path]
+
+    @property
+    def saved(self) -> int:
+        """How many checkpoints the run saved: its step-named ones, or its final weights when none has a step."""
+        return len(self.stepped) or len(self.final)
+
+
+def checkpoint_files(paths: Iterable[Path], run_id: str) -> CheckpointFiles:
+    """Sort a run's outputs, relative to its outputs directory, into checkpoints, for every reader that counts them.
+
+    A checkpoint is a .safetensors file outside a native training-state
+    directory; its name says whether it is a step's checkpoint or the final weights.
+    An older AI-Toolkit layout wrote below `<run id>/`; when weights also sit at the
+    top, those are copies and are not counted again. The state check reads a path
+    below `<run id>/` from there, so a run ID ending in `-state` is not a state directory.
+    """
+    legacy_root = Path(run_id)
+    weights = [path for path in paths if path.suffix.lower() == ".safetensors"]
+    if any(len(path.parts) == 1 for path in weights):
+        weights = [path for path in weights if not path.is_relative_to(legacy_root)]
+    weights = [
+        path
+        for path in weights
+        if not is_training_state_output(path.relative_to(legacy_root) if path.is_relative_to(legacy_root) else path)
+    ]
+    return CheckpointFiles(
+        stepped=[path for path in weights if checkpoint_step(path.name) is not None],
+        final=[path for path in weights if checkpoint_step(path.name) is None],
+    )
 
 
 # What every executor records when a finished run that must leave training state left none.

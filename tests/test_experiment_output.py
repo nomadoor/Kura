@@ -106,7 +106,7 @@ class ExperimentOutputTests(unittest.TestCase):
 
         self.assertIn("completed  exit 0  5h 21m", output)
         self.assertIn("intent     Compare the control recipe.", output)
-        self.assertIn("produced   3 checkpoints  step 100-200", output)
+        self.assertIn("produced   2 checkpoints  step 100-200", output)
         self.assertIn("final  control.safetensors", output)
         self.assertNotIn("outputs/control-step", output)
         self.assertIn("Experiment anima-control", output)

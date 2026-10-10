@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 import yaml
 
-from kura.training_artifacts import checkpoint_step
+from kura.training_artifacts import checkpoint_files
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
@@ -768,12 +768,7 @@ def _outputs_path(run_dir: Path, status: dict[str, Any]) -> Path:
 def _checkpoint_count(outputs: Path) -> int:
     if not outputs.is_dir():
         return 0
-    weights = list(outputs.rglob("*.safetensors"))
-    if any(path.parent == outputs for path in weights):
-        legacy_root = outputs / outputs.parent.name
-        weights = [path for path in weights if not path.is_relative_to(legacy_root)]
-    scheduled = [path for path in weights if checkpoint_step(path.name) is not None]
-    return len(scheduled) if scheduled else len(weights)
+    return checkpoint_files((path.relative_to(outputs) for path in outputs.rglob("*.safetensors")), outputs.parent.name).saved
 
 
 def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:

@@ -11,7 +11,7 @@ from typing import Any
 
 import yaml
 
-from kura.training_artifacts import checkpoint_step
+from kura.training_artifacts import checkpoint_files, checkpoint_step
 from kura.executors.common import format_launch_phases, format_seconds, launch_phases
 from kura.run_envelope import run_executor
 
@@ -261,21 +261,20 @@ def _format_duration(started: Any, ended: Any) -> str | None:
     return format_seconds((end - start).total_seconds())
 
 
-def _output_lines(outputs: Any) -> list[str]:
+def _output_lines(outputs: Any, run_id: str) -> list[str]:
     paths = [Path(value) for value in outputs if isinstance(value, str)] if isinstance(outputs, list) else []
     if not paths:
         return ["produced   0 outputs"]
-    checkpoints = [path for path in paths if path.suffix.lower() == ".safetensors"]
-    steps = sorted({step for path in checkpoints if (step := checkpoint_step(path.name)) is not None})
-    final = [path.name for path in checkpoints if checkpoint_step(path.name) is None]
-    if checkpoints:
-        detail = f"{len(checkpoints)} checkpoint{'s' if len(checkpoints) != 1 else ''}"
+    checkpoints = checkpoint_files((path.relative_to("outputs") if path.is_relative_to("outputs") else path for path in paths), run_id)
+    steps = sorted({checkpoint_step(path.name) for path in checkpoints.stepped})
+    if checkpoints.saved:
+        detail = f"{checkpoints.saved} checkpoint{'s' if checkpoints.saved != 1 else ''}"
         if steps:
             detail += f"  step {steps[0]}-{steps[-1]}" if len(steps) > 1 else f"  step {steps[0]}"
         lines = [f"produced   {detail}"]
-        if final:
-            lines.append(f"           final  {final[-1]}")
-        other = len(paths) - len(checkpoints)
+        if checkpoints.final:
+            lines.append(f"           final  {checkpoints.final[-1].name}")
+        other = len(paths) - len(checkpoints.stepped) - len(checkpoints.final)
         if other:
             lines.append(f"           plus {other} other output{'s' if other != 1 else ''}")
         return lines
@@ -293,7 +292,7 @@ def format_run_completion(workspace: Path, run_dir: Path, status: dict[str, Any]
     if duration:
         headline += f"  {duration}"
     intent = " ".join(str(run.get("intent") or "").split()) or "(not recorded)"
-    lines = [headline, f"intent     {intent}", *_output_lines(status.get("outputs"))]
+    lines = [headline, f"intent     {intent}", *_output_lines(status.get("outputs"), run_dir.name)]
     realization = status.get("last_realization")
     if isinstance(realization, str) and realization.endswith(".json"):
         timing = format_launch_phases(launch_phases(run_dir, Path(realization).stem))
