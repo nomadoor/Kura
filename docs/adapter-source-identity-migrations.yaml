@@ -11,9 +11,9 @@ records:
   - id: runpod-executor-acceptance-4-cost-and-messages-2026-10-08
     executor: runpod
     reason: >-
-      The plan and the billed launch confirmation show the RunPod cost ceiling, and staging
-      prints a summary instead of every file; the Pod, trainer commands, inputs, and outputs are
-      unchanged.
+      The plan, the billed launch confirmation, and kura run lease show the RunPod cost ceiling,
+      and staging prints a summary instead of every file; the Pod, trainer commands, inputs, and
+      outputs are unchanged.
     behavior_changed: false
     evidence_ids:
     - ai-toolkit-flux2-klein-4b-2026-10-02-2236
@@ -53,7 +53,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: d0c259226f8a0cc5d5494a0955c02081659c1ee89d08be1ed7bcb77086ec0b17
+      value: 8e9f0d6d12fa988687d2d044002d14278f6cb4bfed8d9a988a47370400b94839
   - id: checkpoint-peak-disk-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-
