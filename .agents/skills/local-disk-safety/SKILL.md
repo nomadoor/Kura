@@ -124,6 +124,11 @@ or WSL/VHDX/Windows-side operations.
 - Local Docker launch adds known write estimates to the configured free-space
   floor. Musubi Hugging Face downloads use HEAD metadata when available, and
   explicitly allowed many-checkpoint runs add a conservative checkpoint budget.
+  That budget counts the most checkpoints on disk at once while training:
+  retention that prunes during training (AI-Toolkit and sd-scripts
+  `save_last_n_steps`) bounds it near the kept count, while Musubi Tuner's
+  `prune_checkpoints_before_step` runs only after training and AI-Toolkit's
+  unset default is not assumed, so those count every save.
 - On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch

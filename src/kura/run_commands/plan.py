@@ -46,7 +46,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import expected_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import expected_checkpoints, managed_state_cadence, peak_checkpoints, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -767,10 +767,12 @@ def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
 
 
 def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
+    """The checkpoint bytes an explicitly allowed many-checkpoint run writes, counted at the
+    peak the trainer's retention leaves on disk while it trains (`peak_checkpoints`)."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is not True:
         return {"bytes": 0, "count": 0}
-    count = expected_checkpoints(_adapter_display(run).get("checkpoint") or {}, trained_steps(run))
+    count = peak_checkpoints(_adapter_display(run).get("checkpoint") or {}, trained_steps(run))
     if count is None:
         return {"bytes": 0, "count": 0}
     per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)

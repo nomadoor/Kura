@@ -182,9 +182,9 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
             "_disk_warnings": (plan, lambda: plan._disk_warnings(run, {"save_every_n_steps": 10})),
             "_checkpoint_count_safety": (plan, lambda: plan._checkpoint_count_safety(run, trained_steps(run))),
             "_checkpoint_preflight_report": (plan, lambda: plan._checkpoint_preflight_report(allowed)),
-            "_estimate_checkpoint_write_bytes": (plan, lambda: plan._estimate_checkpoint_write_bytes(allowed)),
             "_checkpoint_expected": (monitor, lambda: _monitor_expected(run, 10)),
         }
+        # The disk estimate counts the peak instead (PeakCheckpointsTests).
         for name, (module, call) in cases.items():
             with self.subTest(place=name), patch.object(
                 module, "expected_checkpoints", wraps=training_artifacts.expected_checkpoints,
@@ -204,12 +204,13 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         self.assertIn("about 20 checkpoints without pruning", refusals[0])
         self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 20)
         self.assertEqual(_monitor_expected(run, checkpoint), 20)
-        # A positive keep-last leaves fewer: no count, no warning, no refusal, in both.
+        # A positive keep-last leaves fewer: no count, no warning, no refusal, in both; the disk
+        # estimate counts the peak (the kept saves plus the one written before the cleanup).
         run["backend"]["config"]["native_config"]["save"]["max_step_saves_to_keep"] = 3
         checkpoint = plan._adapter_display(run)["checkpoint"]
         self.assertEqual(plan._disk_warnings(run, checkpoint), [])
         self.assertEqual([record for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"], [])
-        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 0)
+        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 4)
         self.assertIsNone(_monitor_expected(run, checkpoint))
 
 
@@ -229,8 +230,9 @@ def _counts(run: dict[str, Any]) -> dict[str, Any]:
 class CheckpointRetentionTests(unittest.TestCase):
     """Each backend's display says whether its trainer prunes step checkpoints, and every count agrees."""
 
-    def _assert_pruned(self, run: dict[str, Any]) -> None:
-        self.assertEqual(_counts(run), {"disk_warnings": [], "refusals": [], "preflight": [], "write_count": 0, "monitor_expected": None})
+    def _assert_pruned(self, run: dict[str, Any], peak: int) -> None:
+        """No kept count, so no warning, refusal, or monitor expectation; the disk estimate counts the peak."""
+        self.assertEqual(_counts(run), {"disk_warnings": [], "refusals": [], "preflight": [], "write_count": peak, "monitor_expected": None})
 
     def _assert_counted(self, run: dict[str, Any], expected: int) -> None:
         counts = _counts(run)
@@ -246,7 +248,8 @@ class CheckpointRetentionTests(unittest.TestCase):
             run = ai_toolkit_run()
             run["backend"]["config"].update(config)
             with self.subTest(config=config):
-                self._assert_pruned(run)
+                # Kura does not copy the trainer's default count: the peak is every save.
+                self._assert_pruned(run, 20)
 
     def test_ai_toolkit_keep_last_zero_keeps_every_save(self) -> None:
         for config in (
@@ -270,9 +273,12 @@ class CheckpointRetentionTests(unittest.TestCase):
         sd["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 100})
         musubi = musubi_run()
         musubi["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
-        for run in (sd, musubi):
+        # sd-scripts prunes during training: a 100-step window over saves every 50 keeps 3
+        # (100 // 50 + 1) and holds a fourth while it writes the next. Musubi prunes after
+        # training ends, so every save is on disk at the peak.
+        for run, peak in ((sd, 4), (musubi, 20)):
             with self.subTest(backend=run["backend"]["name"]):
-                self._assert_pruned(run)
+                self._assert_pruned(run, peak)
 
     def test_the_guard_points_to_each_backends_own_retention(self) -> None:
         run = sd_scripts_run()
@@ -281,6 +287,70 @@ class CheckpointRetentionTests(unittest.TestCase):
         for text in (counts["refusals"][0], counts["disk_warnings"][0]):
             self.assertNotIn("prune_checkpoints_before_step", text)
             self.assertIn("kura run capabilities sd-scripts", text)
+
+
+class PeakCheckpointsTests(unittest.TestCase):
+    """How many checkpoints are on disk at once is decided with the retention rules, and only the disk estimate reads it."""
+
+    def test_the_peak_follows_when_each_trainer_prunes(self) -> None:
+        peak = training_artifacts.peak_checkpoints
+        self.assertEqual(peak({"save_every_n_steps": 50}, 1000), 20)
+        self.assertEqual(peak({"save_every_n_steps": 5000}, 1000), 1)
+        self.assertIsNone(peak({"save_every_n_steps": 50}, None))
+        self.assertIsNone(peak({}, 1000))
+        # Musubi Tuner prunes after training: every save is on disk first.
+        self.assertEqual(peak({"save_every_n_steps": 50, "prune_before_step": 1000}, 1000), 20)
+        # AI-Toolkit removes older saves after writing the new one: keep_last plus one.
+        self.assertEqual(peak({"save_every_n_steps": 50, "keep_last": 3}, 1000), 4)
+        self.assertEqual(peak({"save_every_n_steps": 50, "keep_last": "3"}, 1000), 4)
+        self.assertEqual(peak({"save_every_n_steps": 50, "keep_last": 30}, 1000), 20)
+        self.assertEqual(peak({"save_every_n_steps": 50, "keep_last": 0}, 1000), 20)
+        # Its unset default is not copied: the conservative bound is every save.
+        self.assertEqual(peak({"save_every_n_steps": 50, "unset_keep_last": "trainer_default"}, 1000), 20)
+        # sd-scripts keeps the saves within the window (window // every + 1) and removes the
+        # oldest after writing the next one.
+        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 100}, 1000), 4)
+        self.assertEqual(peak({"save_every_n_steps": 10, "retention_window_steps": 30}, 1000), 5)
+        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 10}, 1000), 2)
+        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 5000}, 1000), 20)
+
+    def test_the_disk_estimate_reads_the_peak_and_the_counts_do_not(self) -> None:
+        run = sd_scripts_run()
+        run["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 100})
+        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
+        checkpoint = plan._adapter_display(run)["checkpoint"]
+        with patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as owner:
+            self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 4)
+            owner.assert_called_once_with(checkpoint, 1000)
+        with patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as owner:
+            self.assertEqual(plan._disk_warnings(run, checkpoint), [])
+            plan._checkpoint_count_safety(run, 1000)
+            plan._checkpoint_preflight_report(run)
+            self.assertIsNone(_monitor_expected(run, checkpoint))
+            owner.assert_not_called()
+
+    def test_local_and_runpod_disk_preflights_count_the_same_peak(self) -> None:
+        for name, run, retention, peak in (
+            ("sd-scripts", sd_scripts_run(), {"save_last_n_steps": 100}, 4),
+            ("musubi-tuner", musubi_run(), {"prune_checkpoints_before_step": 1000}, 20),
+        ):
+            run["backend"]["config"].update({"save_every_n_steps": 50, **retention})
+            run["safety"] = {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 1, "allow_storage_risk": True}
+            expected = {"bytes": peak * 1024**3, "count": peak, "per_checkpoint_gib": 1}
+            with self.subTest(backend=name), tempfile.TemporaryDirectory() as directory:
+                with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
+                        patch.object(plan, "_disk_cache_estimate", return_value={}):
+                    runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 500}, {"bytes": 0})
+                with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                        patch.object(plan, "_disk_cache_estimate", return_value={}):
+                    local = plan._local_launch_disk_preflight(
+                        Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
+                        enforce_model_download_safety=False, download_estimate={"bytes": 0},
+                    )
+                self.assertEqual(runpod["estimates"]["checkpoints"], expected)
+                self.assertEqual(local["estimates"]["checkpoints"], expected)
+                self.assertEqual(runpod["estimated_write_bytes"], expected["bytes"])
+                self.assertEqual(local["paths"]["workspace"]["estimated_write_bytes"], expected["bytes"])
 
 
 class FreshRunPlanTests(unittest.TestCase):
