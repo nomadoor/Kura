@@ -1808,6 +1808,17 @@ def cmd_run_logs(args: argparse.Namespace) -> int:
         return 1
 
 
+def _stage_summary(run_dir: Path, record: dict[str, Any]) -> str:
+    """What staging wrote, in a few lines; the file list stays in the manifest and the stage record."""
+    files = record.get("entries") if isinstance(record.get("entries"), list) else record.get("files")
+    count = len(files) if isinstance(files, list) else 0
+    lines = [f"staged {count} files ({_format_bytes(record.get('total_bytes'))}) for upload"]
+    for label, key in (("archive", "archive"), ("file list with sha256", "manifest"), ("stage record", "stage_record")):
+        if isinstance(record.get(key), str) and record[key]:
+            lines.append(f"  {label}: {_workspace_display_path(run_dir / record[key])}")
+    return "\n".join(lines)
+
+
 def stage_run(run_id: str, *, executor: str = "runpod") -> int:
     if executor != "runpod":
         print(f"staging is not implemented for executor: {executor}", file=sys.stderr)
@@ -1824,7 +1835,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]
         if not dataset_ids:
             raise ValueError("compiled run has no dataset IDs")
-        print(json.dumps(stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config()), indent=2))
+        print(_stage_summary(run_dir, stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config())))
     except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
         print(f"cannot stage run: {_safe_error(exc)}", file=sys.stderr)
         return 1

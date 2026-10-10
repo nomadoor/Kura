@@ -238,6 +238,9 @@ class DatasetTransferTests(_CompiledRunFixture, unittest.TestCase):
 
             record = stage_runpod(workspace=root, run_dir=run_dir, config=self._workspace_config())
 
+            # `kura run execute` prints only a summary that points at these records.
+            self.assertTrue((run_dir / record["stage_record"]).is_file())
+            self.assertTrue((run_dir / record["manifest"]).is_file())
             with tarfile.open(run_dir / record["archive"]) as archive:
                 names = archive.getnames()
                 content = archive.extractfile("source/datasets/tiny/link.png").read()

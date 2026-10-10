@@ -240,6 +240,39 @@ class ObserveRunTests(unittest.TestCase):
                 self.assertEqual(stage_run("example"), 1)
             stage.assert_not_called()
 
+    def test_stage_prints_a_summary_and_leaves_the_file_list_to_the_records(self) -> None:
+        digest = "ab" * 32
+        record = {
+            "archive": "transfer/kura-upload-example.tar",
+            "manifest": "transfer/kura-upload-example.manifest.json",
+            "stage_record": "realizations/stage-1.json",
+            "payload_bytes": 3 * 1024**3,
+            "tar_bytes": 3 * 1024**3 + 4096,
+            "total_bytes": 3 * 1024**3,
+            "entries": [{"destination": f"datasets/d/{index}.png", "size": 1, "sha256": digest} for index in range(270)],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_dir = root / "runs" / "example"
+            run_dir.mkdir(parents=True)
+            with (
+                patch("kura.run_commands.plan._run_path", return_value=run_dir),
+                patch("kura.run_commands.plan._workspace", return_value=root),
+                patch("kura.run_commands.plan._workspace_display_path", side_effect=lambda path: path.relative_to(root).as_posix()),
+                patch("kura.run_commands.plan._load_yaml", return_value={"datasets": [{"id": "dataset"}]}),
+                patch("kura.run_commands.plan._workspace_config", return_value={}),
+                patch("kura.run_commands.plan.observe_run", return_value={"state": "compiled"}),
+                patch("kura.run_commands.plan.stage_runpod", return_value=record),
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            ):
+                self.assertEqual(stage_run("example"), 0)
+        output = stdout.getvalue()
+        self.assertNotIn(digest, output)
+        self.assertLessEqual(len(output.splitlines()), 4)
+        self.assertIn("staged 270 files (3.0 GiB)", output)
+        self.assertIn("runs/example/transfer/kura-upload-example.manifest.json", output)
+        self.assertIn("runs/example/realizations/stage-1.json", output)
+
 
 if __name__ == "__main__":
     unittest.main()

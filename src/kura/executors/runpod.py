@@ -809,7 +809,7 @@ def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]
         **{key: value for key, value in record.items() if key != "entries"},
         "files": len(record["entries"]),
     })
-    return record
+    return {**record, "stage_record": str(stage_path.relative_to(run_dir))}
 
 
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
@@ -870,7 +870,7 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     status["last_stage"] = str(stage_path.relative_to(run_dir))
     _write_status(run_dir, status)
     append_run_event(run_dir, {"event": "run_staged", **record})
-    return record
+    return {**record, "stage_record": str(stage_path.relative_to(run_dir))}
 
 
 _POSTFLIGHT_STATUSES = frozenset({"matched", "changed", "uncheckable"})
