@@ -56,6 +56,15 @@ stop Pod
   `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
   does. Before starting a new run from such a run, confirm in the RunPod console that the
   Pod is really gone.
+- `pod_stopped_at` in `kura run status` is when Kura deleted the Pod (and any
+  duplicate a recovered launch recorded): RunPod accepted the delete or said
+  the Pod was already gone. The Pod is not paused; it and its container disk
+  no longer exist, and billing for it has ended. Kura deletes it after the
+  outputs are collected, when a render ends, when its job never started, and
+  on `kura run stop`; the delete is recorded in
+  `runs/<run-id>/realizations/*.stop-*.json`. A Pod that deleted itself (its
+  lease or unattended wait) shows `pod_missing_at` instead, once
+  `kura run reconcile` has looked.
 - Kura records its intent before creating a Pod. If a launch dies, or RunPod
   does not confirm a create, Kura never creates again on its own: launch and
   stop refuse until `kura run reconcile` has looked for the Pod by name. A Pod

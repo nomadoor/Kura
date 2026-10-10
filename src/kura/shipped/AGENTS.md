@@ -135,6 +135,10 @@ and local download are confirmed.
 | `recovery_required` | needs a person: outputs or required training state could not be published, or collecting from the Pod failed three times | on RunPod, when `kura run status <run-id>` shows `downloaded_run: null`, the outputs were never collected and the Pod is kept, still billing: report the reason in `runs/<run-id>/logs/runner.log`, then `kura run download <run-id> --force` and `kura run stop <run-id>` (`runpod-lifecycle`); otherwise the outputs are already local and collecting again cannot change them: report `publication_error` or `training_state_sync_error` from `kura run status <run-id>` |
 | `stopped` | written by older Kura versions for a stopped run (now `interrupted`) | as for `interrupted` |
 
+On RunPod, `pod_stopped_at` in `kura run status` means Kura deleted the Pod:
+it and its disk are gone and it no longer bills. `pod_missing_at` means
+`kura run reconcile` found it already gone (`runpod-lifecycle`).
+
 A new run starts from the old one's settings with `kura run new --from
 <run-id> --slug <words>`, or from its saved training state with `kura run
 resume` (`training-parameter-planning`).
