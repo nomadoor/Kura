@@ -1773,15 +1773,13 @@ def launch_render(
         except StaleRunnerEpoch:
             raise
         except Exception as status_exc:
-            try:
-                atomic_write_json(run_dir / "status.json", as_record("run_status", failed_status))
-            except Exception as fallback_exc:
-                _append_runtime_warning(
-                    stdout_log,
-                    "failed to persist render failure status: "
-                    f"{type(status_exc).__name__}: {status_exc}; fallback "
-                    f"{type(fallback_exc).__name__}: {fallback_exc}",
-                )
+            # The failure is already recorded; status keeps what it had, Pod id included, so
+            # the Pod is still deleted. The run then ends as interrupted (the Pod stop, or the
+            # runner settling a follower that returned), not as failed.
+            _append_runtime_warning(
+                stdout_log,
+                f"failed to persist render failure status: {type(status_exc).__name__}: {status_exc}",
+            )
         try:
             event(run_dir, {"event": "render_failed", "timestamp": failed_at, "error": str(exc)})
         except OSError as event_exc:
