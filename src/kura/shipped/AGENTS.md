@@ -168,7 +168,10 @@ in `knowledge/model-families/` and win where they disagree. Cards are knowledge,
 not a list of what Kura can train: which models a backend accepts comes from
 `kura run capabilities <backend>`, through its model selector
 (`backend.config.model_arch` for ai-toolkit, `backend.config.architecture` for
-musubi-tuner and sd-scripts). A family without a card can still be trained: say
+musubi-tuner and sd-scripts). Card names are not selector values (ai-toolkit
+`sd1` is the `sd15` card); `training-parameter-planning` maps them and says how
+to write `model.base`, which ai-toolkit trains from (sd-scripts and
+musubi-tuner take their weights from `backend.config`). A family without a card can still be trained: say
 once that there is no card, then work from upstream primary sources and the
 user's card, and record what you learn in the run's `notes.md`.
 
