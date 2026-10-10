@@ -8,6 +8,89 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: caption-presence-one-owner-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      Which samples carry a caption is decided by one function every backend calls, with the
+      same expression; trainer commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: fbda5cd5466f7c1d9405807862005609dee0207222e4acb08f35aebe07a47d5c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 11fcb8775f6e675716608132cb0af2f337b3e05bb52b2bcbe2208bb0ea6372df
+  - id: caption-presence-one-owner-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      Which samples carry a caption is decided by one function every backend calls, with the
+      same expression; trainer commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 0b94ab255fa5b2e8356c1899b0887f9cfdae8e790adbea9fbbe48bbefc151d58
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f44f268ac03df02bb983b683498d07ab23325d211e318a7526b7ab9bb1a9fb1e
+  - id: caption-presence-one-owner-sd-scripts-2026-10-08
+    backend: sd-scripts
+    reason: >-
+      Which samples carry a caption is decided by one function every backend calls, with the
+      same expression; trainer commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sd15-resume-equivalence-docker-2026-10-10
+    - sd-scripts-multiconcept-resume-docker-2026-10-10
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8c61b230915e0de3e50c0feb2deb63a8a5c5f640164bf64e849a34d3a839b29d
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: fc307a34866fe576b52cb1e17ac51a9139a0e95812dc3bc5bcca087dae83aa10
   - id: model-base-revision-ai-toolkit-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-
