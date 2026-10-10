@@ -23,7 +23,7 @@ class RunStateVocabularyTests(unittest.TestCase):
         self.assertIs(launch.can_start, common.can_start)
         self.assertIs(plan.can_start, common.can_start)
         self.assertIs(runner.EXIT_FOR_STATE, common.EXIT_CODE_FOR_STATE)
-        for name in ("ACTIVE_STATES", "OBSERVABLE_STATES", "TERMINAL_STATES", "UNFINISHED_STATES", "CLEANUP_ELIGIBLE_STATES", "UNSUCCESSFUL_STATES"):
+        for name in ("STARTING_STATES", "OBSERVABLE_STATES", "TERMINAL_STATES", "UNFINISHED_STATES", "CLEANUP_ELIGIBLE_STATES", "UNSUCCESSFUL_STATES"):
             with self.subTest(name=name):
                 self.assertLessEqual(set(getattr(common, name)), common.RUN_STATES)
         self.assertLessEqual(set(common.EXIT_CODE_FOR_STATE), common.RUN_STATES)
@@ -71,6 +71,22 @@ class RunStateVocabularyTests(unittest.TestCase):
                     self.assertEqual(call(), 1)
                     self.assertIn(f"run example ended {state}", stderr.getvalue())
                     self.assertIn("kura run new --from example", stderr.getvalue())
+
+    def test_viewers_decide_whether_a_run_is_unfinished_with_the_runner_rule(self) -> None:
+        from kura import monitor, tui
+        from kura.executors import common
+
+        # One rule says something is still happening to a run; the runner, status, monitor, and TUI all call it.
+        from kura import cli
+
+        self.assertFalse(hasattr(common, "ACTIVE_STATES"))
+        self.assertLessEqual(common.STARTING_STATES, common.UNFINISHED_STATES)
+        self.assertIs(monitor.run_finished, common.run_finished)
+        self.assertIs(cli.run_finished, common.run_finished)
+        self.assertFalse(hasattr(monitor, "UNFINISHED_STATES"))
+        self.assertFalse(hasattr(tui, "UNFINISHED_STATES"))
+        self.assertFalse(hasattr(cli, "UNFINISHED_STATES"))
+        self.assertIs(tui.STARTING_STATES, common.STARTING_STATES)
 
     def test_no_module_keeps_its_own_list_of_run_states(self) -> None:
         # A literal set or tuple of two or more run states outside executors/common.py is a second copy.

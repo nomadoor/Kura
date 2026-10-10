@@ -27,8 +27,8 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from kura.dataset_manifest import CAPTION_SUFFIXES
-from kura.executors.common import UNSUCCESSFUL_STATES
-from kura.monitor import ACTIVE_STATES, DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline
+from kura.executors.common import STARTING_STATES, UNSUCCESSFUL_STATES
+from kura.monitor import DRAFT_STATE, RunDataset, RunSummary, _collect_run_ids, _format_seconds_per_iter, collect_run_summaries, collect_run_summary, loss_sparkline
 
 
 FG = "#c5cdf0"
@@ -300,7 +300,7 @@ class KuraMonitorApp(App[None]):
             run_dir = self.workspace / "runs" / run_id
             fingerprint = _run_fingerprint(run_dir)
             cached = self._summary_cache.get(run_id)
-            if cached and cached[0] == fingerprint and (cached[1].state or "").lower() not in ACTIVE_STATES:
+            if cached and cached[0] == fingerprint and not cached[1].unfinished:
                 summaries.append(cached[1])
                 continue
             summary = collect_run_summary(self.workspace, run_id, loss_tail=80, stale_after=self.stale_after)
@@ -331,7 +331,7 @@ class KuraMonitorApp(App[None]):
         return metrics
 
     def _remote_metrics(self, summary: RunSummary) -> HostMetrics:
-        if (summary.state or "").lower() not in ACTIVE_STATES:
+        if not summary.unfinished:
             return HostMetrics()
         pod_id = summary.executor_info.pod.id if summary.executor_info.pod else None
         cache_key = pod_id or summary.id
@@ -424,16 +424,16 @@ class RunRow(Static):
             width = max(int(self.size.width or 0), 0)
         except RuntimeError:
             width = 0
-        middle_width = 5 if (summary.state or "").lower() in ACTIVE_STATES and (width == 0 or width >= 18) else 0
+        middle_width = 5 if summary.unfinished and (width == 0 or width >= 18) else 0
         location_width = len(location) + 1 if self.lane == "active" else 0
         name_width = max((width - middle_width - 6 - location_width) if width else (12 - location_width), 6)
         name = _fit_plain(_short_run_label(summary), name_width).ljust(name_width)
         activity_percent = _short_duration(summary.capacity_wait.remaining_sec) if summary.capacity_wait and summary.capacity_wait.remaining_sec is not None else _activity_percent(summary.activity)
         if middle_width == 0:
             middle = None
-        elif activity_percent and (summary.state or "").lower() in ACTIVE_STATES:
+        elif activity_percent and summary.unfinished:
             middle = (_fit_plain(activity_percent, middle_width).rjust(middle_width), FG_MUTED)
-        elif summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
+        elif summary.activity and summary.unfinished:
             middle = (_fit_plain(summary.activity, middle_width).rjust(middle_width), FG_MUTED)
         else:
             middle = (" " * middle_width, FG_MUTED)
@@ -550,7 +550,7 @@ class MetricGrid(Static):
         table.add_column()
         step = "unknown" if summary.progress.step is None else str(summary.progress.step)
         table.add_row("step", Text(f"{step}/{summary.progress.total or '-'}", style="bold"))
-        if summary.activity and (summary.state or "").lower() in ACTIVE_STATES and (summary.progress.step is None or summary.progress.step == 0):
+        if summary.activity and summary.unfinished and (summary.progress.step is None or summary.progress.step == 0):
             table.add_row("phase", Text(summary.activity, style=FG_MUTED))
         table.add_row("s/it", Text(_seconds_per_iter(summary), style="bold"))
         table.add_row("elapsed", Text(_elapsed(summary), style="bold"))
@@ -785,7 +785,7 @@ class LossPane(Vertical):
     def update_summary(self, summary: RunSummary | None) -> None:
         self.query_one(PaneTitle).update("LOSS")
         chart = self.query_one("#loss-chart", Static)
-        if summary and not summary.losses and summary.activity and (summary.state or "").lower() in ACTIVE_STATES:
+        if summary and not summary.losses and summary.activity and summary.unfinished:
             phase_title = "GPU CAPACITY WAIT\n" if summary.capacity_wait else "MODEL DOWNLOAD / STARTUP\n"
             chart.update(Text.assemble((phase_title, FG_MUTED), (_fit_plain(summary.activity, 28), f"bold {ACCENT}")))
         else:
@@ -1058,7 +1058,7 @@ class MonitorScreen(Screen[None]):
 
     @property
     def active_runs(self) -> list[RunSummary]:
-        active = [item for item in self.summaries if (item.state or "").lower() in ACTIVE_STATES]
+        active = [item for item in self.summaries if item.unfinished]
         active.sort(key=lambda item: _aware_datetime(item.last_updated or item.created) or AWARE_MIN, reverse=True)
         return active
 
@@ -1086,7 +1086,7 @@ class MonitorScreen(Screen[None]):
         if self.selected_run_id is None:
             return None
         current = next((item for item in self.summaries if item.id == self.selected_run_id), None)
-        if self.selected_run_lane == "active" and current and (current.state or "").lower() not in ACTIVE_STATES:
+        if self.selected_run_lane == "active" and current and not current.unfinished:
             return None
         return current
 
@@ -1340,11 +1340,11 @@ def run_textual_monitor(workspace: Path, *, interval: float = 2.0, stale_after: 
 
 def _status_bar(summaries: list[RunSummary], *, workspace: Path | None = None, width: int | None = None, suffix: Text | None = None) -> Text:
     counts = {
-        "running": sum(item.state == "running" for item in summaries),
+        "running": sum(item.unfinished and item.state not in STARTING_STATES for item in summaries),
         "waiting": sum(item.capacity_wait is not None for item in summaries),
-        "queued": sum(item.state in {"queued", "staged", "launching"} and item.capacity_wait is None for item in summaries),
+        "queued": sum(item.state in STARTING_STATES and item.capacity_wait is None for item in summaries),
         "done": sum(item.state == "completed" for item in summaries),
-        "failed": sum(item.state in UNSUCCESSFUL_STATES for item in summaries),
+        "failed": sum(not item.unfinished and item.state in UNSUCCESSFUL_STATES for item in summaries),
     }
     left = Text.assemble(("▸ kura", f"bold {ACCENT}"), ("   "), (str(counts["running"]), f"bold {RUN}"), (" running   ", RUN), (str(counts["waiting"]), f"bold {QUEUE}"), (" waiting   ", QUEUE), (str(counts["queued"]), f"bold {QUEUE}"), (" queued   ", QUEUE), (str(counts["done"]), f"bold {DONE}"), (" done   ", DONE), (str(counts["failed"]), f"bold {FAIL}"), (" failed", FAIL))
     if workspace is not None:
@@ -1889,7 +1889,7 @@ def _state_dot(summary: RunSummary) -> str:
 def _state_style(summary: RunSummary) -> str:
     if summary.is_stale:
         return STALE
-    return {"running": RUN, "completed": DONE, "failed": FAIL, "launch_failed": FAIL, "interrupted": FAIL, "queued": QUEUE, "staged": QUEUE, "compiled": QUEUE, "draft": QUEUE}.get(summary.state or "", QUEUE)
+    return {"running": RUN, "publishing": RUN, "completed": DONE, "failed": FAIL, "launch_failed": FAIL, "interrupted": FAIL, "queued": QUEUE, "staged": QUEUE, "compiled": QUEUE, "draft": QUEUE}.get(summary.state or "", QUEUE)
 
 
 def _badge(summary: RunSummary) -> str:
@@ -1920,14 +1920,14 @@ def _progress_text(summary: RunSummary) -> Text:
     width = 34
     filled = round(step / total * width) if total else 0
     text = Text()
-    text.append("█" * filled, style=RUN if (summary.state or "") in ACTIVE_STATES else ACCENT)
+    text.append("█" * filled, style=RUN if summary.unfinished else ACCENT)
     text.append("░" * (width - filled), style="#343951")
     text.append("\n")
     step_label = "unknown" if summary.progress.step is None else str(summary.progress.step)
     text.append(f"step {step_label}/{total or '-'}", style=FG_MUTED)
     if summary.progress.seconds_per_iter is not None:
         text.append(f" · {_seconds_per_iter(summary)}", style=FG_MUTED)
-    if summary.activity and (summary.state or "").lower() in ACTIVE_STATES and (summary.progress.step is None or summary.progress.step == 0 or not total):
+    if summary.activity and summary.unfinished and (summary.progress.step is None or summary.progress.step == 0 or not total):
         text.append("\n")
         text.append("phase ", style=FG_MUTED)
         text.append(summary.activity, style=f"bold {ACCENT}")

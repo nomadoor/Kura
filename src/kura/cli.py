@@ -33,7 +33,7 @@ from kura.dataset_manifest import draft_manifest, measure_manifest
 from kura.dataset_observations import observe_dataset
 from kura.doctor import _docker_storage_summary, kura_docker_volumes, stopped_kura_containers, _path_size_bytes, _root_owned_files, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_secrets, cmd_doctor_workspace
 from kura.executors import _redact_secret_text, read_run_status, reconcile_docker, reconcile_runpod
-from kura.executors.common import DEFAULT_MAX_LEASE_SEC, OBSERVABLE_STATES, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_quiet_since
+from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
 from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
@@ -691,7 +691,7 @@ def cmd_run_status(args: argparse.Namespace) -> int:
                 summary["runner"] = "stopped on purpose; `kura runner start` follows this run again"
             else:
                 summary["runner"] = "not running; this command asked one to start, check again with `kura runner status`"
-        elif status.get("state") in OBSERVABLE_STATES | {"launching", "queued"} and not runner_controlled:
+        elif not run_finished(status) and not runner_controlled:
             summary["observe_now"] = f"this run is not under the job runner; `kura run reconcile {args.run_id}` observes it now"
         if len(outputs) > STATUS_SUMMARY_OUTPUTS:
             summary["outputs_shown"] = f"{STATUS_SUMMARY_OUTPUTS} of {len(outputs)}; every output is listed under outputs below"

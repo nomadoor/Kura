@@ -383,6 +383,35 @@ class ViewerTests(unittest.TestCase):
                     self.assertNotIn("runner", summary)
 
 
+    def test_status_offers_reconcile_for_every_unfinished_run_outside_the_runner(self) -> None:
+        import argparse
+        import io
+
+        from kura.cli import cmd_run_status
+
+        self._cleared_backoff()
+        # Publishing, and a failed run whose training state is not yet published, are written only by Docker.
+        cases = [(state, "runpod", {}) for state in ("queued", "staged", "launching", "running")]
+        cases += [("publishing", "docker", {}), ("failed", "docker", {"publication_state": "pending"})]
+        for state, executor, extra in cases:
+            with self.subTest(state=state, **extra), _workspace() as (_, run_dir):
+                (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": executor}), encoding="utf-8")
+                _status(run_dir, state=state, last_realization="realizations/r1.json", **extra)
+                stdout = io.StringIO()
+                with patch("kura.cli._run_path", return_value=run_dir), patch("kura.runner.ensure_runner", return_value=False), patch("sys.stdout", stdout):
+                    self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+                summary = json.loads(stdout.getvalue())["summary"]
+                self.assertIn("kura run reconcile example", summary["observe_now"])
+        # A finished run gets no hint.
+        with _workspace() as (_, run_dir):
+            (run_dir / "realizations" / "r1.json").write_text(json.dumps({"id": "r1", "executor": "docker"}), encoding="utf-8")
+            _status(run_dir, state="failed", publication_state="published", last_realization="realizations/r1.json")
+            stdout = io.StringIO()
+            with patch("kura.cli._run_path", return_value=run_dir), patch("kura.runner.ensure_runner", return_value=False), patch("sys.stdout", stdout):
+                self.assertEqual(cmd_run_status(argparse.Namespace(run_id="example")), 0)
+            self.assertNotIn("observe_now", json.loads(stdout.getvalue())["summary"])
+
+
 class StopAndQueueTests(unittest.TestCase):
     def test_a_follower_carries_out_a_stop_request_once(self) -> None:
         with _workspace() as (root, run_dir):

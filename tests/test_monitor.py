@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import io
 import inspect
 import subprocess
 import tempfile
@@ -13,11 +12,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from rich.console import Console
-
-from kura.monitor import RunSummary, _format_time_cell, _split_for_monitor, collect_run_summaries, loss_sparkline, render_monitor
+from kura.monitor import RunSummary, collect_run_summaries, loss_sparkline
 from kura.container_scripts import hf_download
-from kura.tui import KuraMonitorApp
+from kura.tui import KuraMonitorApp, MonitorScreen, _status_bar
 
 
 class MonitorProjectionTests(unittest.TestCase):
@@ -100,23 +97,6 @@ class MonitorProjectionTests(unittest.TestCase):
             self.assertEqual(summary.resume_artifact_id, "state-1")
             self.assertEqual(summary.recoverable_state_step, 20)
             self.assertEqual(summary.recoverable_state_level, "best_effort_resume")
-
-    def test_active_time_shows_total_elapsed_and_update_age(self) -> None:
-        now = datetime.now().astimezone()
-        summary = RunSummary(
-            id="local",
-            experiment=None,
-            type="train",
-            executor="docker",
-            state="running",
-            started=now - timedelta(minutes=10),
-            last_updated=now - timedelta(seconds=5),
-        )
-
-        rendered = _format_time_cell(summary)
-
-        self.assertIn("10m0s elapsed", rendered)
-        self.assertIn("ago", rendered)
 
     def test_legacy_run_is_isolated_as_unreadable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -222,18 +202,15 @@ class MonitorProjectionTests(unittest.TestCase):
             (run_dir / "realizations" / "stage.json").write_text(json.dumps({"timestamp": now, "state": "staged"}), encoding="utf-8")
 
             summary = collect_run_summaries(root)[0]
-            console = Console(file=io.StringIO(), record=True, width=180, color_system=None)
-            console.print(render_monitor(root))
-            rendered = console.export_text()
+            rendered = _status_bar([summary], width=180).plain
 
             self.assertFalse(summary.is_stale)
             self.assertIsNone(summary.ended)
             self.assertEqual(summary.capacity_wait.attempts if summary.capacity_wait else None, 3)
             self.assertEqual(summary.executor_info.gpu, "NVIDIA A40")
             self.assertEqual(summary.activity, "waiting for GPU · NVIDIA A40 · probe 3 · 5h59m left")
-            self.assertIn("waiting 1", rendered)
-            self.assertIn("waiting-run", rendered)
-            self.assertIn("probe 3", rendered)
+            self.assertIn("1 waiting", rendered)
+            self.assertIn("0 queued", rendered)
 
     def test_collect_run_summaries_reads_config_status_and_loss(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -293,53 +270,11 @@ class MonitorProjectionTests(unittest.TestCase):
             (naive / "run.yaml").write_text("id: naive\ntype: train\ncreated: '2026-06-21T10:00:00'\n", encoding="utf-8")
             (naive / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
 
-            summaries = collect_run_summaries(root)
-            active, history = _split_for_monitor(summaries, limit=10)
+            screen = MonitorScreen()
+            screen.summaries = collect_run_summaries(root)
 
-            self.assertEqual(active, [])
-            self.assertEqual({summary.id for summary in history}, {"aware", "naive"})
-
-    def test_render_monitor_distinguishes_hidden_drafts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            draft = root / "runs" / "draft-run"
-            complete = root / "runs" / "complete-run"
-            draft.mkdir(parents=True)
-            complete.mkdir(parents=True)
-            (draft / "run.yaml").write_text("id: draft-run\ntype: train\n", encoding="utf-8")
-            (draft / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
-            (complete / "run.yaml").write_text("id: complete-run\ntype: train\n", encoding="utf-8")
-            (complete / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
-
-            console = Console(file=io.StringIO(), record=True, width=120, color_system=None)
-            console.print(render_monitor(root))
-            hidden_text = console.export_text()
-
-            self.assertIn("complete-run", hidden_text)
-            self.assertNotIn("draft-run", hidden_text)
-            self.assertIn("1 draft run(s) hidden (--all to show)", hidden_text)
-
-            console = Console(file=io.StringIO(), record=True, width=120, color_system=None)
-            console.print(render_monitor(root, include_drafts=True))
-            all_text = console.export_text()
-
-            self.assertIn("draft-run", all_text)
-            self.assertNotIn("draft run(s) hidden", all_text)
-
-    def test_render_monitor_omits_watch_hint_when_only_drafts_are_hidden(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            draft = root / "runs" / "draft-run"
-            draft.mkdir(parents=True)
-            (draft / "run.yaml").write_text("id: draft-run\ntype: train\n", encoding="utf-8")
-            (draft / "status.json").write_text(json.dumps({"state": "draft"}), encoding="utf-8")
-
-            console = Console(file=io.StringIO(), record=True, width=120, color_system=None)
-            console.print(render_monitor(root))
-            text = console.export_text()
-
-            self.assertIn("1 draft run(s) hidden (--all to show)", text)
-            self.assertNotIn("watch: uv run kura run watch", text)
+            self.assertEqual(screen.active_runs, [])
+            self.assertEqual({summary.id for summary in screen.history_pool}, {"aware", "naive"})
 
     def test_render_samples_images_are_reported_as_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
