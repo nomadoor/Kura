@@ -124,6 +124,43 @@ def atomic_write_bytes(path: Path, data: bytes, *, durable: bool = True) -> None
                 pass
 
 
+def create_new_files(files: dict[Path, bytes]) -> None:
+    """Create every file in `files`, or none: never replace one that exists.
+
+    Each file is opened with O_EXCL, so an existing file (even one that
+    appeared after the caller checked) is never touched, and a symlink at a
+    path is never followed. On any failure the files this call created,
+    including a partly written one, are removed; the original error is
+    raised, with a note naming any file that could not be removed.
+    """
+    created: list[Path] = []
+    try:
+        for path, data in files.items():
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o666)
+            created.append(path)
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    except BaseException as exc:
+        left = []
+        for path in created:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                left.append(str(path))
+        if left:
+            exc.add_note("could not remove created file(s) " + ", ".join(left))
+        raise
+    for parent in {path.parent for path in created}:
+        _fsync_directory(parent)
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     atomic_write_bytes(path, text.encode("utf-8"))
 

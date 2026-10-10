@@ -11,7 +11,7 @@ import yaml
 
 from kura.dataset_inspect import _image_size
 from kura.dataset_jsonl import items_jsonl_rows
-from kura.dataset_manifest import CAPTION_SUFFIXES, caption_is_empty
+from kura.dataset_manifest import caption_is_empty, captions_by_stem, declares_items_v2
 from kura.media_types import KNOWN_IMAGE_SUFFIXES
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 CONDITION_KEYS = {
@@ -30,9 +30,9 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
     records, parse_issues = _jsonl_records(root / "items.jsonl")
     directories = _layout_directories(root, layout)
     directory_files = {role: _indexed_images(path) for role, path in directories.items() if role != "caption"}
-    caption_files = _indexed_captions(directories.get("caption"))
+    caption_files = captions_by_stem(directories.get("caption"))
 
-    manifest_v2 = metadata.get("items_schema_version") == 2
+    manifest_v2 = declares_items_v2(metadata)
     if records and manifest_v2:
         samples = [_sample_from_v2_record(root, numbered) for numbered in records]
     elif records:
@@ -164,16 +164,6 @@ def _indexed_images(path: Path | None) -> dict[str, Path]:
             raise ValueError(f"ambiguous dataset image stem {item.stem!r} in {path}")
         result[item.stem] = item
     return result
-
-
-def _indexed_captions(path: Path | None) -> dict[str, list[Path]]:
-    if path is None or not path.is_dir():
-        return {}
-    result: dict[str, list[Path]] = defaultdict(list)
-    for item in sorted(path.iterdir()):
-        if item.is_file() and item.suffix.lower() in CAPTION_SUFFIXES:
-            result[item.stem].append(item)
-    return dict(result)
 
 
 def _caption_file(root: Path, caption_files: dict[str, list[Path]], stem: str, sample_id: str, issues: list[dict[str, Any]]) -> Path | None:

@@ -8,6 +8,138 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: dataset-draft-writes-items-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      Whether a dataset.yaml declares manifest v2 and which caption files sit beside an image
+      are each decided by one function, and new files are created all-or-nothing; trainer
+      commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 11fcb8775f6e675716608132cb0af2f337b3e05bb52b2bcbe2208bb0ea6372df
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: de5e1e5e77b51e62590a7f514c1614d2153700d54449669ec3332c87f05895d2
+  - id: dataset-draft-writes-items-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      Whether a dataset.yaml declares manifest v2 and which caption files sit beside an image
+      are each decided by one function, and new files are created all-or-nothing; trainer
+      commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f44f268ac03df02bb983b683498d07ab23325d211e318a7526b7ab9bb1a9fb1e
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 50b58c2598c021e177febed8a4e36eec7573ad8b6072196b12fb9acda2a53e42
+  - id: dataset-draft-writes-items-sd-scripts-2026-10-08
+    backend: sd-scripts
+    reason: >-
+      Whether a dataset.yaml declares manifest v2 and which caption files sit beside an image
+      are each decided by one function, and new files are created all-or-nothing; trainer
+      commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sd15-resume-equivalence-docker-2026-10-10
+    - sd-scripts-multiconcept-resume-docker-2026-10-10
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: fc307a34866fe576b52cb1e17ac51a9139a0e95812dc3bc5bcca087dae83aa10
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8bee50d2bb5e9f7a399769e0f788f3d237f997ceb03dca80ed77889ccbb7f3fe
+  - id: runpod-executor-dataset-draft-writes-items-2026-10-08
+    executor: runpod
+    reason: >-
+      Whether a dataset.yaml declares manifest v2 and which caption files sit beside an image
+      are each decided by one function, and new files are created all-or-nothing; trainer
+      commands, inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 6afb5586d3ca7297d1a20c411094883242b8a8f882b42b3be0f68b5dd4955231
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 2f69831570cc506337509dfa867223d3d820988b3e223bf2e937b355b88d8887
   - id: caption-presence-one-owner-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-

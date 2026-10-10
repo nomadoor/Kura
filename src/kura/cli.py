@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import difflib
+import errno
 import itertools
 import json
 import os
@@ -36,7 +37,7 @@ from kura.executors import _redact_secret_text, read_run_status, reconcile_docke
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
-from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
+from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
 from kura.records import record
 from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
@@ -178,21 +179,51 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         if not args.write:
             print(json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
-        metadata_path = directory / "dataset.v2.candidate.yaml"
-        items_path = directory / "items.v2.candidate.jsonl"
-        if metadata_path.exists() or items_path.exists():
-            raise ValueError("v2 candidate already exists; review it before replacing")
-        with metadata_path.open("x", encoding="utf-8") as stream:
-            yaml.safe_dump(proposal["dataset_yaml"], stream, allow_unicode=True, sort_keys=False)
-        with items_path.open("x", encoding="utf-8") as stream:
-            for item in proposal["items"]:
-                stream.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
-        print(f"wrote review candidates: {metadata_path}, {items_path}")
+        if not proposal["items"]:
+            for issue in proposal["issues"]:
+                print(f"review required: {issue}", file=sys.stderr)
+            raise ValueError("no rows were drafted; nothing was written")
+        # Write items.jsonl, the file the next command reads, only when none
+        # exists and the draft is complete: dataset.yaml declares v2 and
+        # nothing needs review. Otherwise every file stays a candidate, so a
+        # draft is never half adopted and an authored file is never replaced.
+        dataset_v2 = proposal["dataset_yaml"] is None
+        items_exist = os.path.lexists(directory / "items.jsonl")
+        adopt = dataset_v2 and not items_exist and not proposal["issues"]
+        files: dict[Path, bytes] = {}
+        if not dataset_v2:
+            files[directory / "dataset.v2.candidate.yaml"] = yaml.safe_dump(
+                proposal["dataset_yaml"], allow_unicode=True, sort_keys=False,
+            ).encode("utf-8")
+        items_path = directory / ("items.jsonl" if adopt else "items.v2.candidate.jsonl")
+        files[items_path] = "".join(
+            json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in proposal["items"]
+        ).encode("utf-8")
+        for path in files:
+            if os.path.lexists(path):
+                raise FileExistsError(errno.EEXIST, "already exists", str(path))
+        create_new_files(files)
+        print("wrote: " + ", ".join(str(path) for path in files))
+        if not dataset_v2:
+            print("review dataset.v2.candidate.yaml, then move it over dataset.yaml")
+        if not adopt:
+            if not items_exist:
+                print("review items.v2.candidate.jsonl, then rename it to items.jsonl")
+            elif dataset_v2:
+                print("compare items.v2.candidate.jsonl with items.jsonl, which was not changed")
+            else:
+                print("review items.v2.candidate.jsonl, then move it over items.jsonl")
         for issue in proposal["issues"]:
             print(f"review required: {issue}", file=sys.stderr)
         return 0
+    except FileExistsError as exc:
+        name = Path(exc.filename).name if exc.filename else "a draft file"
+        message = "; ".join([f"{name} already exists; review it before drafting again", *getattr(exc, "__notes__", [])])
+        print(f"cannot draft dataset: {message}", file=sys.stderr)
+        return 1
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"cannot draft dataset: {_safe_error(exc)}", file=sys.stderr)
+        message = "; ".join([_safe_error(exc), *getattr(exc, "__notes__", [])])
+        print(f"cannot draft dataset: {message}", file=sys.stderr)
         return 1
 
 
@@ -1533,9 +1564,16 @@ def main() -> None:
     validate = dataset_sub.add_parser("validate", help="Validate a dataset manifest")
     validate.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
     validate.set_defaults(func=cmd_dataset_validate)
-    draft = dataset_sub.add_parser("draft", help="Preview or create reviewable v2 candidate files")
+    draft = dataset_sub.add_parser("draft", help="Preview or write a reviewable v2 manifest")
     draft.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
-    draft.add_argument("--write", action="store_true", help="Write candidate files without replacing authored manifests")
+    draft.add_argument(
+        "--write",
+        action="store_true",
+        help=(
+            "Write items.jsonl if absent, dataset.yaml declares items_schema_version 2, and nothing needs review; "
+            "otherwise write *.v2.candidate.*; never replace a file"
+        ),
+    )
     draft.set_defaults(func=cmd_dataset_draft)
     inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")
     inspect.add_argument("dataset", help="Dataset ID under datasets/ or a dataset directory path")

@@ -9,10 +9,51 @@ from unittest.mock import patch
 
 import yaml
 
-from kura.fsio import FileLockBusy, append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml, file_lock
+from kura.fsio import (
+    FileLockBusy, append_line_durably, atomic_write_json, atomic_write_text, atomic_write_yaml, create_new_files, file_lock,
+)
 
 
 class FsioTests(unittest.TestCase):
+    def test_create_new_files_never_replaces_and_removes_what_it_created(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "first", Path(directory) / "second"
+            second.write_bytes(b"authored")
+            with self.assertRaises(FileExistsError):
+                create_new_files({first: b"new", second: b"new"})
+            self.assertFalse(first.exists())
+            self.assertEqual(second.read_bytes(), b"authored")
+
+    @unittest.skipIf(os.name == "nt", "creating a symlink needs privileges on native Windows")
+    def test_create_new_files_does_not_follow_a_dangling_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            link = Path(directory) / "link"
+            link.symlink_to(target)
+            with self.assertRaises(FileExistsError):
+                create_new_files({link: b"new"})
+            self.assertFalse(target.exists())
+            self.assertTrue(link.is_symlink())
+
+    def test_a_failed_removal_does_not_hide_the_original_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first, second, third = (Path(directory) / name for name in ("first", "second", "third"))
+            third.write_bytes(b"authored")
+            real_unlink = Path.unlink
+
+            def unlink(path, *args, **kwargs):
+                if path == first:
+                    raise PermissionError("locked")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch("pathlib.Path.unlink", unlink), self.assertRaises(FileExistsError) as raised:
+                create_new_files({first: b"new", second: b"new", third: b"new"})
+            self.assertEqual(raised.exception.filename, str(third))
+            self.assertEqual(raised.exception.__notes__, [f"could not remove created file(s) {first}"])
+            self.assertTrue(first.exists())
+            self.assertFalse(second.exists())
+            self.assertEqual(third.read_bytes(), b"authored")
+
     def test_append_line_durably_fsyncs_before_returning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.jsonl"

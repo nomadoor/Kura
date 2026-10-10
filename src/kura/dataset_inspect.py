@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 
 from kura.dataset_jsonl import items_jsonl_rows
-from kura.dataset_manifest import caption_has_trigger, caption_is_empty
+from kura.dataset_manifest import caption_has_trigger, caption_is_empty, declares_items_v2
 from kura.media_types import KNOWN_IMAGE_SUFFIXES, KNOWN_VIDEO_SUFFIXES
 SOURCE_KEYS = ("source", "source_path", "control", "control_path", "conditioning", "conditioning_path")
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
@@ -38,7 +38,7 @@ def inspect_dataset(value: str | Path, *, workspace: Path) -> dict[str, Any]:
     from kura.dataset_observations import observe_dataset
 
     observation = observe_dataset(dataset_path)
-    manifest_v2 = metadata.get("items_schema_version") == 2
+    manifest_v2 = declares_items_v2(metadata)
     observed_samples = observation.get("samples") if isinstance(observation.get("samples"), list) else []
     # The observation owns what each sample's caption is, for every dataset layout.
     captions = [

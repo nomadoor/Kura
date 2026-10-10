@@ -24,8 +24,9 @@ that command reads.
 
 ## Starting from a folder of images
 
-1. Put the images in `datasets/<id>/` (or `datasets/<id>/images/`), each with
-   a caption file of the same name ending in `.txt` or `.caption`.
+1. Put the images in `datasets/<id>/` or in `datasets/<id>/images/` (one of
+   the two, not both), each with a caption file of the same name ending in
+   `.txt` or `.caption`.
 2. Write `datasets/<id>/dataset.yaml`:
 
    ```yaml
@@ -35,11 +36,16 @@ that command reads.
                             # warns about captions the trainer receives without it
    ```
 
-3. `kura dataset draft <id> --write` writes `dataset.v2.candidate.yaml` and
-   `items.v2.candidate.jsonl` beside them and never replaces an authored file.
-   Check that each row pairs the right image and caption (each row points at
-   its caption file as `caption.file`), then rename them over `dataset.yaml`
-   and `items.jsonl`.
+3. `kura dataset draft <id> --write` writes `items.jsonl`. Check that each
+   row pairs the right image and caption (each row points at its caption file
+   as `caption.file`). It never replaces a file and never half adopts a draft:
+   when `items.jsonl` already exists, the draft reports `review required`, or
+   `dataset.yaml` lacks `items_schema_version: 2`, it writes
+   `items.v2.candidate.jsonl` instead (and `dataset.v2.candidate.yaml` in the
+   last case) and prints what to do with each. Resolve what it reports, then
+   rename or move the candidates yourself. When it drafts no rows it writes
+   nothing. It does not validate an existing v2 `items.jsonl`; run
+   `kura dataset validate` for that.
 4. `kura dataset validate <id>`, then `kura dataset inspect <id>`. Every
    dataset command takes either the ID or the dataset's path.
 
@@ -116,6 +122,10 @@ starting point for a new run:
   receive them; and
 - remove both old selectors, validate the dataset, then compile again.
 
-Kura does not infer either replacement during compile. Use `kura dataset draft`
-only to create a reviewable candidate manifest; confirm its sample associations
-before adopting it.
+Kura does not infer either replacement during compile. `kura dataset draft`
+proposes rows from the files it finds and does not read `control_subdir`;
+confirm its sample associations and add any missing control references before
+validating. When `items.jsonl` already exists, `--write` writes
+`items.v2.candidate.jsonl`: if the dataset is already v2, compare the two and
+edit `items.jsonl`; otherwise move the candidate over it only after that
+review.

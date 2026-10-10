@@ -25,6 +25,26 @@ ORDINARY_DATASET_SUFFIXES = {".caption", ".json", ".jsonl", ".md", ".txt", ".yam
 CAPTION_SUFFIXES = (".txt", ".caption")
 
 
+def declares_items_v2(metadata: Any) -> bool:
+    """Whether a parsed dataset.yaml declares manifest v2 (the integer 2, not 2.0 or true)."""
+    return isinstance(metadata, dict) and type(metadata.get("items_schema_version")) is int and metadata["items_schema_version"] == 2
+
+
+def captions_by_stem(directory: Path | None) -> dict[str, list[Path]]:
+    """The caption files in `directory`, by stem, under their real names.
+
+    A caption suffix matches whatever its case, so `a.TXT` is `a.png`'s
+    caption on every filesystem.
+    """
+    if directory is None or not directory.is_dir():
+        return {}
+    result: dict[str, list[Path]] = {}
+    for item in sorted(directory.iterdir()):
+        if item.is_file() and item.suffix.lower() in CAPTION_SUFFIXES:
+            result.setdefault(item.stem, []).append(item)
+    return result
+
+
 def caption_is_empty(text: str | None) -> bool:
     """True when a caption carries no words: absent, empty, or whitespace only."""
     return text is None or not text.strip()
@@ -254,7 +274,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         items_text = items_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
-    if not isinstance(metadata, dict) or type(metadata.get("items_schema_version")) is not int or metadata["items_schema_version"] != 2:
+    if not declares_items_v2(metadata):
         raise ValueError("dataset.yaml requires items_schema_version: 2")
     # A run selects a dataset by its directory name. A different declared id
     # would record one name while training another, so the two must agree.
@@ -424,18 +444,21 @@ def validate_manifest(directory: Path) -> tuple[int, list[str]]:
 
 
 def draft_manifest(directory: Path) -> dict[str, Any]:
-    """Make a reviewable v2 proposal; never select a trainer input."""
+    """Make a reviewable v2 proposal; never select a trainer input.
+
+    It does not validate existing v2 rows; `kura dataset validate` does.
+    """
     metadata_path = directory / "dataset.yaml"
     if not metadata_path.is_file():
         raise ValueError("missing dataset.yaml")
     metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
-    proposed_metadata = dict(metadata)
-    proposed_metadata["items_schema_version"] = 2
+    # Propose a dataset.yaml only when the authored one does not declare v2 yet.
+    proposed_metadata = None if declares_items_v2(metadata) else {**metadata, "items_schema_version": 2}
     issues: list[str] = []
     root = directory.resolve(strict=True)
-    legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues)
+    legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues, v2_rows_expected=proposed_metadata is None)
     choices: list[tuple[str, list[Path]]] = []
     for label, folder in (("flat", root), ("images/", root / "images")):
         if folder.is_dir():
@@ -447,16 +470,18 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
             if images:
                 choices.append((label, images))
     if len(choices) != 1:
-        issues.append("choose one image root explicitly; flat and images/ are ambiguous or absent")
+        issues.append(
+            "images are both in the dataset folder and in images/ (or in neither); "
+            "keep them in one of the two, then draft again"
+        )
     items: list[dict[str, Any]] = []
     if len(choices) == 1:
         generated_ids: set[str] = set()
+        captions_beside = captions_by_stem(choices[0][1][0].parent)
         for image in choices[0][1]:
             relative = image.relative_to(root).as_posix()
             legacy = legacy_by_path.get(relative)
-            candidates = [image.with_suffix(suffix) for suffix in CAPTION_SUFFIXES]
-            captions = [candidate for candidate in candidates if candidate.is_file()]
-            caption = _draft_caption(root, relative, legacy, captions, issues)
+            caption = _draft_caption(root, relative, legacy, captions_beside.get(image.stem, []), issues)
             default_id = PurePosixPath(relative).with_suffix("").name
             sample_id = legacy.get("id") if legacy is not None and isinstance(legacy.get("id"), str) and legacy["id"] else default_id
             if sample_id in generated_ids:
@@ -500,7 +525,8 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     return {"dataset": root.name, "dataset_yaml": proposed_metadata, "items": items, "issues": issues}
 
 
-def _legacy_draft_rows(path: Path, issues: list[str]) -> dict[str, dict[str, Any]]:
+def _legacy_draft_rows(path: Path, issues: list[str], *, v2_rows_expected: bool) -> dict[str, dict[str, Any]]:
+    """Legacy rows to import; v2 rows in a v2 dataset are the author's, not issues."""
     if not path.is_file():
         return {}
     rows: dict[str, dict[str, Any]] = {}
@@ -514,6 +540,8 @@ def _legacy_draft_rows(path: Path, issues: list[str]) -> dict[str, dict[str, Any
                 value = json.loads(line, object_pairs_hook=_unique_object)
             except (json.JSONDecodeError, ValueError) as exc:
                 issues.append(f"items.jsonl:{number}: invalid legacy row was not imported: {exc}")
+                continue
+            if isinstance(value, dict) and "files" in value and v2_rows_expected:
                 continue
             if not isinstance(value, dict) or "files" in value:
                 issues.append(f"items.jsonl:{number}: non-legacy row requires author review")
