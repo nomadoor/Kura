@@ -13,7 +13,7 @@ import yaml
 
 from kura.training_artifacts import checkpoint_files, checkpoint_step
 from kura.executors.common import format_launch_phases, format_seconds, launch_phases
-from kura.run_envelope import run_executor
+from kura.run_envelope import final_step, run_executor
 
 
 _FACT_ORDER = (
@@ -78,11 +78,18 @@ def _note_excerpt(path: Path, *, width: int = 120) -> str | None:
     return None
 
 
+def _logical_steps(run: dict[str, Any]) -> int | None:
+    # The logical step a run reaches, as the monitor shows it; an invalid run shows none.
+    try:
+        return final_step(run)
+    except ValueError:
+        return None
+
+
 def _display_mapping(run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
     display = _load_json_mapping(run_dir / "resolved" / "backend-display.lock.json") or {}
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     config = backend.get("config") if isinstance(backend.get("config"), dict) else {}
-    recipe = run.get("recipe") if isinstance(run.get("recipe"), dict) else {}
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     compute = run.get("compute") if isinstance(run.get("compute"), dict) else {}
     datasets = run.get("datasets") if isinstance(run.get("datasets"), list) else []
@@ -97,7 +104,7 @@ def _display_mapping(run_dir: Path, run: dict[str, Any]) -> dict[str, Any]:
         "task": first(display.get("task"), config.get("task")),
         "model": model.get("base"),
         "lr": first(display.get("learning_rate"), config.get("learning_rate")),
-        "steps": recipe.get("steps"),
+        "steps": _logical_steps(run),
         "rank": first(display.get("rank"), config.get("network_dim"), config.get("network_rank")),
         "alpha": first(display.get("alpha"), config.get("network_alpha")),
         "batch": first(display.get("batch_size"), config.get("batch_size")),

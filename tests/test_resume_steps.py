@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,6 +16,9 @@ from unittest.mock import patch
 
 import yaml
 
+import kura.monitor as monitor
+import kura.run_commands.experiment as experiment
+import kura.run_commands.plan as plan
 from kura.backends.ai_toolkit import compile_ai_toolkit
 from kura.backends.musubi_command import command_musubi_tuner
 from kura.backends.sd_scripts import command_sd_scripts
@@ -388,6 +392,52 @@ class ResumeSourceVerificationTests(unittest.TestCase):
             run, run_dir = self._workspace(root, mutate=mutate)
             errors = self._errors(root, run, run_dir)
         self.assertEqual(set(errors.values()), {"continuation.target_step does not match the requested Resume target"}, errors)
+
+
+def _plan_workspace(root: Path) -> None:
+    (root / "workspace.yaml").write_text("schema_version: 2\n", encoding="utf-8")
+    (root / "datasets" / "tiny").mkdir(parents=True)
+
+
+def _plannable_musubi_run() -> dict[str, Any]:
+    run = musubi_run()
+    run["id"] = "derived"
+    run["experiment"] = "steps"
+    run["compute"] = {"executor": "docker"}
+    run["backend"]["config"] = {
+        "architecture": "flux2", "model_bundle": "none", "save_every_n_steps": 500,
+        "model_downloads": {"dit": {"repo": "repo/model", "filename": "weights.safetensors"}},
+    }
+    return run
+
+
+class ResumeStepsDisplayTests(unittest.TestCase):
+    def test_a_resume_shows_the_logical_step_it_reaches_in_plan_experiment_and_monitor(self) -> None:
+        # Resume +50 from step 1000 of a 1000-step recipe: every reader shows 1050.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _plan_workspace(root)
+            source = _plannable_musubi_run()
+            manifest = publish_source(root, source)
+            run = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"], additional=50)
+            run_dir = root / "runs" / "derived"
+            run_dir.mkdir(parents=True)
+            (run_dir / "run.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            previous = Path.cwd()
+            os.chdir(root)
+            try:
+                with patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 200}):
+                    payload = plan.plan_run("derived")
+                text = plan.format_run_plan(payload)
+            finally:
+                os.chdir(previous)
+            facts = experiment._display_mapping(run_dir, run)
+            key_config = monitor._key_config("train", run, run_dir)
+        self.assertEqual(payload["recipe"]["steps"], 1050)
+        self.assertRegex(text, r"\nRecipe\n  steps +1050\n")
+        self.assertEqual(payload["experiment"]["runs"][0]["facts"]["steps"], 1050)
+        self.assertEqual(facts["steps"], 1050)
+        self.assertEqual(key_config["steps"], 1050)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
-from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy
+from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import expected_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
@@ -1131,7 +1131,8 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     write_roots = _command_write_roots(command_lock)
 
     plan_recipe = {
-        "steps": run_recipe.get("steps"),
+        # The logical step the run reaches: a Resume's copied recipe steps are the source's.
+        "steps": final_step(run),
         "seed": run_recipe.get("seed"),
     }
     sampling_payload = {}
