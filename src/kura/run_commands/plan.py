@@ -251,7 +251,7 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
     checkpoints = expected_checkpoints(important_config, steps)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
     if checkpoints is not None and checkpoints >= 10:
-        warnings.append(f"checkpoint cadence may create about {checkpoints} checkpoints{_trained_steps_basis(run, steps)}; set prune_checkpoints_before_step or keep-last policy if this is not intentional")
+        warnings.append(f"checkpoint cadence may create about {checkpoints} checkpoints{_trained_steps_basis(run, steps)}; set the backend's checkpoint retention (see `kura run capabilities {_run_adapter(run).name}`) if this is not intentional")
     if steps and cadence:
         expected_samples = max(steps // cadence, 1)
         if expected_samples >= 20:
@@ -268,7 +268,7 @@ def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
     if expected is not None and expected >= 10:
         raise ValueError(
             f"checkpoint policy may create about {expected} checkpoints without pruning{_trained_steps_basis(run, steps)}; "
-            "set backend.config.prune_checkpoints_before_step, reduce save frequency, "
+            f"set the backend's checkpoint retention (see `kura run capabilities {_run_adapter(run).name}`), reduce save frequency, "
             "or set safety.allow_many_checkpoints: true if intentional"
         )
 

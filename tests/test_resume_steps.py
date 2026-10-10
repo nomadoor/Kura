@@ -439,6 +439,23 @@ class ResumeStepsDisplayTests(unittest.TestCase):
         self.assertEqual(facts["steps"], 1050)
         self.assertEqual(key_config["steps"], 1050)
 
+    def test_experiment_and_monitor_read_one_display_rule(self) -> None:
+        import kura.training_artifacts as training_artifacts
+
+        run = as_resume(musubi_run(), additional=50)
+        broken = deepcopy(run)
+        broken["continuation"]["target_step"] = 1
+        for module, call in (
+            (experiment, lambda item: experiment._display_mapping(Path("missing"), item).get("steps")),
+            (monitor, lambda item: monitor._key_config("train", item, Path("missing"))["steps"]),
+        ):
+            with self.subTest(module=module.__name__), patch.object(
+                module, "displayed_final_step", wraps=training_artifacts.displayed_final_step,
+            ) as owner:
+                self.assertEqual(call(run), 1050)
+                self.assertIsNone(call(broken))
+                owner.assert_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -548,16 +548,29 @@ def trained_steps(run: dict[str, Any]) -> int | None:
     return steps["additional_steps"] if steps is not None else final_step(run)
 
 
+
+def displayed_final_step(run: dict[str, Any]) -> int | None:
+    """The logical step a run reaches (`final_step`) as readers show it: an invalid run, such as
+    a draft or a broken continuation, shows none instead of failing the view. The monitor and
+    experiment comparisons read it."""
+    try:
+        return final_step(run)
+    except ValueError:
+        return None
+
+
 def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int | None:
     """How many checkpoints a run leaves: one per `save_every_n_steps` over the `steps` it
     trains (`trained_steps`), at least one. `checkpoint` is the backend display's `checkpoint`
-    block. None when there is no cadence or no steps, or when a retention policy prunes saves,
-    so fewer are left: a positive `prune_before_step` (Musubi Tuner), `keep_last` (AI-Toolkit,
-    Musubi Tuner), or `retention_window_steps` (sd-scripts). Zero or less is no policy: AI-Toolkit
-    keeps every save at `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no
-    prune below step 1, and sd-scripts refuses a non-positive `save_last_n_steps`. The plan's
-    checkpoint warnings, guard, preflight line, and disk estimate and the monitor's expected
-    checkpoints all read it."""
+    block. None when there is no cadence or no steps, or when a retention policy prunes step
+    checkpoints, so fewer are left: a positive `prune_before_step` (Musubi Tuner), `keep_last`
+    (AI-Toolkit), or `retention_window_steps` (sd-scripts), or no `keep_last` where the display
+    declares `unset_keep_last: trainer_default` (AI-Toolkit then keeps its own
+    `max_step_saves_to_keep`). Zero or less is no policy: AI-Toolkit keeps every save at
+    `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no prune below step 1,
+    and sd-scripts refuses a non-positive `save_last_n_steps`. Epoch retention prunes no step
+    checkpoint. The plan's checkpoint warnings, guard, preflight line, and disk estimate and
+    the monitor's expected checkpoints all read it."""
 
     def positive(value: Any) -> int | None:
         if isinstance(value, bool) or value in (None, ""):
@@ -572,6 +585,8 @@ def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int |
     if not steps or every is None:
         return None
     if any(positive(checkpoint.get(key)) for key in ("prune_before_step", "keep_last", "retention_window_steps")):
+        return None
+    if checkpoint.get("keep_last") is None and checkpoint.get("unset_keep_last") == "trainer_default":
         return None
     return max(steps // every, 1)
 

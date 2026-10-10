@@ -21,7 +21,7 @@ from kura.run_envelope import common_recipe
 from kura.training_artifacts import trained_steps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run  # noqa: E402
+from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, sd_scripts_run  # noqa: E402
 
 
 def _resume(*, save_every: int, additional: int) -> dict[str, Any]:
@@ -170,6 +170,10 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
                 # Musubi prune threshold prunes nothing, and sd-scripts refuses 0.
                 self.assertEqual(owner({"save_every_n_steps": 50, key: 0}, 1000), 20)
                 self.assertEqual(owner({"save_every_n_steps": 50, key: None}, 1000), 20)
+        # A trainer that prunes by its own default when the run sets no keep-last says so.
+        self.assertIsNone(owner({"save_every_n_steps": 50, "unset_keep_last": "trainer_default"}, 1000))
+        self.assertIsNone(owner({"save_every_n_steps": 50, "keep_last": None, "unset_keep_last": "trainer_default"}, 1000))
+        self.assertEqual(owner({"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"}, 1000), 20)
 
     def test_every_count_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
@@ -193,7 +197,7 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         run = ai_toolkit_run()
         run["backend"]["config"]["native_config"] = {"save": {"save_every": 50, "max_step_saves_to_keep": 0}}
         checkpoint = plan._adapter_display(run)["checkpoint"]
-        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0})
+        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"})
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         self.assertIn("about 20 checkpoints", plan._disk_warnings(run, checkpoint)[0])
         refusals = [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"]
@@ -207,6 +211,76 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         self.assertEqual([record for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"], [])
         self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 0)
         self.assertIsNone(_monitor_expected(run, checkpoint))
+
+
+def _counts(run: dict[str, Any]) -> dict[str, Any]:
+    """A fresh run through the real backend display and all five places that count its checkpoints."""
+    checkpoint = plan._adapter_display(run)["checkpoint"]
+    allowed = {**run, "safety": {"allow_many_checkpoints": True}}
+    return {
+        "disk_warnings": plan._disk_warnings(run, checkpoint),
+        "refusals": [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"],
+        "preflight": [record["fact"] for record in plan._checkpoint_preflight_report(allowed)],
+        "write_count": plan._estimate_checkpoint_write_bytes(allowed)["count"],
+        "monitor_expected": _monitor_expected(run, checkpoint),
+    }
+
+
+class CheckpointRetentionTests(unittest.TestCase):
+    """Each backend's display says whether its trainer prunes step checkpoints, and every count agrees."""
+
+    def _assert_pruned(self, run: dict[str, Any]) -> None:
+        self.assertEqual(_counts(run), {"disk_warnings": [], "refusals": [], "preflight": [], "write_count": 0, "monitor_expected": None})
+
+    def _assert_counted(self, run: dict[str, Any], expected: int) -> None:
+        counts = _counts(run)
+        self.assertIn(f"about {expected} checkpoints", counts["disk_warnings"][0])
+        self.assertIn(f"about {expected} checkpoints without pruning", counts["refusals"][0])
+        self.assertEqual(counts["preflight"], [f"checkpoint cadence implies about {expected} checkpoint(s)"])
+        self.assertEqual(counts["write_count"], expected)
+        self.assertEqual(counts["monitor_expected"], expected)
+
+    def test_ai_toolkit_with_no_keep_last_is_pruned_by_the_trainer_default(self) -> None:
+        # The pinned trainer keeps max_step_saves_to_keep (default 5) when the run sets none.
+        for config in ({"save_every_n_steps": 50}, {"native_config": {"save": {"save_every": 50}}}):
+            run = ai_toolkit_run()
+            run["backend"]["config"].update(config)
+            with self.subTest(config=config):
+                self._assert_pruned(run)
+
+    def test_ai_toolkit_keep_last_zero_keeps_every_save(self) -> None:
+        for config in (
+            {"save_every_n_steps": 50, "save_last_n_steps": 0},
+            {"native_config": {"save": {"save_every": 50, "max_step_saves_to_keep": 0}}},
+        ):
+            run = ai_toolkit_run()
+            run["backend"]["config"].update(config)
+            with self.subTest(config=config):
+                self._assert_counted(run, 20)
+
+    def test_musubi_epoch_retention_does_not_prune_step_checkpoints(self) -> None:
+        # Musubi prunes step checkpoints only by save_last_n_steps (which Kura owns), not by epochs.
+        run = musubi_run()
+        run["backend"]["config"].update({"save_every_n_steps": 50, "extra_args": ["--save_last_n_epochs", "2"]})
+        self.assertNotIn("keep_last", plan._adapter_display(run)["checkpoint"])
+        self._assert_counted(run, 20)
+
+    def test_a_fresh_run_with_retention_states_no_count(self) -> None:
+        sd = sd_scripts_run()
+        sd["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 100})
+        musubi = musubi_run()
+        musubi["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
+        for run in (sd, musubi):
+            with self.subTest(backend=run["backend"]["name"]):
+                self._assert_pruned(run)
+
+    def test_the_guard_points_to_each_backends_own_retention(self) -> None:
+        run = sd_scripts_run()
+        run["backend"]["config"]["save_every_n_steps"] = 50
+        counts = _counts(run)
+        for text in (counts["refusals"][0], counts["disk_warnings"][0]):
+            self.assertNotIn("prune_checkpoints_before_step", text)
+            self.assertIn("kura run capabilities sd-scripts", text)
 
 
 class FreshRunPlanTests(unittest.TestCase):

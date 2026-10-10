@@ -417,7 +417,6 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         "checkpoint": {
             "save_every_n_steps": native.get("save_every_n_steps"),
             "prune_before_step": native.get("prune_checkpoints_before_step"),
-            "keep_last": native.get("save_last_n_steps") or _extra_arg_value(extra_args, "--save_last_n_epochs"),
         },
     }
 

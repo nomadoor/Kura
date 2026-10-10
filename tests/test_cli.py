@@ -2097,20 +2097,22 @@ class RunPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "may create about 30 checkpoints"):
             _checkpoint_count_safety(run, trained_steps(run))
 
-    def test_checkpoint_count_safety_accepts_musubi_keep_last_policy(self) -> None:
+    def test_checkpoint_count_safety_accepts_musubi_prune_policy_but_not_epoch_retention(self) -> None:
+        # Musubi Tuner prunes step checkpoints only by Kura's prune step; epoch retention prunes none.
         run = {
             "type": "train",
                         "recipe": {"steps": 3000},
             "backend": {"name": "musubi-tuner", "config": {
                     "save_every_n_steps": 100,
-                    "save_last_n_steps": 300,
+                    "prune_checkpoints_before_step": 2700,
                 }
             },
         }
         _checkpoint_count_safety(run, trained_steps(run))
-        run["backend"]["config"].pop("save_last_n_steps")
+        run["backend"]["config"].pop("prune_checkpoints_before_step")
         run["backend"]["config"]["extra_args"] = ["--save_last_n_epochs=2"]
-        _checkpoint_count_safety(run, trained_steps(run))
+        with self.assertRaisesRegex(ValueError, "about 30 checkpoints without pruning"):
+            _checkpoint_count_safety(run, trained_steps(run))
 
     def test_checkpoint_count_safety_can_be_explicitly_overridden(self) -> None:
         run = {
