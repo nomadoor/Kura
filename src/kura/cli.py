@@ -36,7 +36,7 @@ from kura.executors import _redact_secret_text, read_run_status, reconcile_docke
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, CLEANUP_ELIGIBLE_STATES, quiet_run_notice, run_finished, run_quiet_since
 from kura.executors.docker import DOCKER_LAUNCH_LOCK, resolve_docker_create_intents
 from kura.executors.runpod import resolve_runpod_create_intents, unresolved_create_intents
-from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, file_lock
+from kura.fsio import FileLockBusy, atomic_write_json, atomic_write_text, create_new_files, file_lock
 from kura.records import record
 from kura.init_templates import cmd_init
 from kura.model_requirements import declared_model_requirements
@@ -178,26 +178,40 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         if not args.write:
             print(json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
-        # Write the file the next command reads only when nothing is there yet
-        # and the draft needs no review; otherwise the proposal stays a
-        # candidate, so an authored file is never replaced.
-        items_path = directory / "items.jsonl"
-        if items_path.exists() or proposal["issues"]:
-            items_path = directory / "items.v2.candidate.jsonl"
-        metadata_path = None if proposal["dataset_yaml"] is None else directory / "dataset.v2.candidate.yaml"
-        written = [path for path in (metadata_path, items_path) if path is not None]
-        if any(path.exists() for path in written):
-            raise ValueError("v2 candidate already exists; review it before replacing")
-        if metadata_path is not None:
-            with metadata_path.open("x", encoding="utf-8") as stream:
-                yaml.safe_dump(proposal["dataset_yaml"], stream, allow_unicode=True, sort_keys=False)
-        with items_path.open("x", encoding="utf-8") as stream:
-            for item in proposal["items"]:
-                stream.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
-        print("wrote: " + ", ".join(str(path) for path in written))
-        for candidate, authored in ((metadata_path, "dataset.yaml"), (items_path, "items.jsonl")):
-            if candidate is not None and candidate.name != authored:
-                print(f"review {candidate.name}, then move it over {authored}")
+        if not proposal["items"]:
+            for issue in proposal["issues"]:
+                print(f"review required: {issue}", file=sys.stderr)
+            raise ValueError("no rows were drafted; nothing was written")
+        # Write items.jsonl, the file the next command reads, only when none
+        # exists and the draft is complete: dataset.yaml declares v2 and
+        # nothing needs review. Otherwise every file stays a candidate, so a
+        # draft is never half adopted and an authored file is never replaced.
+        dataset_v2 = proposal["dataset_yaml"] is None
+        items_exist = (directory / "items.jsonl").exists()
+        adopt = dataset_v2 and not items_exist and not proposal["issues"]
+        files: dict[Path, bytes] = {}
+        if not dataset_v2:
+            files[directory / "dataset.v2.candidate.yaml"] = yaml.safe_dump(
+                proposal["dataset_yaml"], allow_unicode=True, sort_keys=False,
+            ).encode("utf-8")
+        items_path = directory / ("items.jsonl" if adopt else "items.v2.candidate.jsonl")
+        files[items_path] = "".join(
+            json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in proposal["items"]
+        ).encode("utf-8")
+        for path in files:
+            if path.exists():
+                raise ValueError(f"{path.name} already exists; review it before drafting again")
+        create_new_files(files)
+        print("wrote: " + ", ".join(str(path) for path in files))
+        if not dataset_v2:
+            print("review dataset.v2.candidate.yaml, then move it over dataset.yaml")
+        if not adopt:
+            if not items_exist:
+                print("review items.v2.candidate.jsonl, then rename it to items.jsonl")
+            elif dataset_v2:
+                print("compare items.v2.candidate.jsonl with items.jsonl, which was not changed")
+            else:
+                print("review items.v2.candidate.jsonl, then move it over items.jsonl")
         for issue in proposal["issues"]:
             print(f"review required: {issue}", file=sys.stderr)
         return 0
@@ -1548,7 +1562,7 @@ def main() -> None:
     draft.add_argument(
         "--write",
         action="store_true",
-        help="Write items.jsonl if absent; never replace an authored file (write *.v2.candidate.* instead)",
+        help="Write items.jsonl if absent and the draft needs no review; otherwise write *.v2.candidate.*; never replace a file",
     )
     draft.set_defaults(func=cmd_dataset_draft)
     inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")

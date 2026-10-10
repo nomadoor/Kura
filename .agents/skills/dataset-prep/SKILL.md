@@ -37,12 +37,13 @@ that command reads.
 
 3. `kura dataset draft <id> --write` writes `items.jsonl`. Check that each
    row pairs the right image and caption (each row points at its caption file
-   as `caption.file`). It never replaces an authored file and never adopts a
-   draft that needs review: when `items.jsonl` already exists or the draft
-   reports `review required`, it writes `items.v2.candidate.jsonl` instead,
-   and when `dataset.yaml` lacks `items_schema_version: 2` it writes
-   `dataset.v2.candidate.yaml`. Resolve what it reports, then move each
-   candidate over its original yourself.
+   as `caption.file`). It never replaces a file and never half adopts a draft:
+   when `items.jsonl` already exists, the draft reports `review required`, or
+   `dataset.yaml` lacks `items_schema_version: 2`, it writes
+   `items.v2.candidate.jsonl` instead (and `dataset.v2.candidate.yaml` in the
+   last case) and prints what to do with each. Resolve what it reports, then
+   rename or move the candidates yourself. When it drafts no rows it writes
+   nothing.
 4. `kura dataset validate <id>`, then `kura dataset inspect <id>`. Every
    dataset command takes either the ID or the dataset's path.
 
@@ -122,6 +123,7 @@ starting point for a new run:
 Kura does not infer either replacement during compile. `kura dataset draft`
 proposes rows from the files it finds and does not read `control_subdir`;
 confirm its sample associations and add any missing control references before
-validating. When it wrote `items.v2.candidate.jsonl` (an existing
-`items.jsonl`, or a draft that reports `review required`), move it over
-`items.jsonl` only after that review.
+validating. When `items.jsonl` already exists, `--write` writes
+`items.v2.candidate.jsonl`: if the dataset is already v2, compare the two and
+edit `items.jsonl`; otherwise move the candidate over it only after that
+review.

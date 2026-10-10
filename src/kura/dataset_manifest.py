@@ -30,6 +30,21 @@ def declares_items_v2(metadata: Any) -> bool:
     return isinstance(metadata, dict) and type(metadata.get("items_schema_version")) is int and metadata["items_schema_version"] == 2
 
 
+def captions_by_stem(directory: Path | None) -> dict[str, list[Path]]:
+    """The caption files in `directory`, by stem, under their real names.
+
+    A caption suffix matches whatever its case, so `a.TXT` is `a.png`'s
+    caption on every filesystem.
+    """
+    if directory is None or not directory.is_dir():
+        return {}
+    result: dict[str, list[Path]] = {}
+    for item in sorted(directory.iterdir()):
+        if item.is_file() and item.suffix.lower() in CAPTION_SUFFIXES:
+            result.setdefault(item.stem, []).append(item)
+    return result
+
+
 def caption_is_empty(text: str | None) -> bool:
     """True when a caption carries no words: absent, empty, or whitespace only."""
     return text is None or not text.strip()
@@ -456,12 +471,11 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     if len(choices) == 1:
         generated_ids: set[str] = set()
+        captions_beside = captions_by_stem(choices[0][1][0].parent)
         for image in choices[0][1]:
             relative = image.relative_to(root).as_posix()
             legacy = legacy_by_path.get(relative)
-            candidates = [image.with_suffix(suffix) for suffix in CAPTION_SUFFIXES]
-            captions = [candidate for candidate in candidates if candidate.is_file()]
-            caption = _draft_caption(root, relative, legacy, captions, issues)
+            caption = _draft_caption(root, relative, legacy, captions_beside.get(image.stem, []), issues)
             default_id = PurePosixPath(relative).with_suffix("").name
             sample_id = legacy.get("id") if legacy is not None and isinstance(legacy.get("id"), str) and legacy["id"] else default_id
             if sample_id in generated_ids:
