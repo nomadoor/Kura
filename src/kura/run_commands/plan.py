@@ -32,7 +32,7 @@ from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
 from kura.executors.runpod import unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
-from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version, runpod_min_cuda_for
+from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
 from kura.model_requirements import model_requirements
 from kura.paths import local_docker_mounts, local_hf_cache, to_host_path
@@ -43,7 +43,7 @@ from kura.workspace import run_path as _run_path
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer
 from kura.workspace import workspace as _workspace
 from kura.workspace import workspace_config as _workspace_config
-from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types, runpod_settings_for_adapter
+from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy
 from kura.training_artifacts import load_training_state, training_state_contract, verify_training_state, training_state_managed
@@ -145,11 +145,7 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
     if executor != "runpod":
         return None
     try:
-        image_reference = _plan_launch_image(run, config, run_dir)["reference"]
-        backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
-        adapter = get_backend(backend.get("name"))
-        # The settings the launch will use: a template only for adapters that accept one.
-        min_cuda_version = runpod_min_cuda_for(runpod_settings_for_adapter(config.get("runpod"), adapter, adapter.image_name), image_reference)
+        min_cuda_version = runpod_min_cuda_version(_plan_launch_image(run, config, run_dir)["reference"])
     except ValueError:
         min_cuda_version = runpod_min_cuda_version("")
     selected_gpu_type_ids, gpu_type_ids = _runpod_planning_gpus(compute, config)

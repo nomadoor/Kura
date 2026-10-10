@@ -97,6 +97,11 @@ manifest-v2 dataset); the RunPod API key is always read from
 `docker.workspace_target`, `storage.docker_data_drive`, `runpod.api_key_env`, or
 `comfyui.runpod.api_key_env` are refused with a pointer to `kura workspace migrate`, which drops them.
 
+Kura starts every RunPod Pod from the configured image and its own start
+script, which arms the maximum lease before anything else runs. RunPod
+templates are not used, so `runpod.template_id` is refused the same way and
+`kura workspace migrate` drops it.
+
 Workspaces created before `docker.hf_cache` mounted the cache through
 `docker.mounts` (target `/workspace/cache/huggingface` or the older
 `/root/.cache/huggingface`). Kura now refuses that entry; `kura workspace migrate`
@@ -195,7 +200,6 @@ Render compile freezes these settings into `resolved/manifest.lock.yaml`.
 
 | Key | Purpose | Default |
 | --- | --- | --- |
-| `runpod.template_id` | Optional RunPod template ID; used for AI-Toolkit-compatible official template startup | `0fqzfjy6f3` |
 | `runpod.storage_mode` | Remote staging mode | `upload` |
 | `runpod.gpu_type_ids` | Ordered RunPod GPU candidates. The first available candidate is tried first. | `["NVIDIA RTX A5000", "NVIDIA A40"]` |
 | `runpod.gpu_count` | Number of GPUs | `1` |

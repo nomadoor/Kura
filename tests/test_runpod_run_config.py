@@ -46,7 +46,8 @@ class GpuChoiceTests(unittest.TestCase):
 
         for module in (plan, runpod):
             with self.subTest(module=module.__name__):
-                self.assertIs(module.runpod_min_cuda_for, images.runpod_min_cuda_for)
+                self.assertIs(module.runpod_min_cuda_version, images.runpod_min_cuda_version)
+                self.assertFalse(hasattr(module, "runpod_min_cuda_for"))
 
 
 if __name__ == "__main__":

@@ -29,8 +29,8 @@ filter from it.** Users do not configure it.
 - Every Pod creation, for training and for rendering, sends the image's CUDA
   version as `minCudaVersion`. GPU stock and price shown before launch use the
   same filter.
-- An image whose CUDA version Kura does not know, such as a workspace override
-  or a RunPod template, asks for the newest version Kura has seen on RunPod. A
+- An image whose CUDA version Kura does not know, such as a workspace override,
+  asks for the newest version Kura has seen on RunPod. A
   newer driver runs an older image, so this finds fewer hosts rather than
   hosts that are too old. The plan says so.
 

@@ -33,7 +33,6 @@ def _render_runpod_config(config: dict[str, Any]) -> dict[str, Any]:
     comfyui = config.get("comfyui") if isinstance(config.get("comfyui"), dict) else {}
     comfy_runpod = comfyui.get("runpod") if isinstance(comfyui.get("runpod"), dict) else {}
     runpod_config.update(comfy_runpod)
-    runpod_config.pop("template_id", None)
     backend_ports = runpod_config.get("backend_ports")
     if isinstance(backend_ports, dict) and isinstance(backend_ports.get("comfyui"), list):
         runpod_config["ports"] = backend_ports["comfyui"]

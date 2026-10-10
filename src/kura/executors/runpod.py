@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 import yaml
 
 from kura import __version__
-from kura.images import runpod_min_cuda_version, runpod_min_cuda_for
+from kura.images import runpod_min_cuda_version
 from kura.install_source import kura_provenance
 from kura.dataset_handoff import inspect_dataset_sources, load_frozen_dataset_handoff, handoff_was_frozen
 from kura.dataset_transfer import build_transfer_inventory, estimate_transfer, pin_transfer_manifest, write_transfer_archive, write_transfer_manifest
@@ -106,7 +106,6 @@ def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
         ("name", "name"),
         ("cloudType", "cloudType"),
         ("imageName", "imageName"),
-        ("templateId", "templateId"),
         ("supportPublicIp", "supportPublicIp"),
         ("volumeMountPath", "volumeMountPath"),
         ("networkVolumeId", "networkVolumeId"),
@@ -414,7 +413,6 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("runpod.cloud_type must be SECURE, COMMUNITY, ANY, or AUTO")
     return {
         "storage_mode": storage_mode,
-        "template_id": config.get("template_id"),
         "gpu_type_ids": gpu_types,
         "gpu_count": config.get("gpu_count", 1),
         "container_disk_gb": config.get("container_disk_gb", 50),
@@ -582,7 +580,7 @@ def confirm_runpod_billing(
     writer's, never the runner's.
     """
     settings = _runpod_settings(config)
-    min_cuda = runpod_min_cuda_for(settings, image)
+    min_cuda = runpod_min_cuda_version(image)
     return _confirm_runpod_launch(
         config, settings, yes=yes, max_lease_sec=max_lease_sec, wait_for_capacity_sec=wait_for_capacity_sec,
         unattended_wait=unattended_wait, min_cuda_version=min_cuda,
@@ -1108,11 +1106,7 @@ def launch_runpod(
             "KURA_WORKSPACE": workspace_path,
             "KURA_RUN_ID": run_dir.name,
         })
-        if isinstance(settings.get("template_id"), str) and settings["template_id"]:
-            start_command = None
-            workspace_contract = "RunPod starts the official template normally; Kura uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
-        else:
-            upload_script = r'''
+        upload_script = r'''
 set -u
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/logs"
 mkdir -p "$KURA_WORKSPACE/runs/$KURA_RUN_ID/outputs" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/checkpoints" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/samples" "$KURA_WORKSPACE/runs/$KURA_RUN_ID/metrics"
@@ -1131,8 +1125,8 @@ fi
 echo "Kura SSH staging pod is ready; waiting for controller" >> "$KURA_LOG_PATH"
 sleep infinity
 '''.strip()
-            start_command = ["sh", "-lc", _pod_start_script(upload_script, max_lease_sec=max_lease_sec, log_path=log_path)]
-            workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
+        start_command = ["sh", "-lc", _pod_start_script(upload_script, max_lease_sec=max_lease_sec, log_path=log_path)]
+        workspace_contract = "Kura starts an SSH staging container, uploads the staged bundle with SCP, runs the backend command over SSH, then downloads outputs before stopping the disposable Pod"
     else:
         mkdir_targets = [
             '"$(dirname "$KURA_LOG_PATH")"',
@@ -1149,17 +1143,12 @@ sleep infinity
         "containerDiskInGb": settings["container_disk_gb"],
         "volumeInGb": settings["volume_in_gb"],
         "interruptible": settings["interruptible"], "env": runtime_env,
-        # A template supplies its own image, whose CUDA version Kura does not know.
-        "minCudaVersion": runpod_min_cuda_for(settings, image),
+        "minCudaVersion": runpod_min_cuda_version(image),
+        "imageName": image,
+        "dockerStartCmd": start_command,
     }
     if settings.get("support_public_ip") is not None:
         request_body["supportPublicIp"] = bool(settings["support_public_ip"])
-    if start_command is not None:
-        request_body["dockerStartCmd"] = start_command
-    if isinstance(settings.get("template_id"), str) and settings["template_id"]:
-        request_body["templateId"] = settings["template_id"]
-    else:
-        request_body["imageName"] = image
     if isinstance(settings.get("ports"), list) and all(isinstance(port, str) for port in settings["ports"]):
         request_body["ports"] = settings["ports"]
     safe_request = dict(request_body)

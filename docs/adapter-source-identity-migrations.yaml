@@ -8,6 +8,136 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: no-runpod-templates-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      The unused RunPod template launch path is removed, so every Pod Kura starts runs its own
+      start script with the lease guard; no adapter used templates, and trainer commands,
+      inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: d931a9f04b076336f8ae94d145f1b382d5bf9606a0857a462cf784e878d10c5b
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: dc47dba171013d70574cb2828457a80fdd28d536508e5216c9dd906080a4ed74
+  - id: no-runpod-templates-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      The unused RunPod template launch path is removed, so every Pod Kura starts runs its own
+      start script with the lease guard; no adapter used templates, and trainer commands,
+      inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 7c8c151ec6fcbe171477ca993177dc7782c9eef99d5b090e187e7e47ddc3d6ac
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 4db621f5073ece5169458d2e70d777b2bc55d320573429357d299c6e6cc1b24f
+  - id: no-runpod-templates-sd-scripts-2026-10-08
+    backend: sd-scripts
+    reason: >-
+      The unused RunPod template launch path is removed, so every Pod Kura starts runs its own
+      start script with the lease guard; no adapter used templates, and trainer commands,
+      inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 791e449da265db2718f8353cb2c1179b423b6b34fb9019e7d7d87be0c826c59c
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 391b12346a2c4d3866fccb03a82f1e399c3533334b43849be2266fa84b8839fc
+  - id: runpod-executor-no-runpod-templates-2026-10-08
+    executor: runpod
+    reason: >-
+      The unused RunPod template launch path is removed, so every Pod Kura starts runs its own
+      start script with the lease guard; no adapter used templates, and trainer commands,
+      inputs, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: bf81935c3f99efcedef191fb5be5a1ee70e72f2ca6ac336a6299b5a607f7470c
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 688f896a344aba04e20d8fe0765256583f8256e2ac00cf32a006a4017c73281e
   - id: dead-code-and-one-lease-default-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-
