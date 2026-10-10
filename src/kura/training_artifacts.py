@@ -581,7 +581,9 @@ def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int |
     `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no prune below step 1,
     and sd-scripts refuses a non-positive `save_last_n_steps`. Epoch retention prunes no step
     checkpoint. The plan's checkpoint warnings, guard, and preflight line and the monitor's
-    expected checkpoints read it; the disk estimate reads `peak_checkpoints`."""
+    expected checkpoints read it; the disk estimate reads `peak_checkpoints`. The guard trusts
+    AI-Toolkit's default pruning because it asks whether many checkpoints are left, while the
+    disk estimate is a conservative bound and so does not assume a default it does not own."""
     every = _retention_value(checkpoint.get("save_every_n_steps"))
     if not steps or every is None:
         return None
@@ -593,18 +595,27 @@ def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int |
 
 
 def peak_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int | None:
-    """How many step checkpoints are on disk at once while a run trains, for the launch disk
-    estimates: every save (`max(steps // every, 1)`) unless the trainer prunes during training.
+    """How many checkpoint files are on disk at once while a run trains, for the launch disk
+    estimates. Every trainer writes an unpruned final file besides its step saves, so every
+    save is the step saves plus one: `steps // every` step saves (sd-scripts and Musubi Tuner
+    save on the last step too), or `(steps - 1) // every` where the display declares
+    `last_step_save: final_only` (AI-Toolkit saves on steps below the last and leaves the
+    last to its final file). An unset cadence counts the final file only; no trainer default
+    cadence is assumed. Pruning during training lowers the peak, never above every save:
     AI-Toolkit removes all but `keep_last` after writing each save, so `keep_last + 1` are on
-    disk at once; sd-scripts removes the save that left the `retention_window_steps` window
-    after writing each save, so it keeps `window // every + 1` and holds one more. Musubi
+    disk at once (at the end, `keep_last` step saves and the final file); sd-scripts removes
+    the save that left the `retention_window_steps` window after writing each save, so it
+    keeps `window // every + 1` and holds one more (at the end, the final file). Musubi
     Tuner's `prune_before_step` runs after training, and AI-Toolkit's unset `keep_last`
-    default is not copied here, so both count every save. None when there is no cadence or no
-    steps; the positive-value rules are those of `expected_checkpoints`."""
-    every = _retention_value(checkpoint.get("save_every_n_steps"))
-    if not steps or every is None:
+    default is not copied here, so both count every save. None when there are no steps; the
+    positive-value rules are those of `expected_checkpoints`."""
+    if not steps:
         return None
-    every_save = max(steps // every, 1)
+    every = _retention_value(checkpoint.get("save_every_n_steps"))
+    if every is None:
+        return 1
+    saved_steps = steps - 1 if checkpoint.get("last_step_save") == "final_only" else steps
+    every_save = saved_steps // every + 1
     keep_last = _retention_value(checkpoint.get("keep_last"))
     if keep_last is not None:
         return min(keep_last + 1, every_save)

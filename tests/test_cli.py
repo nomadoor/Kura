@@ -1847,7 +1847,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 # The host's real free space must not decide this test.
                 with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
-                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1891,7 +1891,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
@@ -2075,7 +2075,7 @@ class RunPlanTests(unittest.TestCase):
             _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
         run["safety"]["allow_runpod_disk_risk"] = True
         result = _runpod_launch_disk_preflight(run, {"container_disk_gb": 10}, download_estimate)
-        self.assertEqual(result["estimated_write_bytes"], 12 * 1024**3)
+        self.assertEqual(result["estimated_write_bytes"], 14 * 1024**3)
 
     def test_checkpoint_count_safety_rejects_many_unpruned_checkpoints(self) -> None:
         run = {
@@ -6023,7 +6023,7 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan.probe_storages", side_effect=self._storage_probe(100)),
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
             ):
-                with self.assertRaisesRegex(ValueError, "requires at least 110 GiB"):
+                with self.assertRaisesRegex(ValueError, "requires at least 112 GiB"):
                     _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
         self.assertEqual(_checkpoint_count_safety(run, trained_steps(run)), None)
 
@@ -6048,13 +6048,13 @@ class DockerLifecycleTests(unittest.TestCase):
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")),
                 patch("kura.run_commands.plan._hf_file_size_probe", return_value={"status": "ok", "size_bytes": 40 * 1024**3}),
             ):
-                with self.assertRaisesRegex(ValueError, "requires at least 130 GiB"):
+                with self.assertRaisesRegex(ValueError, "requires at least 132 GiB"):
                     _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 50}})
                 payload = _local_launch_disk_preflight(root, run, {"docker": {"min_free_gb": 10}})
-        self.assertEqual(payload["paths"]["workspace"]["estimated_write_bytes"], 40 * 1024**3)
+        self.assertEqual(payload["paths"]["workspace"]["estimated_write_bytes"], 42 * 1024**3)
         self.assertEqual(payload["paths"]["hf_cache"]["estimated_write_bytes"], 40 * 1024**3)
-        self.assertEqual(payload["paths"]["workspace"]["backing_estimated_write_bytes"], 80 * 1024**3)
-        self.assertEqual(payload["paths"]["hf_cache"]["backing_estimated_write_bytes"], 80 * 1024**3)
+        self.assertEqual(payload["paths"]["workspace"]["backing_estimated_write_bytes"], 82 * 1024**3)
+        self.assertEqual(payload["paths"]["hf_cache"]["backing_estimated_write_bytes"], 82 * 1024**3)
 
     def test_local_launch_disk_preflight_honors_run_disk_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

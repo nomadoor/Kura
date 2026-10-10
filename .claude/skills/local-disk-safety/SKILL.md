@@ -127,11 +127,14 @@ or WSL/VHDX/Windows-side operations.
   training run adds a conservative checkpoint budget of
   `safety.checkpoint_estimate_gb` (default 1) GiB per checkpoint;
   `safety.allow_many_checkpoints` does not remove it. The budget counts the
-  most checkpoints on disk at once while training:
-  retention that prunes during training (AI-Toolkit and sd-scripts
-  `save_last_n_steps`) bounds it near the kept count, while Musubi Tuner's
-  `prune_checkpoints_before_step` runs only after training and AI-Toolkit's
-  unset default is not assumed, so those count every save.
+  most checkpoint files on disk at once while training, the trainer's final
+  file included: retention that prunes during training (AI-Toolkit and
+  sd-scripts `save_last_n_steps`) bounds it near the kept count, while Musubi
+  Tuner's `prune_checkpoints_before_step` runs only after training and
+  AI-Toolkit's unset default is not assumed, so those count every save. An
+  unset save cadence is counted as the final save only. The disk lines in
+  `kura run plan` and the disk refusals show this part as
+  `checkpoints: N × G GiB (safety.checkpoint_estimate_gb)`.
 - On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch

@@ -89,6 +89,11 @@ def _runpod_graphql(query: str, variables: dict[str, Any], api_key: str, *, time
     return data
 
 
+# The container disk a Pod gets when `runpod.container_disk_gb` is unset; the plan's RunPod
+# disk preflight reads the same value.
+DEFAULT_CONTAINER_DISK_GB = 150
+
+
 def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("interruptible"):
         raise ValueError("RunPod interruptible Pod creation is not supported by Kura's GraphQL control plane")
@@ -98,7 +103,7 @@ def _runpod_graphql_create_input(payload: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "gpuTypeId": gpu_type_ids[0],
         "gpuCount": payload.get("gpuCount", 1),
-        "containerDiskInGb": payload.get("containerDiskInGb", 50),
+        "containerDiskInGb": payload.get("containerDiskInGb", DEFAULT_CONTAINER_DISK_GB),
         "volumeInGb": payload.get("volumeInGb", 0),
         "startSsh": True,
     }
@@ -415,7 +420,7 @@ def _runpod_settings(config: dict[str, Any]) -> dict[str, Any]:
         "storage_mode": storage_mode,
         "gpu_type_ids": gpu_types,
         "gpu_count": config.get("gpu_count", 1),
-        "container_disk_gb": config.get("container_disk_gb", 50),
+        "container_disk_gb": config.get("container_disk_gb", DEFAULT_CONTAINER_DISK_GB),
         "volume_in_gb": config.get("volume_in_gb", 0),
         "workspace_path": config.get("workspace_path", CONTAINER_WORKSPACE),
         "ports": ports,

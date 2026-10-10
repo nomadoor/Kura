@@ -30,7 +30,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -659,7 +659,8 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
             "runpod-disk",
             "info",
             "container_disk_gb="
-            f"{payload['container_disk_gib']}; estimated known remote writes {_preflight_bytes(payload['estimated_write_bytes'])}{suffix}",
+            f"{payload['container_disk_gib']}; estimated known remote writes {_preflight_bytes(payload['estimated_write_bytes'])}; "
+            f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}{suffix}",
             "workspace.yaml",
         )
     ]
@@ -748,7 +749,8 @@ def _local_disk_preflight_report(
             "disk",
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
-            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes)",
+            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes); "
+            f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}",
             "workspace.yaml",
         )
     ]
@@ -775,15 +777,19 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     adapter = _run_adapter(run)
     count = peak_checkpoints(adapter.display(run).get("checkpoint") or {}, trained_steps(run)) if adapter is not None else None
-    if count is None:
-        return {"bytes": 0, "count": 0}
     per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
+    count = count or 0
     return {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+
+
+def _checkpoint_estimate_text(estimate: dict[str, Any]) -> str:
+    """The checkpoint part of a disk preflight line, naming the setting that sizes it."""
+    return f"checkpoints: {estimate['count']} × {estimate['per_checkpoint_gib']} GiB (safety.checkpoint_estimate_gb)"
 
 
 def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=50)
+    container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=DEFAULT_CONTAINER_DISK_GB)
     container_disk_bytes = container_disk_gib * 1024**3
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
     disk_cache_estimate = _disk_cache_estimate(run)
@@ -798,7 +804,8 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
         required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
         raise ValueError(
             f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
-            "(selected input transfer, model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
+            f"(selected input transfer, model downloads, run-scoped cache, and checkpoints); {_checkpoint_estimate_text(checkpoint_estimate)}; "
+            "increase runpod.container_disk_gb, reduce writes, or set "
             "safety.allow_runpod_disk_risk: true if intentional"
         )
     return {
@@ -904,7 +911,7 @@ def _local_launch_disk_preflight(
                 f"local Docker launch requires at least {required_display_gib} GiB including estimated writes"
             )
     if errors:
-        raise ValueError("; ".join(errors))
+        raise ValueError("; ".join([*errors, _checkpoint_estimate_text(checkpoint_estimate)]))
     try:
         # Bounded and outside the workspace, as the daemon probe is: the plan reads this too.
         docker_system_df = subprocess.run(
