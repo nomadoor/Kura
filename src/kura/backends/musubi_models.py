@@ -129,11 +129,20 @@ _FLUX2_KLEIN_NAMES: dict[str, str] = {
 }
 
 
+# The --model_version values the pinned Musubi Tuner accepts for FLUX.2 (flux_2/flux2_utils.py).
+FLUX2_MODEL_VERSIONS = ("klein-base-4b", "klein-4b", "klein-base-9b", "klein-9b", "dev")
+
+
 def _flux2_klein_variant(run: dict[str, Any]) -> str | None:
     """Decide which FLUX.2 Klein variant a run trains: model_version, then model_bundle, then model.base."""
     override = _musubi_backend_override(run)
     model_version = _musubi_model_version(run, default="")
     if model_version:
+        if model_version not in FLUX2_MODEL_VERSIONS:
+            raise ValueError(
+                f"Musubi FLUX.2 backend.config.model_version {model_version!r} is not one Musubi Tuner accepts; "
+                f"use one of {', '.join(FLUX2_MODEL_VERSIONS)}"
+            )
         return model_version if model_version in _FLUX2_KLEIN_NAMES.values() else None
     for name in (override.get("model_bundle"), run.get("model", {}).get("base")):
         variant = _FLUX2_KLEIN_NAMES.get(_normalize_musubi_model_version(name))
@@ -291,13 +300,18 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
 
 
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
+    variant = _flux2_klein_variant(run)
     model_version = _musubi_model_version(run, default="")
     if model_version:
         return model_version
-    variant = _flux2_klein_variant(run)
     if variant:
         return variant
-    raise ValueError("Musubi FLUX.2 requires backend.config.model_version or a recognized model.base/model_bundle; refusing to default to 4B")
+    raise ValueError(
+        "Musubi FLUX.2 requires backend.config.model_version (one of "
+        f"{', '.join(FLUX2_MODEL_VERSIONS)}) or a model.base/model_bundle naming a Klein variant, "
+        f"such as {', '.join(sorted(name for name in _FLUX2_KLEIN_NAMES if name.startswith('black-forest-labs/')))}; "
+        "refusing to default to 4B"
+    )
 
 
 def _musubi_model_version(run: dict[str, Any], *, default: str = "original") -> str:

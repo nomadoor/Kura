@@ -5438,6 +5438,35 @@ class MusubiBackendTests(unittest.TestCase):
             with self.subTest(name=variant, via="model_version"):
                 self.assertEqual(self._flux2_klein_resolution({"model_version": variant}), expected)
 
+    def test_musubi_flux2_refuses_a_model_version_the_trainer_does_not_accept(self) -> None:
+        for value in ("9b", "flux.2-klein-9b", "klein-12b"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "klein-base-4b, klein-4b, klein-base-9b, klein-9b, dev"):
+                self._flux2_klein_resolution({"model_version": value, "model_bundle": "bfl-flux2-klein-9b"})
+
+    def test_musubi_flux2_variant_from_model_base_survives_a_disabled_bundle(self) -> None:
+        from kura.backends.musubi_models import _musubi_flux2_model_version
+
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-9B"}
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "flux2", "model_bundle": "none",
+            "model_paths": {"dit": "/m/dit.safetensors", "vae": "/m/vae.safetensors", "text_encoder": "/m/te.safetensors"},
+        }}
+        self.assertEqual(musubi_model_download_specs(run)[0], [])
+        self.assertEqual(_musubi_flux2_model_version(run), "klein-9b")
+
+    def test_musubi_flux2_a40_rule_reads_the_variant_wherever_it_was_named(self) -> None:
+        from kura.backends.musubi_command import _validate_musubi_resource_flags
+
+        for config, base in (({"model_version": "klein-9b"}, None), ({"model_bundle": "bfl-flux2-klein-9b"}, None), ({}, "black-forest-labs/FLUX.2-klein-9B")):
+            run = self._run()
+            run["model"] = {"base": base} if base else {}
+            run["compute"] = {"executor": "runpod", "gpu": "NVIDIA A40"}
+            override = {"architecture": "flux2", "batch_size": 2, **config}
+            run["backend"] = {"name": "musubi-tuner", "config": override}
+            with self.subTest(config=config, base=base), self.assertRaisesRegex(ValueError, "9B on NVIDIA A40 treats batch_size"):
+                _validate_musubi_resource_flags(run, override, "flux2")
+
     @posix_only(DATASET_IO)
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
         run = self._run()
