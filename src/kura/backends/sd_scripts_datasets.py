@@ -11,6 +11,7 @@ import tomllib
 from typing import Any
 
 from kura.backends.dataset_profiles import (
+    caption_presence,
     classify_dataset_shape,
     resolve_projection_partitions,
     select_projection_profile,
@@ -499,10 +500,7 @@ def _sd_scripts_profile(
         },
         shape_examples=examples,
         role_cardinalities=cardinalities,
-        caption_presence={
-            str(sample.get("id")): isinstance(sample.get("caption"), dict)
-            for sample in dataset.get("samples", [])
-        },
+        caption_presence=caption_presence(dataset),
     )
 
 
