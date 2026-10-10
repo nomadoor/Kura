@@ -47,6 +47,38 @@ Before proposing parameters, inspect:
 Do not guess field names from adapter source. A capability refusal is the
 public contract speaking.
 
+## Name the model
+
+Where the weights come from depends on the backend:
+
+- **ai-toolkit** trains from `model.base`, which compile requires: a Hugging
+  Face repository id (`owner/name`), which the trainer downloads itself, or an
+  absolute path as the container sees it (`/workspace/...` for a file in the
+  workspace, or under a `docker.mounts` target in `workspace.yaml`) for a local
+  Docker run. `backend.config.model_arch` says what the weights are.
+- **sd-scripts** and **musubi-tuner** take their weights from
+  `backend.config.model_paths` and `backend.config.model_downloads` (musubi-tuner
+  also `model_bundle`). `model.base` is optional and only a label, except that
+  for musubi-tuner `architecture: flux2` a FLUX.2 Klein name in it (such as
+  `black-forest-labs/FLUX.2-klein-base-4b`) picks the variant when neither
+  `model_version` nor `model_bundle` does. `backend.config.architecture` says
+  what the weights are.
+
+The family cards are named after the family, not the selector. The selector
+values each shipped card covers:
+
+| Card | ai-toolkit `model_arch` | sd-scripts `architecture` | musubi-tuner `architecture` |
+|---|---|---|---|
+| `sd15` | `sd1` | `sd15` | — |
+| `sdxl` | `sdxl` | `sdxl` | — |
+| `anima` | `anima` | `anima` | — |
+| `flux2` | `flux2`, `flux2_klein_4b`, `flux2_klein_9b` | — | `flux2` |
+| `flux_kontext` | `flux_kontext` | — | `flux_kontext` |
+| `krea2` | `krea2` | — | `krea2` |
+
+Every other selector value `kura run capabilities <backend>` lists has no
+shipped card; a user card in `knowledge/model-families/` may cover it.
+
 ## Build the proposal
 
 Choose each setting from the strongest available source:

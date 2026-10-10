@@ -1847,7 +1847,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 # The host's real free space must not decide this test.
                 with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
-                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1891,7 +1891,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:
@@ -3125,6 +3125,7 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(plan["billing"]["price_checked_at"], "2026-07-16T12:00:00+09:00")
             self.assertEqual(plan["billing"]["maximum_lease"], "12h")
             self.assertEqual(plan["billing"]["maximum_lease_sec"], 12 * 3600)
+            self.assertEqual(plan["billing"]["cost_ceiling"], "at most about $3.48 (12h at $0.290/hr, the highest current quote); disk storage is billed separately")
 
     def test_runpod_render_rejects_tampered_frozen_image_before_billing_probe(self) -> None:
         from kura.run_commands.render_runpod import _render_runpod_images
@@ -7443,6 +7444,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("GPU: NVIDIA A40 x1", confirmation)
             self.assertIn("Hourly price: COMMUNITY $0.400/hr", confirmation)
             self.assertIn("Maximum lease: 12h", confirmation)
+            self.assertIn("Cost ceiling: at most about $4.80 (12h at $0.400/hr, the highest current quote)", confirmation)
             self.assertIn("Capacity wait: up to 6h; hourly prices may change while waiting", confirmation)
             self.assertIn("[y/N]", confirmation)
 

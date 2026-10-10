@@ -276,6 +276,79 @@ def _format_lease_limit(max_lease_sec: int) -> str:
     return f"{max_lease_sec}s"
 
 
+def _cost_ceiling(hourly: float | None, lease_sec: int, *, basis: str, unpriced: list[str], reason: str | None) -> dict[str, Any]:
+    """The arithmetic and fields of every cost ceiling Kura shows; `format_cost_ceiling` words it."""
+    return {
+        "max_lease": _format_lease_limit(lease_sec),
+        "max_lease_sec": lease_sec,
+        "hourly_price": hourly,
+        "max_cost": hourly * lease_sec / 3600 if hourly is not None else None,
+        "basis": basis,
+        "unpriced": unpriced,
+        "reason": reason,
+    }
+
+
+def runpod_cost_ceiling(measurement: dict[str, Any], gpu_type_ids: list[str], *, max_lease_sec: int) -> dict[str, Any]:
+    """The most a Pod's GPU time can bill before the lease it is created with deletes it.
+
+    The highest current hourly quote among the requested GPU types (in the measured cloud types)
+    for the whole lease. The quote is for the configured GPU count as RunPod returns it: measured
+    2026-10-11, `lowestPrice(input: {gpuCount: N})` for an A40 on SECURE was $0.59/h for one GPU
+    and $1.18/h for two, so it is already the total and is not multiplied again. A requested
+    choice with no current price (RunPod gives none without stock) is listed in `unpriced` and is
+    not covered; with no price at all the ceiling is unknown. The ceiling holds for the lease the
+    Pod is created with and rises if `kura run lease` extends it (`pod_cost_ceiling`). The plan,
+    a render's dry run, and the billed launch confirmation all show this. It covers GPU charges
+    only: RunPod bills container and volume disk separately, and Kura does not copy those rates.
+    """
+    if measurement.get("status") != "ok":
+        reason = measurement.get("reason")
+        reason = _redact_secret_text(reason) if isinstance(reason, str) and reason else "RunPod prices are unavailable"
+        return _cost_ceiling(None, max_lease_sec, basis="", unpriced=[], reason=reason)
+    if not gpu_type_ids:
+        return _cost_ceiling(None, max_lease_sec, basis="", unpriced=[], reason="no RunPod GPU type is requested")
+    measured = measurement.get("candidates") if isinstance(measurement.get("candidates"), list) else []
+    by_id = {item.get("gpu_type_id"): item for item in measured if isinstance(item, dict)}
+    prices: list[float] = []
+    unpriced: list[str] = []
+    for gpu_type_id in gpu_type_ids:
+        clouds = by_id.get(gpu_type_id, {}).get("clouds")
+        clouds = [cloud for cloud in clouds if isinstance(cloud, dict)] if isinstance(clouds, list) else []
+        if not clouds:
+            unpriced.append(f"{gpu_type_id} has no current price (not measured)")
+        for cloud in clouds:
+            price = cloud.get("price_per_hour")
+            if isinstance(price, (int, float)) and not isinstance(price, bool) and price >= 0:
+                prices.append(float(price))
+                continue
+            stock = cloud.get("stock_status")
+            stock_text = "no stock" if stock in (None, "", "None") else f"stock {stock}"
+            unpriced.append(f"{gpu_type_id} {cloud.get('cloud_type')} has no current price ({stock_text})")
+    return _cost_ceiling(max(prices) if prices else None, max_lease_sec, basis="the highest current quote",
+                         unpriced=unpriced, reason=None if prices else "; ".join(unpriced))
+
+
+def pod_cost_ceiling(cost_per_h: Any, *, lease_sec: int) -> dict[str, Any]:
+    """The most a running Pod can bill from now until a lease of `lease_sec` deletes it, at its own price."""
+    priced = isinstance(cost_per_h, (int, float)) and not isinstance(cost_per_h, bool) and cost_per_h >= 0
+    return _cost_ceiling(float(cost_per_h) if priced else None, lease_sec, basis="the Pod's price", unpriced=[],
+                         reason=None if priced else "the Pod's hourly price was not recorded")
+
+
+def format_cost_ceiling(ceiling: dict[str, Any]) -> str:
+    """One line for a cost ceiling. "about": a quote may change before billing starts."""
+    if ceiling.get("max_cost") is None:
+        return f"unknown: {ceiling.get('reason') or 'no hourly price'}"
+    unpriced = ceiling.get("unpriced") or []
+    scope = " for the GPUs with a current price" if unpriced else ""
+    text = (f"at most about ${ceiling['max_cost']:.2f}{scope} "
+            f"({ceiling['max_lease']} at ${ceiling['hourly_price']:.3f}/hr, {ceiling['basis']})")
+    if unpriced:
+        text += f"; {', '.join(unpriced)}, and landing there is not covered"
+    return text + "; disk storage is billed separately"
+
+
 def _confirm_runpod_launch(
     config: dict[str, Any],
     settings: dict[str, Any],
@@ -326,7 +399,9 @@ def _confirm_runpod_launch(
             print(f"  Price lookup: {_redact_secret_text(reason)}", file=sys.stderr)
     if min_cuda_version:
         print(f"  Host CUDA: {min_cuda_version} or newer", file=sys.stderr)
-    print(f"  Maximum lease: {_format_lease_limit(max_lease_sec)}", file=sys.stderr)
+    ceiling = runpod_cost_ceiling(measurement, settings["gpu_type_ids"], max_lease_sec=max_lease_sec)
+    print(f"  Maximum lease: {ceiling['max_lease']}", file=sys.stderr)
+    print(f"  Cost ceiling: {format_cost_ceiling(ceiling)}", file=sys.stderr)
     if unattended_wait:
         print(f"  Unattended wait: {unattended_wait}", file=sys.stderr)
     if wait_for_capacity_sec > 0:
@@ -757,7 +832,7 @@ def _stage_selected_files(*, workspace: Path, run_dir: Path, run: dict[str, Any]
         **{key: value for key, value in record.items() if key != "entries"},
         "files": len(record["entries"]),
     })
-    return record
+    return {**record, "stage_record": str(stage_path.relative_to(run_dir))}
 
 
 def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | None = None, dataset_id: str | None = None, config: dict[str, Any]) -> dict[str, Any]:
@@ -818,7 +893,7 @@ def stage_runpod(*, workspace: Path, run_dir: Path, dataset_ids: list[str] | Non
     status["last_stage"] = str(stage_path.relative_to(run_dir))
     _write_status(run_dir, status)
     append_run_event(run_dir, {"event": "run_staged", **record})
-    return record
+    return {**record, "stage_record": str(stage_path.relative_to(run_dir))}
 
 
 _POSTFLIGHT_STATUSES = frozenset({"matched", "changed", "uncheckable"})

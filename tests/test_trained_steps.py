@@ -495,6 +495,33 @@ class PeakCheckpointsTests(unittest.TestCase):
         self.assertEqual(passed[0]["severity"], "info")
         self.assertIn(part, passed[0]["fact"])
 
+    def test_local_disk_refusal_and_pass_name_the_setting_behind_the_minimum(self) -> None:
+        real_probe = plan.probe_storages
+
+        def roomy(paths, config=None):
+            return {name: replace(status, linux_free_bytes=1024**5, host_free_bytes=1024**5, effective_free_bytes=1024**5)
+                    for name, status in real_probe(paths, config).items()}
+
+        def report(run, docker):
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                    patch.object(plan, "_disk_cache_estimate", return_value={}), \
+                    patch.object(plan, "probe_storages", side_effect=roomy):
+                return plan._local_disk_preflight_report(run, Path(directory).resolve(), {"docker": docker}, {"bytes": 0})[0]
+
+        run = musubi_run()
+        run["safety"] = {"allow_storage_risk": True}
+        workspace_part = "GiB minimum free, set by docker.min_free_gb in workspace.yaml"
+        refused = report(run, {"min_free_gb": 10**9})
+        self.assertEqual(refused["severity"], "error")
+        self.assertIn(f"{10**9} {workspace_part}, plus estimated writes", refused["fact"])
+        passed = report(run, {})
+        self.assertEqual(passed["severity"], "info")
+        self.assertIn(f"100 {workspace_part} (default), plus estimated writes", passed["fact"])
+        run["safety"]["max_run_disk_gb"] = 10**9
+        raised = report(run, {})
+        self.assertIn(f"{10**9} GiB minimum free, set by safety.max_run_disk_gb in run.yaml", raised["fact"])
+
     def test_local_and_runpod_disk_preflights_count_the_same_peak(self) -> None:
         plain = musubi_run()
         plain["backend"]["config"]["save_every_n_steps"] = 500

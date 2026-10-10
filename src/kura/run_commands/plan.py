@@ -30,7 +30,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, runpod_cost_ceiling, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -175,6 +175,8 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
         "selected_gpu_type_ids": selected_gpu_type_ids,
         "measurement": measurement,
         "immediate_candidates": immediate,
+        # `kura run execute --max-lease` sets the lease at launch; the plan shows the default's ceiling.
+        "cost_ceiling": runpod_cost_ceiling(measurement, selected_gpu_type_ids, max_lease_sec=DEFAULT_MAX_LEASE_SEC),
         "provider_reservation": {
             "available": False,
             "reason": "Kura upload staging still needs the local controller after Pod creation; native Deploy When Available is not yet safe for autonomous training",
@@ -749,7 +751,7 @@ def _local_disk_preflight_report(
             "disk",
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
-            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes); "
+            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['minimum_free']}); "
             f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}",
             "workspace.yaml",
         )
@@ -858,8 +860,12 @@ def _local_launch_disk_preflight(
     docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = local_min_free_gib(docker_config)
+    required_setting = "docker.min_free_gb in workspace.yaml" + ("" if "min_free_gb" in docker_config else " (default)")
     if safety.get("max_run_disk_gb") is not None:
-        required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
+        run_floor_gib = _configured_gib(safety.get("max_run_disk_gb"), default=required_gib)
+        if run_floor_gib > required_gib:
+            required_gib, required_setting = run_floor_gib, "safety.max_run_disk_gb in run.yaml"
+    minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
     paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
     for mount in local_docker_mounts(workspace, config):
@@ -907,13 +913,13 @@ def _local_launch_disk_preflight(
         required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
         if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:
             errors.append(
-                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB including estimated writes. "
+                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB ({minimum}). "
                 "Set storage.host_drive in workspace.yaml or set safety.allow_storage_risk: true if this is intentional"
             )
         elif status.effective_free_bytes < required_bytes:
             errors.append(
                 f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
-                f"local Docker launch requires at least {required_display_gib} GiB including estimated writes"
+                f"local Docker launch requires at least {required_display_gib} GiB ({minimum})"
             )
     if errors:
         raise ValueError("; ".join([*errors, _checkpoint_estimate_text(checkpoint_estimate)]))
@@ -939,6 +945,7 @@ def _local_launch_disk_preflight(
                 docker_storage.append(item)
     return {
         "required_gib": required_gib,
+        "minimum_free": minimum,
         "floor_bytes": floor_bytes,
         "estimates": {"model_downloads": download_estimate, "musubi_downloads": download_estimate, "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate},
         "paths": checked,
@@ -1381,16 +1388,21 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                     f"    - {_format_plan_value(cloud.get('cloud_type'))}: "
                     f"{_format_plan_value(cloud.get('stock_status'))} · {availability}{price_text}"
                 )
+        ceiling = runpod_capacity.get("cost_ceiling") if isinstance(runpod_capacity.get("cost_ceiling"), dict) else None
+        if ceiling is not None:
+            _append_kv(lines, "max_lease", f"{ceiling['max_lease']} (the default; `kura run execute --max-lease` sets it)")
+            _append_kv(lines, "cost_ceiling", format_cost_ceiling(ceiling))
         immediate = runpod_capacity.get("immediate_candidates") if isinstance(runpod_capacity.get("immediate_candidates"), list) else []
-        if immediate:
-            lines.append("  choices")
-            for item in immediate:
-                if isinstance(item, dict):
-                    lines.append(f"    - launch now: {item.get('gpu_type_id')} / {item.get('cloud_type')}")
-            lines.append("    - wait for the selected GPU: set compute.capacity.mode=wait before compile")
+        lines.append("  choices")
+        for item in immediate:
+            if isinstance(item, dict):
+                lines.append(f"    - launch now: {item.get('gpu_type_id')} / {item.get('cloud_type')}")
+        if policy.get("mode") == "wait":
+            lines.append("    - wait for the selected GPU (compute.capacity.mode is wait)")
         else:
-            lines.append("  choices")
-            lines.append("    - choose another GPU, or set compute.capacity.mode=wait before compile")
+            lines.append("    - wait for the selected GPU: set compute.capacity.mode=wait before compile")
+        if not immediate:
+            lines.append("    - choose another GPU")
         reservation = runpod_capacity.get("provider_reservation") if isinstance(runpod_capacity.get("provider_reservation"), dict) else {}
         if not reservation.get("available"):
             _append_kv(lines, "native_queue", reservation.get("reason"), indent=4)
@@ -1801,6 +1813,17 @@ def cmd_run_logs(args: argparse.Namespace) -> int:
         return 1
 
 
+def _stage_summary(run_dir: Path, record: dict[str, Any]) -> str:
+    """What staging wrote, in a few lines; the file list stays in the manifest and the stage record."""
+    files = record.get("entries") if isinstance(record.get("entries"), list) else record.get("files")
+    count = len(files) if isinstance(files, list) else 0
+    lines = [f"staged {count} files ({_format_bytes(record.get('total_bytes'))}) for upload"]
+    for label, key in (("archive", "archive"), ("file list with sha256", "manifest"), ("stage record", "stage_record")):
+        if isinstance(record.get(key), str) and record[key]:
+            lines.append(f"  {label}: {_workspace_display_path(run_dir / record[key])}")
+    return "\n".join(lines)
+
+
 def stage_run(run_id: str, *, executor: str = "runpod") -> int:
     if executor != "runpod":
         print(f"staging is not implemented for executor: {executor}", file=sys.stderr)
@@ -1817,7 +1840,7 @@ def stage_run(run_id: str, *, executor: str = "runpod") -> int:
         dataset_ids = [item for item in dataset_ids if isinstance(item, str) and item]
         if not dataset_ids:
             raise ValueError("compiled run has no dataset IDs")
-        print(json.dumps(stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config()), indent=2))
+        print(_stage_summary(run_dir, stage_runpod(workspace=_workspace(), run_dir=run_dir, dataset_ids=dataset_ids, config=_workspace_config())))
     except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError) as exc:
         print(f"cannot stage run: {_safe_error(exc)}", file=sys.stderr)
         return 1

@@ -43,7 +43,7 @@ stop Pod
 - `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does. It cannot be turned off; zero is refused.
   If Kura warns that training looks longer than the lease, tell the user the
   estimate and ask before running `kura run lease <run-id> <duration>`, which
-  shows the change and its price; a longer lease is a billing decision, and
+  shows the change, its price, and the cost ceiling from now; a longer lease is a billing decision, and
   Kura never extends it on its own. A render Pod's lease changes the same
   way.
 - `--unattended-wait auto`: after training, if the outputs were not collected,
@@ -56,6 +56,15 @@ stop Pod
   `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
   does. Before starting a new run from such a run, confirm in the RunPod console that the
   Pod is really gone.
+- `pod_stopped_at` in `kura run status` is when Kura's stop confirmed the Pod is gone (and any
+  duplicate a recovered launch recorded): RunPod accepted the delete or said
+  the Pod was already gone. The Pod is not paused; it and its container disk
+  no longer exist, and billing for it has ended. Kura deletes it after the
+  outputs are collected, when a render ends, when its job never started, and
+  on `kura run stop`; the delete is recorded in
+  `runs/<run-id>/realizations/*.stop-*.json`. A Pod that deleted itself (its
+  lease or unattended wait) shows `pod_missing_at` instead, once
+  `kura run reconcile` has looked.
 - Kura records its intent before creating a Pod. If a launch dies, or RunPod
   does not confirm a create, Kura never creates again on its own: launch and
   stop refuse until `kura run reconcile` has looked for the Pod by name. A Pod
@@ -107,7 +116,21 @@ stop Pod
   that billed launch. In a non-interactive agent or script session, `--yes`
   records that explicit instruction; it is not a convenience flag for bypassing
   the launch gate. It skips only the question; Kura still prints the GPU, price,
-  and maximum-lease summary.
+  maximum lease, and cost ceiling.
+- The cost ceiling (`cost_ceiling` in `kura run plan`, `Cost ceiling:` in the
+  launch confirmation) is the most the Pod's GPU time can bill before the lease
+  it is created with deletes it (container and volume disk are billed
+  separately and are not in it): the lease times the highest current hourly quote
+  among the requested GPU types, for the configured GPU count. It is "about"
+  because a quote may change before the Pod starts. The plan shows it for the
+  default 12h lease; `kura run execute --max-lease` sets the lease and the
+  confirmation shows the ceiling for it. It holds only for that lease: if
+  `kura run lease` extends it, the Pod may bill more, and that command shows
+  the new ceiling from now at the Pod's own price. A GPU type or cloud with
+  no stock has no current price; the ceiling then names it and does not cover
+  landing there. Show the ceiling with the hourly price when asking for
+  approval. When Kura says the ceiling is unknown, say so and why rather than
+  estimating one.
 - A local execution failure is not permission to switch providers. In
   particular, do not rewrite `run.yaml` from a local executor to `runpod`
   because Docker, ComfyUI, or another local service is unavailable. Switching
