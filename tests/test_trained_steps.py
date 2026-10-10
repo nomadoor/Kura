@@ -9,6 +9,7 @@ from copy import deepcopy
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 import unittest
 from pathlib import Path
 from typing import Any
@@ -475,11 +476,19 @@ class PeakCheckpointsTests(unittest.TestCase):
         run["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
         run["safety"] = {"checkpoint_estimate_gb": 2, "allow_storage_risk": True}
         part = "checkpoints: 21 × 2 GiB (safety.checkpoint_estimate_gb)"
+        real_probe = plan.probe_storages
+
+        def roomy(paths, config=None):
+            # The CI machine's real free space must not decide the test: give every path 1 PiB.
+            return {name: replace(status, linux_free_bytes=1024**5, host_free_bytes=1024**5, effective_free_bytes=1024**5)
+                    for name, status in real_probe(paths, config).items()}
+
         with tempfile.TemporaryDirectory() as directory, \
                 patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
-                patch.object(plan, "_disk_cache_estimate", return_value={}):
+                patch.object(plan, "_disk_cache_estimate", return_value={}), \
+                patch.object(plan, "probe_storages", side_effect=roomy):
             workspace = Path(directory).resolve()
-            refused = plan._local_disk_preflight_report(run, workspace, {"docker": {"min_free_gb": 10**6}}, {"bytes": 0})
+            refused = plan._local_disk_preflight_report(run, workspace, {"docker": {"min_free_gb": 10**9}}, {"bytes": 0})
             passed = plan._local_disk_preflight_report(run, workspace, {"docker": {"min_free_gb": 1}}, {"bytes": 0})
         self.assertEqual(refused[0]["severity"], "error")
         self.assertIn(part, refused[0]["fact"])
