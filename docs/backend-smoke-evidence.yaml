@@ -1295,7 +1295,7 @@ records:
     backend: sd-scripts
     adapter_source:
       kind: source-tree-sha256
-      value: 8c61b230915e0de3e50c0feb2deb63a8a5c5f640164bf64e849a34d3a839b29d
+      value: 9d95ec957c85a809f498243e841b69f806bca43c1bcd798131b5cebabfa902ee
     runtime_image:
       kind: docker-image-digest
       value: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
@@ -1304,7 +1304,7 @@ records:
       mode: lora
       executor: docker
       control_optimizer_steps: 100
-      resumed_optimizer_steps: 50+50
+      resumed_optimizer_steps: 50+50, 50+30 with the state save cadence capped at 30, 50+50 with no configured cadence
       training_state: enabled
     evidence_kind: real-optimizer-step
     outcome: passed
@@ -1314,7 +1314,7 @@ records:
     backend: sd-scripts
     adapter_source:
       kind: source-tree-sha256
-      value: 8c61b230915e0de3e50c0feb2deb63a8a5c5f640164bf64e849a34d3a839b29d
+      value: 9d95ec957c85a809f498243e841b69f806bca43c1bcd798131b5cebabfa902ee
     runtime_image:
       kind: docker-image-digest
       value: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
