@@ -92,6 +92,14 @@ class ResumeEstimateTests(unittest.TestCase):
         broken["continuation"]["target_step"] = 1
         self.assertIsNone(_monitor_expected(broken, 10))
 
+    def test_the_plan_fails_on_an_invalid_continuation_as_every_estimate_does(self) -> None:
+        broken = _resume(save_every=10, additional=50)
+        broken["continuation"]["target_step"] = 1
+        for allowed in (False, True):
+            run = {**broken, "safety": {"allow_many_checkpoints": allowed}}
+            with self.subTest(allow_many_checkpoints=allowed), self.assertRaisesRegex(ValueError, "continuation.target_step does not match"):
+                plan._checkpoint_preflight_report(run)
+
     def test_every_estimate_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
