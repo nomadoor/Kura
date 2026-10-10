@@ -548,6 +548,34 @@ def trained_steps(run: dict[str, Any]) -> int | None:
     return steps["additional_steps"] if steps is not None else final_step(run)
 
 
+def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int | None:
+    """How many checkpoints a run leaves: one per `save_every_n_steps` over the `steps` it
+    trains (`trained_steps`), at least one. `checkpoint` is the backend display's `checkpoint`
+    block. None when there is no cadence or no steps, or when a retention policy prunes saves,
+    so fewer are left: a positive `prune_before_step` (Musubi Tuner), `keep_last` (AI-Toolkit,
+    Musubi Tuner), or `retention_window_steps` (sd-scripts). Zero or less is no policy: AI-Toolkit
+    keeps every save at `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no
+    prune below step 1, and sd-scripts refuses a non-positive `save_last_n_steps`. The plan's
+    checkpoint warnings, guard, preflight line, and disk estimate and the monitor's expected
+    checkpoints all read it."""
+
+    def positive(value: Any) -> int | None:
+        if isinstance(value, bool) or value in (None, ""):
+            return None
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number > 0 else None
+
+    every = positive(checkpoint.get("save_every_n_steps"))
+    if not steps or every is None:
+        return None
+    if any(positive(checkpoint.get(key)) for key in ("prune_before_step", "keep_last", "retention_window_steps")):
+        return None
+    return max(steps // every, 1)
+
+
 def logical_step(native_step: int, steps: dict[str, Any] | None) -> int:
     """A trainer-reported step as a logical step: process-local progress starts at the source step.
 

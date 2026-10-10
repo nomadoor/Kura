@@ -139,8 +139,10 @@ or WSL/VHDX/Windows-side operations.
   shared authentication failure and a missing immutable artifact remain
   errors.
 - Frequent unpruned checkpoints are blocked before launch unless:
-  - `backend.config.prune_checkpoints_before_step` is set, or
-  - the backend has an explicit keep-last checkpoint policy, or
+  - `backend.config.prune_checkpoints_before_step` is set above zero, or
+  - the backend has a keep-last or retention-window checkpoint policy above
+    zero (`save_last_n_steps: 0` prunes nothing: AI-Toolkit then keeps every
+    save), or
   - `safety.allow_many_checkpoints: true` is explicitly accepted
 
 ## Safety map

@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 import yaml
 
-from kura.training_artifacts import checkpoint_files, trained_steps
+from kura.training_artifacts import checkpoint_files, expected_checkpoints, trained_steps
 from kura.backends import get_backend
 from kura.executors import read_run_status
 from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
@@ -772,17 +772,14 @@ def _checkpoint_count(outputs: Path) -> int:
 
 
 def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:
-    # The steps the run trains have one owner; an invalid continuation shows no expectation.
+    # The steps the run trains and the count over them each have one owner; an invalid continuation shows no expectation.
     try:
         steps = trained_steps(config)
     except ValueError:
         return None
     display = _read_mapping(run_dir / "resolved" / "backend-display.lock.json")
     checkpoint = display.get("checkpoint") if isinstance(display.get("checkpoint"), dict) else {}
-    every = _int_or_none(checkpoint.get("save_every_n_steps"))
-    if not steps or not every or checkpoint.get("prune_before_step") is not None or checkpoint.get("keep_last") is not None or checkpoint.get("retention_window_steps") is not None:
-        return None
-    return max(steps // every, 1)
+    return expected_checkpoints(checkpoint, steps)
 
 
 def _downloaded_run_dir(run_dir: Path, status: dict[str, Any]) -> Path | None:

@@ -16,11 +16,12 @@ import yaml
 
 import kura.monitor as monitor
 import kura.run_commands.plan as plan
+import kura.training_artifacts as training_artifacts
 from kura.run_envelope import common_recipe
 from kura.training_artifacts import trained_steps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tests.test_resume_steps import as_resume, musubi_run  # noqa: E402
+from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run  # noqa: E402
 
 
 def _resume(*, save_every: int, additional: int) -> dict[str, Any]:
@@ -29,12 +30,13 @@ def _resume(*, save_every: int, additional: int) -> dict[str, Any]:
     return as_resume(run, source_step=1000, additional=additional)
 
 
-def _monitor_expected(run: dict[str, Any], save_every: int) -> int | None:
+def _monitor_expected(run: dict[str, Any], save_every: int | dict[str, Any]) -> int | None:
+    checkpoint = save_every if isinstance(save_every, dict) else {"save_every_n_steps": save_every}
     with tempfile.TemporaryDirectory() as directory:
         run_dir = Path(directory)
         (run_dir / "resolved").mkdir()
         (run_dir / "resolved" / "backend-display.lock.json").write_text(
-            json.dumps({"checkpoint": {"save_every_n_steps": save_every}}), encoding="utf-8",
+            json.dumps({"checkpoint": checkpoint}), encoding="utf-8",
         )
         return monitor._checkpoint_expected(run, run_dir)
 
@@ -149,6 +151,62 @@ class LaunchDiskPreflightTests(unittest.TestCase):
         self.assertEqual(plan._disk_warnings(fresh, {}), [])
         warnings = plan._disk_warnings(as_resume(fresh, source_step=1000, additional=5000), {})
         self.assertEqual(warnings, ["sampling cadence may create about 50 sample batches over the 5000 steps this run trains"])
+
+
+class ExpectedCheckpointsOwnerTests(unittest.TestCase):
+    """How many checkpoints a run leaves, and whether a retention policy makes that unknown, is decided once."""
+
+    def test_only_a_positive_retention_value_prunes(self) -> None:
+        owner = training_artifacts.expected_checkpoints
+        self.assertEqual(owner({"save_every_n_steps": 50}, 1000), 20)
+        self.assertEqual(owner({"save_every_n_steps": 5000}, 1000), 1)
+        self.assertIsNone(owner({"save_every_n_steps": 50}, None))
+        self.assertIsNone(owner({}, 1000))
+        for key in ("prune_before_step", "keep_last", "retention_window_steps"):
+            with self.subTest(retention=key):
+                self.assertIsNone(owner({"save_every_n_steps": 50, key: 3}, 1000))
+                self.assertIsNone(owner({"save_every_n_steps": 50, key: "3"}, 1000))
+                # AI-Toolkit keeps every save at max_step_saves_to_keep 0, a non-positive
+                # Musubi prune threshold prunes nothing, and sd-scripts refuses 0.
+                self.assertEqual(owner({"save_every_n_steps": 50, key: 0}, 1000), 20)
+                self.assertEqual(owner({"save_every_n_steps": 50, key: None}, 1000), 20)
+
+    def test_every_count_reads_the_one_owner(self) -> None:
+        run = _resume(save_every=10, additional=50)
+        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
+        cases = {
+            "_disk_warnings": (plan, lambda: plan._disk_warnings(run, {"save_every_n_steps": 10})),
+            "_checkpoint_count_safety": (plan, lambda: plan._checkpoint_count_safety(run, trained_steps(run))),
+            "_checkpoint_preflight_report": (plan, lambda: plan._checkpoint_preflight_report(allowed)),
+            "_estimate_checkpoint_write_bytes": (plan, lambda: plan._estimate_checkpoint_write_bytes(allowed)),
+            "_checkpoint_expected": (monitor, lambda: _monitor_expected(run, 10)),
+        }
+        for name, (module, call) in cases.items():
+            with self.subTest(place=name), patch.object(
+                module, "expected_checkpoints", wraps=training_artifacts.expected_checkpoints,
+            ) as owner:
+                call()
+                owner.assert_called()
+
+    def test_keep_last_zero_counts_every_save_in_plan_and_monitor_alike(self) -> None:
+        # AI-Toolkit max_step_saves_to_keep 0 slices [:-0] and removes nothing: 1000 steps every 50 is 20 kept.
+        run = ai_toolkit_run()
+        run["backend"]["config"]["native_config"] = {"save": {"save_every": 50, "max_step_saves_to_keep": 0}}
+        checkpoint = plan._adapter_display(run)["checkpoint"]
+        self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0})
+        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
+        self.assertIn("about 20 checkpoints", plan._disk_warnings(run, checkpoint)[0])
+        refusals = [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"]
+        self.assertIn("about 20 checkpoints without pruning", refusals[0])
+        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 20)
+        self.assertEqual(_monitor_expected(run, checkpoint), 20)
+        # A positive keep-last leaves fewer: no count, no warning, no refusal, in both.
+        run["backend"]["config"]["native_config"]["save"]["max_step_saves_to_keep"] = 3
+        checkpoint = plan._adapter_display(run)["checkpoint"]
+        self.assertEqual(plan._disk_warnings(run, checkpoint), [])
+        self.assertEqual([record for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"], [])
+        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 0)
+        self.assertIsNone(_monitor_expected(run, checkpoint))
 
 
 class FreshRunPlanTests(unittest.TestCase):
