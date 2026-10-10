@@ -8,6 +8,35 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: musubi-flux2-variant-one-owner-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      A FLUX.2 Klein variant is decided by one rule with one name table; every recorded evidence
+      run names a recognized variant without conflicting values, so its trainer command,
+      downloaded files, and outputs are unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 74a8329b8fe60146f81c6169451c09869f5fd2936fa0e2d750b8dcb873f335dd
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 56e30e5b9ebbbdbb46835f749159bec6c2a8135d3fd79ad284efefc6d3f75643
   - id: state-dirs-and-cadence-display-revert-sd-scripts-2026-10-10
     backend: sd-scripts
     reason: >-
