@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import difflib
+import errno
 import itertools
 import json
 import os
@@ -187,7 +188,7 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         # nothing needs review. Otherwise every file stays a candidate, so a
         # draft is never half adopted and an authored file is never replaced.
         dataset_v2 = proposal["dataset_yaml"] is None
-        items_exist = (directory / "items.jsonl").exists()
+        items_exist = os.path.lexists(directory / "items.jsonl")
         adopt = dataset_v2 and not items_exist and not proposal["issues"]
         files: dict[Path, bytes] = {}
         if not dataset_v2:
@@ -199,8 +200,8 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
             json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in proposal["items"]
         ).encode("utf-8")
         for path in files:
-            if path.exists():
-                raise ValueError(f"{path.name} already exists; review it before drafting again")
+            if os.path.lexists(path):
+                raise FileExistsError(errno.EEXIST, "already exists", str(path))
         create_new_files(files)
         print("wrote: " + ", ".join(str(path) for path in files))
         if not dataset_v2:
@@ -215,8 +216,14 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         for issue in proposal["issues"]:
             print(f"review required: {issue}", file=sys.stderr)
         return 0
+    except FileExistsError as exc:
+        name = Path(exc.filename).name if exc.filename else "a draft file"
+        message = "; ".join([f"{name} already exists; review it before drafting again", *getattr(exc, "__notes__", [])])
+        print(f"cannot draft dataset: {message}", file=sys.stderr)
+        return 1
     except (OSError, ValueError, yaml.YAMLError) as exc:
-        print(f"cannot draft dataset: {_safe_error(exc)}", file=sys.stderr)
+        message = "; ".join([_safe_error(exc), *getattr(exc, "__notes__", [])])
+        print(f"cannot draft dataset: {message}", file=sys.stderr)
         return 1
 
 
@@ -1562,7 +1569,10 @@ def main() -> None:
     draft.add_argument(
         "--write",
         action="store_true",
-        help="Write items.jsonl if absent and the draft needs no review; otherwise write *.v2.candidate.*; never replace a file",
+        help=(
+            "Write items.jsonl if absent, dataset.yaml declares items_schema_version 2, and nothing needs review; "
+            "otherwise write *.v2.candidate.*; never replace a file"
+        ),
     )
     draft.set_defaults(func=cmd_dataset_draft)
     inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")

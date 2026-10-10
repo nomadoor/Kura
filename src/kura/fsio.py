@@ -128,8 +128,10 @@ def create_new_files(files: dict[Path, bytes]) -> None:
     """Create every file in `files`, or none: never replace one that exists.
 
     Each file is opened with O_EXCL, so an existing file (even one that
-    appeared after the caller checked) is never touched. On any failure the
-    files this call created, including a partly written one, are removed.
+    appeared after the caller checked) is never touched, and a symlink at a
+    path is never followed. On any failure the files this call created,
+    including a partly written one, are removed; the original error is
+    raised, with a note naming any file that could not be removed.
     """
     created: list[Path] = []
     try:
@@ -143,10 +145,17 @@ def create_new_files(files: dict[Path, bytes]) -> None:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
-    except BaseException:
+    except BaseException as exc:
+        left = []
         for path in created:
-            with contextlib.suppress(FileNotFoundError):
+            try:
                 path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                left.append(str(path))
+        if left:
+            exc.add_note("could not remove partly written " + ", ".join(left))
         raise
     for parent in {path.parent for path in created}:
         _fsync_directory(parent)

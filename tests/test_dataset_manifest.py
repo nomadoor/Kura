@@ -283,8 +283,9 @@ class DatasetManifestTests(unittest.TestCase):
             authored = json.dumps({"id": "a", "files": [{"type": "file", "role": "target", "path": "a.png"}],
                                    "caption": {"text": "authored"}}) + "\n"
             (dataset / "items.jsonl").write_text(authored, encoding="utf-8")
-            result, stdout, _ = self.draft(dataset)
+            result, stdout, stderr = self.draft(dataset)
             self.assertEqual(result, 0)
+            self.assertEqual(stderr, "")
             self.assertEqual((dataset / "items.jsonl").read_text(encoding="utf-8"), authored)
             self.assertTrue((dataset / "items.v2.candidate.jsonl").exists())
             self.assertFalse((dataset / "dataset.v2.candidate.yaml").exists())
@@ -319,9 +320,32 @@ class DatasetManifestTests(unittest.TestCase):
             (dataset / "dataset.yaml").write_text("id: tiny\n", encoding="utf-8")
             result, stdout, stderr = self.draft(dataset)
             self.assertEqual(result, 1)
-            self.assertIn("choose one image root", stderr)
+            self.assertIn(
+                "images are both in the dataset folder and in images/ (or in neither); "
+                "keep them in one of the two, then draft again", stderr,
+            )
             self.assertNotIn("review", stdout)
             self.assertEqual(sorted(path.name for path in dataset.iterdir()), ["a.png", "dataset.yaml", "images"])
+
+    @unittest.skipIf(NATIVE_WINDOWS, "creating a symlink needs privileges on native Windows")
+    def test_a_dangling_items_jsonl_symlink_counts_as_existing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = self.fresh_dataset(Path(directory))
+            (dataset / "items.jsonl").symlink_to(Path(directory) / "elsewhere.jsonl")
+            result, _, _ = self.draft(dataset)
+            self.assertEqual(result, 0)
+            self.assertTrue((dataset / "items.v2.candidate.jsonl").is_file())
+            self.assertTrue((dataset / "items.jsonl").is_symlink())
+            self.assertFalse((Path(directory) / "elsewhere.jsonl").exists())
+
+    def test_a_file_that_appears_while_drafting_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = self.fresh_dataset(Path(directory))
+            raced = FileExistsError(17, "File exists", str(dataset / "items.jsonl"))
+            with patch("kura.cli.create_new_files", side_effect=raced):
+                result, _, stderr = self.draft(dataset)
+            self.assertEqual(result, 1)
+            self.assertIn("items.jsonl already exists; review it before drafting again", stderr)
 
     def test_a_failed_write_leaves_no_file_behind(self) -> None:
         import kura.fsio

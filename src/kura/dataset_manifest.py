@@ -455,7 +455,7 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     proposed_metadata = None if declares_items_v2(metadata) else {**metadata, "items_schema_version": 2}
     issues: list[str] = []
     root = directory.resolve(strict=True)
-    legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues)
+    legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues, v2_rows_expected=proposed_metadata is None)
     choices: list[tuple[str, list[Path]]] = []
     for label, folder in (("flat", root), ("images/", root / "images")):
         if folder.is_dir():
@@ -467,7 +467,10 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
             if images:
                 choices.append((label, images))
     if len(choices) != 1:
-        issues.append("choose one image root explicitly; flat and images/ are ambiguous or absent")
+        issues.append(
+            "images are both in the dataset folder and in images/ (or in neither); "
+            "keep them in one of the two, then draft again"
+        )
     items: list[dict[str, Any]] = []
     if len(choices) == 1:
         generated_ids: set[str] = set()
@@ -519,7 +522,8 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     return {"dataset": root.name, "dataset_yaml": proposed_metadata, "items": items, "issues": issues}
 
 
-def _legacy_draft_rows(path: Path, issues: list[str]) -> dict[str, dict[str, Any]]:
+def _legacy_draft_rows(path: Path, issues: list[str], *, v2_rows_expected: bool) -> dict[str, dict[str, Any]]:
+    """Legacy rows to import; v2 rows in a v2 dataset are the author's, not issues."""
     if not path.is_file():
         return {}
     rows: dict[str, dict[str, Any]] = {}
@@ -533,6 +537,8 @@ def _legacy_draft_rows(path: Path, issues: list[str]) -> dict[str, dict[str, Any
                 value = json.loads(line, object_pairs_hook=_unique_object)
             except (json.JSONDecodeError, ValueError) as exc:
                 issues.append(f"items.jsonl:{number}: invalid legacy row was not imported: {exc}")
+                continue
+            if isinstance(value, dict) and "files" in value and v2_rows_expected:
                 continue
             if not isinstance(value, dict) or "files" in value:
                 issues.append(f"items.jsonl:{number}: non-legacy row requires author review")

@@ -24,8 +24,9 @@ that command reads.
 
 ## Starting from a folder of images
 
-1. Put the images in `datasets/<id>/` (or `datasets/<id>/images/`), each with
-   a caption file of the same name ending in `.txt` or `.caption`.
+1. Put the images in `datasets/<id>/` or in `datasets/<id>/images/` (one of
+   the two, not both), each with a caption file of the same name ending in
+   `.txt` or `.caption`.
 2. Write `datasets/<id>/dataset.yaml`:
 
    ```yaml
