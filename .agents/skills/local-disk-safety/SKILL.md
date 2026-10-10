@@ -131,10 +131,14 @@ or WSL/VHDX/Windows-side operations.
   file included: retention that prunes during training (AI-Toolkit and
   sd-scripts `save_last_n_steps`) bounds it near the kept count, while Musubi
   Tuner's `prune_checkpoints_before_step` runs only after training and
-  AI-Toolkit's unset default is not assumed, so those count every save. An
-  unset save cadence is counted as the final save only. The disk lines in
-  `kura run plan` and the disk refusals show this part as
-  `checkpoints: N × G GiB (safety.checkpoint_estimate_gb)`.
+  AI-Toolkit's unset default is not assumed, so those count every save. Saves
+  are counted at the cadence the trainer is given. With `save_every_n_steps`
+  unset, sd-scripts writes only its final file, Musubi Tuner saves once at the
+  recipe's steps besides its final file, and AI-Toolkit saves at its own
+  default, which Kura does not know: only its final file is counted, and the
+  line says `trainer-default saves not counted`; set `save_every_n_steps` for
+  a full estimate. The disk lines in `kura run plan` and the disk refusals show
+  this part as `checkpoints: N × G GiB (safety.checkpoint_estimate_gb)`.
 - On WSL2, Kura treats Linux `df` as only one signal. Every disk gate tries to
   detect the Windows backing drive (`storage.host_drive` names it) and uses
   effective free space. If backing confidence is unknown, local Docker launch

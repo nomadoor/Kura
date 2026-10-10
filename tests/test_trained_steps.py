@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,11 +18,16 @@ import yaml
 import kura.monitor as monitor
 import kura.run_commands.plan as plan
 import kura.training_artifacts as training_artifacts
+from kura.backends.ai_toolkit import compile_ai_toolkit
+from kura.backends.musubi_command import command_musubi_tuner
+from kura.backends.sd_scripts import command_sd_scripts
 from kura.run_envelope import common_recipe
 from kura.training_artifacts import trained_steps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, sd_scripts_run  # noqa: E402
+from handoff_fixtures import freeze_fixture  # noqa: E402
+from tests.platform_support import DATASET_IO, posix_only  # noqa: E402
+from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, publish_source, sd_scripts_run  # noqa: E402
 
 
 def _resume(*, save_every: int, additional: int) -> dict[str, Any]:
@@ -105,9 +111,10 @@ class ResumeEstimateTests(unittest.TestCase):
     def test_every_estimate_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
+        # The disk estimate counts saves over the trainer's native span instead (PeakCheckpointsTests).
+        del allowed
         cases = {
             "_disk_warnings": (plan, lambda: plan._disk_warnings(run, {"save_every_n_steps": 10})),
-            "_estimate_checkpoint_write_bytes": (plan, lambda: plan._estimate_checkpoint_write_bytes(allowed)),
             "_checkpoint_expected": (monitor, lambda: _monitor_expected(run, 10)),
         }
         for name, (module, call) in cases.items():
@@ -128,16 +135,16 @@ class LaunchDiskPreflightTests(unittest.TestCase):
         expected = {"bytes": 6 * 1024**3, "count": 6, "per_checkpoint_gib": 1}
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
-                    patch.object(plan, "trained_steps", wraps=trained_steps) as runpod_owner:
+                    patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as runpod_owner:
                 runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 50}, {"bytes": 0})
             with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
-                    patch.object(plan, "trained_steps", wraps=trained_steps) as local_owner:
+                    patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as local_owner:
                 local = plan._local_launch_disk_preflight(
                     Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
                     enforce_model_download_safety=False, download_estimate={"bytes": 0},
                 )
-        runpod_owner.assert_called_once_with(run)
-        local_owner.assert_called_once_with(run)
+        runpod_owner.assert_called_once()
+        local_owner.assert_called_once()
         self.assertEqual(runpod["estimates"]["checkpoints"], expected)
         self.assertEqual(local["estimates"]["checkpoints"], expected)
         cache = int(runpod["estimates"]["disk_cache"].get("bytes") or 0)
@@ -295,38 +302,40 @@ class PeakCheckpointsTests(unittest.TestCase):
     """How many checkpoints are on disk at once is decided with the retention rules, and only the disk estimate reads it."""
 
     def test_the_peak_follows_when_each_trainer_prunes(self) -> None:
-        peak = training_artifacts.peak_checkpoints
+        def peak(checkpoint: dict[str, Any], steps: int = 1000, build=musubi_run) -> int:
+            run = build()
+            run["recipe"]["steps"] = steps
+            return training_artifacts.peak_checkpoints(run, checkpoint)["count"]
+
         # Every save: one per cadence over the steps, and the final file every trainer writes
         # besides them (sd-scripts and Musubi Tuner save on the last step too).
-        self.assertEqual(peak({"save_every_n_steps": 50}, 1000), 21)
+        self.assertEqual(peak({"save_every_n_steps": 50}), 21)
         self.assertEqual(peak({"save_every_n_steps": 50}, 1020), 21)
-        self.assertEqual(peak({"save_every_n_steps": 5000}, 1000), 1)
-        self.assertIsNone(peak({"save_every_n_steps": 50}, None))
+        self.assertEqual(peak({"save_every_n_steps": 5000}), 1)
+        no_steps = musubi_run()
+        del no_steps["recipe"]["steps"]
+        self.assertIsNone(training_artifacts.peak_checkpoints(no_steps, {"save_every_n_steps": 50}))
         # AI-Toolkit saves on steps 50..950 and leaves the last step to its final file.
         final_only = {"save_every_n_steps": 50, "last_step_save": "final_only"}
-        self.assertEqual(peak(final_only, 1000), 20)
+        self.assertEqual(peak(final_only), 20)
         self.assertEqual(peak(final_only, 1020), 21)
         self.assertEqual(peak(final_only, 50), 1)
-        # No cadence: the final file only; no upstream default cadence is assumed.
-        self.assertEqual(peak({}, 1000), 1)
-        self.assertEqual(peak({"save_every_n_steps": None, "last_step_save": "final_only"}, 1000), 1)
-        self.assertIsNone(peak({}, None))
         # Musubi Tuner prunes after training: every save is on disk first.
-        self.assertEqual(peak({"save_every_n_steps": 50, "prune_before_step": 1000}, 1000), 21)
+        self.assertEqual(peak({"save_every_n_steps": 50, "prune_before_step": 1000}), 21)
         # AI-Toolkit removes older saves after writing the new one: keep_last plus one (at the
         # end, keep_last step saves and the final file), never more than every save.
-        self.assertEqual(peak({**final_only, "keep_last": 3}, 1000), 4)
-        self.assertEqual(peak({**final_only, "keep_last": "3"}, 1000), 4)
-        self.assertEqual(peak({**final_only, "keep_last": 30}, 1000), 20)
-        self.assertEqual(peak({**final_only, "keep_last": 0}, 1000), 20)
+        self.assertEqual(peak({**final_only, "keep_last": 3}), 4)
+        self.assertEqual(peak({**final_only, "keep_last": "3"}), 4)
+        self.assertEqual(peak({**final_only, "keep_last": 30}), 20)
+        self.assertEqual(peak({**final_only, "keep_last": 0}), 20)
         # Its unset default is not copied: the conservative bound is every save.
-        self.assertEqual(peak({**final_only, "unset_keep_last": "trainer_default"}, 1000), 20)
+        self.assertEqual(peak({**final_only, "unset_keep_last": "trainer_default"}), 20)
         # sd-scripts keeps the saves within the window (window // every + 1) and removes the
         # oldest after writing the next one; at the end the final file joins the kept saves.
-        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 100}, 1000), 4)
-        self.assertEqual(peak({"save_every_n_steps": 10, "retention_window_steps": 30}, 1000), 5)
-        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 10}, 1000), 2)
-        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 5000}, 1000), 21)
+        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 100}, build=sd_scripts_run), 4)
+        self.assertEqual(peak({"save_every_n_steps": 10, "retention_window_steps": 30}, build=sd_scripts_run), 5)
+        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 10}, build=sd_scripts_run), 2)
+        self.assertEqual(peak({"save_every_n_steps": 50, "retention_window_steps": 5000}, build=sd_scripts_run), 21)
 
     def test_each_backend_display_declares_its_last_step_save(self) -> None:
         # The display says what the core needs; no backend name is read by the peak.
@@ -337,11 +346,49 @@ class PeakCheckpointsTests(unittest.TestCase):
                 self.assertEqual(plan._estimate_checkpoint_write_bytes(run)["count"], every_save)
         self.assertEqual(plan._adapter_display(ai_toolkit_run())["checkpoint"]["last_step_save"], "final_only")
 
-    def test_an_unset_cadence_counts_the_final_save(self) -> None:
+    def test_an_unset_cadence_counts_what_the_trainer_is_given(self) -> None:
+        # sd-scripts gets no step cadence (final file only); Musubi Tuner is given the recipe's
+        # steps (one step save and the final file); AI-Toolkit saves at a default Kura does not
+        # know, so only its final file is counted and the estimate says so.
+        expected = {
+            "sd-scripts": {"bytes": 1024**3, "count": 1, "per_checkpoint_gib": 1},
+            "musubi-tuner": {"bytes": 2 * 1024**3, "count": 2, "per_checkpoint_gib": 1},
+            "ai-toolkit": {"bytes": 1024**3, "count": 1, "per_checkpoint_gib": 1, "trainer_default_saves_not_counted": True},
+        }
         for run in (ai_toolkit_run(), musubi_run(), sd_scripts_run()):
             run["backend"]["config"].pop("save_every_n_steps", None)
+            name = run["backend"]["name"]
+            with self.subTest(backend=name):
+                estimate = plan._estimate_checkpoint_write_bytes(run)
+                self.assertEqual(estimate, expected[name])
+                text = plan._checkpoint_estimate_text(estimate)
+                if name == "ai-toolkit":
+                    self.assertEqual(text, "checkpoints: 1 × 1 GiB (safety.checkpoint_estimate_gb; trainer-default saves not counted)")
+                else:
+                    self.assertNotIn("trainer-default", text)
+
+    def test_a_logical_progress_resume_counts_saves_on_logical_multiples(self) -> None:
+        # Resume +170 from step 1030 to 1200 with a cadence of 100. AI-Toolkit counts logical
+        # steps, saves on 1100, and leaves 1200 to its final file: 2. sd-scripts' target is
+        # logical, so it saves on 1100 and 1200 and writes its final file: 3 (170 // 100 + 1
+        # would say 2). Musubi Tuner counts 0..170 in its process: a save on 100 and the final file: 2.
+        for build, expected in ((ai_toolkit_run, 2), (sd_scripts_run, 3), (musubi_run, 2)):
+            source = build()
+            source["backend"]["config"]["save_every_n_steps"] = 100
+            run = as_resume(source, source_step=1030, additional=170)
+            checkpoint = plan._adapter_display(run)["checkpoint"]
+            with self.subTest(backend=source["backend"]["name"]):
+                self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], expected)
+
+    def test_a_process_local_resume_caps_the_cadence_as_the_trainer_is_given(self) -> None:
+        # Resume +50 with no cadence set: Kura gives Musubi Tuner and sd-scripts a cadence of
+        # 50 (the steps added), so each saves once and writes its final file.
+        for build in (musubi_run, sd_scripts_run):
+            run = as_resume(build(), source_step=1000, additional=50)
+            checkpoint = plan._adapter_display(run)["checkpoint"]
             with self.subTest(backend=run["backend"]["name"]):
-                self.assertEqual(plan._estimate_checkpoint_write_bytes(run), {"bytes": 1024**3, "count": 1, "per_checkpoint_gib": 1})
+                self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint), 50)
+                self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], 2)
 
     def test_the_disk_estimate_reads_the_peak_and_the_counts_do_not(self) -> None:
         run = sd_scripts_run()
@@ -350,7 +397,7 @@ class PeakCheckpointsTests(unittest.TestCase):
         checkpoint = plan._adapter_display(run)["checkpoint"]
         with patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as owner:
             self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 4)
-            owner.assert_called_once_with(checkpoint, 1000)
+            owner.assert_called_once_with(allowed, checkpoint)
         with patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as owner:
             self.assertEqual(plan._disk_warnings(run, checkpoint), [])
             plan._checkpoint_count_safety(run, 1000)
@@ -476,6 +523,45 @@ class FreshRunPlanTests(unittest.TestCase):
         self.assertEqual(current, before)
         self.assertIn("about 20 checkpoint(s)", current)
 
+
+
+def _compiled_cadence(run: dict[str, Any], scratch: Path) -> int | str | None:
+    """The step-save cadence each trainer is given, read from its compiled command or config."""
+    name = run["backend"]["name"]
+    if name == "musubi-tuner":
+        found = re.findall(r"--save_every_n_steps (\d+)", command_musubi_tuner(run)["argv"][2])
+        return int(found[-1]) if found else None
+    if name == "sd-scripts":
+        found = re.findall(r'"--save_every_n_steps","(\d+)"', command_sd_scripts(run)["argv"][2])
+        return int(found[-1]) if found else None
+    destination = scratch / "ai-toolkit"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    freeze_fixture(run, destination.parent)
+    compile_ai_toolkit(run, destination)
+    config = yaml.safe_load(destination.with_suffix(".yaml").read_text(encoding="utf-8"))
+    return config["config"]["process"][0]["save"].get("save_every") or "trainer_default"
+
+
+class CheckpointCadenceParityTests(unittest.TestCase):
+    @posix_only(DATASET_IO)
+    def test_the_peak_reads_the_cadence_each_trainer_is_given(self) -> None:
+        for build in (musubi_run, sd_scripts_run, ai_toolkit_run):
+            for configured in (None, 30):
+                source = build()
+                if configured is not None:
+                    source["backend"]["config"]["save_every_n_steps"] = configured
+                name = source["backend"]["name"]
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    manifest = publish_source(root, source)
+                    resumed = as_resume(source, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"], additional=20)
+                    for label, run in (("fresh", source), ("resume", resumed)):
+                        with self.subTest(backend=name, configured=configured, run=label):
+                            checkpoint = plan._adapter_display(run)["checkpoint"]
+                            self.assertEqual(
+                                training_artifacts.checkpoint_save_cadence(run, checkpoint),
+                                _compiled_cadence(run, root / label),
+                            )
 
 
 class RunPodContainerDiskDefaultTests(unittest.TestCase):

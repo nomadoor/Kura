@@ -34,6 +34,8 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
         "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"),
         "native_progress": "process_local",
         "native_target": "process_local",
+        # Every Musubi command names the recipe's steps as its cadence when the run sets none.
+        "unset_save_cadence": "recipe_steps",
         "capability": "best_effort_resume",
         "restoration_contract": {
             "level": "best_effort_resume",

@@ -594,35 +594,58 @@ def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int |
     return max(steps // every, 1)
 
 
-def peak_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int | None:
+def checkpoint_save_cadence(run: dict[str, Any], checkpoint: dict[str, Any]) -> int | str | None:
+    """The step-save cadence a run's trainer is given: `managed_state_cadence` over the
+    display's configured `save_every_n_steps` (a process-local Resume caps it at the steps the
+    run adds). With none set, the backend's training-state contract declares what the trainer
+    does: `unset_save_cadence: recipe_steps` (Musubi Tuner is given the recipe's steps),
+    `trainer_default` (AI-Toolkit saves at its own default, which Kura does not know), or
+    nothing (sd-scripts writes no step saves). `checkpoint` is the backend display's block."""
+    cadence = managed_state_cadence(run, _retention_value(checkpoint.get("save_every_n_steps")))
+    if cadence is not None:
+        return cadence
+    unset = training_state_contract(run).get("unset_save_cadence")
+    if unset == "recipe_steps":
+        return validated_recipe(run, required=True)["steps"]
+    return "trainer_default" if unset == "trainer_default" else None
+
+
+def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[str, Any] | None:
     """How many checkpoint files are on disk at once while a run trains, for the launch disk
-    estimates. Every trainer writes an unpruned final file besides its step saves, so every
-    save is the step saves plus one: `steps // every` step saves (sd-scripts and Musubi Tuner
-    save on the last step too), or `(steps - 1) // every` where the display declares
-    `last_step_save: final_only` (AI-Toolkit saves on steps below the last and leaves the
-    last to its final file). An unset cadence counts the final file only; no trainer default
-    cadence is assumed. Pruning during training lowers the peak, never above every save:
-    AI-Toolkit removes all but `keep_last` after writing each save, so `keep_last + 1` are on
-    disk at once (at the end, `keep_last` step saves and the final file); sd-scripts removes
-    the save that left the `retention_window_steps` window after writing each save, so it
-    keeps `window // every + 1` and holds one more (at the end, the final file). Musubi
-    Tuner's `prune_before_step` runs after training, and AI-Toolkit's unset `keep_last`
-    default is not copied here, so both count every save. None when there are no steps; the
+    estimates: `{"count": n, "trainer_default_saves": bool}`, or None when the run has no steps.
+
+    Saves are counted at `checkpoint_save_cadence` over the trainer's native span
+    (`resume_steps`' `native_start` to `native_end`, or 0 to the recipe's steps on a fresh
+    run), so a Resume whose trainer counts logical steps saves on logical multiples. Every
+    trainer writes an unpruned final file besides its step saves, so every save is the step
+    saves plus one; the step saves end at `native_end` (sd-scripts and Musubi Tuner save on
+    the last step too) or below it where the display declares `last_step_save: final_only`
+    (AI-Toolkit leaves the last step to its final file). With no step cadence only the final
+    file is counted; where the trainer saves at its own default (`trainer_default_saves`),
+    those saves are not counted and no default is assumed. Pruning during training lowers the
+    peak, never above every save: AI-Toolkit removes all but `keep_last` after writing each
+    save, so `keep_last + 1` are on disk at once (at the end, `keep_last` step saves and the
+    final file); sd-scripts removes the save that left the `retention_window_steps` window
+    after writing each save, so it keeps `window // every + 1` and holds one more (at the
+    end, the final file). Musubi Tuner's `prune_before_step` runs after training, and
+    AI-Toolkit's unset `keep_last` default is not copied here, so both count every save. The
     positive-value rules are those of `expected_checkpoints`."""
-    if not steps:
+    span = resume_steps(run)
+    start, end = (span["native_start"], span["native_end"]) if span is not None else (0, trained_steps(run))
+    if not end:
         return None
-    every = _retention_value(checkpoint.get("save_every_n_steps"))
-    if every is None:
-        return 1
-    saved_steps = steps - 1 if checkpoint.get("last_step_save") == "final_only" else steps
-    every_save = saved_steps // every + 1
+    cadence = checkpoint_save_cadence(run, checkpoint)
+    if not isinstance(cadence, int):
+        return {"count": 1, "trainer_default_saves": cadence == "trainer_default"}
+    last = end - 1 if checkpoint.get("last_step_save") == "final_only" else end
+    every_save = last // cadence - start // cadence + 1
     keep_last = _retention_value(checkpoint.get("keep_last"))
-    if keep_last is not None:
-        return min(keep_last + 1, every_save)
     window = _retention_value(checkpoint.get("retention_window_steps"))
-    if window is not None:
-        return min(window // every + 2, every_save)
-    return every_save
+    if keep_last is not None:
+        every_save = min(keep_last + 1, every_save)
+    elif window is not None:
+        every_save = min(window // cadence + 2, every_save)
+    return {"count": every_save, "trainer_default_saves": False}
 
 
 def logical_step(native_step: int, steps: dict[str, Any] | None) -> int:

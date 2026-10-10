@@ -776,15 +776,20 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     no checkpoint estimate, as `_disk_cache_estimate` writes no cache estimate for it."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     adapter = _run_adapter(run)
-    count = peak_checkpoints(adapter.display(run).get("checkpoint") or {}, trained_steps(run)) if adapter is not None else None
+    peak = peak_checkpoints(run, adapter.display(run).get("checkpoint") or {}) if adapter is not None else None
     per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
-    count = count or 0
-    return {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+    count = peak["count"] if peak is not None else 0
+    estimate = {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+    if peak is not None and peak["trainer_default_saves"]:
+        estimate["trainer_default_saves_not_counted"] = True
+    return estimate
 
 
 def _checkpoint_estimate_text(estimate: dict[str, Any]) -> str:
-    """The checkpoint part of a disk preflight line, naming the setting that sizes it."""
-    return f"checkpoints: {estimate['count']} × {estimate['per_checkpoint_gib']} GiB (safety.checkpoint_estimate_gb)"
+    """The checkpoint part of a disk preflight line, naming the setting that sizes it and any
+    saves the trainer makes at a default Kura does not know."""
+    uncounted = "; trainer-default saves not counted" if estimate.get("trainer_default_saves_not_counted") else ""
+    return f"checkpoints: {estimate['count']} × {estimate['per_checkpoint_gib']} GiB (safety.checkpoint_estimate_gb{uncounted})"
 
 
 def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
