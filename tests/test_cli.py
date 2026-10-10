@@ -1847,7 +1847,7 @@ class RunPlanTests(unittest.TestCase):
             try:
                 # The host's real free space must not decide this test.
                 with patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout, \
-                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
+                        patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="compiled-example", json=True)), 0)
             finally:
                 os.chdir(previous)
@@ -1891,7 +1891,7 @@ class RunPlanTests(unittest.TestCase):
                 with (
                     patch("sys.stdout", new_callable=__import__("io").StringIO) as stdout,
                     patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "", "")),
-                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
+                    patch("kura.run_commands.plan._local_launch_disk_preflight", return_value={"required_gib": 100, "minimum_free": "100 GiB minimum free, set by docker.min_free_gb in workspace.yaml, plus estimated writes", "estimates": {"checkpoints": {"bytes": 0, "count": 0, "per_checkpoint_gib": 1}}, "paths": {"workspace": {"path": "ws", "effective_free_bytes": 190 * 1024**3, "required_bytes": 100 * 1024**3}}}),
                 ):
                     self.assertEqual(cmd_run_plan(argparse.Namespace(run_id="preflight-example", json=False)), 0)
             finally:

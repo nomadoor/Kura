@@ -751,7 +751,7 @@ def _local_disk_preflight_report(
             "disk",
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
-            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes); "
+            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['minimum_free']}); "
             f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}",
             "workspace.yaml",
         )
@@ -860,8 +860,12 @@ def _local_launch_disk_preflight(
     docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = local_min_free_gib(docker_config)
+    required_setting = "docker.min_free_gb in workspace.yaml"
     if safety.get("max_run_disk_gb") is not None:
-        required_gib = max(required_gib, _configured_gib(safety.get("max_run_disk_gb"), default=required_gib))
+        run_floor_gib = _configured_gib(safety.get("max_run_disk_gb"), default=required_gib)
+        if run_floor_gib > required_gib:
+            required_gib, required_setting = run_floor_gib, "safety.max_run_disk_gb in run.yaml"
+    minimum = f"{required_gib} GiB minimum free, set by {required_setting}, plus estimated writes"
     floor_bytes = required_gib * 1024**3
     paths = {"workspace": workspace, "hf_cache": local_hf_cache(workspace, config)}
     for mount in local_docker_mounts(workspace, config):
@@ -909,13 +913,13 @@ def _local_launch_disk_preflight(
         required_display_gib = (required_bytes + 1024**3 - 1) // 1024**3
         if status.confidence == "unknown" and safety.get("allow_storage_risk") is not True:
             errors.append(
-                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB including estimated writes. "
+                f"{path} is on storage with unknown physical backing free space; local Docker launch requires at least {required_display_gib} GiB ({minimum}). "
                 "Set storage.host_drive in workspace.yaml or set safety.allow_storage_risk: true if this is intentional"
             )
         elif status.effective_free_bytes < required_bytes:
             errors.append(
                 f"{path} has only {status.effective_free_bytes // 1024**3} GiB effective free on {status.backing_id}; "
-                f"local Docker launch requires at least {required_display_gib} GiB including estimated writes"
+                f"local Docker launch requires at least {required_display_gib} GiB ({minimum})"
             )
     if errors:
         raise ValueError("; ".join([*errors, _checkpoint_estimate_text(checkpoint_estimate)]))
@@ -941,6 +945,7 @@ def _local_launch_disk_preflight(
                 docker_storage.append(item)
     return {
         "required_gib": required_gib,
+        "minimum_free": minimum,
         "floor_bytes": floor_bytes,
         "estimates": {"model_downloads": download_estimate, "musubi_downloads": download_estimate, "disk_cache": disk_cache_estimate, "checkpoints": checkpoint_estimate},
         "paths": checked,
