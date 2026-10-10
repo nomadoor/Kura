@@ -970,6 +970,18 @@ def runtime_checks_ai_toolkit(projection: dict[str, Any]) -> list[dict[str, Any]
 
 
 def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
+    # AI-Toolkit is the one backend that trains from model.base
+    # (process.model.name_or_path); its pinned ModelConfig has no revision.
+    model = run.get("model") if isinstance(run.get("model"), dict) else {}
+    base = model.get("base")
+    if not isinstance(base, str) or not base.strip():
+        raise ValueError(
+            "AI-Toolkit trains from model.base; set model.base to a Hugging Face repository or a model path before compile"
+        )
+    if model.get("revision") not in (None, ""):
+        raise ValueError(
+            "AI-Toolkit loads the repository's default branch and cannot pin a revision; remove model.revision"
+        )
     native = backend_config(run, "ai-toolkit")
     authored_arch = native.get("model_arch")
     if authored_arch is not None:
@@ -1178,7 +1190,7 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     override = _ai_toolkit_backend_override(run)
 
-    def requirement(role: str, reference: Any, *, revision: Any = None) -> dict[str, Any] | None:
+    def requirement(role: str, reference: Any) -> dict[str, Any] | None:
         if not isinstance(reference, str) or not reference:
             return None
         if reference.startswith(("/", "./", "../", "~")):
@@ -1189,12 +1201,10 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
             acquisition = "backend"
             identity = {"kind": "huggingface-repository", "repo_id": reference}
             expected_format, observable = "backend-native-repository", False
-            if isinstance(revision, str) and revision:
-                identity["revision"] = revision
         return {"role": role, "acquisition": acquisition, "identity": identity, "runtime_reference": reference, "expected_format": expected_format, "measurement": {"scope": "backend-runtime", "status": "not-measured-by-kura"}, "pinning": artifact_pinning(identity, observable=observable)}
 
     requirements = []
-    base = requirement("base_model", model.get("base"), revision=model.get("revision"))
+    base = requirement("base_model", model.get("base"))
     if base is not None:
         requirements.append(base)
     extras = requirement("model_extras", override.get("extras_name_or_path"))

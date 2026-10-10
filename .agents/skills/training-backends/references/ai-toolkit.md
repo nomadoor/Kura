@@ -8,6 +8,10 @@ Use this reference only for `backend.name: ai-toolkit`.
 - Prefer typed top-level controls and typed dataset fields. Use
   `native_config` only for reviewed upstream input that has no first-class Kura
   field; it may not replace Kura-owned process, dataset, or model identity.
+- `model.base` is the trained model (`process.model.name_or_path`), so the
+  adapter's own validation requires it. The pinned ModelConfig has no revision,
+  so the adapter refuses `model.revision` and records no revision in the
+  requirement identity.
 - Unset training settings are filled from the pinned UI baseline
   (`docs/adr/upstream-training-baseline.md`). This covers the scheduler,
   precision, quantization, optimizer, learning rate, and latent caching.

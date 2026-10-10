@@ -10,7 +10,7 @@ class ModelRequirementsTests(unittest.TestCase):
         requirements = model_requirements(
             {
                 "backend": {"name": "ai-toolkit"},
-                "model": {"base": "example/model", "revision": "abc123"},
+                "model": {"base": "example/model"},
             }
         )
 
@@ -18,7 +18,7 @@ class ModelRequirementsTests(unittest.TestCase):
         requirement = requirements[0]
         self.assertEqual(requirement["role"], "base_model")
         self.assertEqual(requirement["acquisition"], "backend")
-        self.assertEqual(requirement["identity"], {"kind": "huggingface-repository", "repo_id": "example/model", "revision": "abc123"})
+        self.assertEqual(requirement["identity"], {"kind": "huggingface-repository", "repo_id": "example/model"})
         self.assertEqual(requirement["measurement"]["scope"], "backend-runtime")
 
     def test_ai_toolkit_preserves_explicit_local_path(self) -> None:
