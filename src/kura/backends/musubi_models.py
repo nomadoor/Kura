@@ -111,48 +111,55 @@ def _musubi_model_cache_path(repo_id: str, key: str, filename: str) -> str:
     return f"/workspace/cache/models/musubi/{repo_component}/{key_component}/{filename}"
 
 
-def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    model = run.get("model", {})
-    base = str(model.get("base") or "").lower().replace("_", "-")
+# Every accepted name for a FLUX.2 Klein variant, read from model_bundle and model.base alike.
+_FLUX2_KLEIN_NAMES: dict[str, str] = {
+    name: variant
+    for variant, names in {
+        "klein-base-4b": ("flux2-klein-base-4b-comfy", "comfy-flux2-klein-base-4b"),
+        "klein-4b": ("flux2-klein-4b-comfy", "comfy-flux2-klein-4b"),
+        "klein-base-9b": ("bfl-flux2-klein-base-9b",),
+        "klein-9b": ("bfl-flux2-klein-9b",),
+    }.items()
+    for name in (
+        *names,
+        f"black-forest-labs/flux.2-{variant}",
+        f"flux.2-{variant}",
+        f"flux2-{variant}",
+    )
+}
+
+
+def _flux2_klein_variant(run: dict[str, Any]) -> str | None:
+    """Decide which FLUX.2 Klein variant a run trains: model_version, then model_bundle, then model.base."""
     override = _musubi_backend_override(run)
-    architecture = _musubi_architecture(run)
-    if architecture != "flux2":
+    model_version = _musubi_model_version(run, default="")
+    if model_version:
+        return model_version if model_version in _FLUX2_KLEIN_NAMES.values() else None
+    for name in (override.get("model_bundle"), run.get("model", {}).get("base")):
+        variant = _FLUX2_KLEIN_NAMES.get(_normalize_musubi_model_version(name))
+        if variant:
+            return variant
+    return None
+
+
+def _flux2_klein_bundle(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    override = _musubi_backend_override(run)
+    if _musubi_architecture(run) != "flux2":
         return {}
-    model_version = _normalize_musubi_model_version(override.get("model_version"))
-    bundle = _normalize_musubi_model_version(override.get("model_bundle"), default="auto")
-    if bundle in ("none", "off", "false"):
+    if _normalize_musubi_model_version(override.get("model_bundle"), default="auto") in ("none", "off", "false"):
         return {}
-    is_base_4b = (
-        bundle in ("flux2-klein-base-4b", "flux2-klein-base-4b-comfy", "comfy-flux2-klein-base-4b")
-        or model_version == "klein-base-4b"
-        or base in {"black-forest-labs/flux.2-klein-base-4b", "flux.2-klein-base-4b", "flux2-klein-base-4b"}
-    )
-    is_distilled_4b = (
-        bundle in ("flux2-klein-4b", "flux2-klein-4b-comfy", "comfy-flux2-klein-4b")
-        or model_version == "klein-4b"
-        or base in {"black-forest-labs/flux.2-klein-4b", "flux.2-klein-4b", "flux2-klein-4b"}
-    )
-    is_base_9b = (
-        bundle in ("flux2-klein-base-9b", "bfl-flux2-klein-base-9b")
-        or model_version == "klein-base-9b"
-        or base in {"black-forest-labs/flux.2-klein-base-9b", "flux.2-klein-base-9b", "flux2-klein-base-9b"}
-    )
-    is_distilled_9b = (
-        bundle in ("flux2-klein-9b", "bfl-flux2-klein-9b")
-        or model_version == "klein-9b"
-        or base in {"black-forest-labs/flux.2-klein-9b", "flux.2-klein-9b", "flux2-klein-9b"}
-    )
-    if is_base_4b or is_distilled_4b:
+    variant = _flux2_klein_variant(run)
+    if variant in ("klein-base-4b", "klein-4b"):
         repo = "Comfy-Org/vae-text-encorder-for-flux-klein-4b"
-        dit_name = "flux-2-klein-4b.safetensors" if is_distilled_4b else "flux-2-klein-base-4b.safetensors"
+        dit_name = f"flux-2-{variant}.safetensors"
         return {
             "dit": {"repo": repo, "filename": f"split_files/diffusion_models/{dit_name}"},
             "vae": {"repo": repo, "filename": "split_files/vae/flux2-vae.safetensors"},
             "text_encoder": {"repo": repo, "filename": "split_files/text_encoders/qwen_3_4b.safetensors"},
         }
-    if is_base_9b or is_distilled_9b:
-        model_repo = "black-forest-labs/FLUX.2-klein-base-9B" if is_base_9b else "black-forest-labs/FLUX.2-klein-9B"
-        dit_name = "flux-2-klein-base-9b.safetensors" if is_base_9b else "flux-2-klein-9b.safetensors"
+    if variant in ("klein-base-9b", "klein-9b"):
+        model_repo = "black-forest-labs/FLUX.2-klein-base-9B" if variant == "klein-base-9b" else "black-forest-labs/FLUX.2-klein-9B"
+        dit_name = f"flux-2-{variant}.safetensors"
         text_files = [f"text_encoder/model-0000{index}-of-00004.safetensors" for index in range(1, 5)]
         return {
             "dit": {"repo": model_repo, "filename": dit_name},
@@ -284,23 +291,12 @@ def _unsupported_musubi_adapter_error(architecture: str) -> ValueError:
 
 
 def _musubi_flux2_model_version(run: dict[str, Any]) -> str:
-    override = _musubi_backend_override(run)
     model_version = _musubi_model_version(run, default="")
     if model_version:
         return model_version
-
-    model = run.get("model", {})
-    base = str(model.get("base") or "").lower().replace("_", "-")
-    bundle = str(override.get("model_bundle") or "").lower().replace("_", "-")
-    candidates = {base, bundle}
-    if candidates & {"black-forest-labs/flux.2-klein-base-9b", "flux.2-klein-base-9b", "flux2-klein-base-9b", "bfl-flux2-klein-base-9b"}:
-        return "klein-base-9b"
-    if candidates & {"black-forest-labs/flux.2-klein-9b", "flux.2-klein-9b", "flux2-klein-9b", "bfl-flux2-klein-9b"}:
-        return "klein-9b"
-    if candidates & {"black-forest-labs/flux.2-klein-base-4b", "flux.2-klein-base-4b", "flux2-klein-base-4b", "flux2-klein-base-4b-comfy", "comfy-flux2-klein-base-4b"}:
-        return "klein-base-4b"
-    if candidates & {"black-forest-labs/flux.2-klein-4b", "flux.2-klein-4b", "flux2-klein-4b", "flux2-klein-4b-comfy", "comfy-flux2-klein-4b"}:
-        return "klein-4b"
+    variant = _flux2_klein_variant(run)
+    if variant:
+        return variant
     raise ValueError("Musubi FLUX.2 requires backend.config.model_version or a recognized model.base/model_bundle; refusing to default to 4B")
 
 
@@ -315,16 +311,11 @@ def _musubi_model_version(run: dict[str, Any], *, default: str = "original") -> 
 def _musubi_model_expectations(run: dict[str, Any]) -> dict[str, str]:
     architecture = _musubi_architecture(run)
     override = _musubi_backend_override(run)
-    model_version = (
-        _musubi_flux2_model_version(run)
-        if architecture == "flux2"
-        else _musubi_model_version(run)
-    )
-    model_base = str(run.get("model", {}).get("base") or "").lower().replace("_", "-")
-    if model_version == "dev" or "flux.2-dev" in model_base or "flux2-dev" in model_base:
-        text_encoder_format = "safetensors"
-    else:
-        text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version or "9b" in model_base else "qwen3_4b_text_encoder"
+    text_encoder_format = "safetensors"
+    if architecture == "flux2":
+        model_version = _musubi_flux2_model_version(run)
+        if model_version != "dev":
+            text_encoder_format = "qwen3_8b_text_encoder" if "9b" in model_version else "qwen3_4b_text_encoder"
     defaults: dict[str, dict[str, str]] = {
         "flux2": {
             "dit": "flux2_dit",
