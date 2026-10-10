@@ -34,7 +34,7 @@ from kura.media_types import KNOWN_MEDIA_SUFFIXES, frozen_suffixes
 
 from kura.artifact_publication import output_contract, publish_outputs, record_publication_failure, record_unverified_publication, existing_publication
 from kura.executors import _materialize_stdout_progress, _redact_secret_text, _redact_secrets
-from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell
+from kura.executors.runpod import LEASE_DEADLINE_PATH, POD_SELF_DELETE_FUNCTION, _runpod_lease_guard_shell, format_cost_ceiling, pod_cost_ceiling
 from kura.fsio import append_line_durably, atomic_write_json
 from kura.records import record
 from kura.workspace import load_yaml as _load_yaml
@@ -2372,7 +2372,8 @@ def change_runpod_lease(run_dir: Path, duration_sec: int, *, yes: bool, input_st
           + (f" Hourly price: ${price:.3f}." if isinstance(price, (int, float)) else ""), file=sys.stderr)
     if current is None:
         raise ValueError("this Pod's lease cannot be changed; it was created before Kura kept the deadline in a file")
-    training = _training_left_sec(run_dir)
+    print(f"Cost ceiling from now: {format_cost_ceiling(pod_cost_ceiling(price, lease_sec=duration_sec))}", file=sys.stderr)
+    training =_training_left_sec(run_dir)
     if training is not None and new < now + training + LEASE_MARGIN_SEC:
         print(f"note: training needs about {_format_remaining(training)} more, so this lease ends before it finishes", file=sys.stderr)
     if not yes:

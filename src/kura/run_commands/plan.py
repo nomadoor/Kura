@@ -860,7 +860,7 @@ def _local_launch_disk_preflight(
     docker_config = config.get("docker") if isinstance(config.get("docker"), dict) else {}
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     required_gib = local_min_free_gib(docker_config)
-    required_setting = "docker.min_free_gb in workspace.yaml"
+    required_setting = "docker.min_free_gb in workspace.yaml" + ("" if "min_free_gb" in docker_config else " (default)")
     if safety.get("max_run_disk_gb") is not None:
         run_floor_gib = _configured_gib(safety.get("max_run_disk_gb"), default=required_gib)
         if run_floor_gib > required_gib:

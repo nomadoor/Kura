@@ -43,7 +43,7 @@ stop Pod
 - `--max-lease 12h`: the Pod deletes itself this long after it starts, whatever the local controller does. It cannot be turned off; zero is refused.
   If Kura warns that training looks longer than the lease, tell the user the
   estimate and ask before running `kura run lease <run-id> <duration>`, which
-  shows the change and its price; a longer lease is a billing decision, and
+  shows the change, its price, and the cost ceiling from now; a longer lease is a billing decision, and
   Kura never extends it on its own. A render Pod's lease changes the same
   way.
 - `--unattended-wait auto`: after training, if the outputs were not collected,
@@ -118,13 +118,18 @@ stop Pod
   the launch gate. It skips only the question; Kura still prints the GPU, price,
   maximum lease, and cost ceiling.
 - The cost ceiling (`cost_ceiling` in `kura run plan`, `Cost ceiling:` in the
-  launch confirmation) is the most the Pod can bill before its maximum lease
-  deletes it: the lease times the highest current hourly price among the
-  requested GPU types. The plan shows it for the default 12h lease;
-  `kura run execute --max-lease` sets the lease and the confirmation shows the
-  ceiling for it. Show it with the hourly price when asking for approval. When
-  Kura says the ceiling is unknown, RunPod returned no price; say so rather
-  than estimating one.
+  launch confirmation) is the most the Pod can bill before the lease it is
+  created with deletes it: the lease times the highest current hourly quote
+  among the requested GPU types, for the configured GPU count. It is "about"
+  because a quote may change before the Pod starts. The plan shows it for the
+  default 12h lease; `kura run execute --max-lease` sets the lease and the
+  confirmation shows the ceiling for it. It holds only for that lease: if
+  `kura run lease` extends it, the Pod may bill more, and that command shows
+  the new ceiling from now at the Pod's own price. A GPU type or cloud with
+  no stock has no current price; the ceiling then names it and does not cover
+  landing there. Show the ceiling with the hourly price when asking for
+  approval. When Kura says the ceiling is unknown, say so and why rather than
+  estimating one.
 - A local execution failure is not permission to switch providers. In
   particular, do not rewrite `run.yaml` from a local executor to `runpod`
   because Docker, ComfyUI, or another local service is unavailable. Switching
