@@ -49,7 +49,7 @@ class FsioTests(unittest.TestCase):
             with patch("pathlib.Path.unlink", unlink), self.assertRaises(FileExistsError) as raised:
                 create_new_files({first: b"new", second: b"new", third: b"new"})
             self.assertEqual(raised.exception.filename, str(third))
-            self.assertIn(str(first), " ".join(getattr(raised.exception, "__notes__", [])))
+            self.assertEqual(raised.exception.__notes__, [f"could not remove created file(s) {first}"])
             self.assertTrue(first.exists())
             self.assertFalse(second.exists())
             self.assertEqual(third.read_bytes(), b"authored")

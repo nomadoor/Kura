@@ -338,6 +338,27 @@ class DatasetManifestTests(unittest.TestCase):
             self.assertTrue((dataset / "items.jsonl").is_symlink())
             self.assertFalse((Path(directory) / "elsewhere.jsonl").exists())
 
+    def test_a_v2_row_without_a_v2_declaration_still_needs_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = self.fresh_dataset(Path(directory), "id: tiny\n")
+            (dataset / "items.jsonl").write_text(json.dumps({
+                "id": "a", "files": [{"type": "file", "role": "target", "path": "a.png"}], "caption": {"text": "hi"},
+            }) + "\n", encoding="utf-8")
+            result, _, stderr = self.draft(dataset)
+            self.assertEqual(result, 0)
+            self.assertIn("review required: items.jsonl:1: non-legacy row requires author review", stderr)
+
+    def test_the_cli_prints_files_the_cleanup_could_not_remove(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = self.fresh_dataset(Path(directory))
+            failure = OSError("disk full")
+            failure.add_note("could not remove created file(s) /x/items.jsonl")
+            with patch("kura.cli.create_new_files", side_effect=failure):
+                result, _, stderr = self.draft(dataset)
+            self.assertEqual(result, 1)
+            self.assertIn("disk full", stderr)
+            self.assertIn("could not remove created file(s) /x/items.jsonl", stderr)
+
     def test_a_file_that_appears_while_drafting_is_named(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dataset = self.fresh_dataset(Path(directory))

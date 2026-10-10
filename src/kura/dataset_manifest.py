@@ -444,7 +444,10 @@ def validate_manifest(directory: Path) -> tuple[int, list[str]]:
 
 
 def draft_manifest(directory: Path) -> dict[str, Any]:
-    """Make a reviewable v2 proposal; never select a trainer input."""
+    """Make a reviewable v2 proposal; never select a trainer input.
+
+    It does not validate existing v2 rows; `kura dataset validate` does.
+    """
     metadata_path = directory / "dataset.yaml"
     if not metadata_path.is_file():
         raise ValueError("missing dataset.yaml")

@@ -155,7 +155,7 @@ def create_new_files(files: dict[Path, bytes]) -> None:
             except OSError:
                 left.append(str(path))
         if left:
-            exc.add_note("could not remove partly written " + ", ".join(left))
+            exc.add_note("could not remove created file(s) " + ", ".join(left))
         raise
     for parent in {path.parent for path in created}:
         _fsync_directory(parent)

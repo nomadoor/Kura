@@ -44,7 +44,8 @@ that command reads.
    `items.v2.candidate.jsonl` instead (and `dataset.v2.candidate.yaml` in the
    last case) and prints what to do with each. Resolve what it reports, then
    rename or move the candidates yourself. When it drafts no rows it writes
-   nothing.
+   nothing. It does not validate an existing v2 `items.jsonl`; run
+   `kura dataset validate` for that.
 4. `kura dataset validate <id>`, then `kura dataset inspect <id>`. Every
    dataset command takes either the ID or the dataset's path.
 
