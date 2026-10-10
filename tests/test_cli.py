@@ -31,7 +31,7 @@ from kura.backends import BACKENDS, MUSUBI_ADAPTER_SCRIPTS, _safetensors_validat
 from kura.backends.ai_toolkit import AI_TOOLKIT_VIDEO_SUFFIXES, project_ai_toolkit_dataset
 from kura.backends.musubi_datasets import MUSUBI_AUDIO_SUFFIXES, MUSUBI_IMAGE_SUFFIXES, MUSUBI_VIDEO_SUFFIXES, project_musubi_dataset
 from kura.backends.musubi_command import display_musubi_tuner
-from kura.backends.musubi_models import requirements_musubi
+from kura.backends.musubi_models import _musubi_model_lock, musubi_model_download_specs, requirements_musubi
 from kura.cli import _docker_cleanup_image, _notification_channels, _notify, _parse_duration_seconds, _runpod_run_over_ssh, _runpod_secret_env_payload, _select_remote_outputs, _sync_runpod_remote_stdout, _workspace, cmd_cleanup, cmd_dataset_validate, cmd_doctor_comfyui, cmd_doctor_disk, cmd_doctor_docker, cmd_doctor_musubi, cmd_doctor_runpod, cmd_doctor_sd_scripts, cmd_doctor_workspace, cmd_fix_links, cmd_fix_permissions, cmd_image_build, cmd_init, cmd_monitor, cmd_render_launch, cmd_render_new, cmd_run_compile, cmd_run_discard, cmd_run_download, cmd_run_new, cmd_run_plan, cmd_run_prune, cmd_run_reconcile, cmd_run_status
 from kura.run_commands.runpod_ssh import POD_SELF_DELETE_FUNCTION, _mark_runpod_outputs_collected, _mark_runpod_outputs_collecting, _runpod_lease_guard_shell, _unattended_completion_shell, _record_pulled_training_states, _ssh_base, _start_ssh_master, _extract_snapshot_delta_archive, _link_or_copy_snapshot_file, _local_reusable_snapshot_source, _mutate_run_status, _pull_remote_output_items, _record_pulled_outputs, _run_operation_lock, _same_remote_output_version, _try_sync_runpod_checkpoints, validate_safetensors_file, _validated_snapshot_manifest
 from kura.container_scripts import script_source
@@ -5389,6 +5389,83 @@ class MusubiBackendTests(unittest.TestCase):
         expected = {item["role"]: item["expected_format"] for item in bundle["models"]}
         self.assertEqual(expected["vae"], "flux2_ae_or_vae")
         self.assertEqual(expected["text_encoder"], "qwen3_8b_text_encoder")
+
+    FLUX2_KLEIN_DIT_FILES = {
+        "klein-base-4b": "split_files/diffusion_models/flux-2-klein-base-4b.safetensors",
+        "klein-4b": "split_files/diffusion_models/flux-2-klein-4b.safetensors",
+        "klein-base-9b": "flux-2-klein-base-9b.safetensors",
+        "klein-9b": "flux-2-klein-9b.safetensors",
+    }
+
+    def _flux2_klein_resolution(self, config: dict[str, object], base: str | None = None) -> tuple[str, str, str]:
+        run = self._run()
+        run["model"] = {"base": base} if base else {}
+        run["backend"] = {"name": "musubi-tuner", "config": {"architecture": "flux2", **config}}
+        specs, _ = musubi_model_download_specs(run)
+        dit = next(item["filename"] for item in specs if item["key"] == "dit")
+        script = command_musubi_tuner(run)["argv"][2]
+        version = script.split("--model_version ", 1)[1].split()[0]
+        text_encoder = {item["role"]: item["expected_format"] for item in _musubi_model_lock(run)["models"]}["text_encoder"]
+        return dit, version, text_encoder
+
+    def test_musubi_flux2_klein_files_and_version_agree_when_authored_values_conflict(self) -> None:
+        dit, version, text_encoder = self._flux2_klein_resolution(
+            {"model_version": "klein-base-9b", "model_bundle": "flux2-klein-4b"}, base="black-forest-labs/FLUX.2-klein-4B",
+        )
+        self.assertEqual(version, "klein-base-9b")
+        self.assertEqual(dit, self.FLUX2_KLEIN_DIT_FILES["klein-base-9b"])
+        self.assertEqual(text_encoder, "qwen3_8b_text_encoder")
+        dit, version, text_encoder = self._flux2_klein_resolution(
+            {"model_bundle": "flux2-klein-4b"}, base="black-forest-labs/FLUX.2-klein-base-9B",
+        )
+        self.assertEqual((dit, version, text_encoder), (self.FLUX2_KLEIN_DIT_FILES["klein-4b"], "klein-4b", "qwen3_4b_text_encoder"))
+
+    def test_musubi_flux2_klein_every_accepted_name_selects_one_variant_for_files_and_version(self) -> None:
+        names = {
+            "klein-base-4b": ["black-forest-labs/FLUX.2-klein-base-4B", "flux.2-klein-base-4b", "flux2-klein-base-4b", "flux2-klein-base-4b-comfy", "comfy-flux2-klein-base-4b"],
+            "klein-4b": ["black-forest-labs/FLUX.2-klein-4B", "flux.2-klein-4b", "flux2-klein-4b", "flux2-klein-4b-comfy", "comfy-flux2-klein-4b"],
+            "klein-base-9b": ["black-forest-labs/FLUX.2-klein-base-9B", "flux.2-klein-base-9b", "flux2-klein-base-9b", "bfl-flux2-klein-base-9b"],
+            "klein-9b": ["black-forest-labs/FLUX.2-klein-9B", "flux.2-klein-9b", "flux2-klein-9b", "bfl-flux2-klein-9b"],
+        }
+        for variant, accepted in names.items():
+            expected_encoder = "qwen3_8b_text_encoder" if "9b" in variant else "qwen3_4b_text_encoder"
+            expected = (self.FLUX2_KLEIN_DIT_FILES[variant], variant, expected_encoder)
+            for name in accepted:
+                with self.subTest(name=name, via="model_bundle"):
+                    self.assertEqual(self._flux2_klein_resolution({"model_bundle": name}), expected)
+                with self.subTest(name=name, via="model.base"):
+                    self.assertEqual(self._flux2_klein_resolution({}, base=name), expected)
+            with self.subTest(name=variant, via="model_version"):
+                self.assertEqual(self._flux2_klein_resolution({"model_version": variant}), expected)
+
+    def test_musubi_flux2_refuses_a_model_version_the_trainer_does_not_accept(self) -> None:
+        for value in ("9b", "flux.2-klein-9b", "klein-12b"):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "klein-base-4b, klein-4b, klein-base-9b, klein-9b, dev"):
+                self._flux2_klein_resolution({"model_version": value, "model_bundle": "bfl-flux2-klein-9b"})
+
+    def test_musubi_flux2_variant_from_model_base_survives_a_disabled_bundle(self) -> None:
+        from kura.backends.musubi_models import _musubi_flux2_model_version
+
+        run = self._run()
+        run["model"] = {"base": "black-forest-labs/FLUX.2-klein-9B"}
+        run["backend"] = {"name": "musubi-tuner", "config": {
+            "architecture": "flux2", "model_bundle": "none",
+            "model_paths": {"dit": "/m/dit.safetensors", "vae": "/m/vae.safetensors", "text_encoder": "/m/te.safetensors"},
+        }}
+        self.assertEqual(musubi_model_download_specs(run)[0], [])
+        self.assertEqual(_musubi_flux2_model_version(run), "klein-9b")
+
+    def test_musubi_flux2_a40_rule_reads_the_variant_wherever_it_was_named(self) -> None:
+        from kura.backends.musubi_command import _validate_musubi_resource_flags
+
+        for config, base in (({"model_version": "klein-9b"}, None), ({"model_bundle": "bfl-flux2-klein-9b"}, None), ({}, "black-forest-labs/FLUX.2-klein-9B")):
+            run = self._run()
+            run["model"] = {"base": base} if base else {}
+            run["compute"] = {"executor": "runpod", "gpu": "NVIDIA A40"}
+            override = {"architecture": "flux2", "batch_size": 2, **config}
+            run["backend"] = {"name": "musubi-tuner", "config": override}
+            with self.subTest(config=config, base=base), self.assertRaisesRegex(ValueError, "9B on NVIDIA A40 treats batch_size"):
+                _validate_musubi_resource_flags(run, override, "flux2")
 
     @posix_only(DATASET_IO)
     def test_command_musubi_resolves_known_krea2_bundle(self) -> None:
