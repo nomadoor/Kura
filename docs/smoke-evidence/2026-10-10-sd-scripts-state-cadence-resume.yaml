@@ -74,10 +74,10 @@ cases:
     resumed_run: 20261010-1037_f-mc-resume1-to2_f4bd
     trainer_save_every_n_steps: 1
     outcome: completed, publication completed, training state published at logical step 2
-  published_steps: every resumed run published its training state at its logical target step, and the plan showed the cadence the trainer was given
+  published_steps: every resumed run published its training state at its logical target step
 not_covered: >-
-  The RunPod mid-run training-state pull was not run on a Pod; it is covered by unit tests
-  that give Docker and RunPod the same state directories.
+  The RunPod mid-run training-state pull was not run on a Pod. Unit tests give Docker and
+  RunPod the same state directories, and run the Pod listing script locally under bash.
 interpretation: >-
   With and without the cadence cap, Resume reproduced the recorded one-item constant-scheduler
   equivalence: identical learned weights, optimizer, scheduler, and normalized train state,

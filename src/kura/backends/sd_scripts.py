@@ -18,7 +18,7 @@ from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
 from kura.secrets import is_secret_name
-from kura.training_artifacts import managed_state_cadence, managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
+from kura.training_artifacts import managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, validated_recipe
 
 
@@ -514,14 +514,6 @@ def compile_sd_scripts(run: dict[str, Any], destination: Path) -> dict[str, Any]
     return command
 
 
-def _displayed_cadence(run: dict[str, Any], native: dict[str, Any]) -> Any:
-    """The cadence the trainer is given: Kura's when it manages training state, else the configured one."""
-    contract = training_state_contract_sd_scripts(run)
-    if training_state_managed(run, contract):
-        return managed_state_cadence(run, native.get("save_every_n_steps"), contract=contract)
-    return native.get("save_every_n_steps")
-
-
 def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     native = sd_scripts_native(run)
     if native.get("command") is not None:
@@ -571,6 +563,6 @@ def display_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
             **{key: native.get(key) for key in ("gradient_checkpointing", "fp8_base", "cache_latents", "cache_latents_to_disk", "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk", "blocks_to_swap", "qwen_image_vae_2d", "vae_chunk_size")},
             "attn_mode": native.get("attn_mode", "sdpa") if architecture == "anima" and mode == "controlnet_lllite" else native.get("attn_mode"),
         },
-        "checkpoint": {"save_every_n_steps": _displayed_cadence(run, native), "retention_window_steps": native.get("save_last_n_steps")},
+        "checkpoint": {"save_every_n_steps": native.get("save_every_n_steps"), "retention_window_steps": native.get("save_last_n_steps")},
         "dataset_config": dataset_display,
     }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -107,16 +109,18 @@ class ManagedStateCadenceTests(unittest.TestCase):
             script,
         )
 
-    def test_the_plan_shows_the_cadence_the_trainer_is_given(self) -> None:
-        displays = {"musubi-tuner": musubi_command.display_musubi_tuner, "sd-scripts": sd_scripts.display_sd_scripts}
+    def test_a_capped_resume_passes_the_checkpoint_safety_preflight_as_a_fresh_run_does(self) -> None:
+        # The preflight counts checkpoints from the recipe's steps and the configured cadence;
+        # the cap on a Resume's state saves must not make it refuse the Resume.
+        from kura.run_commands.plan import _checkpoint_safety_preflight
+
         for build in (musubi_run, sd_scripts_run):
             run = build()
-            run["backend"]["config"]["save_every_n_steps"] = 500
+            run["backend"]["config"]["save_every_n_steps"] = 200
             run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
-            name = run["backend"]["name"]
-            with self.subTest(backend=name):
-                self.assertEqual(displays[name](run)["checkpoint"]["save_every_n_steps"], 500)
-                self.assertEqual(displays[name](as_resume(run, additional=200))["checkpoint"]["save_every_n_steps"], 200)
+            with self.subTest(backend=run["backend"]["name"]):
+                _checkpoint_safety_preflight(run)
+                _checkpoint_safety_preflight(as_resume(run, additional=50))
 
     def test_every_accelerate_trainer_names_its_outputs_through_one_rule(self) -> None:
         for module, build, command in (
@@ -203,6 +207,30 @@ class StatePublicationParityTests(unittest.TestCase):
                 )
             self.assertEqual([entry["observed_step"] for entry in items], [1200])
             owner.assert_called()
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash") and shutil.which("python"), "a Pod runs this under Linux bash and python")
+    def test_the_pod_listing_reports_the_step_the_contracts_marker_records(self) -> None:
+        import kura.run_commands.runpod_ssh as runpod_ssh
+
+        with tempfile.TemporaryDirectory() as directory:
+            outputs = Path(directory) / "runs" / "derived" / "outputs"
+            self._write_state(outputs / "derived-step1200-state", 1200)
+            (outputs / "derived-step0300-state").mkdir()
+            (outputs / "derived-step0300-state" / "kura-state-info.json").write_text("[1]", encoding="utf-8")
+            scripts: list[str] = []
+            real_run = subprocess.run
+
+            def run_on_pod(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+                scripts.append(command[-1])
+                return real_run(["bash", "-c", command[-1]], **kwargs)
+
+            marker = sd_scripts.training_state_contract_sd_scripts(sd_scripts_run())["state_step"]
+            with patch.object(runpod_ssh, "_ssh_base", return_value=["ssh"]), patch.object(runpod_ssh.subprocess, "run", side_effect=run_on_pod):
+                listed = runpod_ssh._runpod_remote_training_states({}, workspace=directory, run_id="derived", marker=marker)
+                unmarked = runpod_ssh._runpod_remote_training_states({}, workspace=directory, run_id="derived", marker=None)
+        self.assertEqual(len(scripts), 2)
+        self.assertEqual({item["name"]: item["marked_step"] for item in listed}, {"derived-step0300-state": None, "derived-step1200-state": 1200})
+        self.assertEqual({item["marked_step"] for item in unmarked}, {None})
 
     def test_runpod_reports_a_malformed_continuation_instead_of_pulling_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
