@@ -139,7 +139,7 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: executor-v1
-      value: ebb65d03d9461af2c7f954c9b921c246dca1e3eb1a87ca67c4de6d11d7b12521
+      value: 64a57d7a85689e6beee1aedef40563c25563c40b615bb47c4cfa8ed277c28c27
   - id: caption-presence-one-owner-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-
