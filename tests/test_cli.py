@@ -614,6 +614,15 @@ class ImageCommandTests(unittest.TestCase):
 
 
 class DoctorDockerTests(unittest.TestCase):
+    def test_doctor_output_leads_with_its_conclusion_and_keeps_every_key(self) -> None:
+        from kura.doctor import conclusion_first
+
+        payload = {"workspace_root": "/w", "sizes": {"a": 1}, "issues": [{"code": "x"}], "warnings": ["w"], "advisories": [], "checks": {"ok": True}, "configuration_error": None, "diagnosis": "done"}
+        ordered = conclusion_first(payload)
+        self.assertEqual(list(ordered), ["diagnosis", "checks", "configuration_error", "warnings", "advisories", "issues", "workspace_root", "sizes"])
+        self.assertEqual(ordered, payload)
+        self.assertEqual(list(conclusion_first({"secrets": {}, "user_secrets_file": "f"})), ["secrets", "user_secrets_file"])
+
     def test_cleanup_all_is_dry_run_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -879,6 +888,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["issues"][0]["severity"], "warning")
             self.assertIn("Docker build cache exceeds 30GiB", payload["warnings"])
             self.assertIn("cache/runs contain root-owned files; cleanup may require permission repair", payload["warnings"])
+            self.assertEqual(list(payload)[:4], ["diagnosis", "warnings", "advisories", "issues"])
 
     def test_doctor_disk_reports_large_cache_runs_as_advisory_when_space_is_ok(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1232,6 +1242,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertEqual(payload["local_image"], "will be pulled")
             self.assertIsNone(payload["gpu_available"])
             self.assertIn("docker pull nomadoor/kura-ai-toolkit@sha256:", payload["diagnosis"])
+            self.assertEqual(list(payload)[0], "diagnosis")
 
     def test_doctor_workspace_points_an_old_schema_at_migrate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1245,6 +1256,7 @@ class DoctorDockerTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
             self.assertIn("kura workspace migrate", json.loads(stdout.getvalue())["configuration_error"])
+            self.assertEqual(list(json.loads(stdout.getvalue()))[:2], ["configuration_error", "warnings"])
 
     def test_doctor_musubi_reports_adapter_script_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1280,6 +1292,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertTrue(payload["checks"]["adapter_scripts_exist"])
             self.assertTrue(payload["checks"]["adapter_help_smoke"])
             self.assertIn({"adapter": "flux2", "script": "flux_2_train_network.py", "exists": True, "help_returncode": 0}, payload["diagnostics"]["scripts"])
+            self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
 
     def test_doctor_musubi_accepts_image_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1354,6 +1367,7 @@ class DoctorDockerTests(unittest.TestCase):
             self.assertFalse(payload["checks"]["probe_exit"])
             self.assertFalse(payload["checks"]["tier1_scripts"])
             self.assertIn("probe failed", payload["diagnosis"])
+            self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
 
 
 class MonitorCommandTests(unittest.TestCase):
@@ -9466,6 +9480,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertIn("This process could not reach", payload["diagnosis"])
             self.assertIn("may work outside", payload["diagnosis"])
             self.assertNotIn("Codex", payload["diagnosis"])
+            self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
 
     def test_doctor_comfyui_handles_unreachable_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -9514,6 +9529,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertNotIn("abc123", payload_text)
             self.assertNotIn("frag123", payload_text)
             self.assertEqual(payload["diagnostics"]["endpoint"], "http://***@example.invalid:8188")
+            self.assertEqual(list(payload)[:2], ["diagnosis", "checks"])
 
     def test_doctor_comfyui_reports_lora_loader_count_and_stage_dir(self) -> None:
         class FakeResponse:
@@ -9578,6 +9594,7 @@ class RunPodLifecycleTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertFalse(payload["checks"]["core_model_patch_loader"])
             self.assertFalse(payload["checks"]["core_anima_lllite_apply"])
+            self.assertEqual(list(payload)[:3], ["diagnosis", "checks", "warnings"])
 
     def test_doctor_comfyui_reports_kura_stage_files(self) -> None:
         class FakeResponse:

@@ -45,6 +45,19 @@ def _docker_run(command: list[str], *, capture: bool = False) -> subprocess.Comp
     return subprocess.run(command, text=True, capture_output=capture, check=False)
 
 
+# A doctor report's conclusion leads, so a reader that stops early has read the answer.
+CONCLUSION_KEYS = ("diagnosis", "checks", "configuration_error", "warnings", "advisories", "issues")
+
+
+def conclusion_first(payload: dict[str, Any]) -> dict[str, Any]:
+    """The same report with its conclusion keys first; every key and value is kept."""
+    return {**{key: payload[key] for key in CONCLUSION_KEYS if key in payload}, **payload}
+
+
+def _print_report(payload: dict[str, Any]) -> None:
+    print(json.dumps(conclusion_first(payload), indent=2))
+
+
 def _safe_error(exc: BaseException | str) -> str:
     return _redact_secret_text(str(exc))
 
@@ -394,7 +407,7 @@ def cmd_doctor_disk(_: argparse.Namespace) -> int:
         "advisories": advisories,
         "diagnosis": "Disk diagnostics completed. This command is read-only.",
     }
-    print(json.dumps(_redact_secrets(payload), indent=2))
+    _print_report(_redact_secrets(payload))
     return 1 if warnings else 0
 
 
@@ -467,7 +480,7 @@ def cmd_doctor_docker(_: argparse.Namespace) -> int:
         cache["note"] = "Kura creates this cache directory before a local Docker launch. Set docker.hf_cache in workspace.yaml to keep it elsewhere."
     if checks["daemon_reachable"] and not diagnosis:
         diagnosis = "Docker is ready. Keep Docker Desktop and WSL updated; configure global memory/swap limits outside Kura only when the host requires them."
-    print(json.dumps({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    _print_report({**checks, "workspace_root": str(workspace_root), "runtime": runtime, "huggingface_cache": cache, "docker_storage": docker_storage, "diagnostics": diagnostics, "diagnosis": diagnosis})
     return 0 if all(value is not False for value in checks.values()) else 1
 
 
@@ -504,14 +517,14 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     }
     if not docker:
         diagnosis = "Docker CLI was not found on PATH."
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis})
         return 1
     image_check = subprocess.run([docker, "image", "inspect", image], text=True, capture_output=True, check=False, timeout=30)
     checks["local_image"] = image_check.returncode == 0
     if not checks["local_image"]:
         diagnostics["image_inspect_stderr"] = _redact_secret_text(image_check.stderr.strip())
         diagnosis = f"The Musubi Tuner image is not pulled yet. Pull it with: docker pull {image}"
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis})
         return 1
 
     probe_code = script_source("musubi_probe.py")
@@ -538,7 +551,7 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
     except subprocess.TimeoutExpired as exc:
         diagnostics["probe_error"] = f"timed out after {exc.timeout}s"
         diagnosis = "Musubi adapter probe timed out; inspect the local image and try a larger --timeout."
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis})
         return 1
     diagnostics["probe_returncode"] = probe.returncode
     if probe.stderr.strip():
@@ -563,7 +576,7 @@ def cmd_doctor_musubi(args: argparse.Namespace) -> int:
         diagnosis = "Musubi adapter scripts are present in the configured image and the smoke check passed."
     else:
         diagnosis = "Musubi adapter smoke failed. The configured image/ref may not contain all Kura adapter scripts or their imports may not start."
-    print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis})
     return 0 if checks["adapter_scripts_exist"] and (args.skip_help or checks["adapter_help_smoke"]) else 1
 
 
@@ -578,18 +591,18 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
     checks: dict[str, Any] = {"docker_command": bool(docker), "local_image": False, "probe_exit": False, "tier1_scripts": False, "imports": False, "sd_checkpoint_symlink_compat": False, "sdxl_checkpoint_symlink_compat": False, "gpu_available": None if args.no_gpu else False}
     diagnostics: dict[str, Any] = {"workspace_root": str(workspace_root), "image": image, "script_root": "/opt/sd-scripts", "gpu": not args.no_gpu}
     if not docker:
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Docker CLI was not found on PATH."}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Docker CLI was not found on PATH."})
         return 1
     try:
         inspected = subprocess.run([docker, "image", "inspect", image], text=True, capture_output=True, check=False, timeout=30)
     except subprocess.TimeoutExpired:
         diagnostics["image_inspect_error"] = "timed out after 30s"
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Configured sd-scripts image inspection timed out."}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": "Configured sd-scripts image inspection timed out."})
         return 1
     checks["local_image"] = inspected.returncode == 0
     if not checks["local_image"]:
         diagnostics["image_inspect_stderr"] = _redact_secret_text(inspected.stderr.strip())
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": f"The sd-scripts image is not pulled yet. Pull it with: docker pull {image}"}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": f"The sd-scripts image is not pulled yet. Pull it with: docker pull {image}"})
         return 1
     command = [docker, "run", "--rm"]
     if not args.no_gpu:
@@ -599,7 +612,7 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
         probe = subprocess.run(command, text=True, capture_output=True, check=False, timeout=args.timeout)
     except subprocess.TimeoutExpired as exc:
         diagnostics["probe_error"] = f"timed out after {exc.timeout}s"
-        print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": "sd-scripts image probe timed out."}, indent=2))
+        _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": "sd-scripts image probe timed out."})
         return 1
     diagnostics["probe_returncode"] = probe.returncode
     checks["probe_exit"] = probe.returncode == 0
@@ -629,7 +642,7 @@ def cmd_doctor_sd_scripts(args: argparse.Namespace) -> int:
             checks["gpu_available"] = payload.get("torch", {}).get("cuda_available") is True if isinstance(payload.get("torch"), dict) else False
     passed = all(value is True or value is None for value in checks.values())
     diagnosis = "sd-scripts Tier 1 scripts, imports, and runtime passed." if passed else "sd-scripts image probe failed; inspect the per-script and import diagnostics."
-    print(json.dumps({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}, indent=2))
+    _print_report({"checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis})
     return 0 if passed else 1
 
 
@@ -699,7 +712,7 @@ def cmd_doctor_runpod(_: argparse.Namespace) -> int:
         diagnosis = "This process could not reach the RunPod API because the OS denied the connection before RunPod responded. The same Kura command may work outside this process's permission context. See external-access.md, shipped with Kura as .kura/reference/external-access.md."
     else:
         diagnosis = "RunPod is not fully ready; inspect checks and diagnostics."
-    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
+    _print_report(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}))
     return 0 if ok else 1
 
 
@@ -817,7 +830,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
     if parsed_endpoint.scheme not in ("http", "https"):
         diagnostics["object_info_error"] = f"unsupported comfyui.endpoint scheme: {parsed_endpoint.scheme or '(none)'}"
         diagnosis = "ComfyUI endpoint is not ready; comfyui.endpoint must start with http:// or https://."
-        print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}), indent=2))
+        _print_report(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "diagnosis": diagnosis}))
         return 1
     object_info: dict[str, Any] | None = None
     try:
@@ -909,7 +922,7 @@ def cmd_doctor_comfyui(args: argparse.Namespace) -> int:
             "ComfyUI is reachable, but it cannot see every workflow-required model. Verify the intended endpoint and the user's "
             "ComfyUI model paths. Local render never downloads models."
         )
-    print(json.dumps(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "warnings": warnings, "diagnosis": diagnosis}), indent=2))
+    _print_report(_redact_secrets({"workspace_root": str(workspace_root), "checks": checks, "diagnostics": diagnostics, "warnings": warnings, "diagnosis": diagnosis}))
     ok = checks["endpoint_reachable"] and checks["object_info"] and checks["lora_stage_visible"] is not False and checks.get("workflow_models_visible") is not False
     return 0 if ok else 1
 
@@ -940,7 +953,7 @@ def cmd_doctor_secrets(_: argparse.Namespace) -> int:
         pass
     from kura.secrets import sources, user_secrets_path
 
-    print(json.dumps({"secrets": sources(), "user_secrets_file": str(user_secrets_path()), "docker_login_registries": registries}, indent=2))
+    _print_report({"secrets": sources(), "user_secrets_file": str(user_secrets_path()), "docker_login_registries": registries})
     return 0
 
 
@@ -986,7 +999,7 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
     if logout_warning:
         warnings.append(logout_warning)
     subdirs = {name: (workspace / name).is_dir() for name in ("datasets", "runs", "workflows", "promptsets")}
-    print(json.dumps({
+    _print_report({
         "workspace_root": str(workspace),
         "workspace_yaml": (workspace / "workspace.yaml").is_file(),
         "subdirs": subdirs,
@@ -994,7 +1007,7 @@ def cmd_doctor_workspace(_: argparse.Namespace) -> int:
         "settings": workspace_schema_description(),
         "configuration_error": configuration_error,
         "warnings": warnings,
-    }, indent=2))
+    })
     return 1 if warnings else 0
 
 
