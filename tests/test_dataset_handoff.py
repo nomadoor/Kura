@@ -41,10 +41,12 @@ from kura.backends.musubi_native_selectors import (
 from kura.backends.sd_scripts_datasets import (
     SD_SCRIPTS_FOLDER_CODECS,
     SD_SCRIPTS_PROJECTION_PROFILES,
+    _sd_scripts_profile,
     project_sd_scripts_dataset,
     write_sd_scripts_dataset_config as write_sd_scripts_dataset_config_impl,
 )
 from kura.backends.dataset_profiles import (
+    caption_presence,
     classify_dataset_shape,
     resolve_projection_partitions,
     select_projection_profile,
@@ -819,6 +821,57 @@ class DatasetHandoffTests(unittest.TestCase):
                 project=lambda selection: project_sd_scripts_dataset(changed, selection),
             )
             self.assertNotEqual(lock["semantic"], changed_lock["semantic"])
+
+    def test_backends_share_one_caption_presence_owner(self) -> None:
+        import kura.backends.ai_toolkit as ai_toolkit_module
+        import kura.backends.musubi_datasets as musubi_module
+        import kura.backends.sd_scripts_datasets as sd_scripts_module
+
+        dataset = {
+            "id": "images",
+            "samples": [
+                {
+                    "id": "captioned",
+                    "files": [{"role": "target", "path": "a.png"}],
+                    "caption": {"text": "caption"},
+                },
+                {"id": "uncaptioned", "files": [{"role": "target", "path": "b.png"}]},
+                {
+                    "id": 7,
+                    "files": [{"role": "target", "path": "c.png"}],
+                    "caption": "not a caption object",
+                },
+            ],
+        }
+        expected = {"captioned": True, "uncaptioned": False, "7": False}
+        self.assertEqual(caption_presence(dataset), expected)
+
+        class Selected(Exception):
+            pass
+
+        def stop(**kwargs):
+            raise Selected(kwargs["caption_presence"])
+
+        calls = {
+            "AI-Toolkit": (ai_toolkit_module, lambda: _select_ai_toolkit_projection_profile(
+                architecture="flux", dataset=dataset, dataset_config={},
+            )),
+            "Musubi": (musubi_module, lambda: project_musubi_dataset(
+                {"backend": {"name": "musubi-tuner", "config": {"architecture": "flux2"}}},
+                {"datasets": [dataset]},
+            )),
+            "sd-scripts": (sd_scripts_module, lambda: _sd_scripts_profile(
+                {"architecture": "sdxl"}, dataset,
+            )),
+        }
+        for backend, (module, call) in calls.items():
+            with self.subTest(backend=backend), patch.object(
+                module, "caption_presence", wraps=caption_presence,
+            ) as owner, patch.object(module, "select_projection_profile", side_effect=stop):
+                with self.assertRaises(Selected) as raised:
+                    call()
+                owner.assert_called_once_with(dataset)
+                self.assertEqual(raised.exception.args[0], expected)
 
     def test_sd_scripts_profiles_use_shared_media_shapes_and_caption_contract(self) -> None:
         self.assertEqual(SD_SCRIPTS_PROJECTION_PROFILES["ordinary-image-lora"]["shape"], "image")

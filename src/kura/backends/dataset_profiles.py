@@ -162,6 +162,14 @@ def role_cardinality_errors(
     return invalid
 
 
+def caption_presence(dataset: dict[str, Any]) -> dict[str, bool]:
+    """Return whether each manifest sample carries a caption, keyed by sample ID."""
+    return {
+        str(sample.get("id")): isinstance(sample.get("caption"), dict)
+        for sample in dataset.get("samples", [])
+    }
+
+
 def caption_requirement_errors(
     caption_presence: dict[str, bool], requirement: str,
 ) -> list[str]:

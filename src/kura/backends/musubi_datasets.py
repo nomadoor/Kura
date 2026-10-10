@@ -13,6 +13,7 @@ from typing import Any
 
 from kura.backends.common import _musubi_architecture, _musubi_backend_override
 from kura.backends.dataset_profiles import (
+    caption_presence,
     classify_dataset_shape,
     resolve_projection_partitions,
     role_cardinality_errors,
@@ -919,10 +920,7 @@ def project_musubi_dataset(run: dict[str, Any], selection: dict[str, Any]) -> di
             mode=mode,
             shape_examples=shape_examples,
             role_cardinalities=role_cardinalities,
-            caption_presence={
-                str(sample.get("id")): isinstance(sample.get("caption"), dict)
-                for sample in dataset.get("samples", [])
-            },
+            caption_presence=caption_presence(dataset),
         )
         blocks = _resolve_musubi_projection_blocks(
             dataset, dataset_options.get(dataset_id, {}), flatten_groups=flatten_groups,

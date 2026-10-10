@@ -11,6 +11,7 @@ from typing import Any
 
 from kura.backends.ai_toolkit_baseline import BASELINE_KEYS, load_baseline, select_baseline_entry
 from kura.backends.dataset_profiles import (
+    caption_presence,
     classify_dataset_shape,
     resolve_projection_partitions,
     select_projection_profile,
@@ -376,10 +377,7 @@ def _select_ai_toolkit_projection_profile(
             },
             shape_examples=examples,
             role_cardinalities=cardinalities,
-            caption_presence={
-                str(sample.get("id")): isinstance(sample.get("caption"), dict)
-                for sample in dataset.get("samples", [])
-            },
+            caption_presence=caption_presence(dataset),
         )
     except ValueError as error:
         samples = dataset.get("samples", [])
