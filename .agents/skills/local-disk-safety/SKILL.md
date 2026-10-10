@@ -122,9 +122,12 @@ or WSL/VHDX/Windows-side operations.
   build cache limit. `kura doctor workspace` lists the settings and their
   accepted values.
 - Local Docker launch adds known write estimates to the configured free-space
-  floor. Musubi Hugging Face downloads use HEAD metadata when available, and
-  explicitly allowed many-checkpoint runs add a conservative checkpoint budget.
-  That budget counts the most checkpoints on disk at once while training:
+  floor, and the RunPod check compares them with `runpod.container_disk_gb`.
+  Musubi Hugging Face downloads use HEAD metadata when available, and every
+  training run adds a conservative checkpoint budget of
+  `safety.checkpoint_estimate_gb` (default 1) GiB per checkpoint;
+  `safety.allow_many_checkpoints` does not remove it. The budget counts the
+  most checkpoints on disk at once while training:
   retention that prunes during training (AI-Toolkit and sd-scripts
   `save_last_n_steps`) bounds it near the kept count, while Musubi Tuner's
   `prune_checkpoints_before_step` runs only after training and AI-Toolkit's

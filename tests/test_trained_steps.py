@@ -329,13 +329,44 @@ class PeakCheckpointsTests(unittest.TestCase):
             self.assertIsNone(_monitor_expected(run, checkpoint))
             owner.assert_not_called()
 
+    def test_the_disk_estimate_does_not_wait_for_allow_many_checkpoints(self) -> None:
+        # A plain run with few checkpoints and a Musubi run whose prune passes the guard both
+        # write their peak; allowing many checkpoints changes the guard, not the estimate.
+        plain = musubi_run()
+        plain["backend"]["config"]["save_every_n_steps"] = 500
+        pruned = musubi_run()
+        pruned["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
+        for name, run, peak in (("plain", plain, 2), ("musubi prune", pruned, 20)):
+            with self.subTest(run=name):
+                plan._checkpoint_count_safety(run, trained_steps(run))
+                for safety in ({}, {"allow_many_checkpoints": True}):
+                    estimate = plan._estimate_checkpoint_write_bytes({**run, "safety": safety})
+                    self.assertEqual(estimate, {"bytes": peak * 1024**3, "count": peak, "per_checkpoint_gib": 1})
+                sized = plan._estimate_checkpoint_write_bytes({**run, "safety": {"checkpoint_estimate_gb": 3}})
+                self.assertEqual(sized, {"bytes": 3 * peak * 1024**3, "count": peak, "per_checkpoint_gib": 3})
+
+    def test_runpod_refuses_a_container_disk_below_the_peak(self) -> None:
+        run = musubi_run()
+        run["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
+        run["safety"] = {"checkpoint_estimate_gb": 2}
+        with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
+                patch.object(plan, "_disk_cache_estimate", return_value={}):
+            with self.assertRaisesRegex(ValueError, "container_disk_gb=30 is below estimated remote writes of about 40 GiB"):
+                plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 30}, {"bytes": 0})
+            run["safety"]["allow_runpod_disk_risk"] = True
+            result = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 30}, {"bytes": 0})
+        self.assertEqual(result["estimated_write_bytes"], 40 * 1024**3)
+
     def test_local_and_runpod_disk_preflights_count_the_same_peak(self) -> None:
+        plain = musubi_run()
+        plain["backend"]["config"]["save_every_n_steps"] = 500
         for name, run, retention, peak in (
-            ("sd-scripts", sd_scripts_run(), {"save_last_n_steps": 100}, 4),
-            ("musubi-tuner", musubi_run(), {"prune_checkpoints_before_step": 1000}, 20),
+            ("sd-scripts", sd_scripts_run(), {"save_every_n_steps": 50, "save_last_n_steps": 100}, 4),
+            ("musubi-tuner", musubi_run(), {"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000}, 20),
+            ("no retention", plain, {}, 2),
         ):
-            run["backend"]["config"].update({"save_every_n_steps": 50, **retention})
-            run["safety"] = {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 1, "allow_storage_risk": True}
+            run["backend"]["config"].update(retention)
+            run["safety"] = {"checkpoint_estimate_gb": 1, "allow_storage_risk": True}
             expected = {"bytes": peak * 1024**3, "count": peak, "per_checkpoint_gib": 1}
             with self.subTest(backend=name), tempfile.TemporaryDirectory() as directory:
                 with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \

@@ -767,12 +767,14 @@ def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
 
 
 def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
-    """The checkpoint bytes an explicitly allowed many-checkpoint run writes, counted at the
-    peak the trainer's retention leaves on disk while it trains (`peak_checkpoints`)."""
+    """The checkpoint bytes a training run writes for the launch disk preflights, counted at the
+    peak the trainer's retention leaves on disk while it trains (`peak_checkpoints`), at
+    `safety.checkpoint_estimate_gb` (default 1) GiB each. `safety.allow_many_checkpoints` waives
+    only the checkpoint-count guard, never this estimate. A run without a known backend writes
+    no checkpoint estimate, as `_disk_cache_estimate` writes no cache estimate for it."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    if safety.get("allow_many_checkpoints") is not True:
-        return {"bytes": 0, "count": 0}
-    count = peak_checkpoints(_adapter_display(run).get("checkpoint") or {}, trained_steps(run))
+    adapter = _run_adapter(run)
+    count = peak_checkpoints(adapter.display(run).get("checkpoint") or {}, trained_steps(run)) if adapter is not None else None
     if count is None:
         return {"bytes": 0, "count": 0}
     per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
