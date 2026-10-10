@@ -118,6 +118,27 @@ following it (`kura runner status`, `kura run status`) and use the
 `runpod-lifecycle` recovery flow if not; do not stop the Pod before remote exit
 and local download are confirmed.
 
+`kura run status <run-id>` reports one of these states:
+
+| State | Meaning | Next step |
+|---|---|---|
+| `draft` | `run.yaml` is not frozen yet | `kura run compile <run-id>` |
+| `compiled` | frozen and never launched | `kura run plan <run-id>`, approval, `kura run execute <run-id>` |
+| `queued`, `staged`, `launching` | waiting for, or being put on, a machine | follow with `kura run execute <run-id>` |
+| `running` | the trainer is running; on RunPod, also until its outputs are collected | follow with `kura run execute <run-id>` |
+| `publishing` | local Docker only: the trainer exited 0; its outputs are not published yet | keep following; it is not finished |
+| `completed` | the trainer exited 0 and its outputs are published | verify the outputs and report |
+| `failed` | the trainer exited non-zero | read `kura run logs <run-id>`; any fix goes in a new run |
+| `interrupted` | stopped by `kura run stop`, or its Pod or container went away or was never confirmed created; a local run keeps what it wrote, but outputs a RunPod Pod held uncollected are gone | report; a new run needs approval |
+| `launch_failed` | the trainer never started | read the error; any fix goes in a new run |
+| `unknown` | the outcome was not observed: the container is gone, or the Pod exited, without an exit code | do not start the same run again; `kura run reconcile <run-id>` or `kura run stop <run-id>` so no Pod or container remains, then a new run with approval |
+| `recovery_required` | needs a person: outputs or required training state could not be published, or collecting from the Pod failed three times | on RunPod, when `kura run status <run-id>` shows `downloaded_run: null`, the outputs were never collected and the Pod is kept, still billing: report the reason in `runs/<run-id>/logs/runner.log`, then `kura run download <run-id> --force` and `kura run stop <run-id>` (`runpod-lifecycle`); otherwise the outputs are already local and collecting again cannot change them: report `publication_error` or `training_state_sync_error` from `kura run status <run-id>` |
+| `stopped` | written by older Kura versions for a stopped run (now `interrupted`) | as for `interrupted` |
+
+A new run starts from the old one's settings with `kura run new --from
+<run-id> --slug <words>`, or from its saved training state with `kura run
+resume` (`training-parameter-planning`).
+
 An approval covers that run only. Do not attach a render, evaluation, or sample
 generation to a training approval. After the run finishes you may offer a
 confirmation render in one line, naming the workflow, prompt, and seed; if the
