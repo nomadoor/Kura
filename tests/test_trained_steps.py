@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,7 @@ import yaml
 import kura.monitor as monitor
 import kura.run_commands.plan as plan
 from kura.run_envelope import common_recipe
+from kura.training_artifacts import trained_steps
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tests.test_resume_steps import as_resume, musubi_run  # noqa: E402
@@ -114,6 +116,36 @@ class ResumeEstimateTests(unittest.TestCase):
         with patch.object(plan, "_checkpoint_safety_preflight"), patch.object(plan, "trained_steps", wraps=trained_steps) as owner:
             plan._checkpoint_preflight_report(run)
             owner.assert_called_once()
+
+
+class LaunchDiskPreflightTests(unittest.TestCase):
+    def test_local_and_runpod_disk_preflights_count_the_resume_added_steps(self) -> None:
+        # 1000-step source resumed +50 with a cadence of 10: 5 checkpoints of 1 GiB on both executors.
+        run = _resume(save_every=10, additional=50)
+        run["safety"] = {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 1, "allow_storage_risk": True}
+        expected = {"bytes": 5 * 1024**3, "count": 5, "per_checkpoint_gib": 1}
+        with tempfile.TemporaryDirectory() as directory, patch.object(plan, "trained_steps", wraps=trained_steps) as owner:
+            with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None):
+                runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 50}, {"bytes": 0})
+            with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+                local = plan._local_launch_disk_preflight(
+                    Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
+                    enforce_model_download_safety=False, download_estimate={"bytes": 0},
+                )
+            self.assertEqual(owner.call_count, 2)
+        self.assertEqual(runpod["estimates"]["checkpoints"], expected)
+        self.assertEqual(local["estimates"]["checkpoints"], expected)
+        cache = int(runpod["estimates"]["disk_cache"].get("bytes") or 0)
+        self.assertEqual(runpod["estimated_write_bytes"], expected["bytes"] + cache)
+        self.assertEqual(local["paths"]["workspace"]["estimated_write_bytes"], expected["bytes"] + cache)
+
+    def test_a_long_resume_warns_about_the_samples_it_adds(self) -> None:
+        # 1000-step recipe with a sample cadence of 100: 10 batches fresh, about 50 when resumed +5000.
+        fresh = musubi_run()
+        fresh["sampling"] = {"cadence_steps": 100}
+        self.assertEqual(plan._disk_warnings(fresh, {}), [])
+        warnings = plan._disk_warnings(as_resume(fresh, source_step=1000, additional=5000), {})
+        self.assertEqual(warnings, ["sampling cadence may create about 50 sample batches"])
 
 
 class FreshRunPlanTests(unittest.TestCase):
