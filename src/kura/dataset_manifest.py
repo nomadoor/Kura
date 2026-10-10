@@ -431,8 +431,8 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     metadata = yaml.safe_load(metadata_path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
-    proposed_metadata = dict(metadata)
-    proposed_metadata["items_schema_version"] = 2
+    # Propose a dataset.yaml only when the authored one does not declare v2 yet.
+    proposed_metadata = None if metadata.get("items_schema_version") == 2 else {**metadata, "items_schema_version": 2}
     issues: list[str] = []
     root = directory.resolve(strict=True)
     legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues)

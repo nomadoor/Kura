@@ -189,7 +189,7 @@ implementation; the detail lives in
 | --- | --- |
 | Typed-reference row details | `items_schema_version: 2` rows carry ordered typed `files[]` entries (`type`, `role`, `path`, optional `sha256`), a caption of `{text}`, `{file}`, or `null`, and an optional opaque `group`; metadata never selects inputs. |
 | Dataset-prep skill example | `src/kura/shipped/skills/dataset-prep/SKILL.md` teaches the v2 row and how to replace the old selectors (`dataset_folder`, `control_subdir`). |
-| Existing dataset migration interface | `kura dataset draft` previews reviewable v2 candidate files, and `kura dataset validate` checks them; neither rewrites media nor turns a draft into run intent. |
+| Existing dataset migration interface | `kura dataset draft` previews a reviewable v2 manifest and, with `--write`, writes `items.jsonl` when it is absent or `*.v2.candidate.*` files beside authored ones it never replaces, and `kura dataset validate` checks them; neither rewrites media nor turns a draft into run intent. |
 | Resume from a run without the new lock | Resume compares semantic input identity when both runs have v2 locks and records `legacy-unverified` / `source-unverified` when the source run cannot prove media identity. |
 | RunPod selected-file transfer | Stage archives only the frozen selected files with per-file SHA-256 proof; launch re-proves the stage and pins its manifest before Pod creation; the Pod verifies the archive and every file before model acquisition. |
 | Candidate-media inventory scope | Manifest measurement reports unlisted media only under declared dataset roots and requires them to be listed or explicitly excluded. |

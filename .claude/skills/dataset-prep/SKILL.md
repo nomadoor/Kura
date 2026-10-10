@@ -35,11 +35,13 @@ that command reads.
                             # warns about captions the trainer receives without it
    ```
 
-3. `kura dataset draft <id> --write` writes `dataset.v2.candidate.yaml` and
-   `items.v2.candidate.jsonl` beside them and never replaces an authored file.
-   Check that each row pairs the right image and caption (each row points at
-   its caption file as `caption.file`), then rename them over `dataset.yaml`
-   and `items.jsonl`.
+3. `kura dataset draft <id> --write` writes `items.jsonl`. Check that each
+   row pairs the right image and caption (each row points at its caption file
+   as `caption.file`). It never replaces an authored file: when `items.jsonl`
+   already exists it writes `items.v2.candidate.jsonl` instead, and when
+   `dataset.yaml` lacks `items_schema_version: 2` it writes
+   `dataset.v2.candidate.yaml`; review those and rename them over the
+   originals yourself.
 4. `kura dataset validate <id>`, then `kura dataset inspect <id>`. Every
    dataset command takes either the ID or the dataset's path.
 

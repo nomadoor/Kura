@@ -237,9 +237,46 @@ class DatasetManifestTests(unittest.TestCase):
             self.assertEqual(preview["items"][0]["id"], "a")
             self.assertEqual(preview["items"][0]["caption"], {"file": {"type": "file", "path": "images/a.txt"}})
             self.assertFalse((dataset / "items.v2.candidate.jsonl").exists())
+            self.assertFalse((dataset / "items.jsonl").exists())
             self.assertEqual(cmd_dataset_draft(argparse.Namespace(dataset_dir=str(dataset), write=True)), 0)
-            self.assertTrue((dataset / "items.v2.candidate.jsonl").exists())
+            # dataset.yaml lacks items_schema_version: 2, so its proposal stays a candidate.
+            self.assertEqual((dataset / "dataset.yaml").read_text(encoding="utf-8"), "id: tiny\n")
+            self.assertTrue((dataset / "dataset.v2.candidate.yaml").exists())
+            self.assertTrue((dataset / "items.jsonl").exists())
+            self.assertFalse((dataset / "items.v2.candidate.jsonl").exists())
             self.assertEqual(cmd_dataset_draft(argparse.Namespace(dataset_dir=str(dataset), write=True)), 1)
+
+    def test_draft_write_on_a_fresh_v2_dataset_writes_items_jsonl_that_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "tiny"
+            dataset.mkdir()
+            (dataset / "a.png").write_bytes(b"image")
+            (dataset / "a.txt").write_text("hello\n", encoding="utf-8")
+            authored = "id: tiny\nitems_schema_version: 2\n"
+            (dataset / "dataset.yaml").write_text(authored, encoding="utf-8")
+            with patch("sys.stdout", io.StringIO()):
+                self.assertEqual(cmd_dataset_draft(argparse.Namespace(dataset_dir=str(dataset), write=True)), 0)
+            self.assertEqual((dataset / "dataset.yaml").read_text(encoding="utf-8"), authored)
+            self.assertFalse((dataset / "dataset.v2.candidate.yaml").exists())
+            self.assertFalse((dataset / "items.v2.candidate.jsonl").exists())
+            self.assertTrue((dataset / "items.jsonl").exists())
+            self.assertEqual(self.validate(dataset), (0, ""))
+
+    def test_draft_write_never_replaces_an_existing_items_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "tiny"
+            dataset.mkdir()
+            (dataset / "a.png").write_bytes(b"image")
+            (dataset / "a.txt").write_text("hello\n", encoding="utf-8")
+            (dataset / "dataset.yaml").write_text("id: tiny\nitems_schema_version: 2\n", encoding="utf-8")
+            authored = json.dumps({"id": "a", "files": [{"type": "file", "role": "target", "path": "a.png"}],
+                                   "caption": {"text": "authored"}}) + "\n"
+            (dataset / "items.jsonl").write_text(authored, encoding="utf-8")
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                self.assertEqual(cmd_dataset_draft(argparse.Namespace(dataset_dir=str(dataset), write=True)), 0)
+            self.assertEqual((dataset / "items.jsonl").read_text(encoding="utf-8"), authored)
+            self.assertTrue((dataset / "items.v2.candidate.jsonl").exists())
+            self.assertFalse((dataset / "dataset.v2.candidate.yaml").exists())
 
     def test_draft_imports_unambiguous_legacy_id_caption_and_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

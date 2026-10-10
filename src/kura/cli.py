@@ -178,16 +178,22 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         if not args.write:
             print(json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
-        metadata_path = directory / "dataset.v2.candidate.yaml"
-        items_path = directory / "items.v2.candidate.jsonl"
-        if metadata_path.exists() or items_path.exists():
+        # Write the file the next command reads when nothing is there yet;
+        # an authored file is never replaced, so its proposal stays a candidate.
+        items_path = directory / "items.jsonl"
+        if items_path.exists():
+            items_path = directory / "items.v2.candidate.jsonl"
+        metadata_path = None if proposal["dataset_yaml"] is None else directory / "dataset.v2.candidate.yaml"
+        written = [path for path in (metadata_path, items_path) if path is not None]
+        if any(path.exists() for path in written):
             raise ValueError("v2 candidate already exists; review it before replacing")
-        with metadata_path.open("x", encoding="utf-8") as stream:
-            yaml.safe_dump(proposal["dataset_yaml"], stream, allow_unicode=True, sort_keys=False)
+        if metadata_path is not None:
+            with metadata_path.open("x", encoding="utf-8") as stream:
+                yaml.safe_dump(proposal["dataset_yaml"], stream, allow_unicode=True, sort_keys=False)
         with items_path.open("x", encoding="utf-8") as stream:
             for item in proposal["items"]:
                 stream.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
-        print(f"wrote review candidates: {metadata_path}, {items_path}")
+        print("wrote: " + ", ".join(str(path) for path in written))
         for issue in proposal["issues"]:
             print(f"review required: {issue}", file=sys.stderr)
         return 0
@@ -1533,9 +1539,13 @@ def main() -> None:
     validate = dataset_sub.add_parser("validate", help="Validate a dataset manifest")
     validate.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
     validate.set_defaults(func=cmd_dataset_validate)
-    draft = dataset_sub.add_parser("draft", help="Preview or create reviewable v2 candidate files")
+    draft = dataset_sub.add_parser("draft", help="Preview or write a reviewable v2 manifest")
     draft.add_argument("dataset_dir", help="Dataset ID under datasets/ or a dataset directory path")
-    draft.add_argument("--write", action="store_true", help="Write candidate files without replacing authored manifests")
+    draft.add_argument(
+        "--write",
+        action="store_true",
+        help="Write items.jsonl if absent; never replace an authored file (write *.v2.candidate.* instead)",
+    )
     draft.set_defaults(func=cmd_dataset_draft)
     inspect = dataset_sub.add_parser("inspect", help="Measure dataset facts without judging them")
     inspect.add_argument("dataset", help="Dataset ID under datasets/ or a dataset directory path")
