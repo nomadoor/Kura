@@ -46,7 +46,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import managed_state_cadence, read_resume_lock, resume_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import managed_state_cadence, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -248,10 +248,9 @@ def _checkpoint_retention_policy_present(important_config: dict[str, Any]) -> bo
 
 
 def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> list[str]:
-    run_recipe = common_recipe(run)
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     warnings: list[str] = []
-    steps = _as_positive_int(run_recipe.get("steps"))
+    steps = trained_steps(run)
     save_every = _as_positive_int(important_config.get("save_every_n_steps"))
     has_retention_policy = _checkpoint_retention_policy_present(important_config)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
@@ -271,8 +270,7 @@ def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
     if safety.get("allow_many_checkpoints") is True:
         return
     important = (_adapter_display(run).get("checkpoint") or {})
-    run_recipe = common_recipe(run)
-    steps = _as_positive_int(run_recipe.get("steps"))
+    steps = trained_steps(run)
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
         return
@@ -580,8 +578,7 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     except ValueError as exc:
         return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
     important = (_adapter_display(run).get("checkpoint") or {})
-    run_recipe = common_recipe(run)
-    steps = _as_positive_int(run_recipe.get("steps"))
+    steps = trained_steps(run)
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if steps and save_every:
         expected = max(steps // save_every, 1)
@@ -786,8 +783,7 @@ def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     if safety.get("allow_many_checkpoints") is not True:
         return {"bytes": 0, "count": 0}
     important = (_adapter_display(run).get("checkpoint") or {})
-    run_recipe = common_recipe(run)
-    steps = _as_positive_int(run_recipe.get("steps"))
+    steps = trained_steps(run)
     save_every = _as_positive_int(important.get("save_every_n_steps"))
     if not steps or not save_every or _checkpoint_retention_policy_present(important):
         return {"bytes": 0, "count": 0}
