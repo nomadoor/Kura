@@ -270,10 +270,6 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
     return warnings
 
 
-def _checkpoint_safety_preflight(run: dict[str, Any]) -> None:
-    _checkpoint_count_safety(run, trained_steps(run))
-
-
 def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
     """Refuse a run whose `steps` would save many unpruned checkpoints, unless it allows that."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
@@ -286,7 +282,7 @@ def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
     expected = max(steps // save_every, 1)
     if expected >= 10:
         raise ValueError(
-            f"checkpoint policy may create about {expected} checkpoints{_trained_steps_basis(run, steps)} without pruning; "
+            f"checkpoint policy may create about {expected} checkpoints without pruning{_trained_steps_basis(run, steps)}; "
             "set backend.config.prune_checkpoints_before_step, reduce save frequency, "
             "or set safety.allow_many_checkpoints: true if intentional"
         )
@@ -582,10 +578,7 @@ def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
-    try:
-        steps = trained_steps(run)
-    except ValueError as exc:
-        return [_preflight_record("continuation", "error", str(exc), "run.yaml")]
+    steps = trained_steps(run)
     try:
         _checkpoint_count_safety(run, steps)
     except ValueError as exc:

@@ -42,11 +42,8 @@ def _monitor_expected(run: dict[str, Any], save_every: int) -> int | None:
 def _estimates(run: dict[str, Any], save_every: int) -> dict[str, Any]:
     """The run through all five places that count its checkpoints."""
     allowed = {**run, "safety": {"allow_many_checkpoints": True}}
-    try:
-        plan._checkpoint_safety_preflight(run)
-        refused = None
-    except ValueError as exc:
-        refused = str(exc)
+    refusals = [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"]
+    refused = refusals[0] if refusals else None
     return {
         "disk_warnings": plan._disk_warnings(run, {"save_every_n_steps": save_every}),
         "safety_refusal": refused,
@@ -85,7 +82,7 @@ class ResumeEstimateTests(unittest.TestCase):
         estimates = _estimates(_resume(save_every=500, additional=5000), 500)
         self.assertEqual(len(estimates["disk_warnings"]), 1)
         self.assertIn("about 10 checkpoints over the 5000 steps this run trains;", estimates["disk_warnings"][0])
-        self.assertIn("about 10 checkpoints over the 5000 steps this run trains without pruning", estimates["safety_refusal"] or "")
+        self.assertIn("about 10 checkpoints without pruning over the 5000 steps this run trains", estimates["safety_refusal"] or "")
         self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 10 checkpoint(s) over the 5000 steps this run trains"])
         self.assertEqual(estimates["write_count"], 10)
         self.assertEqual(estimates["monitor_expected"], 10)
@@ -95,22 +92,11 @@ class ResumeEstimateTests(unittest.TestCase):
         broken["continuation"]["target_step"] = 1
         self.assertIsNone(_monitor_expected(broken, 10))
 
-    def test_the_preflight_reports_an_invalid_continuation_as_such_with_or_without_many_checkpoints(self) -> None:
-        broken = _resume(save_every=10, additional=50)
-        broken["continuation"]["target_step"] = 1
-        for allowed in (False, True):
-            run = {**broken, "safety": {"allow_many_checkpoints": allowed}}
-            with self.subTest(allow_many_checkpoints=allowed):
-                records = plan._checkpoint_preflight_report(run)
-                self.assertEqual([(record["check"], record["severity"], record["path"]) for record in records], [("continuation", "error", "run.yaml")])
-                self.assertIn("continuation.target_step", records[0]["fact"])
-
     def test_every_estimate_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         cases = {
             "_disk_warnings": (plan, lambda: plan._disk_warnings(run, {"save_every_n_steps": 10})),
-            "_checkpoint_safety_preflight": (plan, lambda: plan._checkpoint_safety_preflight(run)),
             "_estimate_checkpoint_write_bytes": (plan, lambda: plan._estimate_checkpoint_write_bytes(allowed)),
             "_checkpoint_expected": (monitor, lambda: _monitor_expected(run, 10)),
         }
