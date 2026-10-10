@@ -44,7 +44,7 @@ from kura.run_envelope import training_state_policy
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, _OperationBusy, host_time, _mutate_run_status, check_stop, sleep_checking_stop, _run_operation_lock, append_run_event, record_launch_phase, run_events, _apply_stdout_progress
 from kura.run_commands.common import _load_frozen_command, _safe_error
 from kura.run_commands.plan import _configured_download_min_free_bytes
-from kura.training_artifacts import checkpoint_step, frozen_resume_steps, logical_step, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
+from kura.training_artifacts import checkpoint_step, run_output_name, state_directory_step, state_logical_step, training_state_contract, is_training_state_output, validate_safetensors_file, load_training_state, publish_completed_training_states, publish_training_state_candidate, select_training_state, training_state_at_step, training_state_capture_required, training_state_retention_floor, verify_training_state, missing_training_state_error, MISSING_STATE_PUBLICATION_ERROR
 from kura.runtime_io import validated_write_roots
 
 
@@ -847,7 +847,7 @@ def _same_remote_training_state_version(before: dict[str, Any], after: dict[str,
     return (
         len(before_files) == len(after_files)
         and normalize(before_files) == normalize(after_files)
-        and before.get("logical_step") == after.get("logical_step")
+        and before.get("marked_step") == after.get("marked_step")
     )
 
 
@@ -882,27 +882,31 @@ PY
     return items
 
 
-def _runpod_remote_training_states(details: dict[str, Any], *, workspace: str, run_id: str, timeout_sec: int = 30) -> list[dict[str, Any]]:
+def _runpod_remote_training_states(
+    details: dict[str, Any], *, workspace: str, run_id: str, marker: dict[str, Any] | None, timeout_sec: int = 30,
+) -> list[dict[str, Any]]:
+    """List the Pod's state directories with the step their backend's marker (`marker`, from the
+    training-state contract) records; the controller verifies the marker after the copy."""
     remote_outputs = f"{workspace.rstrip('/')}/runs/{run_id}/outputs"
+    marker_path = marker.get("path") if isinstance(marker, dict) and isinstance(marker.get("path"), str) else None
+    marker_field = marker.get("field") if isinstance(marker, dict) and isinstance(marker.get("field"), str) else None
     script = f"""
 export PATH="/opt/conda/bin:/usr/local/bin:$PATH"
 python - <<'PY'
 import glob
 import json
 import os
-import re
 
 directory = {remote_outputs!r}
+marker_path = {marker_path!r}
+marker_field = {marker_field!r}
 items = []
-for state_dir in sorted(glob.glob(os.path.join(directory, "*-step*-state"))):
+# The controller decides which of these are the run's states, with the rule every executor uses.
+for state_dir in sorted(glob.glob(os.path.join(directory, "*-state"))):
     if not os.path.isdir(state_dir) or os.path.islink(state_dir):
         continue
     name = os.path.basename(state_dir)
-    match = re.search(r"-step(\\d{{4,}})-state$", name)
-    if not match:
-        continue
     files = []
-    logical_step = None
     for root, dirs, names in os.walk(state_dir):
         dirs[:] = sorted(item for item in dirs if not os.path.islink(os.path.join(root, item)))
         for filename in sorted(names):
@@ -911,17 +915,16 @@ for state_dir in sorted(glob.glob(os.path.join(directory, "*-step*-state"))):
                 continue
             stat = os.stat(path)
             files.append({{"path": os.path.relpath(path, state_dir), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}})
-    for marker_name in ("kura-state-info.json", "state-info.json"):
-        marker_path = os.path.join(state_dir, marker_name)
+    marked_step = None
+    if marker_path and marker_field:
         try:
-            with open(marker_path, encoding="utf-8") as handle:
-                marked = json.load(handle).get("logical_step")
+            with open(os.path.join(state_dir, marker_path), encoding="utf-8") as handle:
+                value = json.load(handle).get(marker_field)
         except (OSError, ValueError, AttributeError):
-            continue
-        if isinstance(marked, int) and not isinstance(marked, bool) and marked >= 0:
-            logical_step = marked
-            break
-    items.append({{"path": state_dir, "name": name, "step": int(match.group(1)), "logical_step": logical_step, "files": files}})
+            value = None
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            marked_step = value
+    items.append({{"path": state_dir, "name": name, "marked_step": marked_step, "files": files}})
 print(json.dumps(items))
 PY
 """.strip()
@@ -945,29 +948,36 @@ def _pull_remote_training_state_items(
     published: list[dict[str, Any]] = []
     pending_root = run_dir / "recovery" / "training-state-pull"
     pending_root.mkdir(parents=True, exist_ok=True)
+    # A run whose frozen manifest cannot be read or interpreted raises, and the caller records
+    # it as the training-state sync error rather than pulling nothing silently.
     try:
         run = _load_yaml(run_dir / "resolved" / "manifest.lock.yaml")
-        steps = frozen_resume_steps(run_dir, run)
-        retention_floor = training_state_retention_floor(
-            host_workspace,
-            run_dir.name,
-            training_state_policy(run)["keep_generations"],
-        )
-    except (OSError, ValueError, yaml.YAMLError):
-        steps = None
-        retention_floor = None
+    except yaml.YAMLError as exc:
+        raise ValueError("cannot read the frozen run manifest for training-state sync") from exc
+    contract = training_state_contract(run)
+    output_name = run_output_name(run)
+    retention_floor = training_state_retention_floor(
+        host_workspace,
+        run_dir.name,
+        training_state_policy(run)["keep_generations"],
+    )
     for item in items:
-        name, remote_path, step, files = item.get("name"), item.get("path"), item.get("step"), item.get("files")
+        name, remote_path, files = item.get("name"), item.get("path"), item.get("files")
         if not isinstance(name, str) or Path(name).name != name or not isinstance(remote_path, str):
             continue
-        if isinstance(step, bool) or not isinstance(step, int) or not isinstance(files, list) or not files:
+        # Mid-run: the final state directory is collected with the run's outputs.
+        step = state_directory_step(name, output_name, allow_final=False)
+        if step is None or not isinstance(files, list) or not files:
             continue
-        marked_step = item.get("logical_step")
+        marked_step = item.get("marked_step")
         if isinstance(marked_step, bool) or not isinstance(marked_step, int):
-            marked_step = logical_step(step, steps)
-        if retention_floor is not None and marked_step < retention_floor:
+            marked_step = None
+        run_step = state_logical_step(run_dir, run, contract, step, marked_step)
+        if run_step is None:
+            continue  # its marker is not written yet; the next sync places it
+        if retention_floor is not None and run_step < retention_floor:
             continue
-        existing = training_state_at_step(host_workspace, run_dir.name, marked_step, verify_payload=False)
+        existing = training_state_at_step(host_workspace, run_dir.name, run_step, verify_payload=False)
         if existing is not None:
             published.append(existing)
             continue
@@ -993,7 +1003,7 @@ def _pull_remote_training_state_items(
             )
             if result.returncode:
                 raise ValueError(f"scp training-state pull failed with exit code {result.returncode}: {name}")
-            refreshed = _runpod_remote_training_states(details, workspace=workspace, run_id=run_dir.name)
+            refreshed = _runpod_remote_training_states(details, workspace=workspace, run_id=run_dir.name, marker=contract.get("state_step"))
             after = next((candidate for candidate in refreshed if candidate.get("path") == remote_path), None)
             if not _same_remote_training_state_version(item, after):
                 raise ValueError(f"remote training state changed while it was being copied: {name}")
@@ -1212,10 +1222,11 @@ def _try_sync_runpod_checkpoints(run_dir: Path, details: dict[str, Any], *, work
                 sync_states = False  # mid-run mirroring is best effort; the terminal check decides
             if sync_states:
                 try:
-                    state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id)
+                    marker = training_state_contract(_load_yaml(run_dir / "resolved" / "manifest.lock.yaml")).get("state_step")
+                    state_items = _runpod_remote_training_states(details, workspace=workspace, run_id=run_id, marker=marker)
                     training_states = _pull_remote_training_state_items(run_dir, details, workspace=workspace, items=state_items)
                     _record_pulled_training_states(run_dir, training_states)
-                except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+                except (OSError, ValueError, json.JSONDecodeError, yaml.YAMLError, subprocess.TimeoutExpired) as exc:
                     state_error = _safe_error(exc)
                     try:
                         _mutate_run_status(

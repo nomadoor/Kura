@@ -1,0 +1,85 @@
+schema_version: 1
+kind: training-resume-equivalence
+observed_at: '2026-10-10'
+executor: docker
+kura_commit: 62d3774
+campaign: >-
+  sd-scripts SD 1.5 Resume equivalence on the code that reads the managed state save cadence
+  and state directory steps with one rule each, and that caps a process-local Resume's state
+  save cadence at the steps it adds.
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+runtime_image_digest: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+adapter_source:
+  kind: source-tree-sha256
+  scope: selected-adapter-v3
+  value: 9d95ec957c85a809f498243e841b69f806bca43c1bcd798131b5cebabfa902ee
+command_check: >-
+  Every recorded sd-scripts SD 1.5 evidence run.yaml (the 2026-08-27 controls, source, and
+  Resume, and the 2026-09-29 multi-concept and Resume runs) compiles to a trainer command
+  byte-identical to the one the previous code produces. In those runs the configured cadence
+  equals the steps the Resume adds, so the cap does not apply to them.
+parameters: >-
+  One training item, 256px, network_dim 4, alpha 1, AdamW8bit, constant scheduler, lr 7e-05,
+  bf16, seed 42, save_last_n_steps 100, training state enabled with two generations.
+comparison:
+  weights: tensor-by-tensor equality
+  optimizer_scheduler: recursive value equality
+  train_state: train_state.json equality
+cases:
+  controls:
+    runs: [20261010-1026_f-direct100-a_e623, 20261010-1026_f-direct100-b_1cae]
+    save_every_n_steps: 50
+    weight_tensors_different: 0
+    optimizer_semantic_leaves_different: 0
+    rng_semantic_leaves_different: 0
+  resume_cap_not_applied:
+    source_run: 20261010-1026_f-split50_5bef
+    resumed_run: 20261010-1034_f-resume50-to100_7a66
+    trainer_save_every_n_steps: 50
+    compared_with: 20261010-1026_f-direct100-a_e623 at step 100
+    weight_tensors_total: 792
+    weight_tensors_different: 0
+    optimizer_semantic_leaves_total: 2834
+    optimizer_semantic_leaves_different: 0
+    scheduler_exact: true
+    normalized_train_state_exact: true
+    rng_semantic_leaves_different: 625
+  resume_cap_applied_below_configured:
+    source_run: 20261010-1026_f-split50_5bef
+    resumed_run: 20261010-1035_f-resume50-to80_a83f
+    configured_save_every_n_steps: 50
+    trainer_save_every_n_steps: 30
+    compared_with: 20261010-1026_f-direct80_0adf at step 80
+    weight_tensors_different: 0
+    optimizer_semantic_leaves_different: 0
+    scheduler_exact: true
+    normalized_train_state_exact: true
+    rng_semantic_leaves_different: 625
+  resume_cap_applied_without_configured_cadence:
+    source_run: 20261010-1026_f-split50-nocad_d91c
+    resumed_run: 20261010-1035_f-nocad-resume50-to100_69e1
+    configured_save_every_n_steps: null
+    trainer_save_every_n_steps: 50
+    compared_with: 20261010-1026_f-direct100-a_e623 at step 100
+    weight_tensors_different: 0
+    optimizer_semantic_leaves_different: 0
+    scheduler_exact: true
+    normalized_train_state_exact: true
+    rng_semantic_leaves_different: 625
+  multi_concept_resume:
+    dataset: kura-smoke-multiconcept (nested groups to subsets, buckets 128-256)
+    source_run: 20261010-1026_f-mc_a17f
+    resumed_run: 20261010-1037_f-mc-resume1-to2_f4bd
+    trainer_save_every_n_steps: 1
+    outcome: completed, publication completed, training state published at logical step 2
+  published_steps: every resumed run published its training state at its logical target step
+not_covered: >-
+  The RunPod mid-run training-state pull was not run on a Pod. Unit tests give Docker and
+  RunPod the same state directories, and run the Pod listing script locally under bash.
+interpretation: >-
+  With and without the cadence cap, Resume reproduced the recorded one-item constant-scheduler
+  equivalence: identical learned weights, optimizer, scheduler, and normalized train state,
+  with Resume RNG differing as recorded on 2026-08-27. Do not generalize to shuffled or
+  multi-item datasets.

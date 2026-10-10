@@ -18,8 +18,8 @@ from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
 from kura.secrets import is_secret_name
-from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
-from kura.run_envelope import backend_config, resume_intent, training_state_policy, validated_recipe
+from kura.training_artifacts import managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
+from kura.run_envelope import backend_config, resume_intent, validated_recipe
 
 
 def training_state_contract_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
@@ -320,22 +320,21 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
         args.append("--fp8_base")
     for key in ("save_every_n_steps", "save_last_n_steps"):
         value = native.get(key)
-        if value is not None:
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise ValueError(f"sd-scripts {key} must be a positive integer")
-            args.extend([f"--{key}", str(value)])
-    policy = training_state_policy(run)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+            raise ValueError(f"sd-scripts {key} must be a positive integer")
+    save_args: list[str] = []
     if training_state_managed(run, training_state_contract_sd_scripts(run)):
-        epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
-        configured_epoch_flags = sorted(arg.split("=", 1)[0] for arg in _extra_args(native) if arg.split("=", 1)[0] in epoch_flags)
-        if configured_epoch_flags:
-            raise ValueError(
-                "sd-scripts epoch save flags are incompatible with managed training-state retention; "
-                "use backend.config.save_every_n_steps instead: " + ", ".join(configured_epoch_flags)
-            )
-        cadence = native.get("save_every_n_steps") or recipe["steps"]
-        state_window = cadence if policy["keep_generations"] == 2 else 1
-        args.extend(["--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_window)])
+        save_args = managed_state_save_args(
+            run, native.get("save_every_n_steps"), _extra_args(native), contract=training_state_contract_sd_scripts(run),
+        )
+    for key in ("save_every_n_steps", "save_last_n_steps"):
+        if key == "save_every_n_steps" and save_args[:1] == ["--save_every_n_steps"]:
+            # Kura's cadence takes the configured one's place, so a fresh run's argv is unchanged.
+            args.extend(save_args[:2])
+            save_args = save_args[2:]
+        elif native.get(key) is not None:
+            args.extend([f"--{key}", str(native[key])])
+    args.extend(save_args)
     if continuation is not None:
         artifact_id = continuation["source"]["artifact_id"]
         args.extend(["--resume", training_state_payload(artifact_id), "--skip_until_initial_step"])
@@ -426,8 +425,9 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     # of the frozen training recipe, but reusing it would make the derived run
     # report (and, with a shared workspace, potentially overwrite) source-run
     # weights.
-    configured_output_name = run["id"] if resume_intent(run) is not None else native.get("output_name", run["id"])
-    output_name = _safe_name(configured_output_name, field="output_name")
+    if "output_name" in native:
+        _safe_name(native["output_name"], field="output_name")
+    output_name = _safe_name(run_output_name(run), field="output_name")
     final_output = f"/workspace/runs/{run['id']}/outputs"
     train_output = f"/workspace/runs/{run['id']}/cache/sd-scripts/native-output" if architecture == "anima" and mode == "lora" else final_output
     model_items = [{"role": role, "path": path} for role, path in sorted(paths.items())]

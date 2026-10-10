@@ -1291,6 +1291,43 @@ records:
     outcome: passed
     observed_at: 2026-08-27
     artifact: smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml
+  - id: sd-scripts-sd15-resume-equivalence-docker-2026-10-10
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 9d95ec957c85a809f498243e841b69f806bca43c1bcd798131b5cebabfa902ee
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+    native_path:
+      architecture: sd15
+      mode: lora
+      executor: docker
+      control_optimizer_steps: 100
+      resumed_optimizer_steps: 50+50, 50+30 with the state save cadence capped at 30, 50+50 with no configured cadence
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-10-10
+    artifact: smoke-evidence/2026-10-10-sd-scripts-state-cadence-resume.yaml
+  - id: sd-scripts-multiconcept-resume-docker-2026-10-10
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 9d95ec957c85a809f498243e841b69f806bca43c1bcd798131b5cebabfa902ee
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+    native_path:
+      architecture: sd15
+      executor: docker
+      dataset_layout: nested multi-concept groups to subsets
+      resume: 1-to-2
+      optimizer_steps: 1
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: 2026-10-10
+    artifact: smoke-evidence/2026-10-10-sd-scripts-state-cadence-resume.yaml
   - id: sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26
     backend: sd-scripts
     adapter_source:

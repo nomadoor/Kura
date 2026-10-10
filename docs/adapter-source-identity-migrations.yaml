@@ -8,6 +8,130 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: state-dirs-and-cadence-display-revert-sd-scripts-2026-10-10
+    backend: sd-scripts
+    reason: >-
+      The plan display returns to the configured state save cadence, as before this change;
+      the trainer commands, inputs, and outputs are byte-identical to the code the
+      2026-10-10 Resume runs used.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sd15-resume-equivalence-docker-2026-10-10
+    - sd-scripts-multiconcept-resume-docker-2026-10-10
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 9d95ec957c85a809f498243e841b69f806bca43c1bcd798131b5cebabfa902ee
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8c61b230915e0de3e50c0feb2deb63a8a5c5f640164bf64e849a34d3a839b29d
+  - id: state-dirs-and-cadence-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      State directory steps, the managed state save cadence, and output names are each decided
+      by one rule that every executor uses. Fresh runs compile byte-identical. A process-local
+      Resume caps the state save cadence at the steps it adds; every recorded evidence run's
+      command is byte-identical, and local SD 1.5 Resume runs on this code reproduced the
+      recorded equivalence with and without the cap.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: adb6171b28b962059c5fe063415308f7df52a99c55199450fe92f225ebfbb086
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 74a8329b8fe60146f81c6169451c09869f5fd2936fa0e2d750b8dcb873f335dd
+  - id: state-dirs-and-cadence-sd-scripts-2026-10-08
+    backend: sd-scripts
+    reason: >-
+      State directory steps, the managed state save cadence, and output names are each decided
+      by one rule that every executor uses. Fresh runs compile byte-identical. A process-local
+      Resume caps the state save cadence at the steps it adds; every recorded evidence run's
+      command is byte-identical, and local SD 1.5 Resume runs on this code reproduced the
+      recorded equivalence with and without the cap.
+    behavior_changed: false
+    evidence_ids:
+    - sd-scripts-sdxl-2026-09-29
+    - sd-scripts-sdxl-docker-2026-10-07
+    - sd-scripts-sdxl-2026-10-01-1458
+    - sd-scripts-anima-lora-2026-09-29
+    - sd-scripts-anima-lllite-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - sd-scripts-manifest-v2-multiconcept-docker-2026-09-29
+    - sd-scripts-avif-absent-image-probe-2026-09-29
+    - sd-scripts-sd15-resume-equivalence-docker-2026-08-27
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 1a6d2cb6bb2feef1332025a3d0b7f11b365e18fa391f825fedc4a6046b353295
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 8c61b230915e0de3e50c0feb2deb63a8a5c5f640164bf64e849a34d3a839b29d
+  - id: runpod-executor-state-dirs-and-cadence-2026-10-08
+    executor: runpod
+    reason: >-
+      State directory steps, the managed state save cadence, and output names are each decided
+      by one rule that every executor uses. Fresh runs compile byte-identical. A process-local
+      Resume caps the state save cadence at the steps it adds; every recorded evidence run's
+      command is byte-identical, and local SD 1.5 Resume runs on this code reproduced the
+      recorded equivalence with and without the cap.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2236
+    - ai-toolkit-flux2-klein-4b-2026-10-02-2027
+    - ai-toolkit-qwen-image-2-2026-10-01-1458
+    - musubi-zimage-2026-10-01-1458
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - musubi-framepack-2026-09-30-0201
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - sd-scripts-flux1-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - ai-toolkit-selected-file-transfer-runpod-main-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 32d94015bcd4fdaf713aea70844df83865a612e852ea82ca02fa0b044ff960d2
+    replacement:
+      kind: source-tree-sha256
+      scope: executor-v1
+      value: 6afb5586d3ca7297d1a20c411094883242b8a8f882b42b3be0f68b5dd4955231
   - id: runpod-executor-dataset-view-one-comparer-2026-10-08
     executor: runpod
     reason: >-

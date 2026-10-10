@@ -141,9 +141,10 @@ so later saves cannot change its input. A source run may be pruned without
 removing an artifact still referenced by a derived run.
 
 Backend completion sidecars are accepted only when their schema, backend name,
-logical step, and declared payload digests agree. For short Musubi Resume runs,
-the derived checkpoint cadence is capped at the requested additional steps so
-the endpoint remains resumable. RunPod compile freezes the effective runtime
+logical step, and declared payload digests agree. For short Musubi and sd-scripts
+Resume runs, the derived checkpoint cadence is capped at the requested
+additional steps so the endpoint remains resumable. Only state directories named
+for the run's own output name are published, on every executor. RunPod compile freezes the effective runtime
 image, and Resume launch does not accept `--image` overrides.
 
 Resume does not mean "load a LoRA and start over." The plan reports the actual

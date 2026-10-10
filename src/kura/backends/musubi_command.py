@@ -23,8 +23,8 @@ from kura.backends.musubi_native_selectors import musubi_native_task, wan_native
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.secrets import is_secret_name
-from kura.training_artifacts import resume_steps, training_state_managed, training_state_payload
-from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
+from kura.training_artifacts import managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
+from kura.run_envelope import resume_intent, validated_recipe
 
 
 def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
@@ -127,21 +127,10 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
         raise ValueError("Musubi training command assembly requires the frozen run envelope")
     continuation = resume_intent(run)
     steps = resume_steps(run, contract=training_state_contract_musubi(run))
-    additional_steps = None
     if steps is not None:
-        additional_steps = steps["additional_steps"]
         target_index = train.index("--max_train_steps") + 1
         train[target_index] = str(steps["native_end"])
-    policy = training_state_policy(run)
     if training_state_managed(run, training_state_contract_musubi(run)):
-        epoch_flags = {"--save_every_n_epochs", "--save_last_n_epochs", "--save_last_n_epochs_state", "--save_n_epoch_ratio"}
-        configured_epoch_flags = sorted(arg.split("=", 1)[0] for arg in _extra_args(override) if arg.split("=", 1)[0] in epoch_flags)
-        if configured_epoch_flags:
-            raise ValueError(
-                "Musubi epoch save flags are incompatible with managed training-state retention; "
-                "use backend.config.save_every_n_steps instead: " + ", ".join(configured_epoch_flags)
-            )
-        recipe = validated_recipe(run, required=True)
         configured_cadence = override.get("save_every_n_steps")
         if configured_cadence is not None and (
             isinstance(configured_cadence, bool)
@@ -149,17 +138,18 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
             or configured_cadence <= 0
         ):
             raise ValueError("Musubi backend.config.save_every_n_steps must be a positive integer")
-        cadence = configured_cadence if configured_cadence is not None else recipe["steps"]
-        if additional_steps is not None:
-            cadence = min(cadence, additional_steps)
+        save_args = managed_state_save_args(run, configured_cadence, _extra_args(override), contract=training_state_contract_musubi(run))
+        if save_args[0] == "--save_every_n_steps":
+            # Every Musubi command already names its default cadence; one Kura sets takes its place.
+            cadence = save_args[1]
+            save_args = save_args[2:]
             try:
                 cadence_index = train.index("--save_every_n_steps") + 1
             except ValueError:
-                train.extend(["--save_every_n_steps", str(cadence)])
+                train.extend(["--save_every_n_steps", cadence])
             else:
-                train[cadence_index] = str(cadence)
-        state_window = cadence if policy["keep_generations"] == 2 else 1
-        train.extend(["--save_state", "--save_state_on_train_end", "--save_last_n_steps_state", str(state_window)])
+                train[cadence_index] = cadence
+        train.extend(save_args)
     if continuation is not None:
         extra_scheduler = _extra_arg_value(_extra_args(override), "--lr_scheduler")
         if extra_scheduler is not None and override.get("lr_scheduler") is not None:
@@ -493,7 +483,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     download_commands, _ = _musubi_model_downloads(run)
     dataset_config = f"/workspace/runs/{run['id']}/resolved/musubi/dataset.toml"
     output_dir = f"/workspace/runs/{run['id']}/outputs"
-    output_name = run["id"]
+    output_name = run_output_name(run)
     common = [
         "accelerate", "launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
     ]

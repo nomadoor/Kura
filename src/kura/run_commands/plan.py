@@ -46,7 +46,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import read_resume_lock, resume_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import managed_state_cadence, read_resume_lock, resume_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -1164,6 +1164,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
     ai_save = ai_native.get("save") if isinstance(ai_native.get("save"), dict) else {}
     if state_cadence is None:
         state_cadence = ai_save.get("save_every")
+    state_cadence = managed_state_cadence(run, state_cadence)
     if state_cadence is None:
         state_cadence = run_recipe.get("steps")
     state_capability = training_state_contract(run)["capability"]
