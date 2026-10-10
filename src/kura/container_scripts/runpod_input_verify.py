@@ -30,7 +30,7 @@ CHUNK = 1024 * 1024
 CONTAINER_WORKSPACE = "/workspace/"
 
 
-class TransferError(Exception):
+class TransferError(ValueError):
     pass
 
 
@@ -209,7 +209,7 @@ def materialize_views(workspace, lock, run_id, created):
             expected_files[path] = data
         links += len(expected_links)
         generated += len(expected_files)
-    changes = view_changes(workspace, lock)
+    changes = view_changes(workspace, lock, media_suffixes())
     if changes:
         raise TransferError("view inventory differs from the frozen lock: " + "; ".join(changes[:5]))
     return links, generated
@@ -226,22 +226,30 @@ def media_suffixes():
     return frozenset(values)
 
 
-def view_changes(workspace, lock):
+def view_changes(workspace, lock, suffixes):
     """Compare every view's exact link and generated-file inventory with the lock.
 
     Trainers may write caches beside view files, so only an unexpected media
-    file counts as drift among regular files.
+    file (a suffix in ``suffixes``) counts as drift among regular files. This
+    is the one view comparer: the Pod runs it here, and Kura imports it for
+    Docker launch, plan, and postflight.
     """
-    suffixes = media_suffixes()
     changes = []
-    for view in lock["views"]:
-        root_relative = safe_relative(view["root"])
+    views = lock.get("views") if isinstance(lock, dict) else None
+    if not isinstance(views, list):
+        raise TransferError("invalid view lock: views is not a list")
+    for view in views:
+        try:
+            root_relative = safe_relative(view["root"])
+            expected_links = {link["path"]: link["target"] for link in view["links"]}
+            expected_files = {
+                item["path"]: item["text"].encode("utf-8")
+                for item in [*view.get("files", []), *view.get("native_files", [])]
+            }
+        except (AttributeError, KeyError, TypeError) as exc:
+            # A frozen lock Kura did not write cannot be checked; say so instead of crashing the check.
+            raise TransferError(f"invalid view lock: {exc!r}") from exc
         root = workspace / root_relative
-        expected_links = {link["path"]: link["target"] for link in view["links"]}
-        expected_files = {
-            item["path"]: item["text"].encode("utf-8")
-            for item in [*view.get("files", []), *view.get("native_files", [])]
-        }
         actual_links = {}
         actual_files = set()
         if not root.is_dir() or root.is_symlink():
@@ -306,7 +314,7 @@ def postflight():
                 continue
             if observed != baseline:
                 source_changes.append(f"transferred source changed: {destination}")
-        link_changes = view_changes(workspace, lock)
+        link_changes = view_changes(workspace, lock, media_suffixes())
         record.update({
             "status": "changed" if source_changes or link_changes else "matched",
             "source_stat_verification": "changed" if source_changes else "matched",
