@@ -8,6 +8,37 @@ description: >-
   scope. Evidence older than the listed transition pairs remains stale for its
   original identity and is not implicitly migrated.
 records:
+  - id: model-base-revision-ai-toolkit-ai-toolkit-2026-10-08
+    backend: ai-toolkit
+    reason: >-
+      model.base is required only by AI-Toolkit, which trains from it, and AI-Toolkit's
+      requirement record no longer names a model.revision its trainer never receives; every
+      recorded evidence run sets model.base, so trainer commands, inputs, and outputs are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - ai-toolkit-hidream-2026-09-30-0052
+    - ai-toolkit-qwen-image-2026-09-30-0040
+    - ai-toolkit-qwen-image-edit-2026-09-30-0040
+    - ai-toolkit-sd1-2026-09-29-2323
+    - ai-toolkit-sdxl-2026-09-29-2323
+    - ai-toolkit-anima-2026-09-29-2323
+    - ai-toolkit-flux2-klein-4b-2026-09-29-2323
+    - ai-toolkit-zimage-2026-09-29-2323
+    - ai-toolkit-chroma-2026-09-29-2323
+    - ai-toolkit-flux-kontext-2026-09-29-2323
+    - ai-toolkit-qwen-image-2-2026-09-29-2323
+    - ai-toolkit-krea2-2026-09-29-2323
+    - ai-toolkit-flux-2026-09-29-2323
+    - ai-toolkit-flex2-2026-09-29-2323
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 6eff658ad44af21e453c5f389e2b59d7edbb6318ac2ec04f21c2a87877204bca
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: fbda5cd5466f7c1d9405807862005609dee0207222e4acb08f35aebe07a47d5c
   - id: musubi-flux2-variant-one-owner-musubi-tuner-2026-10-08
     backend: musubi-tuner
     reason: >-
