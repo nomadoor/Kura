@@ -10,8 +10,8 @@ Use this reference only for `backend.name: ai-toolkit`.
   field; it may not replace Kura-owned process, dataset, or model identity.
 - `model.base` is the trained model (`process.model.name_or_path`), so the
   adapter's own validation requires it. The pinned ModelConfig has no revision,
-  so the adapter refuses `model.revision` and records no revision in the
-  requirement identity.
+  so `model.revision` stays a label and the requirement identity records no
+  revision.
 - Unset training settings are filled from the pinned UI baseline
   (`docs/adr/upstream-training-baseline.md`). This covers the scheduler,
   precision, quantization, optimizer, learning rate, and latent caching.

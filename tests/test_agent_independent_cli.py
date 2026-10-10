@@ -82,8 +82,7 @@ class AgentIndependentCliTests(unittest.TestCase):
                 run_path = root / "runs" / run_id / "run.yaml"
                 run = yaml.safe_load(run_path.read_text(encoding="utf-8"))
                 run["intent"] = "prove the CLI can execute authored files without agent state"
-                # AI-Toolkit loads the repository's default branch and cannot pin a revision.
-                run["model"] = {"base": "example/model", "revision": None if backend == "ai-toolkit" else "0123456789abcdef0123456789abcdef01234567"}
+                run["model"] = {"base": "example/model", "revision": "0123456789abcdef0123456789abcdef01234567"}
                 run["datasets"] = [{"id": "tiny", "digest": None, "role": None}]
                 run["recipe"] = {"steps": 1, "seed": 1}
                 if backend == "ai-toolkit":
@@ -161,9 +160,11 @@ class AgentIndependentCliTests(unittest.TestCase):
                 self.assertRegex(self._compile_with_model("ai-toolkit", model), "AI-Toolkit trains from model.base")
 
     @posix_only(POSIX_PATHS)
-    def test_ai_toolkit_refuses_a_model_revision_it_cannot_pin(self) -> None:
-        refusal = self._compile_with_model("ai-toolkit", {"base": "example/model", "revision": "0123456789abcdef0123456789abcdef01234567"})
-        self.assertRegex(refusal, "AI-Toolkit .*cannot pin a revision.*remove model.revision")
+    def test_model_revision_stays_a_label_for_every_backend(self) -> None:
+        # Earlier runs wrote it, and Resume fingerprints include it, so no backend refuses it.
+        for backend in ("ai-toolkit", "sd-scripts", "musubi-tuner"):
+            with self.subTest(backend=backend):
+                self.assertEqual(self._compile_with_model(backend, {"base": "example/model", "revision": "main"}), "")
 
     @posix_only(POSIX_PATHS)
     def test_ai_toolkit_file_only_lifecycle(self) -> None:

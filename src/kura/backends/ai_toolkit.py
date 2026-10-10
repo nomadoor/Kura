@@ -970,17 +970,12 @@ def runtime_checks_ai_toolkit(projection: dict[str, Any]) -> list[dict[str, Any]
 
 
 def validate_ai_toolkit_config(run: dict[str, Any]) -> None:
-    # AI-Toolkit is the one backend that trains from model.base
-    # (process.model.name_or_path); its pinned ModelConfig has no revision.
+    # AI-Toolkit is the one backend that trains from model.base (process.model.name_or_path).
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     base = model.get("base")
     if not isinstance(base, str) or not base.strip():
         raise ValueError(
             "AI-Toolkit trains from model.base; set model.base to a Hugging Face repository or a model path before compile"
-        )
-    if model.get("revision") not in (None, ""):
-        raise ValueError(
-            "AI-Toolkit loads the repository's default branch and cannot pin a revision; remove model.revision"
         )
     native = backend_config(run, "ai-toolkit")
     authored_arch = native.get("model_arch")
@@ -1190,6 +1185,8 @@ def requirements_ai_toolkit(run: dict[str, Any], download_estimate: dict[str, An
     model = run.get("model") if isinstance(run.get("model"), dict) else {}
     override = _ai_toolkit_backend_override(run)
 
+    # The pinned ModelConfig takes no revision, so model.revision stays a label and never
+    # enters the identity: the trainer loads the repository's default branch.
     def requirement(role: str, reference: Any) -> dict[str, Any] | None:
         if not isinstance(reference, str) or not reference:
             return None

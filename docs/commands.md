@@ -130,9 +130,9 @@ AI-Toolkit still acquires its own base and companion models. Its backend-owned
 `MODELS_PATH` now points to a writable cache under the Kura workspace, checked
 before the training command starts. This does not copy the base model into each
 run or change model-acquisition ownership. AI-Toolkit trains from `model.base`,
-so compile requires it there; the pinned trainer loads the repository's default
-branch and cannot pin a revision, so an AI-Toolkit run must leave
-`model.revision` unset. sd-scripts and Musubi Tuner take their models from
+so compile requires it there. The pinned trainer loads the repository's default
+branch and takes no revision, so `model.revision` is only a label for AI-Toolkit,
+as for the other backends, and the run record names no revision. sd-scripts and Musubi Tuner take their models from
 `backend.config`, and `model.base` is an optional label for them.
 
 Training-state capture is on by default at the backend's weight checkpoint
