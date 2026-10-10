@@ -276,6 +276,56 @@ def _format_lease_limit(max_lease_sec: int) -> str:
     return f"{max_lease_sec}s"
 
 
+def runpod_cost_ceiling(measurement: dict[str, Any], gpu_type_ids: list[str], *, max_lease_sec: int) -> dict[str, Any]:
+    """The most a Pod for these GPU types can bill before its maximum lease deletes it.
+
+    The highest current hourly price among the requested GPU types (in the measured cloud types),
+    times the GPU count, for the whole lease. A requested choice with no current price is listed
+    in `unpriced`; with no price at all the ceiling is unknown. The plan, a render's dry run, and
+    the billed launch confirmation all show this.
+    """
+    gpu_count = measurement.get("gpu_count")
+    if not isinstance(gpu_count, int) or isinstance(gpu_count, bool) or gpu_count < 1:
+        gpu_count = 1
+    measured = measurement.get("candidates") if measurement.get("status") == "ok" and isinstance(measurement.get("candidates"), list) else []
+    by_id = {item.get("gpu_type_id"): item for item in measured if isinstance(item, dict)}
+    prices: list[float] = []
+    unpriced: list[str] = []
+    for gpu_type_id in gpu_type_ids:
+        clouds = by_id.get(gpu_type_id, {}).get("clouds")
+        clouds = [cloud for cloud in clouds if isinstance(cloud, dict)] if isinstance(clouds, list) else []
+        if not clouds:
+            unpriced.append(gpu_type_id)
+        for cloud in clouds:
+            price = cloud.get("price_per_hour")
+            if isinstance(price, (int, float)) and not isinstance(price, bool) and price >= 0:
+                prices.append(float(price))
+            else:
+                unpriced.append(f"{gpu_type_id} {cloud.get('cloud_type')}")
+    hourly = max(prices) if prices else None
+    return {
+        "max_lease": _format_lease_limit(max_lease_sec),
+        "max_lease_sec": max_lease_sec,
+        "gpu_count": gpu_count,
+        "hourly_price": hourly,
+        "max_cost": hourly * gpu_count * max_lease_sec / 3600 if hourly is not None else None,
+        "unpriced": unpriced,
+    }
+
+
+def format_cost_ceiling(ceiling: dict[str, Any]) -> str:
+    """One line for a `runpod_cost_ceiling` result."""
+    if ceiling.get("max_cost") is None:
+        return "unknown, because RunPod returned no current hourly price for the requested GPUs"
+    gpus = f" × {ceiling['gpu_count']} GPUs" if ceiling.get("gpu_count", 1) > 1 else ""
+    text = f"at most about ${ceiling['max_cost']:.2f} ({ceiling['max_lease']} at ${ceiling['hourly_price']:.3f}/hr{gpus})"
+    unpriced = ceiling.get("unpriced") or []
+    if unpriced:
+        verb = "has" if len(unpriced) == 1 else "have"
+        text += f" where a price is known; unknown for {', '.join(unpriced)}, which {verb} no current price"
+    return text
+
+
 def _confirm_runpod_launch(
     config: dict[str, Any],
     settings: dict[str, Any],
@@ -326,7 +376,9 @@ def _confirm_runpod_launch(
             print(f"  Price lookup: {_redact_secret_text(reason)}", file=sys.stderr)
     if min_cuda_version:
         print(f"  Host CUDA: {min_cuda_version} or newer", file=sys.stderr)
-    print(f"  Maximum lease: {_format_lease_limit(max_lease_sec)}", file=sys.stderr)
+    ceiling = runpod_cost_ceiling(measurement, settings["gpu_type_ids"], max_lease_sec=max_lease_sec)
+    print(f"  Maximum lease: {ceiling['max_lease']}", file=sys.stderr)
+    print(f"  Cost ceiling: {format_cost_ceiling(ceiling)}", file=sys.stderr)
     if unattended_wait:
         print(f"  Unattended wait: {unattended_wait}", file=sys.stderr)
     if wait_for_capacity_sec > 0:

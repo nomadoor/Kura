@@ -30,7 +30,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, format_cost_ceiling, runpod_cost_ceiling, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -175,6 +175,8 @@ def _runpod_capacity_payload(run: dict[str, Any], config: dict[str, Any], run_di
         "selected_gpu_type_ids": selected_gpu_type_ids,
         "measurement": measurement,
         "immediate_candidates": immediate,
+        # `kura run execute --max-lease` sets the lease at launch; the plan shows the default's ceiling.
+        "cost_ceiling": runpod_cost_ceiling(measurement, selected_gpu_type_ids, max_lease_sec=DEFAULT_MAX_LEASE_SEC),
         "provider_reservation": {
             "available": False,
             "reason": "Kura upload staging still needs the local controller after Pod creation; native Deploy When Available is not yet safe for autonomous training",
@@ -1381,16 +1383,21 @@ def format_run_plan(payload: dict[str, Any]) -> str:
                     f"    - {_format_plan_value(cloud.get('cloud_type'))}: "
                     f"{_format_plan_value(cloud.get('stock_status'))} · {availability}{price_text}"
                 )
+        ceiling = runpod_capacity.get("cost_ceiling") if isinstance(runpod_capacity.get("cost_ceiling"), dict) else None
+        if ceiling is not None:
+            _append_kv(lines, "max_lease", f"{ceiling['max_lease']} (the default; `kura run execute --max-lease` sets it)")
+            _append_kv(lines, "cost_ceiling", format_cost_ceiling(ceiling))
         immediate = runpod_capacity.get("immediate_candidates") if isinstance(runpod_capacity.get("immediate_candidates"), list) else []
-        if immediate:
-            lines.append("  choices")
-            for item in immediate:
-                if isinstance(item, dict):
-                    lines.append(f"    - launch now: {item.get('gpu_type_id')} / {item.get('cloud_type')}")
-            lines.append("    - wait for the selected GPU: set compute.capacity.mode=wait before compile")
+        lines.append("  choices")
+        for item in immediate:
+            if isinstance(item, dict):
+                lines.append(f"    - launch now: {item.get('gpu_type_id')} / {item.get('cloud_type')}")
+        if policy.get("mode") == "wait":
+            lines.append("    - wait for the selected GPU (compute.capacity.mode is wait)")
         else:
-            lines.append("  choices")
-            lines.append("    - choose another GPU, or set compute.capacity.mode=wait before compile")
+            lines.append("    - wait for the selected GPU: set compute.capacity.mode=wait before compile")
+        if not immediate:
+            lines.append("    - choose another GPU")
         reservation = runpod_capacity.get("provider_reservation") if isinstance(runpod_capacity.get("provider_reservation"), dict) else {}
         if not reservation.get("available"):
             _append_kv(lines, "native_queue", reservation.get("reason"), indent=4)

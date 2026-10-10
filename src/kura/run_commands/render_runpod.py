@@ -13,7 +13,7 @@ import yaml
 
 from kura.executors import launch_runpod_session, runpod_gpu_availability
 from kura.executors.common import DEFAULT_MAX_LEASE_SEC, check_stop
-from kura.executors.runpod import confirm_runpod_billing, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
+from kura.executors.runpod import confirm_runpod_billing, format_cost_ceiling, runpod_cost_ceiling, stop_runpod, unresolved_create_intents, unstopped_recovered_pod
 from kura.fsio import file_lock
 from kura.notifications import notify as _notify
 from kura.render import _safe_stage_name, digest, image_patch_names, launch_render, load_resolved_cases
@@ -64,6 +64,7 @@ def _render_runpod_billing_plan(runpod_config: dict[str, Any], *, max_lease_sec:
         "price_reason": measurement.get("reason"),
         "maximum_lease": _format_duration(max_lease_sec),
         "maximum_lease_sec": max_lease_sec,
+        "cost_ceiling": format_cost_ceiling(runpod_cost_ceiling(measurement, gpu_type_ids, max_lease_sec=max_lease_sec)),
     }
 
 

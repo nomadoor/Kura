@@ -78,7 +78,9 @@ obtain approval for the resulting plan before launch. The source artifact and
 training recipe remain frozen.
 
 For RunPod runs, `run plan` measures current stock and hourly price for every
-ordered GPU/cloud candidate before approval. Choose an available alternative or
+ordered GPU/cloud candidate before approval, and the cost ceiling: the default
+12h maximum lease times the highest current hourly price among the requested
+GPU types (unknown when RunPod returns no price). Choose an available alternative or
 record a bounded foreground wait in `run.yaml` before compiling:
 
 ```yaml
@@ -212,7 +214,8 @@ completing starts again, as a new run from its settings:
   lease alone.
 - `--yes` confirms Pod creation in a non-interactive session. Use it only after
   the user explicitly approves the billed RunPod launch. Interactive terminals
-  show GPU, current hourly price, and maximum lease and ask once before creation.
+  show GPU, current hourly price, maximum lease, and cost ceiling (the lease
+  times the highest current hourly price) and ask once before creation.
   `--yes` skips only the question; the cost summary is still printed. A capacity
   wait is approved once before waiting, and its displayed price may change
   before capacity becomes available.
@@ -239,7 +242,7 @@ completing starts again, as a new run from its settings:
 
 Before approving a RunPod render, use
 `uv run kura render launch <run-id> --executor runpod --dry-run` to show the
-GPU candidates, current hourly prices, and maximum lease. After the user gives
+GPU candidates, current hourly prices, maximum lease, and cost ceiling. After the user gives
 the single explicit approval, a non-interactive agent launches with `--yes`;
 that flag carries the approval through the launch gate and does not ask the
 user a second time. A human running the launch in an interactive terminal may

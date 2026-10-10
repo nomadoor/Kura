@@ -107,7 +107,15 @@ stop Pod
   that billed launch. In a non-interactive agent or script session, `--yes`
   records that explicit instruction; it is not a convenience flag for bypassing
   the launch gate. It skips only the question; Kura still prints the GPU, price,
-  and maximum-lease summary.
+  maximum lease, and cost ceiling.
+- The cost ceiling (`cost_ceiling` in `kura run plan`, `Cost ceiling:` in the
+  launch confirmation) is the most the Pod can bill before its maximum lease
+  deletes it: the lease times the highest current hourly price among the
+  requested GPU types. The plan shows it for the default 12h lease;
+  `kura run execute --max-lease` sets the lease and the confirmation shows the
+  ceiling for it. Show it with the hourly price when asking for approval. When
+  Kura says the ceiling is unknown, RunPod returned no price; say so rather
+  than estimating one.
 - A local execution failure is not permission to switch providers. In
   particular, do not rewrite `run.yaml` from a local executor to `runpod`
   because Docker, ComfyUI, or another local service is unavailable. Switching
