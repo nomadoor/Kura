@@ -1,0 +1,62 @@
+schema_version: 1
+kind: training-resume-equivalence
+observed_at: '2026-10-10'
+executor: docker
+kura_commit: 6d4467a
+campaign: >-
+  Re-run of the recorded sd-scripts SD 1.5 Resume equivalence after the managed state
+  save cadence and state directory names were given one rule each, and a process-local
+  Resume began capping the state save cadence at the steps it adds.
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+runtime_image_digest: sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02
+adapter_source:
+  kind: source-tree-sha256
+  scope: selected-adapter-v3
+  value: 8c61b230915e0de3e50c0feb2deb63a8a5c5f640164bf64e849a34d3a839b29d
+command_check: >-
+  Every recorded sd-scripts SD 1.5 evidence run.yaml (the 2026-08-27 controls, source, and
+  Resume, and the 2026-09-29 multi-concept and Resume runs) compiles to a trainer command
+  byte-identical to the one the previous code produces.
+equivalence:
+  architecture: sd15
+  mode: lora
+  dataset_scope: one training item
+  parameters: 256px, network_dim 4, alpha 1, AdamW8bit, constant scheduler, lr 7e-05, bf16, seed 42,
+    save_every_n_steps 50, save_last_n_steps 100, training state enabled with two generations
+  control_run: 20261010-0958_direct100-a_c966
+  repeat_control_run: 20261010-0959_direct100-b_73da
+  source_run: 20261010-0959_split50_b9dc
+  resumed_run: 20261010-1006_resume50-to100_a44f
+  resumed_state_save_cadence: 50
+  controls:
+    weight_file_sha256_equal: true
+    optimizer_file_sha256_equal: true
+    rng_file_sha256_equal_for_the_same_save: true
+  control_vs_resumed:
+    weight_tensors_total: 792
+    weight_tensors_different: 0
+    weight_max_abs: 0.0
+    optimizer_semantic_leaves_total: 2834
+    optimizer_semantic_leaves_different: 0
+    scheduler_exact: true
+    normalized_train_state_exact: true
+    rng_semantic_leaves_different: 625
+    published_logical_step: 100
+  matches_2026_08_27_record: true
+multi_concept_resume:
+  dataset: kura-smoke-multiconcept (nested groups to subsets, buckets 128-256)
+  source_run: 20261010-1005_mc-bucketed_7898
+  resumed_run: 20261010-1006_mc-resume1-to2_7ea5
+  resume: 1-to-2
+  resumed_state_save_cadence: 1
+  outcome: completed, publication completed, training state published at logical step 2
+operator_error_not_a_finding: >-
+  A first multi-concept source run (20261010-0959_mc-one_c5bf) failed in the trainer's
+  dataloader because the smoke config omitted the bucketing the recorded run used; the
+  re-run with the recorded bucketing completed.
+interpretation: >-
+  The changed code reproduces the recorded one-item constant-scheduler Resume equivalence:
+  identical learned weights, optimizer, scheduler, and normalized train state, with Resume
+  RNG differing as before. Do not generalize to shuffled or multi-item datasets.
