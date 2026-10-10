@@ -17,6 +17,19 @@ Use this reference only for `backend.name: sd-scripts`.
   material, never as successful outputs.
 - Keep model-patch artifacts distinct from trained adapters and validate their
   type-specific metadata before publication.
+- Resume passes `--resume` and `--skip_until_initial_step` with the logical
+  target as `--max_train_steps`. Upstream `train_network.py` sets `global_step`
+  to the step's remainder within its epoch after skipping whole epochs, so step
+  names, the save cadence, and the stop drift once the source step passes an
+  epoch boundary. The image applies
+  `docker/sd-scripts/patches/0002-resume-continues-the-logical-step.patch`, which
+  keeps `global_step` and the progress bar logical; the training-state contract
+  therefore declares `native_progress: logical`, and a Resume's save cadence is
+  not capped. Locks compiled before the patch froze `process_local` and are read
+  that way. Re-check both hunks whenever the sd-scripts pin moves, and drop the
+  patch once upstream counts logical steps. A one-item smoke dataset cannot show
+  this (one step per epoch leaves no remainder); test with several items and a
+  target that is not a multiple of the steps per epoch.
 
 Verification starts with:
 

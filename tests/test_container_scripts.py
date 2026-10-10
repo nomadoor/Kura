@@ -44,6 +44,20 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn("git apply --check", dockerfile)
         self.assertIn('io.kura.patch.symlink-safetensors="preserve-input-filename-v2"', dockerfile)
 
+    def test_sd_scripts_image_continues_the_logical_step_on_resume(self) -> None:
+        # The training-state contract says sd-scripts counts logical steps on Resume; the
+        # image build applies the patch that makes it so, and fails if it does not apply.
+        root = Path(__file__).resolve().parents[1]
+        name = "0002-resume-continues-the-logical-step.patch"
+        patch_text = (root / "docker/sd-scripts/patches" / name).read_text(encoding="utf-8")
+        self.assertIn("-            global_step = initial_step\n", patch_text)
+        self.assertIn("+            global_step = initial_step // args.gradient_accumulation_steps\n", patch_text)
+        self.assertIn("+            range(args.max_train_steps), initial=global_step,", patch_text)
+        dockerfile = (root / "docker/sd-scripts/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn(f"git apply --check /tmp/kura-sd-scripts-patches/{name}", dockerfile)
+        self.assertIn(f"git apply /tmp/kura-sd-scripts-patches/{name}", dockerfile)
+        self.assertIn('io.kura.patch.resume-step="logical-global-step-v1"', dockerfile)
+
     def test_sd_scripts_probe_fails_closed_for_each_checkpoint_loader(self) -> None:
         namespace = {"__name__": "__test__"}
         exec(script_source("sd_scripts_probe.py"), namespace)

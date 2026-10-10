@@ -69,15 +69,17 @@ class StateDirectoryNameTests(unittest.TestCase):
 class ManagedStateCadenceTests(unittest.TestCase):
     def test_a_fresh_run_keeps_each_backends_cadence_and_a_resume_caps_it_at_the_added_steps(self) -> None:
         # Fresh runs: each backend's own default (Musubi always names a cadence, sd-scripts only a
-        # configured one). Process-local Resume: both save within the steps the run adds.
+        # configured one). Musubi's process-local Resume saves within the steps the run adds;
+        # sd-scripts counts logical steps on Resume, so it keeps the configured cadence and
+        # saves its state at the end.
         cases = {
             "fresh": ({}, None, 2, {"musubi-tuner": ("1000", "1000"), "sd-scripts": (None, "1000")}),
             "fresh-configured": ({"save_every_n_steps": 100}, None, 2, ("100", "100")),
             "fresh-one-generation": ({}, None, 1, {"musubi-tuner": ("1000", "1"), "sd-scripts": (None, "1")}),
-            "resume": ({}, 200, 2, ("200", "200")),
+            "resume": ({}, 200, 2, {"musubi-tuner": ("200", "200"), "sd-scripts": (None, "1000")}),
             "resume-configured-below": ({"save_every_n_steps": 50}, 200, 2, ("50", "50")),
-            "resume-configured-above": ({"save_every_n_steps": 500}, 200, 2, ("200", "200")),
-            "resume-one-generation": ({}, 200, 1, ("200", "1")),
+            "resume-configured-above": ({"save_every_n_steps": 500}, 200, 2, {"musubi-tuner": ("200", "200"), "sd-scripts": ("500", "500")}),
+            "resume-one-generation": ({}, 200, 1, {"musubi-tuner": ("200", "1"), "sd-scripts": (None, "1")}),
         }
         for build in (musubi_run, sd_scripts_run):
             for label, (config, additional, keep, expected) in cases.items():
@@ -99,7 +101,8 @@ class ManagedStateCadenceTests(unittest.TestCase):
     def test_the_plan_shows_the_cadence_each_trainer_saves_state_at(self) -> None:
         # A 1000-step recipe with no cadence set: sd-scripts saves state only at the end and
         # Musubi Tuner is given the recipe's steps, while AI-Toolkit is given `save: {}` and
-        # saves at its own default. A set cadence, or a process-local Resume's cap, is shown as is.
+        # saves at its own default. A set cadence, or a process-local Resume's cap, is shown as is;
+        # an sd-scripts Resume with none saves at its end, after the steps it adds.
         from kura.run_commands.plan import _training_state_cadence
 
         def shown(run: dict[str, Any]) -> Any:
@@ -157,11 +160,14 @@ class ManagedStateCadenceTests(unittest.TestCase):
                 owner.assert_called()
 
     def test_managed_state_cadence_changes_only_a_process_local_resume(self) -> None:
-        self.assertIsNone(managed_state_cadence(sd_scripts_run(), None))
-        self.assertEqual(managed_state_cadence(sd_scripts_run(), 100), 100)
-        self.assertEqual(managed_state_cadence(as_resume(sd_scripts_run()), None), 200)
-        self.assertEqual(managed_state_cadence(as_resume(sd_scripts_run()), 500), 200)
-        no_steps = as_resume(sd_scripts_run())
+        self.assertIsNone(managed_state_cadence(musubi_run(), None))
+        self.assertEqual(managed_state_cadence(musubi_run(), 100), 100)
+        self.assertEqual(managed_state_cadence(as_resume(musubi_run()), None), 200)
+        self.assertEqual(managed_state_cadence(as_resume(musubi_run()), 500), 200)
+        # sd-scripts counts logical steps on Resume: its cadence is left as configured.
+        self.assertIsNone(managed_state_cadence(as_resume(sd_scripts_run()), None))
+        self.assertEqual(managed_state_cadence(as_resume(sd_scripts_run()), 500), 500)
+        no_steps = as_resume(musubi_run())
         del no_steps["recipe"]["steps"]
         with self.assertRaisesRegex(ValueError, "recipe.steps"):
             managed_state_cadence(no_steps, None)

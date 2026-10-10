@@ -626,8 +626,8 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     estimates: `{"count": n, "trainer_default_saves": bool}`, or None when the run has no steps.
 
     Saves are counted at `checkpoint_save_cadence` over the steps the trainer counts in its own
-    progress: on a Resume whose `native_progress` is `process_local` (Musubi Tuner,
-    sd-scripts) from 0 to the steps it adds, on a `logical` one (AI-Toolkit) from the source
+    progress: on a Resume whose `native_progress` is `process_local` (Musubi Tuner) from 0 to
+    the steps it adds, on a `logical` one (AI-Toolkit, sd-scripts) from the source
     step to the target, so its saves land on logical multiples; on a fresh run from 0 to the
     recipe's steps. Every trainer writes an unpruned final file besides its step saves, so
     every save is the step saves plus one; the step saves end at the last step (sd-scripts and

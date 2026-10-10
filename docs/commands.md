@@ -151,9 +151,13 @@ so later saves cannot change its input. A source run may be pruned without
 removing an artifact still referenced by a derived run.
 
 Backend completion sidecars are accepted only when their schema, backend name,
-logical step, and declared payload digests agree. For short Musubi and sd-scripts
-Resume runs, the derived checkpoint cadence is capped at the requested
-additional steps so the endpoint remains resumable. Only state directories named
+logical step, and declared payload digests agree. Musubi Tuner counts a Resume's
+steps from zero, so for short Musubi Tuner Resume runs the derived checkpoint
+cadence is capped at the requested additional steps so the endpoint remains
+resumable. sd-scripts continues the logical step on Resume (Kura's image patches
+upstream's counter, which restarted at the step's position within its epoch), so
+its checkpoints and states are named, saved, and stopped at logical steps, and its
+endpoint state is saved at the end of training. Only state directories named
 for the run's own output name are published, on every executor. RunPod compile freezes the effective runtime
 image, and Resume launch does not accept `--image` overrides.
 
