@@ -18,7 +18,7 @@ import yaml
 
 from kura.fsio import atomic_write_json, file_lock
 from kura.install_source import kura_continuity
-from kura.run_envelope import final_step, resume_intent, training_state_policy, validated_recipe
+from kura.run_envelope import common_recipe, final_step, resume_intent, training_state_policy, validated_recipe
 
 
 ARTIFACT_SCHEMA_VERSION = 1
@@ -570,22 +570,26 @@ def _retention_value(value: Any) -> int | None:
     return number if number > 0 else None
 
 
-def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int | None:
-    """How many checkpoints a run leaves: one per `save_every_n_steps` over the `steps` it
-    trains (`trained_steps`), at least one. `checkpoint` is the backend display's `checkpoint`
-    block. None when there is no cadence or no steps, or when a retention policy prunes step
-    checkpoints, so fewer are left: a positive `prune_before_step` (Musubi Tuner), `keep_last`
-    (AI-Toolkit), or `retention_window_steps` (sd-scripts), or no `keep_last` where the display
-    declares `unset_keep_last: trainer_default` (AI-Toolkit then keeps its own
-    `max_step_saves_to_keep`). Zero or less is no policy: AI-Toolkit keeps every save at
-    `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no prune below step 1,
-    and sd-scripts refuses a non-positive `save_last_n_steps`. Epoch retention prunes no step
-    checkpoint. The plan's checkpoint warnings, guard, and preflight line and the monitor's
-    expected checkpoints read it; the disk estimate reads `peak_checkpoints`. The guard trusts
-    AI-Toolkit's default pruning because it asks whether many checkpoints are left, while the
-    disk estimate is a conservative bound and so does not assume a default it does not own."""
-    every = _retention_value(checkpoint.get("save_every_n_steps"))
-    if not steps or every is None:
+def expected_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any], steps: int | None) -> int | None:
+    """How many checkpoints a run leaves: one per save at `checkpoint_save_cadence` (the
+    cadence the trainer is given) over the `steps` it trains (`trained_steps`), at least one.
+    `checkpoint` is the backend display's `checkpoint` block. None when the trainer is given
+    no cadence or saves at its own default, when there are no steps, or when a retention
+    policy prunes step checkpoints, so fewer are left: a positive `prune_before_step` (Musubi
+    Tuner), `keep_last` (AI-Toolkit), or `retention_window_steps` (sd-scripts), or no
+    `keep_last` where the display declares `unset_keep_last: trainer_default` (AI-Toolkit then
+    keeps its own `max_step_saves_to_keep`). Zero or less is no policy: AI-Toolkit keeps every
+    save at `max_step_saves_to_keep: 0` (it slices `[:-0]`), Musubi Tuner runs no prune below
+    step 1, and sd-scripts refuses a non-positive `save_last_n_steps`. Epoch retention prunes
+    no step checkpoint. The plan's checkpoint warnings, guard, and preflight line and the
+    monitor's expected checkpoints read it; the disk estimate reads `peak_checkpoints`. The
+    guard trusts AI-Toolkit's default pruning because it asks whether many checkpoints are
+    left, while the disk estimate is a conservative bound and so does not assume a default it
+    does not own."""
+    if not steps:
+        return None
+    every = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
+    if not isinstance(every, int):
         return None
     if any(_retention_value(checkpoint.get(key)) for key in ("prune_before_step", "keep_last", "retention_window_steps")):
         return None
@@ -594,19 +598,26 @@ def expected_checkpoints(checkpoint: dict[str, Any], steps: int | None) -> int |
     return max(steps // every, 1)
 
 
-def checkpoint_save_cadence(run: dict[str, Any], checkpoint: dict[str, Any]) -> int | str | None:
-    """The step-save cadence a run's trainer is given: `managed_state_cadence` over the
-    display's configured `save_every_n_steps` (a process-local Resume caps it at the steps the
-    run adds). With none set, the backend's training-state contract declares what the trainer
-    does: `unset_save_cadence: recipe_steps` (Musubi Tuner is given the recipe's steps),
-    `trainer_default` (AI-Toolkit saves at its own default, which Kura does not know), or
-    nothing (sd-scripts writes no step saves). `checkpoint` is the backend display's block."""
-    cadence = managed_state_cadence(run, _retention_value(checkpoint.get("save_every_n_steps")))
+def checkpoint_save_cadence(run: dict[str, Any], configured: Any, *, contract: dict[str, Any] | None = None) -> int | str | None:
+    """The one rule for the step-save cadence a run's trainer is given. `configured` is the
+    backend's `save_every_n_steps` (zero, less, or unset is none). When Kura manages the run's
+    training state (`training_state_managed`), `managed_state_cadence` applies, so a
+    process-local Resume is capped at the steps it adds. With no cadence, the backend's
+    training-state contract declares what its trainer does: `unset_save_cadence:
+    recipe_steps` (Musubi Tuner is given the recipe's steps), `trainer_default` (AI-Toolkit
+    saves at its own default, which Kura does not know; returned as `"trainer_default"`), or
+    nothing (sd-scripts is given no cadence; None). Command builders, the state save flags,
+    the plan, the guard, the monitor, and the disk estimate all read it; a backend building
+    its own command passes its contract."""
+    contract = training_state_contract(run) if contract is None else contract
+    cadence = _retention_value(configured)
+    if training_state_managed(run, contract):
+        cadence = managed_state_cadence(run, cadence, contract=contract)
     if cadence is not None:
         return cadence
-    unset = training_state_contract(run).get("unset_save_cadence")
+    unset = contract.get("unset_save_cadence")
     if unset == "recipe_steps":
-        return validated_recipe(run, required=True)["steps"]
+        return _retention_value(common_recipe(run).get("steps"))
     return "trainer_default" if unset == "trainer_default" else None
 
 
@@ -614,27 +625,33 @@ def peak_checkpoints(run: dict[str, Any], checkpoint: dict[str, Any]) -> dict[st
     """How many checkpoint files are on disk at once while a run trains, for the launch disk
     estimates: `{"count": n, "trainer_default_saves": bool}`, or None when the run has no steps.
 
-    Saves are counted at `checkpoint_save_cadence` over the trainer's native span
-    (`resume_steps`' `native_start` to `native_end`, or 0 to the recipe's steps on a fresh
-    run), so a Resume whose trainer counts logical steps saves on logical multiples. Every
-    trainer writes an unpruned final file besides its step saves, so every save is the step
-    saves plus one; the step saves end at `native_end` (sd-scripts and Musubi Tuner save on
-    the last step too) or below it where the display declares `last_step_save: final_only`
-    (AI-Toolkit leaves the last step to its final file). With no step cadence only the final
-    file is counted; where the trainer saves at its own default (`trainer_default_saves`),
-    those saves are not counted and no default is assumed. Pruning during training lowers the
-    peak, never above every save: AI-Toolkit removes all but `keep_last` after writing each
-    save, so `keep_last + 1` are on disk at once (at the end, `keep_last` step saves and the
-    final file); sd-scripts removes the save that left the `retention_window_steps` window
-    after writing each save, so it keeps `window // every + 1` and holds one more (at the
-    end, the final file). Musubi Tuner's `prune_before_step` runs after training, and
-    AI-Toolkit's unset `keep_last` default is not copied here, so both count every save. The
-    positive-value rules are those of `expected_checkpoints`."""
+    Saves are counted at `checkpoint_save_cadence` over the steps the trainer counts in its own
+    progress: on a Resume whose `native_progress` is `process_local` (Musubi Tuner,
+    sd-scripts) from 0 to the steps it adds, on a `logical` one (AI-Toolkit) from the source
+    step to the target, so its saves land on logical multiples; on a fresh run from 0 to the
+    recipe's steps. Every trainer writes an unpruned final file besides its step saves, so
+    every save is the step saves plus one; the step saves end at the last step (sd-scripts and
+    Musubi Tuner save on it too) or below it where the display declares `last_step_save:
+    final_only` (AI-Toolkit leaves the last step to its final file). With no step cadence only
+    the final file is counted; where the trainer saves at its own default
+    (`trainer_default_saves`), those saves are not counted and no default is assumed. Pruning
+    during training lowers the peak, never above every save: AI-Toolkit removes all but
+    `keep_last` after writing each save, so `keep_last + 1` are on disk at once (at the end,
+    `keep_last` step saves and the final file); sd-scripts removes the save that left the
+    `retention_window_steps` window after writing each save, so it keeps `window // every + 1`
+    and holds one more (at the end, the final file). Musubi Tuner's `prune_before_step` runs
+    after training, and AI-Toolkit's unset `keep_last` default is not copied here, so both
+    count every save. The positive-value rules are those of `expected_checkpoints`."""
     span = resume_steps(run)
-    start, end = (span["native_start"], span["native_end"]) if span is not None else (0, trained_steps(run))
+    if span is None:
+        start, end = 0, trained_steps(run)
+    elif span["native_progress"] == "process_local":
+        start, end = 0, span["additional_steps"]
+    else:
+        start, end = span["source_step"], span["target_step"]
     if not end:
         return None
-    cadence = checkpoint_save_cadence(run, checkpoint)
+    cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
     if not isinstance(cadence, int):
         return {"count": 1, "trainer_default_saves": cadence == "trainer_default"}
     last = end - 1 if checkpoint.get("last_step_save") == "final_only" else end
@@ -899,7 +916,7 @@ def managed_state_save_args(
 ) -> list[str]:
     """The save flags of an accelerate trainer (Musubi Tuner, sd-scripts) whose state Kura manages.
 
-    The trainer saves state at `managed_state_cadence` (named only when Kura sets one) and at
+    The trainer saves state at `checkpoint_save_cadence` (named only when there is one) and at
     the end, and keeps the states of the last cadence, or of the recipe's steps when none is
     set (two generations), or only the newest (one generation). `configured_cadence` is the
     backend's validated `save_every_n_steps`; a backend building its own command passes its
@@ -912,7 +929,9 @@ def managed_state_save_args(
             f"{backend.get('name')} epoch save flags are incompatible with managed training-state retention; "
             "use backend.config.save_every_n_steps instead: " + ", ".join(epoch_flags)
         )
-    cadence = managed_state_cadence(run, configured_cadence, contract=contract)
+    cadence = checkpoint_save_cadence(run, configured_cadence, contract=contract)
+    if not isinstance(cadence, int):
+        cadence = None
     if training_state_policy(run)["keep_generations"] == 2:
         window = cadence if cadence is not None else validated_recipe(run, required=True)["steps"]
     else:

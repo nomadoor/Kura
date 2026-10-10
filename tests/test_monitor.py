@@ -617,7 +617,7 @@ class MonitorProjectionTests(unittest.TestCase):
             run_dir = root / "runs" / "train"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "outputs").mkdir()
-            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nbackend: {name: musubi-tuner}\nrecipe: {steps: 1000}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "running"}), encoding="utf-8")
             (run_dir / "resolved" / "backend-display.lock.json").write_text(json.dumps({"checkpoint": {"save_every_n_steps": 250}}), encoding="utf-8")
             for step in (250, 500, 750):
@@ -636,7 +636,7 @@ class MonitorProjectionTests(unittest.TestCase):
             run_dir = root / "runs" / "train"
             (run_dir / "resolved").mkdir(parents=True)
             (run_dir / "outputs").mkdir()
-            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1}\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nbackend: {name: musubi-tuner}\nrecipe: {steps: 1}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
             (run_dir / "resolved" / "backend-display.lock.json").write_text(
                 json.dumps({"checkpoint": {"save_every_n_steps": 1}}),
@@ -656,7 +656,7 @@ class MonitorProjectionTests(unittest.TestCase):
             legacy_dir = run_dir / "outputs" / "train"
             (run_dir / "resolved").mkdir(parents=True)
             legacy_dir.mkdir(parents=True)
-            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nbackend: {name: musubi-tuner}\nrecipe: {steps: 1000}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(json.dumps({"state": "completed"}), encoding="utf-8")
             (run_dir / "resolved" / "backend-display.lock.json").write_text(
                 json.dumps({"checkpoint": {"save_every_n_steps": 500}}),
@@ -680,7 +680,7 @@ class MonitorProjectionTests(unittest.TestCase):
             downloaded_outputs = run_dir / "downloads" / "train" / "outputs"
             (run_dir / "resolved").mkdir(parents=True)
             downloaded_outputs.mkdir(parents=True)
-            (run_dir / "run.yaml").write_text("id: train\ntype: train\nrecipe: {steps: 1000}\n", encoding="utf-8")
+            (run_dir / "run.yaml").write_text("id: train\ntype: train\nbackend: {name: musubi-tuner}\nrecipe: {steps: 1000}\n", encoding="utf-8")
             (run_dir / "status.json").write_text(
                 json.dumps({"state": "completed", "downloaded_run": "downloads/train"}),
                 encoding="utf-8",

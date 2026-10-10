@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from copy import deepcopy
 import subprocess
 import sys
 import tempfile
@@ -164,7 +165,9 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
     """How many checkpoints a run leaves, and whether a retention policy makes that unknown, is decided once."""
 
     def test_only_a_positive_retention_value_prunes(self) -> None:
-        owner = training_artifacts.expected_checkpoints
+        def owner(checkpoint: dict[str, Any], steps: int | None, build=sd_scripts_run) -> int | None:
+            return training_artifacts.expected_checkpoints(build(), checkpoint, steps)
+
         self.assertEqual(owner({"save_every_n_steps": 50}, 1000), 20)
         self.assertEqual(owner({"save_every_n_steps": 5000}, 1000), 1)
         self.assertIsNone(owner({"save_every_n_steps": 50}, None))
@@ -181,6 +184,20 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         self.assertIsNone(owner({"save_every_n_steps": 50, "unset_keep_last": "trainer_default"}, 1000))
         self.assertIsNone(owner({"save_every_n_steps": 50, "keep_last": None, "unset_keep_last": "trainer_default"}, 1000))
         self.assertEqual(owner({"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"}, 1000), 20)
+
+    def test_the_count_reads_the_cadence_the_trainer_is_given(self) -> None:
+        # With no cadence set, Musubi Tuner is given the recipe's steps (one save), sd-scripts
+        # writes no step saves, and AI-Toolkit saves at a default Kura does not know.
+        self.assertEqual(training_artifacts.expected_checkpoints(musubi_run(), {}, 1000), 1)
+        self.assertIsNone(training_artifacts.expected_checkpoints(sd_scripts_run(), {}, 1000))
+        self.assertIsNone(training_artifacts.expected_checkpoints(ai_toolkit_run(), {"last_step_save": "final_only"}, 1000))
+        run = musubi_run()
+        with patch.object(training_artifacts, "checkpoint_save_cadence", wraps=training_artifacts.checkpoint_save_cadence) as cadence:
+            training_artifacts.expected_checkpoints(run, {"save_every_n_steps": 50}, 1000)
+        cadence.assert_called_once_with(run, 50)
+        # The plan's preflight line now names the one save a Musubi run with no cadence makes.
+        records = [record["fact"] for record in plan._checkpoint_preflight_report(musubi_run())]
+        self.assertEqual(records, ["checkpoint cadence implies about 1 checkpoint(s)"])
 
     def test_every_count_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
@@ -368,11 +385,11 @@ class PeakCheckpointsTests(unittest.TestCase):
                     self.assertNotIn("trainer-default", text)
 
     def test_a_logical_progress_resume_counts_saves_on_logical_multiples(self) -> None:
-        # Resume +170 from step 1030 to 1200 with a cadence of 100. AI-Toolkit counts logical
-        # steps, saves on 1100, and leaves 1200 to its final file: 2. sd-scripts' target is
-        # logical, so it saves on 1100 and 1200 and writes its final file: 3 (170 // 100 + 1
-        # would say 2). Musubi Tuner counts 0..170 in its process: a save on 100 and the final file: 2.
-        for build, expected in ((ai_toolkit_run, 2), (sd_scripts_run, 3), (musubi_run, 2)):
+        # Resume +170 from step 1030 to 1200 with a cadence of 100. AI-Toolkit's progress is
+        # logical: it saves on 1100 and leaves 1200 to its final file: 2 (170 // 100 + 1 counted
+        # from 1030 would land on 1130). sd-scripts and Musubi Tuner count progress from zero in
+        # their process, 0..170: a save on 100 and the final file: 2.
+        for build, expected in ((ai_toolkit_run, 2), (sd_scripts_run, 2), (musubi_run, 2)):
             source = build()
             source["backend"]["config"]["save_every_n_steps"] = 100
             run = as_resume(source, source_step=1030, additional=170)
@@ -387,8 +404,19 @@ class PeakCheckpointsTests(unittest.TestCase):
             run = as_resume(build(), source_step=1000, additional=50)
             checkpoint = plan._adapter_display(run)["checkpoint"]
             with self.subTest(backend=run["backend"]["name"]):
-                self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint), 50)
+                self.assertEqual(training_artifacts.checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps")), 50)
                 self.assertEqual(training_artifacts.peak_checkpoints(run, checkpoint)["count"], 2)
+
+    def test_the_resume_cap_applies_only_when_kura_manages_state(self) -> None:
+        for build in (musubi_run, sd_scripts_run):
+            for configured, managed, expected in ((None, False, {"musubi-tuner": 1000, "sd-scripts": None}), (30, False, 30), (500, True, 50), (500, False, 500)):
+                source = build()
+                source["recovery"] = {"training_state": {"enabled": managed}}
+                run = as_resume(source, source_step=1000, additional=50)
+                name = run["backend"]["name"]
+                want = expected[name] if isinstance(expected, dict) else expected
+                with self.subTest(backend=name, configured=configured, managed=managed):
+                    self.assertEqual(training_artifacts.checkpoint_save_cadence(run, configured), want)
 
     def test_the_disk_estimate_reads_the_peak_and_the_counts_do_not(self) -> None:
         run = sd_scripts_run()
@@ -532,7 +560,8 @@ def _compiled_cadence(run: dict[str, Any], scratch: Path) -> int | str | None:
         found = re.findall(r"--save_every_n_steps (\d+)", command_musubi_tuner(run)["argv"][2])
         return int(found[-1]) if found else None
     if name == "sd-scripts":
-        found = re.findall(r'"--save_every_n_steps","(\d+)"', command_sd_scripts(run)["argv"][2])
+        # A managed run's command carries a JSON argv; an unmanaged one a shell line.
+        found = re.findall(r'"?--save_every_n_steps"?[ ,]"?(\d+)', command_sd_scripts(run)["argv"][2])
         return int(found[-1]) if found else None
     destination = scratch / "ai-toolkit"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -559,9 +588,46 @@ class CheckpointCadenceParityTests(unittest.TestCase):
                         with self.subTest(backend=name, configured=configured, run=label):
                             checkpoint = plan._adapter_display(run)["checkpoint"]
                             self.assertEqual(
-                                training_artifacts.checkpoint_save_cadence(run, checkpoint),
+                                training_artifacts.checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps")),
                                 _compiled_cadence(run, root / label),
                             )
+                    if name == "ai-toolkit":
+                        continue  # AI-Toolkit refuses a Resume without managed state.
+                    unmanaged = deepcopy(source)
+                    unmanaged["recovery"] = {"training_state": {"enabled": False}}
+                    unmanaged_resume = as_resume(unmanaged, artifact_id=manifest["id"], manifest_sha256=manifest["manifest_sha256"], additional=20)
+                    for label, run in (("unmanaged-fresh", unmanaged), ("unmanaged-resume", unmanaged_resume)):
+                        with self.subTest(backend=name, configured=configured, run=label):
+                            self.assertEqual(
+                                training_artifacts.checkpoint_save_cadence(run, configured),
+                                _compiled_cadence(run, root / label),
+                            )
+
+    def test_every_command_builder_and_reader_asks_the_one_owner(self) -> None:
+        import kura.backends.musubi_command as musubi_command
+
+        owner = training_artifacts.checkpoint_save_cadence
+        for build, module, call in (
+            (musubi_run, musubi_command, lambda run: musubi_command.command_musubi_tuner(run)),
+            (sd_scripts_run, training_artifacts, lambda run: command_sd_scripts(run)),
+            (musubi_run, plan, lambda run: plan._training_state_cadence(run)),
+            (musubi_run, training_artifacts, lambda run: plan._checkpoint_preflight_report(run)),
+            (musubi_run, training_artifacts, lambda run: plan._estimate_checkpoint_write_bytes(run)),
+        ):
+            run = build()
+            with self.subTest(module=module.__name__, backend=run["backend"]["name"]), \
+                    patch.object(module, "checkpoint_save_cadence", wraps=owner) as cadence:
+                call(run)
+                cadence.assert_called()
+
+    def test_the_plan_formats_the_owners_state_cadence(self) -> None:
+        cases = ((musubi_run, None, 1000), (sd_scripts_run, None, 1000), (ai_toolkit_run, None, "trainer default"), (musubi_run, 30, 30))
+        for build, configured, shown in cases:
+            run = build()
+            if configured is not None:
+                run["backend"]["config"]["save_every_n_steps"] = configured
+            with self.subTest(backend=run["backend"]["name"], configured=configured):
+                self.assertEqual(plan._training_state_cadence(run), shown)
 
 
 class RunPodContainerDiskDefaultTests(unittest.TestCase):

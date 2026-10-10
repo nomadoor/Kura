@@ -46,7 +46,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import expected_checkpoints, managed_state_cadence, peak_checkpoints, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -248,7 +248,7 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     warnings: list[str] = []
     steps = trained_steps(run)
-    checkpoints = expected_checkpoints(important_config, steps)
+    checkpoints = expected_checkpoints(run, important_config, steps)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
     if checkpoints is not None and checkpoints >= 10:
         warnings.append(f"checkpoint cadence may create about {checkpoints} checkpoints{_trained_steps_basis(run, steps)}; set the backend's checkpoint retention (see `kura run capabilities {_run_adapter(run).name}`) if this is not intentional")
@@ -264,7 +264,7 @@ def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is True:
         return
-    expected = expected_checkpoints(_adapter_display(run).get("checkpoint") or {}, steps)
+    expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None and expected >= 10:
         raise ValueError(
             f"checkpoint policy may create about {expected} checkpoints without pruning{_trained_steps_basis(run, steps)}; "
@@ -568,7 +568,7 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
         _checkpoint_count_safety(run, steps)
     except ValueError as exc:
         return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
-    expected = expected_checkpoints(_adapter_display(run).get("checkpoint") or {}, steps)
+    expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None:
         return [_preflight_record("checkpoint-safety", "info", f"checkpoint cadence implies about {expected} checkpoint(s){_trained_steps_basis(run, steps)}", "run.yaml")]
     return []
@@ -1023,19 +1023,15 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
 
 
 def _training_state_cadence(run: dict[str, Any]) -> Any:
-    """The steps between training-state saves the plan shows. With none set by the run or by
-    `managed_state_cadence`, a backend whose training-state contract declares
-    `unset_save_cadence: trainer_default` saves at the trainer's own default; the others save
-    at the recipe's steps (sd-scripts saves state only at the end, and Musubi Tuner is given
-    the recipe's steps)."""
+    """The steps between training-state saves the plan shows: `checkpoint_save_cadence`, formatted.
+    A trainer saving at its own default shows "trainer default"; one given no cadence
+    (sd-scripts) saves state only at the end, shown as the recipe's steps."""
     # The configured cadence is what the backend's display reads from its own config.
     checkpoint = _adapter_display(run).get("checkpoint") or {}
-    state_cadence = managed_state_cadence(run, checkpoint.get("save_every_n_steps"))
-    if state_cadence is not None:
-        return state_cadence
-    if training_state_contract(run).get("unset_save_cadence") == "trainer_default":
+    cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
+    if cadence == "trainer_default":
         return "trainer default"
-    return common_recipe(run).get("steps")
+    return common_recipe(run).get("steps") if cadence is None else cadence
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
