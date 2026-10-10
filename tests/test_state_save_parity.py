@@ -31,7 +31,7 @@ from kura.training_artifacts import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tests.test_resume_steps import as_resume, musubi_run, sd_scripts_run  # noqa: E402
+from tests.test_resume_steps import ai_toolkit_run, as_resume, musubi_run, sd_scripts_run  # noqa: E402
 from tests.test_training_resume import _safetensors_bytes, _torch_archive_bytes, _write_state_marker  # noqa: E402
 
 
@@ -95,6 +95,30 @@ class ManagedStateCadenceTests(unittest.TestCase):
                 ) as owner:
                     self.assertEqual(_cadence(run), wanted)
                     owner.assert_called_once()
+
+    def test_the_plan_shows_the_cadence_each_trainer_saves_state_at(self) -> None:
+        # A 1000-step recipe with no cadence set: sd-scripts saves state only at the end and
+        # Musubi Tuner is given the recipe's steps, while AI-Toolkit is given `save: {}` and
+        # saves at its own default. A set cadence, or a process-local Resume's cap, is shown as is.
+        from kura.run_commands.plan import _training_state_cadence
+        from kura.run_envelope import backend_config
+
+        def shown(run: dict[str, Any]) -> Any:
+            return _training_state_cadence(run, backend_config(run, run["backend"]["name"]))
+
+        unset = {"sd-scripts": 1000, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
+        resumed = {"sd-scripts": 200, "musubi-tuner": 200, "ai-toolkit": "trainer default"}
+        for build in (sd_scripts_run, musubi_run, ai_toolkit_run):
+            run = build()
+            name = run["backend"]["name"]
+            with self.subTest(backend=name):
+                self.assertEqual(shown(run), unset[name])
+                self.assertEqual(shown(as_resume(run, additional=200)), resumed[name])
+                run["backend"]["config"]["save_every_n_steps"] = 100
+                self.assertEqual(shown(run), 100)
+        native = ai_toolkit_run()
+        native["backend"]["config"]["native_config"] = {"save": {"save_every": 250}}
+        self.assertEqual(shown(native), 250)
 
     def test_a_fresh_sd_scripts_run_keeps_its_save_flags_where_they_were(self) -> None:
         # A fresh run's argv stays byte-identical: a configured cadence keeps its place

@@ -1006,6 +1006,25 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
     }
 
 
+def _training_state_cadence(run: dict[str, Any], native_config: dict[str, Any]) -> Any:
+    """The steps between training-state saves the plan shows. With none set by the run or by
+    `managed_state_cadence`, a backend whose training-state contract declares
+    `unset_save_cadence: trainer_default` saves at the trainer's own default; the others save
+    at the recipe's steps (sd-scripts saves state only at the end, and Musubi Tuner is given
+    the recipe's steps)."""
+    state_cadence = native_config.get("save_every_n_steps")
+    ai_native = native_config.get("native_config") if isinstance(native_config.get("native_config"), dict) else {}
+    ai_save = ai_native.get("save") if isinstance(ai_native.get("save"), dict) else {}
+    if state_cadence is None:
+        state_cadence = ai_save.get("save_every")
+    state_cadence = managed_state_cadence(run, state_cadence)
+    if state_cadence is not None:
+        return state_cadence
+    if training_state_contract(run).get("unset_save_cadence") == "trainer_default":
+        return "trainer default"
+    return common_recipe(run).get("steps")
+
+
 def _run_plan_payload(run_id: str) -> dict[str, Any]:
     workspace = _require_workspace()
     run_dir = _run_path(run_id)
@@ -1141,14 +1160,7 @@ def _run_plan_payload(run_id: str) -> dict[str, Any]:
 
     native_config = backend_config(run, backend.get("name")) if isinstance(backend.get("name"), str) else {}
     state_policy = training_state_policy(run)
-    state_cadence = native_config.get("save_every_n_steps")
-    ai_native = native_config.get("native_config") if isinstance(native_config.get("native_config"), dict) else {}
-    ai_save = ai_native.get("save") if isinstance(ai_native.get("save"), dict) else {}
-    if state_cadence is None:
-        state_cadence = ai_save.get("save_every")
-    state_cadence = managed_state_cadence(run, state_cadence)
-    if state_cadence is None:
-        state_cadence = run_recipe.get("steps")
+    state_cadence = _training_state_cadence(run, native_config)
     state_capability = training_state_contract(run)["capability"]
     state_payload = {
         "enabled": state_policy["enabled"],
