@@ -58,8 +58,6 @@ def _estimates(run: dict[str, Any], save_every: int) -> dict[str, Any]:
 
 class TrainedStepsOwnerTests(unittest.TestCase):
     def test_a_run_trains_the_resume_added_steps_else_the_recipe_steps(self) -> None:
-        from kura.training_artifacts import trained_steps
-
         self.assertEqual(trained_steps(musubi_run()), 1000)
         self.assertEqual(trained_steps(as_resume(musubi_run(), additional=50)), 50)
         self.assertEqual(trained_steps(as_resume(musubi_run(), additional=5000)), 5000)
@@ -78,7 +76,7 @@ class ResumeEstimateTests(unittest.TestCase):
         estimates = _estimates(_resume(save_every=10, additional=50), 10)
         self.assertEqual(estimates["disk_warnings"], [])
         self.assertIsNone(estimates["safety_refusal"])
-        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 5 checkpoint(s)"])
+        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 5 checkpoint(s) over the 50 steps this run trains"])
         self.assertEqual(estimates["write_count"], 5)
         self.assertEqual(estimates["monitor_expected"], 5)
 
@@ -86,9 +84,9 @@ class ResumeEstimateTests(unittest.TestCase):
         # 1000-step recipe resumed +5000 with a cadence of 500: 10 checkpoints, not 2.
         estimates = _estimates(_resume(save_every=500, additional=5000), 500)
         self.assertEqual(len(estimates["disk_warnings"]), 1)
-        self.assertIn("about 10 checkpoints", estimates["disk_warnings"][0])
-        self.assertIn("about 10 checkpoints", estimates["safety_refusal"] or "")
-        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 10 checkpoint(s)"])
+        self.assertIn("about 10 checkpoints over the 5000 steps this run trains;", estimates["disk_warnings"][0])
+        self.assertIn("about 10 checkpoints over the 5000 steps this run trains without pruning", estimates["safety_refusal"] or "")
+        self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 10 checkpoint(s) over the 5000 steps this run trains"])
         self.assertEqual(estimates["write_count"], 10)
         self.assertEqual(estimates["monitor_expected"], 10)
 
@@ -97,9 +95,17 @@ class ResumeEstimateTests(unittest.TestCase):
         broken["continuation"]["target_step"] = 1
         self.assertIsNone(_monitor_expected(broken, 10))
 
-    def test_every_estimate_reads_the_one_owner(self) -> None:
-        from kura.training_artifacts import trained_steps
+    def test_the_preflight_reports_an_invalid_continuation_as_such_with_or_without_many_checkpoints(self) -> None:
+        broken = _resume(save_every=10, additional=50)
+        broken["continuation"]["target_step"] = 1
+        for allowed in (False, True):
+            run = {**broken, "safety": {"allow_many_checkpoints": allowed}}
+            with self.subTest(allow_many_checkpoints=allowed):
+                records = plan._checkpoint_preflight_report(run)
+                self.assertEqual([(record["check"], record["severity"], record["path"]) for record in records], [("continuation", "error", "run.yaml")])
+                self.assertIn("continuation.target_step", records[0]["fact"])
 
+    def test_every_estimate_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
         allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         cases = {
@@ -112,8 +118,8 @@ class ResumeEstimateTests(unittest.TestCase):
             with self.subTest(place=name), patch.object(module, "trained_steps", wraps=trained_steps) as owner:
                 call()
                 owner.assert_called()
-        # The preflight report counts once for its guard and once for its own line.
-        with patch.object(plan, "_checkpoint_safety_preflight"), patch.object(plan, "trained_steps", wraps=trained_steps) as owner:
+        # The preflight report reads the owner once, for its guard and its own line.
+        with patch.object(plan, "trained_steps", wraps=trained_steps) as owner:
             plan._checkpoint_preflight_report(run)
             owner.assert_called_once()
 
@@ -124,15 +130,18 @@ class LaunchDiskPreflightTests(unittest.TestCase):
         run = _resume(save_every=10, additional=50)
         run["safety"] = {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 1, "allow_storage_risk": True}
         expected = {"bytes": 5 * 1024**3, "count": 5, "per_checkpoint_gib": 1}
-        with tempfile.TemporaryDirectory() as directory, patch.object(plan, "trained_steps", wraps=trained_steps) as owner:
-            with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
+                    patch.object(plan, "trained_steps", wraps=trained_steps) as runpod_owner:
                 runpod = plan._runpod_launch_disk_preflight(run, {"container_disk_gb": 50}, {"bytes": 0})
-            with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")):
+            with patch("kura.run_commands.plan.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "")), \
+                    patch.object(plan, "trained_steps", wraps=trained_steps) as local_owner:
                 local = plan._local_launch_disk_preflight(
                     Path(directory).resolve(), run, {"docker": {"min_free_gb": 1}},
                     enforce_model_download_safety=False, download_estimate={"bytes": 0},
                 )
-            self.assertEqual(owner.call_count, 2)
+        runpod_owner.assert_called_once_with(run)
+        local_owner.assert_called_once_with(run)
         self.assertEqual(runpod["estimates"]["checkpoints"], expected)
         self.assertEqual(local["estimates"]["checkpoints"], expected)
         cache = int(runpod["estimates"]["disk_cache"].get("bytes") or 0)
@@ -145,7 +154,7 @@ class LaunchDiskPreflightTests(unittest.TestCase):
         fresh["sampling"] = {"cadence_steps": 100}
         self.assertEqual(plan._disk_warnings(fresh, {}), [])
         warnings = plan._disk_warnings(as_resume(fresh, source_step=1000, additional=5000), {})
-        self.assertEqual(warnings, ["sampling cadence may create about 50 sample batches"])
+        self.assertEqual(warnings, ["sampling cadence may create about 50 sample batches over the 5000 steps this run trains"])
 
 
 class FreshRunPlanTests(unittest.TestCase):

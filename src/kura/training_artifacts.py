@@ -538,8 +538,12 @@ def resume_steps(
 
 def trained_steps(run: dict[str, Any]) -> int | None:
     """The optimizer steps a training run trains: the steps a Resume adds, else the recipe's
-    steps. Every checkpoint and disk estimate counts from it. An invalid continuation raises;
-    a run without a positive step count gives None."""
+    steps. The plan's checkpoint count, checkpoint disk, and sample estimates and the monitor's
+    expected checkpoints count from it. Those counts are approximate: a trainer counting logical
+    steps saves on multiples of the logical step, not of the steps this run adds. An invalid
+    continuation raises; a run without a positive step count gives None."""
+    # `additional_steps` is target minus source and does not depend on the training-state
+    # contract (it only sets the native range), so no backend contract is looked up here.
     steps = resume_steps(run, contract={})
     return steps["additional_steps"] if steps is not None else final_step(run)
 
