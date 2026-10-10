@@ -1,6 +1,6 @@
 # sdxl (incl. Illustrious / WAI finetunes)
 
-- VRAM class: a 1-step sd-scripts LoRA smoke on Docker ran on a 12 GB
+- Recorded: a 1-step sd-scripts LoRA smoke on Docker ran on a 12 GB
   RTX 4070 Ti at 512px, batch 1, dim 8 (alpha 4), U-Net only, bf16, AdamW8bit,
   with latents and text-encoder outputs cached to disk; peak VRAM was not
   recorded, and 1024px is unmeasured.

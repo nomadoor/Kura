@@ -32,7 +32,8 @@ Before proposing parameters, inspect:
    count, resolutions, captions, roles, and pair integrity;
 3. `kura run plan <run-id>` for model artifacts, executor, detected or
    selected GPU resources, cache state, and download estimates. The plan
-   reads a run, so first create it with `kura run new` and fill a draft
+   reads a run, so first create it with `kura run new --experiment <name>
+   --slug <words> --backend <backend>` and fill a draft
    `backend.config` that `kura run capabilities <backend>` accepts (for
    sd-scripts, a `dataset_config` whose datasets have their `subsets`);
    revise the draft as the proposal takes shape;
@@ -111,9 +112,11 @@ The plan's **Training state** block says what a run leaves to resume from:
 - `enabled`: `recovery.training_state.enabled` in `run.yaml` (default yes).
 - `keep`: how many of the newest saved states are kept, 1 or 2
   (`recovery.training_state.keep_generations`, default 2).
-- `cadence`: steps between state saves, from `backend.config`
-  (`save_every_n_steps`, or AI-Toolkit's `native_config.save.save_every`);
-  the recipe's steps when unset.
+- `cadence`: steps between state saves, from `backend.config.save_every_n_steps`
+  (or AI-Toolkit's `native_config.save.save_every`); on a process-local Resume,
+  capped at the steps the run adds. When none is set the plan shows the
+  recipe's steps: sd-scripts and Musubi Tuner then save state only at the end,
+  while AI-Toolkit keeps its own default of every 1000 steps.
 - `capability`: how far the backend can restore this architecture and mode:
   `partial_resume`, `best_effort_resume`, or `unsupported`.
 - `saved`: whether Kura manages the state: enabled, Kura builds the command
