@@ -290,7 +290,7 @@ def _cost_ceiling(hourly: float | None, lease_sec: int, *, basis: str, unpriced:
 
 
 def runpod_cost_ceiling(measurement: dict[str, Any], gpu_type_ids: list[str], *, max_lease_sec: int) -> dict[str, Any]:
-    """The most a Pod for these GPU types can bill before the lease it is created with deletes it.
+    """The most a Pod's GPU time can bill before the lease it is created with deletes it.
 
     The highest current hourly quote among the requested GPU types (in the measured cloud types)
     for the whole lease. The quote is for the configured GPU count as RunPod returns it: measured
@@ -299,7 +299,8 @@ def runpod_cost_ceiling(measurement: dict[str, Any], gpu_type_ids: list[str], *,
     choice with no current price (RunPod gives none without stock) is listed in `unpriced` and is
     not covered; with no price at all the ceiling is unknown. The ceiling holds for the lease the
     Pod is created with and rises if `kura run lease` extends it (`pod_cost_ceiling`). The plan,
-    a render's dry run, and the billed launch confirmation all show this.
+    a render's dry run, and the billed launch confirmation all show this. It covers GPU charges
+    only: RunPod bills container and volume disk separately, and Kura does not copy those rates.
     """
     if measurement.get("status") != "ok":
         reason = measurement.get("reason")
@@ -345,7 +346,7 @@ def format_cost_ceiling(ceiling: dict[str, Any]) -> str:
             f"({ceiling['max_lease']} at ${ceiling['hourly_price']:.3f}/hr, {ceiling['basis']})")
     if unpriced:
         text += f"; {', '.join(unpriced)}, and landing there is not covered"
-    return text
+    return text + "; disk storage is billed separately"
 
 
 def _confirm_runpod_launch(

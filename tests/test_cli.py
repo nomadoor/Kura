@@ -3125,7 +3125,7 @@ class RenderNotificationTests(unittest.TestCase):
             self.assertEqual(plan["billing"]["price_checked_at"], "2026-07-16T12:00:00+09:00")
             self.assertEqual(plan["billing"]["maximum_lease"], "12h")
             self.assertEqual(plan["billing"]["maximum_lease_sec"], 12 * 3600)
-            self.assertEqual(plan["billing"]["cost_ceiling"], "at most about $3.48 (12h at $0.290/hr, the highest current quote)")
+            self.assertEqual(plan["billing"]["cost_ceiling"], "at most about $3.48 (12h at $0.290/hr, the highest current quote); disk storage is billed separately")
 
     def test_runpod_render_rejects_tampered_frozen_image_before_billing_probe(self) -> None:
         from kura.run_commands.render_runpod import _render_runpod_images

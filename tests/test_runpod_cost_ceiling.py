@@ -35,13 +35,13 @@ class CostCeilingTests(unittest.TestCase):
         self.assertEqual(ceiling["max_lease"], "12h")
         self.assertEqual(ceiling["hourly_price"], 0.44)
         self.assertAlmostEqual(ceiling["max_cost"], 5.28)
-        self.assertEqual(format_cost_ceiling(ceiling), "at most about $5.28 (12h at $0.440/hr, the highest current quote)")
+        self.assertEqual(format_cost_ceiling(ceiling), "at most about $5.28 (12h at $0.440/hr, the highest current quote); disk storage is billed separately")
 
     def test_the_price_for_the_configured_gpu_count_is_used_as_returned(self) -> None:
         # RunPod's lowestPrice for gpuCount N is already the price of all N GPUs.
         ceiling = runpod_cost_ceiling(_measurement(("A40", "SECURE", 1.18), gpu_count=2), ["A40"], max_lease_sec=3 * 3600)
         self.assertAlmostEqual(ceiling["max_cost"], 3.54)
-        self.assertEqual(format_cost_ceiling(ceiling), "at most about $3.54 (3h at $1.180/hr, the highest current quote)")
+        self.assertEqual(format_cost_ceiling(ceiling), "at most about $3.54 (3h at $1.180/hr, the highest current quote); disk storage is billed separately")
 
     def test_unknown_prices_make_the_ceiling_unknown_or_partial(self) -> None:
         unknown = runpod_cost_ceiling({"status": "unavailable", "reason": "RUNPOD_API_KEY is not set", "candidates": []}, ["A40"], max_lease_sec=3600)
@@ -55,11 +55,11 @@ class CostCeilingTests(unittest.TestCase):
         self.assertEqual(
             format_cost_ceiling(partial),
             "at most about $0.40 for the GPUs with a current price (1h at $0.400/hr, the highest current quote); "
-            "A5000 COMMUNITY has no current price (no stock), and landing there is not covered",
+            "A5000 COMMUNITY has no current price (no stock), and landing there is not covered; disk storage is billed separately",
         )
 
     def test_a_running_pods_ceiling_uses_its_own_price(self) -> None:
-        self.assertEqual(format_cost_ceiling(pod_cost_ceiling(0.58, lease_sec=6 * 3600)), "at most about $3.48 (6h at $0.580/hr, the Pod's price)")
+        self.assertEqual(format_cost_ceiling(pod_cost_ceiling(0.58, lease_sec=6 * 3600)), "at most about $3.48 (6h at $0.580/hr, the Pod's price); disk storage is billed separately")
         self.assertEqual(format_cost_ceiling(pod_cost_ceiling(None, lease_sec=3600)), "unknown: the Pod's hourly price was not recorded")
 
 
@@ -74,7 +74,7 @@ class ConfirmationShowsCeilingTests(unittest.TestCase):
             confirm_runpod_billing({"gpu_type_ids": ["NVIDIA A40"], "cloud_types": ["COMMUNITY"]}, "registry/image:tag", yes=True, max_lease_sec=6 * 3600)
         text = stderr.getvalue()
         self.assertIn("  Maximum lease: 6h\n", text)
-        self.assertIn("  Cost ceiling: at most about $2.40 (6h at $0.400/hr, the highest current quote)\n", text)
+        self.assertIn("  Cost ceiling: at most about $2.40 (6h at $0.400/hr, the highest current quote); disk storage is billed separately\n", text)
 
     def test_billed_confirmation_says_when_the_ceiling_is_unknown(self) -> None:
         stderr = io.StringIO()
@@ -150,7 +150,7 @@ class PlanShowsCeilingAndCapacityChoicesTests(unittest.TestCase):
         output = self._plan(None)
         self.assertRegex(output, r"max_lease +12h \(the default; `kura run execute --max-lease` sets it\)")
         # The alternative RTX A5000 is cheaper and not requested; the ceiling is the A40's.
-        self.assertRegex(output, r"cost_ceiling +at most about \$4\.80 \(12h at \$0\.400/hr, the highest current quote\)")
+        self.assertRegex(output, r"cost_ceiling +at most about \$4\.80 \(12h at \$0\.400/hr, the highest current quote\); disk storage is billed separately")
 
     def test_plan_offers_waiting_only_when_the_run_does_not_wait(self) -> None:
         waiting = self._plan(None)

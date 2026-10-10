@@ -80,7 +80,8 @@ training recipe remain frozen.
 For RunPod runs, `run plan` measures current stock and hourly price for every
 ordered GPU/cloud candidate before approval, and the cost ceiling: the default
 12h maximum lease times the highest current hourly price among the requested
-GPU types (unknown when RunPod returns no price). Choose an available alternative or
+GPU types (unknown when RunPod returns no price). It covers GPU charges only;
+RunPod bills container and volume disk separately. Choose an available alternative or
 record a bounded foreground wait in `run.yaml` before compiling:
 
 ```yaml

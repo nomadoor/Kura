@@ -56,7 +56,7 @@ stop Pod
   `pod_missing_at`; whatever the Pod held is gone. Automatic observation never
   does. Before starting a new run from such a run, confirm in the RunPod console that the
   Pod is really gone.
-- `pod_stopped_at` in `kura run status` is when Kura deleted the Pod (and any
+- `pod_stopped_at` in `kura run status` is when Kura's stop confirmed the Pod is gone (and any
   duplicate a recovered launch recorded): RunPod accepted the delete or said
   the Pod was already gone. The Pod is not paused; it and its container disk
   no longer exist, and billing for it has ended. Kura deletes it after the
@@ -118,8 +118,9 @@ stop Pod
   the launch gate. It skips only the question; Kura still prints the GPU, price,
   maximum lease, and cost ceiling.
 - The cost ceiling (`cost_ceiling` in `kura run plan`, `Cost ceiling:` in the
-  launch confirmation) is the most the Pod can bill before the lease it is
-  created with deletes it: the lease times the highest current hourly quote
+  launch confirmation) is the most the Pod's GPU time can bill before the lease
+  it is created with deletes it (container and volume disk are billed
+  separately and are not in it): the lease times the highest current hourly quote
   among the requested GPU types, for the configured GPU count. It is "about"
   because a quote may change before the Pod starts. The plan shows it for the
   default 12h lease; `kura run execute --max-lease` sets the lease and the
