@@ -94,6 +94,19 @@ class ManagedStateCadenceTests(unittest.TestCase):
                     self.assertEqual(_cadence(run), wanted)
                     owner.assert_called_once()
 
+    def test_a_fresh_sd_scripts_run_keeps_its_save_flags_where_they_were(self) -> None:
+        # A fresh run's argv stays byte-identical: a configured cadence keeps its place
+        # before save_last_n_steps, and the state flags follow them.
+        run = sd_scripts_run()
+        run["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 100})
+        run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+        script = sd_scripts.command_sd_scripts(run)["argv"][2]
+        self.assertIn(
+            '"--save_every_n_steps","50","--save_last_n_steps","100","--save_state","--save_state_on_train_end",'
+            '"--save_last_n_steps_state","50"',
+            script,
+        )
+
     def test_managed_state_cadence_changes_only_a_process_local_resume(self) -> None:
         self.assertIsNone(managed_state_cadence(sd_scripts_run(), None))
         self.assertEqual(managed_state_cadence(sd_scripts_run(), 100), 100)

@@ -318,18 +318,23 @@ def _base_training_args(run: dict[str, Any], native: dict[str, Any], paths: dict
         args.append("--network_train_unet_only")
     if architecture != "anima" and _truthy(native.get("fp8_base")):
         args.append("--fp8_base")
-    managed = training_state_managed(run, training_state_contract_sd_scripts(run))
     for key in ("save_every_n_steps", "save_last_n_steps"):
         value = native.get(key)
-        if value is not None:
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise ValueError(f"sd-scripts {key} must be a positive integer")
-            if not (managed and key == "save_every_n_steps"):
-                args.extend([f"--{key}", str(value)])
-    if managed:
-        args.extend(managed_state_save_args(
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+            raise ValueError(f"sd-scripts {key} must be a positive integer")
+    save_args: list[str] = []
+    if training_state_managed(run, training_state_contract_sd_scripts(run)):
+        save_args = managed_state_save_args(
             run, native.get("save_every_n_steps"), _extra_args(native), contract=training_state_contract_sd_scripts(run),
-        ))
+        )
+    for key in ("save_every_n_steps", "save_last_n_steps"):
+        if key == "save_every_n_steps" and save_args[:1] == ["--save_every_n_steps"]:
+            # Kura's cadence takes the configured one's place, so a fresh run's argv is unchanged.
+            args.extend(save_args[:2])
+            save_args = save_args[2:]
+        elif native.get(key) is not None:
+            args.extend([f"--{key}", str(native[key])])
+    args.extend(save_args)
     if continuation is not None:
         artifact_id = continuation["source"]["artifact_id"]
         args.extend(["--resume", training_state_payload(artifact_id), "--skip_until_initial_step"])
