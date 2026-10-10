@@ -66,14 +66,14 @@ class QuietRunTests(unittest.TestCase):
             self.assertNotIn("quiet_minutes", _status_summary(run_dir))
 
     def test_the_monitor_marks_the_same_run_stale(self) -> None:
-        from kura.monitor import _format_time_cell, _staleness_label, collect_run_summary
+        from kura.monitor import collect_run_summary
+        from kura.tui import STALE, _state_style
 
         with tempfile.TemporaryDirectory() as directory:
             run_dir = _running(directory, quiet_sec=20 * 60, executor="runpod")
             summary = collect_run_summary(run_dir.parent.parent, "example")
             self.assertTrue(summary.is_stale)
-            self.assertEqual(_staleness_label(summary), " stale")
-            self.assertRegex(_format_time_cell(summary), r"^20m\d+s ago stale$")
+            self.assertEqual(_state_style(summary), STALE)
 
     def test_the_monitor_and_status_agree_on_a_short_quiet_spell(self) -> None:
         from kura.monitor import collect_run_summary

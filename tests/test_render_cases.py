@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import tempfile
 import unittest
@@ -10,10 +9,9 @@ from typing import Any
 from unittest.mock import patch
 
 import yaml
-from rich.console import Console
 
 import kura.render as render_module
-from kura.monitor import collect_run_summaries, render_monitor
+from kura.monitor import collect_run_summaries
 from kura.render import authored_cases, compile_render, launch_render
 
 
@@ -913,12 +911,6 @@ class RenderCasesMonitorTests(unittest.TestCase):
             self.assertEqual(summaries[0].id, "render-1")
             self.assertEqual((summaries[0].progress.step, summaries[0].progress.total), (1, 3))
             self.assertEqual(summaries[0].progress.current_case_id, "case-1")
-            console = Console(file=io.StringIO(), record=True, width=180, color_system=None)
-            console.print(render_monitor(root))
-            rendered = console.export_text()
-            self.assertEqual(rendered.count("render-1"), 1)
-            self.assertIn("1/3", rendered)
-            self.assertIn("case-1", rendered)
 
 
 if __name__ == "__main__":

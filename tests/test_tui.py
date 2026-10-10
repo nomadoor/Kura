@@ -14,6 +14,7 @@ from unittest.mock import patch
 from rich.console import Console
 
 from kura.monitor import CapacityWaitInfo, ExecutorInfo, PodInfo, RunSummary
+from kura import tui
 from kura.tui import HostMetrics, KuraMonitorApp, MonitorScreen, PathRow, RunRow, SegmentButton, WatchScreen, _aware_datetime, _batch, _compute_location, _events_table, _filter_run_history, _open_path, _open_url, _parse_nvidia_smi_csv, _parse_remote_metrics_output, _remote_execution_phase, _resolve_run_selection, _retained_run_history, _runpod_pod_url
 
 
@@ -172,6 +173,48 @@ class TuiMetricsTests(unittest.TestCase):
         self.assertIsNotNone(_aware_datetime(naive).tzinfo)
         self.assertEqual(_aware_datetime(aware), aware)
 
+
+    def test_a_publishing_run_is_still_active_and_counted_as_running(self) -> None:
+        from kura.monitor import collect_run_summaries
+        from kura.tui import _status_bar
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for run_id, state in (("publishing-run", "publishing"), ("done-run", "completed")):
+                run_dir = root / "runs" / run_id
+                run_dir.mkdir(parents=True)
+                (run_dir / "run.yaml").write_text(f"id: {run_id}\ntype: train\ncompute: {{executor: runpod}}\n", encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": state, "ended": "2026-07-13T09:00:00+09:00"}), encoding="utf-8")
+            screen = MonitorScreen()
+            screen.summaries = collect_run_summaries(root)
+
+            self.assertEqual([item.id for item in screen.active_runs], ["publishing-run"])
+            self.assertIsNone(screen.active_runs[0].ended)
+            # A publishing run is drawn like a running one, as the status bar counts it.
+            self.assertEqual(tui._state_style(screen.active_runs[0]), tui.RUN)
+            self.assertIn("1 running", _status_bar(screen.summaries, width=200).plain)
+            self.assertIn("0 queued", _status_bar(screen.summaries, width=200).plain)
+
+    def test_a_failed_run_still_publishing_training_state_is_active(self) -> None:
+        from kura.monitor import collect_run_summaries
+        from kura.tui import _status_bar
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Docker records the failure before it publishes training state; reconcile completes the run.
+            for run_id, publication in (("pending-run", "pending"), ("published-run", "published")):
+                run_dir = root / "runs" / run_id
+                run_dir.mkdir(parents=True)
+                (run_dir / "run.yaml").write_text(f"id: {run_id}\ntype: train\ncompute: {{executor: docker}}\n", encoding="utf-8")
+                (run_dir / "status.json").write_text(json.dumps({"state": "failed", "publication_state": publication, "ended": "2026-07-13T09:00:00+09:00"}), encoding="utf-8")
+            screen = MonitorScreen()
+            screen.summaries = collect_run_summaries(root)
+
+            self.assertEqual([item.id for item in screen.active_runs], ["pending-run"])
+            self.assertIsNone(screen.active_runs[0].ended)
+            bar = _status_bar(screen.summaries, width=200).plain
+            self.assertIn("1 running", bar)
+            self.assertIn("1 failed", bar)
 
     def test_active_selection_does_not_fall_through_to_history(self) -> None:
         selected, lane = _resolve_run_selection("run-1", "active", [], {"run-1"})

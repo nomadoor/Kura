@@ -8,9 +8,7 @@ import math
 import os
 import re
 import shlex
-import shutil
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,13 +16,12 @@ import yaml
 
 from kura.training_artifacts import checkpoint_step
 from kura.backends import get_backend
-from kura.executors import ACTIVE_STATES, read_run_status
-from kura.executors.common import QUIET_RUN_NOTICE_SEC, UNSUCCESSFUL_STATES, is_realization_record, run_quiet_since
+from kura.executors import read_run_status
+from kura.executors.common import QUIET_RUN_NOTICE_SEC, is_realization_record, run_finished, run_quiet_since
 from kura.run_envelope import common_recipe, final_step, run_executor
 
 
 DRAFT_STATE = "draft"
-AWARE_MIN = datetime.min.replace(tzinfo=timezone.utc)
 SPARK_BLOCKS = "▁▂▃▄▅▆▇█"
 TRAIN_STDOUT_PROGRESS_RE = re.compile(r"(?P<step>\d+)\s*/\s*(?P<total>\d+)")
 TRAIN_STDOUT_LOSS_RE = re.compile(r"(?:\bloss:\s*|\bavr_loss=)(?P<loss>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)", re.IGNORECASE)
@@ -120,6 +117,12 @@ class RunSummary:
     resume_artifact_id: str | None = None
     recoverable_state_step: int | None = None
     recoverable_state_level: str | None = None
+    publication_state: str | None = None
+
+    @property
+    def unfinished(self) -> bool:
+        """Whether something is still happening to the run, decided by the runner's own rule."""
+        return not run_finished({"state": self.state, "publication_state": self.publication_state})
 
 
 def collect_run_summaries(workspace: Path, *, loss_tail: int = 80, stale_after: float = 90.0) -> list[RunSummary]:
@@ -167,132 +170,6 @@ def loss_sparkline(values: Iterable[float | int], *, width: int = 24) -> str:
     return "".join(SPARK_BLOCKS[round((value - low) / (high - low) * scale)] for value in series)
 
 
-def render_monitor(workspace: Path, *, limit: int = 30, loss_tail: int = 80, include_drafts: bool = False) -> Any:
-    from rich.console import Group
-    from rich.table import Table
-    from rich.text import Text
-
-    all_summaries = collect_run_summaries(workspace, loss_tail=loss_tail)
-    visible_summaries, hidden_drafts = _partition_drafts(all_summaries, include_drafts=include_drafts)
-    active, history = _split_for_monitor(visible_summaries, limit=limit)
-    width = shutil.get_terminal_size((120, 24)).columns
-    summary = _summary_bar(visible_summaries)
-    parts: list[Any] = [summary, Text("")]
-    if active:
-        parts.append(Text("active", style="bold"))
-        parts.append(_monitor_table(active, terminal_width=width, active=True))
-        parts.append(Text(""))
-    parts.append(Text(f"history  latest {len(history)}", style="bold dim"))
-    parts.append(_monitor_table(history, terminal_width=width, active=False))
-    if visible_summaries:
-        parts.append(Text(""))
-        parts.append(Text("watch: uv run kura run watch <run-id>    interactive navigation is intentionally off", style="dim"))
-    if hidden_drafts:
-        parts.append(Text(""))
-        parts.append(Text(f"{hidden_drafts} draft run(s) hidden (--all to show)", style="dim"))
-    if not visible_summaries and not hidden_drafts:
-        parts.append(Text(""))
-        parts.append(Text("No runs found. Create runs with `kura run new` or `kura render new`.", style="dim"))
-    return Group(*parts)
-
-
-def _monitor_table(summaries: list[RunSummary], *, terminal_width: int, active: bool) -> Any:
-    from rich.table import Table
-
-    table = Table(box=None, show_edge=False, pad_edge=False, expand=True)
-    for column in ("state", "id / experiment", "type", "executor", "config", "progress", "loss", "time"):
-        table.add_column(column, no_wrap=column not in {"config"})
-    for summary in summaries:
-        stale_style = _staleness_style(summary)
-        table.add_row(
-            _state_text(summary),
-            _id_text(summary),
-            summary.type or "-",
-            summary.executor or "-",
-            _fit_text(_format_key_config(summary), _config_width(terminal_width)),
-            _format_progress_cell(summary, active=active),
-            _format_loss(summary),
-            _format_time_cell(summary),
-            style=stale_style or None,
-        )
-    return table
-
-
-def run_monitor_loop(workspace: Path, *, interval: float = 2.0, limit: int = 30, include_drafts: bool = False) -> int:
-    from rich.live import Live
-
-    with Live(render_monitor(workspace, limit=limit, include_drafts=include_drafts), refresh_per_second=4, transient=False) as live:
-        try:
-            while True:
-                time.sleep(max(interval, 0.1))
-                live.update(render_monitor(workspace, limit=limit, include_drafts=include_drafts))
-        except KeyboardInterrupt:
-            return 0
-
-
-def render_watch(workspace: Path, run_id: str, *, events_tail: int = 8, full_config: bool = False) -> Any:
-    from rich.console import Group
-    from rich.syntax import Syntax
-    from rich.table import Table
-    from rich.text import Text
-
-    workspace = Path(workspace)
-    run_dir = workspace / "runs" / run_id
-    summary = collect_run_summary(workspace, run_id, loss_tail=10_000, stale_after=90.0)
-    terminal = shutil.get_terminal_size((120, 32))
-    width = terminal.columns
-    status = _read_mapping(run_dir / "status.json")
-
-    header = Table.grid(expand=True)
-    header.add_column(ratio=1)
-    header.add_column(ratio=1)
-    header.add_row(
-        Text.assemble(("run ", "dim"), (summary.id, "bold cyan"), ("  "), _state_text(summary)),
-        Text(datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"), style="dim"),
-    )
-
-    overview = Table.grid(expand=True)
-    overview.add_column(ratio=1)
-    overview.add_column(ratio=1)
-    overview.add_row(_watch_left(summary), _watch_right(summary, status))
-
-    config = _read_mapping(run_dir / "resolved" / "manifest.lock.yaml")
-    if not config:
-        config = _read_mapping(run_dir / "run.yaml")
-
-    chart_height = 14 if terminal.lines >= 34 else 10
-    chart = _loss_chart(summary.losses, width=max(60, width - 4), height=chart_height)
-    events = _tail_events(run_dir / "logs" / "events.jsonl", events_tail, pretty=full_config)
-    config_renderable = _watch_config(config, summary, full=full_config)
-
-    return Group(
-        header,
-        Text(""),
-        overview,
-        Text(""),
-        Text("loss", style="dim"),
-        Text(chart or "loss unavailable"),
-        Text(""),
-        Text("config" + ("  full" if full_config else "  summary"), style="dim"),
-        config_renderable if not isinstance(config_renderable, str) else Syntax(config_renderable, "yaml", theme="ansi_dark", word_wrap=True, background_color="default"),
-        Text(""),
-        Text(f"events tail ({events_tail})", style="dim"),
-        Syntax(events or "events unavailable", "json", theme="ansi_dark", word_wrap=True, background_color="default") if full_config else Text(events or "events unavailable"),
-    )
-
-
-def run_watch_loop(workspace: Path, run_id: str, *, interval: float = 2.0, events_tail: int = 8, full_config: bool = False) -> int:
-    from rich.live import Live
-
-    with Live(render_watch(workspace, run_id, events_tail=events_tail, full_config=full_config), screen=True, refresh_per_second=4) as live:
-        try:
-            while True:
-                time.sleep(max(interval, 0.1))
-                live.update(render_watch(workspace, run_id, events_tail=events_tail, full_config=full_config))
-        except KeyboardInterrupt:
-            return 0
-
-
 def _collect_run_ids(workspace: Path) -> list[str]:
     ids: list[str] = []
     seen: set[str] = set()
@@ -338,7 +215,8 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         *sorted((run_dir / "realizations").glob("*.json")),
     )
     ended = _parse_datetime(_first_present(status.get("ended"), realization.get("ended"), realization.get("timestamp")))
-    if state in ACTIVE_STATES:
+    publication_state = _string(status.get("publication_state"))
+    if not run_finished({"state": state, "publication_state": publication_state}):
         ended = None
     outputs_path = _outputs_path(run_dir, status)
     quiet_since = run_quiet_since(run_dir, status)
@@ -364,6 +242,7 @@ def _collect_one_run(workspace: Path, run_dir: Path, fallback_id: str, *, loss_t
         type=run_type,
         executor=executor,
         state=state,
+        publication_state=publication_state,
         key_config=_key_config(run_type, config, run_dir),
         progress=progress,
         losses=losses,
@@ -826,7 +705,7 @@ def _executor_info(executor: str | None, config: dict[str, Any], status: dict[st
     started = _parse_datetime(_first_present(observation.get("last_started_at"), pod_raw.get("last_started_at"), realization.get("launched_at")))
     cost_per_h = _float_or_none(_first_present(observation.get("cost_per_h"), pod_raw.get("cost_per_h"), observation.get("costPerHr"), pod_raw.get("costPerHr")))
     cost_stop = _parse_datetime(_first_present(status.get("pod_stopped_at"), status.get("ended")))
-    cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, status.get("state"))
+    cost_used = _runpod_cost_used(cost_per_h, started, cost_stop, run_finished(status))
     pod = PodInfo(id=pod_id, state=pod_state, started=started, cost_per_h=cost_per_h, cost_used=cost_used) if pod_id or pod_state else None
     pulled = status.get("mirrored_outputs") if isinstance(status.get("mirrored_outputs"), list) else []
     mirrored_steps = [_int_or_none(item.get("step")) for item in pulled if isinstance(item, dict)]
@@ -924,14 +803,6 @@ def _artifact_candidates(run_dir: Path, status: dict[str, Any], relative: str) -
     return paths
 
 
-def _split_for_monitor(summaries: list[RunSummary], *, limit: int) -> tuple[list[RunSummary], list[RunSummary]]:
-    active = [summary for summary in summaries if (summary.state or "").lower() in ACTIVE_STATES]
-    history = [summary for summary in summaries if summary not in active]
-    active.sort(key=_recency_key, reverse=True)
-    history.sort(key=_recency_key, reverse=True)
-    return active, history[: max(limit, 0)]
-
-
 def _capacity_wait_info(value: dict[str, Any]) -> CapacityWaitInfo:
     return CapacityWaitInfo(
         started_at=_parse_datetime(value.get("started_at")),
@@ -956,86 +827,6 @@ def _capacity_wait_activity(wait: CapacityWaitInfo, *, stale: bool) -> str:
     if wait.remaining_sec is not None:
         parts.append(f"{_duration(timedelta(seconds=wait.remaining_sec))} left")
     return " · ".join(parts)
-
-
-def _display_state(summary: RunSummary) -> str:
-    if summary.capacity_wait:
-        return "wait stale" if summary.is_stale else "waiting"
-    return summary.state or "unknown"
-
-
-def _partition_drafts(summaries: list[RunSummary], *, include_drafts: bool) -> tuple[list[RunSummary], int]:
-    if include_drafts:
-        return summaries, 0
-    visible: list[RunSummary] = []
-    hidden = 0
-    for summary in summaries:
-        if (summary.state or "").lower() == DRAFT_STATE:
-            hidden += 1
-            continue
-        visible.append(summary)
-    return visible, hidden
-
-
-def _recency_key(summary: RunSummary) -> datetime:
-    return summary.last_updated or summary.ended or summary.started or summary.created or AWARE_MIN
-
-
-def _state_text(summary: RunSummary) -> Any:
-    from rich.text import Text
-
-    state = _display_state(summary)
-    style = {
-        "running": "green",
-        "waiting": "yellow",
-        "wait stale": "red",
-        "queued": "yellow",
-        "staged": "yellow",
-        "launching": "yellow",
-        "completed": "blue",
-        "failed": "red",
-        "launch_failed": "red",
-        "interrupted": "yellow",
-    }.get(state, "dim")
-    return Text(state, style=style)
-
-
-def _id_text(summary: RunSummary) -> str:
-    return f"{summary.id}\n{summary.experiment}" if summary.experiment else summary.id
-
-
-def _format_key_config(summary: RunSummary) -> str:
-    values = summary.key_config
-    if summary.type == "render":
-        return " ".join(
-            part
-            for part in (
-                _basename_label("cases", values.get("cases")),
-                _basename_label("ckpt", values.get("checkpoint")),
-                _basename_label("wf", values.get("workflow")),
-            )
-            if part
-        ) or "-"
-    parts = []
-    for key in ("rank", "lr", "steps", "dataset"):
-        value = values.get(key)
-        if value not in (None, ""):
-            label = {"rank": "r", "lr": "lr", "steps": "steps", "dataset": "ds"}[key]
-            parts.append(f"{label}={value}")
-    conv_rank = values.get("conv_rank")
-    conv_alpha = values.get("conv_alpha")
-    if conv_rank not in (None, "") or conv_alpha not in (None, ""):
-        parts.append(f"conv={conv_rank or '-'}/{conv_alpha or '-'}")
-    save_precision = values.get("save_precision")
-    if save_precision not in (None, ""):
-        parts.append(f"save={save_precision}")
-    return " ".join(parts) or "-"
-
-
-def _basename_label(label: str, value: Any) -> str:
-    if not isinstance(value, str) or not value:
-        return ""
-    return f"{label}={Path(value).name}"
 
 
 def _format_progress(progress: RunProgress) -> str:
@@ -1078,256 +869,6 @@ def _format_seconds_per_iter(progress: RunProgress) -> str:
     if value >= 1:
         return f"{value:.2f}s/it"
     return f"{value:.3f}s/it"
-
-
-def _format_progress_cell(summary: RunSummary, *, active: bool) -> Any:
-    from rich.text import Text
-
-    if active and summary.capacity_wait and summary.activity:
-        return Text(summary.activity, style="dim")
-    text = _format_progress(summary.progress)
-    if text == "unknown" and active and summary.activity:
-        return Text(summary.activity, style="dim")
-    if not active or summary.progress.total in (None, 0):
-        if active and summary.activity and summary.progress.step in (None, 0):
-            return Text(summary.activity, style="dim")
-        return Text(text)
-    step = 0 if summary.progress.step is None else summary.progress.step
-    total = max(summary.progress.total or 0, 1)
-    filled = max(0, min(14, round(step / total * 14)))
-    bar = "█" * filled + "░" * (14 - filled)
-    speed = _format_seconds_per_iter(summary.progress)
-    suffix = f" · {speed}" if speed != "-" else ""
-    return Text.assemble((bar, "green"), (" "), (text + suffix, "dim"))
-
-
-def _format_loss(summary: RunSummary) -> Any:
-    from rich.text import Text
-
-    if summary.latest_loss is None:
-        return Text("-")
-    style = _loss_style(summary.losses)
-    return Text.assemble((loss_sparkline(summary.losses, width=18), style), (" "), (f"{summary.latest_loss:.4g}/{summary.best_loss:.4g}", "dim"))
-
-
-def _format_time_cell(summary: RunSummary) -> str:
-    now = datetime.now().astimezone()
-    state = (summary.state or "").lower()
-    if state in ACTIVE_STATES:
-        # A running run's age is its quiet time, so the age and the stale label agree.
-        base = summary.quiet_since or summary.last_updated or summary.started or summary.created
-        if not base:
-            return "-"
-        age = _duration(now - base)
-        stale = _staleness_label(summary)
-        if summary.started:
-            elapsed = _duration(now - summary.started)
-            return f"{elapsed} elapsed · {age} ago{stale}"
-        return f"{age} ago{stale}"
-    if summary.started and summary.ended:
-        return f"{_duration(summary.ended - summary.started)} / {summary.ended:%m-%d %H:%M}"
-    if summary.ended:
-        return summary.ended.strftime("%m-%d %H:%M")
-    if summary.last_updated:
-        return summary.last_updated.strftime("%m-%d %H:%M")
-    return "-"
-
-
-def _loss_chart(values: tuple[float, ...], *, width: int = 80, height: int = 14) -> str:
-    if not values:
-        return ""
-    try:
-        import plotext as plt
-    except ImportError:
-        return loss_sparkline(values, width=width)
-    try:
-        plt.clear_figure()
-        plt.theme("clear")
-        plt.plotsize(width, height)
-        plt.plot(list(range(1, len(values) + 1)), list(values))
-        built = plt.build()
-        return built if isinstance(built, str) else loss_sparkline(values, width=width)
-    except Exception:
-        return loss_sparkline(values, width=width)
-
-
-def _tail_events(path: Path, limit: int, *, pretty: bool = False) -> str:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
-        return ""
-    rendered: list[str] = []
-    for line in lines[-max(limit, 0) :]:
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            rendered.append(line)
-            continue
-        if pretty:
-            rendered.append(json.dumps(item, ensure_ascii=False, indent=2))
-        else:
-            rendered.append(_event_one_line(item))
-    return "\n\n".join(rendered) if pretty else "\n".join(rendered)
-
-
-def _watch_config(config: dict[str, Any], summary: RunSummary, *, full: bool) -> Any:
-    from rich.table import Table
-
-    if full:
-        return yaml.safe_dump(config, allow_unicode=True, sort_keys=False).rstrip() if config else "config unavailable"
-
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="dim", no_wrap=True)
-    table.add_column()
-    for label, value in _config_summary_rows(config, summary):
-        table.add_row(label, value)
-    return table
-
-
-def _config_summary_rows(config: dict[str, Any], summary: RunSummary) -> list[tuple[str, str]]:
-    if not config:
-        return [("config", "unavailable")]
-    rows = [
-        ("experiment", summary.experiment or "-"),
-        ("main", _format_key_config(summary)),
-    ]
-    if summary.type == "train":
-        backend = config.get("backend", {}) if isinstance(config.get("backend"), dict) else {}
-        model = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
-        rows.extend(
-            [
-                ("backend", _string(backend.get("name")) or "-"),
-                ("model", _string(model.get("base")) or "-"),
-            ]
-        )
-    elif summary.type == "render":
-        generator = config.get("generator", {}) if isinstance(config.get("generator"), dict) else {}
-        rows.append(("generator", _string(generator.get("name")) or "-"))
-    return rows
-
-
-def _event_one_line(item: dict[str, Any]) -> str:
-    event = item.get("event") or "event"
-    timestamp = item.get("timestamp") or item.get("observed_at") or item.get("created_at")
-    state = item.get("state")
-    exit_code = item.get("exit_code")
-    detail = item.get("detail")
-    parts = [str(event)]
-    if isinstance(timestamp, str):
-        parts.append(timestamp.replace("T", " ")[:19])
-    if isinstance(state, str):
-        parts.append(f"state={state}")
-    if exit_code is not None:
-        parts.append(f"exit={exit_code}")
-    if isinstance(detail, str) and detail:
-        parts.append(_fit_text(detail, 60))
-    return "  ".join(parts)
-
-
-def _summary_bar(summaries: list[RunSummary]) -> Any:
-    from rich.text import Text
-
-    counts = {
-        "running": sum(1 for item in summaries if item.state == "running"),
-        "waiting": sum(1 for item in summaries if item.capacity_wait),
-        "queued": sum(1 for item in summaries if item.state in {"queued", "staged", "launching"} and not item.capacity_wait),
-        "completed": sum(1 for item in summaries if item.state == "completed"),
-        "failed": sum(1 for item in summaries if item.state in UNSUCCESSFUL_STATES),
-    }
-    return Text.assemble(
-        ("kura monitor", "bold"),
-        ("   "),
-        (f"running {counts['running']}", "green"),
-        ("   "),
-        (f"waiting {counts['waiting']}", "yellow"),
-        ("   "),
-        (f"queued {counts['queued']}", "yellow"),
-        ("   "),
-        (f"completed {counts['completed']}", "blue"),
-        ("   "),
-        (f"failed {counts['failed']}", "red" if counts["failed"] else "dim"),
-    )
-
-
-def _watch_left(summary: RunSummary) -> Any:
-    from rich.table import Table
-
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="dim", no_wrap=True)
-    table.add_column()
-    table.add_row("state", _state_text(summary))
-    table.add_row("progress", _format_progress_cell(summary, active=(summary.state or "").lower() in ACTIVE_STATES))
-    if summary.capacity_wait:
-        table.add_row("phase", "RunPod capacity wait · no Pod created")
-    table.add_row("executor", summary.executor or "-")
-    table.add_row("type", summary.type or "-")
-    if summary.resume_source_run:
-        table.add_row("resume", f"{summary.resume_source_run} · {summary.resume_artifact_id or '-'}")
-    return table
-
-
-def _watch_right(summary: RunSummary, status: dict[str, Any]) -> Any:
-    from rich.table import Table
-
-    outputs = status.get("outputs")
-    output_count = len(outputs) if isinstance(outputs, list) else 0
-    first_output = ""
-    if isinstance(outputs, list) and outputs and isinstance(outputs[0], str):
-        first_output = outputs[0]
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="dim", no_wrap=True)
-    table.add_column()
-    table.add_row("timing", _format_time_cell(summary))
-    table.add_row("started", summary.started.strftime("%m-%d %H:%M") if summary.started else "-")
-    table.add_row("ended", summary.ended.strftime("%m-%d %H:%M") if summary.ended else "-")
-    table.add_row("outputs", f"{output_count}" + (f"  {first_output}" if first_output else ""))
-    if summary.recoverable_state_step is not None:
-        table.add_row("state", f"step {summary.recoverable_state_step} · {summary.recoverable_state_level or '-'}")
-    return table
-
-
-def _loss_style(values: tuple[float, ...]) -> str:
-    if len(values) < 2:
-        return "dim"
-    if values[-1] < values[0]:
-        return "green"
-    if values[-1] > values[0]:
-        return "red"
-    return "yellow"
-
-
-def _staleness_label(summary: RunSummary) -> str:
-    stale = _staleness_seconds(summary)
-    if stale >= QUIET_RUN_NOTICE_SEC:
-        return " stale"
-    if stale >= 300:
-        return " slow"
-    return ""
-
-
-def _staleness_style(summary: RunSummary) -> str:
-    stale = _staleness_seconds(summary)
-    if stale >= QUIET_RUN_NOTICE_SEC:
-        return "red"
-    if stale >= 300:
-        return "yellow"
-    return ""
-
-
-def _staleness_seconds(summary: RunSummary) -> int:
-    if not summary.quiet_since:
-        return 0
-    return max(int((datetime.now().astimezone() - summary.quiet_since).total_seconds()), 0)
-
-
-def _config_width(terminal_width: int) -> int:
-    return max(18, min(54, terminal_width // 3))
-
-
-def _fit_text(value: str, width: int) -> str:
-    if len(value) <= width:
-        return value
-    return value[: max(width - 1, 0)] + "…"
 
 
 def _sample_series(series: list[float], width: int) -> list[float]:
@@ -1412,10 +953,10 @@ def _float_or_none(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _runpod_cost_used(cost_per_h: float | None, started: datetime | None, ended: datetime | None, state: Any) -> float | None:
+def _runpod_cost_used(cost_per_h: float | None, started: datetime | None, ended: datetime | None, finished: bool) -> float | None:
     if cost_per_h is None or started is None:
         return None
-    stop = ended if state not in ACTIVE_STATES and ended is not None else datetime.now().astimezone()
+    stop = ended if finished and ended is not None else datetime.now().astimezone()
     return max((stop - started).total_seconds(), 0.0) / 3600.0 * cost_per_h
 
 

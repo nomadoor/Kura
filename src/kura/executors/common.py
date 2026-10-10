@@ -37,7 +37,6 @@ RUN_STATES = frozenset({
     "stopped",  # written by older Kura versions only
 })
 
-ACTIVE_STATES = frozenset({"queued", "staged", "launching", "running"})
 
 def can_start(status: dict[str, Any]) -> bool:
     """Whether a launch may stage and start this run: a run starts once, from `compiled`, or
@@ -268,6 +267,8 @@ def create_intent_executor(path: Path) -> str:
 
 # States in which something is still happening to the run.
 UNFINISHED_STATES = frozenset({"queued", "staged", "launching", "running", "publishing"})
+# The unfinished states before training starts: the run waits for, or is being put on, a machine.
+STARTING_STATES = frozenset({"queued", "staged", "launching"})
 
 
 def run_finished(status: dict[str, Any]) -> bool:
