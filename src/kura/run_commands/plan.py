@@ -30,7 +30,7 @@ from kura.dataset_handoff import (
 from kura.dataset_inspect import dataset_trigger_word
 from kura.dataset_manifest import caption_has_trigger, caption_is_empty
 from kura.executors import observe_run, runpod_gpu_availability, stage_runpod, stop_docker, stop_runpod
-from kura.executors.runpod import unresolved_create_intents
+from kura.executors.runpod import DEFAULT_CONTAINER_DISK_GB, unresolved_create_intents
 from kura.executors.docker import DOCKER_INFO_TIMEOUT_SEC
 from kura.images import image_cuda_version, launch_image, launch_image_warnings, runpod_min_cuda_version
 from kura.install_source import kura_continuity_warning
@@ -46,7 +46,7 @@ from kura.workspace import workspace_config as _workspace_config
 from kura.run_commands.common import _run_datasets, _safe_error, _workspace_display_path, requested_gpu_types
 from kura.run_commands.experiment import experiment_context, format_experiment_context
 from kura.run_envelope import backend_config, capacity_policy, common_recipe, final_step, resume_intent, run_executor, training_state_policy
-from kura.training_artifacts import expected_checkpoints, managed_state_cadence, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
+from kura.training_artifacts import checkpoint_save_cadence, expected_checkpoints, peak_checkpoints, read_resume_lock, resume_steps, trained_steps, training_state_contract, training_state_managed, training_state_payload, verified_resume_source
 
 
 NOT_SET = "(not set)"
@@ -248,7 +248,7 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
     sampling = run.get("sampling") if isinstance(run.get("sampling"), dict) else {}
     warnings: list[str] = []
     steps = trained_steps(run)
-    checkpoints = expected_checkpoints(important_config, steps)
+    checkpoints = expected_checkpoints(run, important_config, steps)
     cadence = _as_positive_int(sampling.get("cadence_steps"))
     if checkpoints is not None and checkpoints >= 10:
         warnings.append(f"checkpoint cadence may create about {checkpoints} checkpoints{_trained_steps_basis(run, steps)}; set the backend's checkpoint retention (see `kura run capabilities {_run_adapter(run).name}`) if this is not intentional")
@@ -264,7 +264,7 @@ def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if safety.get("allow_many_checkpoints") is True:
         return
-    expected = expected_checkpoints(_adapter_display(run).get("checkpoint") or {}, steps)
+    expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None and expected >= 10:
         raise ValueError(
             f"checkpoint policy may create about {expected} checkpoints without pruning{_trained_steps_basis(run, steps)}; "
@@ -568,7 +568,7 @@ def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
         _checkpoint_count_safety(run, steps)
     except ValueError as exc:
         return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
-    expected = expected_checkpoints(_adapter_display(run).get("checkpoint") or {}, steps)
+    expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None:
         return [_preflight_record("checkpoint-safety", "info", f"checkpoint cadence implies about {expected} checkpoint(s){_trained_steps_basis(run, steps)}", "run.yaml")]
     return []
@@ -659,7 +659,8 @@ def _runpod_disk_preflight_report(run: dict[str, Any], runpod_config: dict[str, 
             "runpod-disk",
             "info",
             "container_disk_gb="
-            f"{payload['container_disk_gib']}; estimated known remote writes {_preflight_bytes(payload['estimated_write_bytes'])}{suffix}",
+            f"{payload['container_disk_gib']}; estimated known remote writes {_preflight_bytes(payload['estimated_write_bytes'])}; "
+            f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}{suffix}",
             "workspace.yaml",
         )
     ]
@@ -748,7 +749,8 @@ def _local_disk_preflight_report(
             "disk",
             "info",
             f"passes: {tightest['path']} has {_preflight_bytes(tightest['effective_free_bytes'])} free of "
-            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes)",
+            f"{_preflight_bytes(tightest['required_bytes'])} needed ({payload['required_gib']} GiB minimum free plus estimated writes); "
+            f"{_checkpoint_estimate_text(payload['estimates']['checkpoints'])}",
             "workspace.yaml",
         )
     ]
@@ -767,19 +769,32 @@ def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
 
 
 def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
+    """The checkpoint bytes a training run writes for the launch disk preflights, counted at the
+    peak the trainer's retention leaves on disk while it trains (`peak_checkpoints`), at
+    `safety.checkpoint_estimate_gb` (default 1) GiB each. `safety.allow_many_checkpoints` waives
+    only the checkpoint-count guard, never this estimate. A run without a known backend writes
+    no checkpoint estimate, as `_disk_cache_estimate` writes no cache estimate for it."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    if safety.get("allow_many_checkpoints") is not True:
-        return {"bytes": 0, "count": 0}
-    count = expected_checkpoints(_adapter_display(run).get("checkpoint") or {}, trained_steps(run))
-    if count is None:
-        return {"bytes": 0, "count": 0}
+    adapter = _run_adapter(run)
+    peak = peak_checkpoints(run, adapter.display(run).get("checkpoint") or {}) if adapter is not None else None
     per_checkpoint_gib = _configured_gib(safety.get("checkpoint_estimate_gb"), default=1)
-    return {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+    count = peak["count"] if peak is not None else 0
+    estimate = {"bytes": count * per_checkpoint_gib * 1024**3, "count": count, "per_checkpoint_gib": per_checkpoint_gib}
+    if peak is not None and peak["trainer_default_saves"]:
+        estimate["trainer_default_saves_not_counted"] = True
+    return estimate
+
+
+def _checkpoint_estimate_text(estimate: dict[str, Any]) -> str:
+    """The checkpoint part of a disk preflight line, naming the setting that sizes it and any
+    saves the trainer makes at a default Kura does not know."""
+    uncounted = "; trainer-default saves not counted" if estimate.get("trainer_default_saves_not_counted") else ""
+    return f"checkpoints: {estimate['count']} × {estimate['per_checkpoint_gib']} GiB (safety.checkpoint_estimate_gb{uncounted})"
 
 
 def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, Any], download_estimate: dict[str, Any]) -> dict[str, Any]:
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=50)
+    container_disk_gib = _configured_gib(runpod_config.get("container_disk_gb"), default=DEFAULT_CONTAINER_DISK_GB)
     container_disk_bytes = container_disk_gib * 1024**3
     checkpoint_estimate = _estimate_checkpoint_write_bytes(run)
     disk_cache_estimate = _disk_cache_estimate(run)
@@ -794,7 +809,8 @@ def _runpod_launch_disk_preflight(run: dict[str, Any], runpod_config: dict[str, 
         required_gib = (estimated_write_bytes + 1024**3 - 1) // 1024**3
         raise ValueError(
             f"RunPod container_disk_gb={container_disk_gib} is below estimated remote writes of about {required_gib} GiB "
-            "(selected input transfer, model downloads, run-scoped cache, and checkpoint estimate); increase runpod.container_disk_gb, reduce writes, or set "
+            f"(selected input transfer, model downloads, run-scoped cache, and checkpoints); {_checkpoint_estimate_text(checkpoint_estimate)}; "
+            "increase runpod.container_disk_gb, reduce writes, or set "
             "safety.allow_runpod_disk_risk: true if intentional"
         )
     return {
@@ -900,7 +916,7 @@ def _local_launch_disk_preflight(
                 f"local Docker launch requires at least {required_display_gib} GiB including estimated writes"
             )
     if errors:
-        raise ValueError("; ".join(errors))
+        raise ValueError("; ".join([*errors, _checkpoint_estimate_text(checkpoint_estimate)]))
     try:
         # Bounded and outside the workspace, as the daemon probe is: the plan reads this too.
         docker_system_df = subprocess.run(
@@ -1007,19 +1023,15 @@ def _resume_plan_payload(workspace: Path, run: dict[str, Any], run_dir: Path) ->
 
 
 def _training_state_cadence(run: dict[str, Any]) -> Any:
-    """The steps between training-state saves the plan shows. With none set by the run or by
-    `managed_state_cadence`, a backend whose training-state contract declares
-    `unset_save_cadence: trainer_default` saves at the trainer's own default; the others save
-    at the recipe's steps (sd-scripts saves state only at the end, and Musubi Tuner is given
-    the recipe's steps)."""
+    """The steps between training-state saves the plan shows: `checkpoint_save_cadence`, formatted.
+    A trainer saving at its own default shows "trainer default"; one given no cadence
+    (sd-scripts) saves state only at the end, shown as the recipe's steps."""
     # The configured cadence is what the backend's display reads from its own config.
     checkpoint = _adapter_display(run).get("checkpoint") or {}
-    state_cadence = managed_state_cadence(run, checkpoint.get("save_every_n_steps"))
-    if state_cadence is not None:
-        return state_cadence
-    if training_state_contract(run).get("unset_save_cadence") == "trainer_default":
+    cadence = checkpoint_save_cadence(run, checkpoint.get("save_every_n_steps"))
+    if cadence == "trainer_default":
         return "trainer default"
-    return common_recipe(run).get("steps")
+    return common_recipe(run).get("steps") if cadence is None else cadence
 
 
 def _run_plan_payload(run_id: str) -> dict[str, Any]:

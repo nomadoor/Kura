@@ -23,7 +23,7 @@ from kura.backends.musubi_native_selectors import musubi_native_task, wan_native
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.secrets import is_secret_name
-from kura.training_artifacts import managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
+from kura.training_artifacts import checkpoint_save_cadence, managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import resume_intent, validated_recipe
 
 
@@ -34,6 +34,8 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
         "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"),
         "native_progress": "process_local",
         "native_target": "process_local",
+        # Every Musubi command names the recipe's steps as its cadence when the run sets none.
+        "unset_save_cadence": "recipe_steps",
         "capability": "best_effort_resume",
         "restoration_contract": {
             "level": "best_effort_resume",
@@ -435,7 +437,7 @@ def _musubi_common_train_args(run: dict[str, Any], override: dict[str, Any], out
         args.extend(["--network_alpha", str(alpha)])
     args.extend([
         "--max_train_steps", str(recipe["steps"]),
-        "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe["steps"]),
+        "--save_every_n_steps", str(checkpoint_save_cadence(run, override.get("save_every_n_steps"), contract=training_state_contract_musubi(run))),
         "--save_precision", _musubi_save_precision(override),
         "--seed", str(recipe["seed"]),
         "--output_dir", output_dir,
@@ -508,7 +510,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--network_module", "networks.lora_flux_2",
             "--network_dim", str(override.get("network_dim") or 32),
             "--max_train_steps", str(recipe["steps"]),
-            "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe["steps"]),
+            "--save_every_n_steps", str(checkpoint_save_cadence(run, override.get("save_every_n_steps"), contract=training_state_contract_musubi(run))),
             "--save_precision", _musubi_save_precision(override),
             "--seed", str(recipe["seed"]),
             "--output_dir", output_dir, "--output_name", output_name,
@@ -584,7 +586,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--timestep_sampling", str(override.get("timestep_sampling") or "shift"),
             "--discrete_flow_shift", str(override.get("discrete_flow_shift") or "3.0"),
             "--max_train_steps", str(recipe["steps"]),
-            "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe["steps"]),
+            "--save_every_n_steps", str(checkpoint_save_cadence(run, override.get("save_every_n_steps"), contract=training_state_contract_musubi(run))),
             "--save_precision", _musubi_save_precision(override),
             "--seed", str(recipe["seed"]),
             "--output_dir", output_dir, "--output_name", output_name,
@@ -814,7 +816,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
             "--network_dim", str(override.get("network_dim") or 32),
             "--network_alpha", str(override.get("network_alpha") or override.get("network_dim") or 32),
             "--max_train_steps", str(recipe["steps"]),
-            "--save_every_n_steps", str(override.get("save_every_n_steps") or recipe["steps"]),
+            "--save_every_n_steps", str(checkpoint_save_cadence(run, override.get("save_every_n_steps"), contract=training_state_contract_musubi(run))),
             "--save_precision", _musubi_save_precision(override),
             "--seed", str(recipe["seed"]),
             "--output_dir", output_dir, "--output_name", output_name,

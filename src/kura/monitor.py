@@ -764,14 +764,14 @@ def _checkpoint_count(outputs: Path) -> int:
 
 
 def _checkpoint_expected(config: dict[str, Any], run_dir: Path) -> int | None:
-    # The steps the run trains and the count over them each have one owner; an invalid continuation shows no expectation.
-    try:
-        steps = trained_steps(config)
-    except ValueError:
-        return None
+    # The steps the run trains, the cadence its trainer is given, and the count each have one
+    # owner; an invalid continuation or an unknown backend shows no expectation.
     display = _read_mapping(run_dir / "resolved" / "backend-display.lock.json")
     checkpoint = display.get("checkpoint") if isinstance(display.get("checkpoint"), dict) else {}
-    return expected_checkpoints(checkpoint, steps)
+    try:
+        return expected_checkpoints(config, checkpoint, trained_steps(config))
+    except ValueError:
+        return None
 
 
 def _downloaded_run_dir(run_dir: Path, status: dict[str, Any]) -> Path | None:

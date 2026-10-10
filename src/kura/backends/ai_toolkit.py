@@ -1180,6 +1180,8 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
             "keep_last": native["save_last_n_steps"] if native.get("save_last_n_steps") is not None else _nested(config, "save", "max_step_saves_to_keep"),
             "unset_keep_last": "trainer_default",
+            # The trainer saves on steps below the last and writes the last step as its final file.
+            "last_step_save": "final_only",
         },
     }
 
