@@ -22,9 +22,13 @@ recorded separately in `applied_values`.
 Do not present dynamic full-checkpoint or model-patch staging as supported by
 the RunPod render executor.
 
-Switching a failed local render to RunPod is a billed plan change. Do not edit
-the executor automatically. Show the RunPod dry-run and obtain approval under
-`runpod-lifecycle`, then record the approved executor and recompile.
+Switching a failed local render to RunPod is a billed plan change, and a
+compiled or failed render never changes or launches again. Do not switch it
+automatically. Create a new render with `kura render new --slug <words>`, give
+its `run.yaml` the same inputs with `executor.name: runpod`, and run `kura
+render compile <run-id>`. Show `kura render launch <run-id> --executor runpod
+--dry-run` and obtain approval under `runpod-lifecycle` before launching it with
+`--executor runpod`.
 
 ## Model registry
 

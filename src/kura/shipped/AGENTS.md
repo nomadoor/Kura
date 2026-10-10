@@ -118,6 +118,26 @@ following it (`kura runner status`, `kura run status`) and use the
 `runpod-lifecycle` recovery flow if not; do not stop the Pod before remote exit
 and local download are confirmed.
 
+`kura run status <run-id>` reports one of these states:
+
+| State | Meaning | Next step |
+|---|---|---|
+| `draft` | `run.yaml` is not frozen yet | `kura run compile` |
+| `compiled` | frozen and never launched | `kura run plan`, approval, `kura run execute` |
+| `queued`, `staged`, `launching` | waiting for, or being put on, a machine | follow with `kura run execute <run-id>` |
+| `running` | the trainer is running | follow with `kura run execute <run-id>` |
+| `publishing` | the trainer exited 0; its outputs are not published yet | keep following; it is not finished |
+| `completed` | the trainer exited 0 and its outputs are published | verify the outputs and report |
+| `failed` | the trainer exited non-zero | read `kura run logs <run-id>`; any fix goes in a new run |
+| `interrupted` | stopped by `kura run stop`, or its Pod or container went away or was never confirmed created; uncollected outputs are gone | report; a new run needs approval |
+| `launch_failed` | the trainer never started | read the error; any fix goes in a new run |
+| `unknown` | the outcome was not observed: the container is gone, or the Pod exited, without an exit code | `kura run reconcile <run-id>`; a Pod may still bill (`kura run stop <run-id>`); never discard or rerun it |
+| `recovery_required` | needs a person: outputs or required training state could not be published, or collecting from the Pod failed three times | report `publication_error` from `kura run status`; on RunPod, `kura run download <run-id> --force`, then `kura run stop <run-id>` (`runpod-lifecycle`) |
+
+A new run starts from the old one's settings with `kura run new --from
+<run-id> --slug <words>`, or from its saved training state with `kura run
+resume` (`training-parameter-planning`).
+
 An approval covers that run only. Do not attach a render, evaluation, or sample
 generation to a training approval. After the run finishes you may offer a
 confirmation render in one line, naming the workflow, prompt, and seed; if the

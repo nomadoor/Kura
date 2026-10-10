@@ -31,7 +31,11 @@ Before proposing parameters, inspect:
 2. `kura dataset inspect <dataset>` and dataset validation for item
    count, resolutions, captions, roles, and pair integrity;
 3. `kura run plan <run-id>` for model artifacts, executor, detected or
-   selected GPU resources, cache state, and download estimates;
+   selected GPU resources, cache state, and download estimates. The plan
+   reads a run, so first create it with `kura run new` and fill a draft
+   `backend.config` that `kura run capabilities <backend>` accepts (for
+   sd-scripts, a `dataset_config` whose datasets have their `subsets`);
+   revise the draft as the proposal takes shape;
 4. the matching family card, when present: `.kura/knowledge/model-families/<family>.md`
    (shipped) and `knowledge/model-families/<family>.md` (the user's, which wins);
    a missing card is not a reason to refuse the model;
@@ -101,6 +105,26 @@ equivalence.
 - Keep Resume distinct from starting a new optimizer from trained weights.
 - State uncertainty rather than transferring evidence across revisions or
   materially different datasets.
+
+The plan's **Training state** block says what a run leaves to resume from:
+
+- `enabled`: `recovery.training_state.enabled` in `run.yaml` (default yes).
+- `keep`: how many of the newest saved states are kept, 1 or 2
+  (`recovery.training_state.keep_generations`, default 2).
+- `cadence`: steps between state saves, from `backend.config`
+  (`save_every_n_steps`, or AI-Toolkit's `native_config.save.save_every`);
+  the recipe's steps when unset.
+- `capability`: how far the backend can restore this architecture and mode:
+  `partial_resume`, `best_effort_resume`, or `unsupported`.
+- `saved`: whether Kura manages the state: enabled, Kura builds the command
+  (no `backend.config.command`), and the capability is not `unsupported`.
+  Only then does the trainer save state, and a completed run that leaves none
+  ends `recovery_required`.
+
+The **Trainer write locations** block lists the paths outside the run's own
+directories that the trainer writes to (a model or backend cache); Kura
+creates them and checks they are writable before the trainer starts. They
+come from the compiled command, so an uncompiled run shows `none declared`.
 
 ## Own execution through completion
 
