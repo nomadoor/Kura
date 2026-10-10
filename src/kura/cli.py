@@ -178,10 +178,11 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
         if not args.write:
             print(json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
-        # Write the file the next command reads when nothing is there yet;
-        # an authored file is never replaced, so its proposal stays a candidate.
+        # Write the file the next command reads only when nothing is there yet
+        # and the draft needs no review; otherwise the proposal stays a
+        # candidate, so an authored file is never replaced.
         items_path = directory / "items.jsonl"
-        if items_path.exists():
+        if items_path.exists() or proposal["issues"]:
             items_path = directory / "items.v2.candidate.jsonl"
         metadata_path = None if proposal["dataset_yaml"] is None else directory / "dataset.v2.candidate.yaml"
         written = [path for path in (metadata_path, items_path) if path is not None]
@@ -194,6 +195,9 @@ def cmd_dataset_draft(args: argparse.Namespace) -> int:
             for item in proposal["items"]:
                 stream.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
         print("wrote: " + ", ".join(str(path) for path in written))
+        for candidate, authored in ((metadata_path, "dataset.yaml"), (items_path, "items.jsonl")):
+            if candidate is not None and candidate.name != authored:
+                print(f"review {candidate.name}, then move it over {authored}")
         for issue in proposal["issues"]:
             print(f"review required: {issue}", file=sys.stderr)
         return 0

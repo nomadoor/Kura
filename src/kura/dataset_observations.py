@@ -11,7 +11,7 @@ import yaml
 
 from kura.dataset_inspect import _image_size
 from kura.dataset_jsonl import items_jsonl_rows
-from kura.dataset_manifest import CAPTION_SUFFIXES, caption_is_empty
+from kura.dataset_manifest import CAPTION_SUFFIXES, caption_is_empty, declares_items_v2
 from kura.media_types import KNOWN_IMAGE_SUFFIXES
 TARGET_KEYS = ("target", "target_path", "image", "image_path", "path")
 CONDITION_KEYS = {
@@ -32,7 +32,7 @@ def observe_dataset(dataset_path: Path) -> dict[str, Any]:
     directory_files = {role: _indexed_images(path) for role, path in directories.items() if role != "caption"}
     caption_files = _indexed_captions(directories.get("caption"))
 
-    manifest_v2 = metadata.get("items_schema_version") == 2
+    manifest_v2 = declares_items_v2(metadata)
     if records and manifest_v2:
         samples = [_sample_from_v2_record(root, numbered) for numbered in records]
     elif records:

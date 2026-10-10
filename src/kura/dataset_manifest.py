@@ -25,6 +25,11 @@ ORDINARY_DATASET_SUFFIXES = {".caption", ".json", ".jsonl", ".md", ".txt", ".yam
 CAPTION_SUFFIXES = (".txt", ".caption")
 
 
+def declares_items_v2(metadata: Any) -> bool:
+    """Whether a parsed dataset.yaml declares manifest v2 (the integer 2, not 2.0 or true)."""
+    return isinstance(metadata, dict) and type(metadata.get("items_schema_version")) is int and metadata["items_schema_version"] == 2
+
+
 def caption_is_empty(text: str | None) -> bool:
     """True when a caption carries no words: absent, empty, or whitespace only."""
     return text is None or not text.strip()
@@ -254,7 +259,7 @@ def measure_manifest(directory: Path) -> dict[str, Any]:
         items_text = items_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("dataset.yaml and items.jsonl must be UTF-8") from exc
-    if not isinstance(metadata, dict) or type(metadata.get("items_schema_version")) is not int or metadata["items_schema_version"] != 2:
+    if not declares_items_v2(metadata):
         raise ValueError("dataset.yaml requires items_schema_version: 2")
     # A run selects a dataset by its directory name. A different declared id
     # would record one name while training another, so the two must agree.
@@ -432,7 +437,7 @@ def draft_manifest(directory: Path) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ValueError("dataset.yaml must be a mapping")
     # Propose a dataset.yaml only when the authored one does not declare v2 yet.
-    proposed_metadata = None if metadata.get("items_schema_version") == 2 else {**metadata, "items_schema_version": 2}
+    proposed_metadata = None if declares_items_v2(metadata) else {**metadata, "items_schema_version": 2}
     issues: list[str] = []
     root = directory.resolve(strict=True)
     legacy_by_path = _legacy_draft_rows(root / "items.jsonl", issues)
