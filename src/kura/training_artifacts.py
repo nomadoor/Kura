@@ -18,7 +18,7 @@ import yaml
 
 from kura.fsio import atomic_write_json, file_lock
 from kura.install_source import kura_continuity
-from kura.run_envelope import resume_intent, training_state_policy, validated_recipe
+from kura.run_envelope import final_step, resume_intent, training_state_policy, validated_recipe
 
 
 ARTIFACT_SCHEMA_VERSION = 1
@@ -534,6 +534,18 @@ def resume_steps(
         "native_start": 0 if process_local else source_step,
         "native_end": target_step - source_step if process_local else target_step,
     }
+
+
+def trained_steps(run: dict[str, Any]) -> int | None:
+    """The optimizer steps a training run trains: the steps a Resume adds, else the recipe's
+    steps. The plan's checkpoint count, checkpoint disk, and sample estimates and the monitor's
+    expected checkpoints count from it. Those counts are approximate: a trainer counting logical
+    steps saves on multiples of the logical step, not of the steps this run adds. An invalid
+    continuation raises; a run without a positive step count gives None."""
+    # `additional_steps` is target minus source and does not depend on the training-state
+    # contract (it only sets the native range), so no backend contract is looked up here.
+    steps = resume_steps(run, contract={})
+    return steps["additional_steps"] if steps is not None else final_step(run)
 
 
 def logical_step(native_step: int, steps: dict[str, Any] | None) -> int:

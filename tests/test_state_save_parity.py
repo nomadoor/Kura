@@ -109,18 +109,20 @@ class ManagedStateCadenceTests(unittest.TestCase):
             script,
         )
 
-    def test_a_capped_resume_passes_the_checkpoint_safety_preflight_as_a_fresh_run_does(self) -> None:
-        # The preflight counts checkpoints from the recipe's steps and the configured cadence;
+    def test_a_capped_resume_passes_the_checkpoint_count_guard_as_a_fresh_run_does(self) -> None:
+        # The guard counts checkpoints from the steps the run trains and the configured cadence;
         # the cap on a Resume's state saves must not make it refuse the Resume.
-        from kura.run_commands.plan import _checkpoint_safety_preflight
+        from kura.run_commands.plan import _checkpoint_count_safety
+        from kura.training_artifacts import trained_steps
 
         for build in (musubi_run, sd_scripts_run):
             run = build()
             run["backend"]["config"]["save_every_n_steps"] = 200
             run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
             with self.subTest(backend=run["backend"]["name"]):
-                _checkpoint_safety_preflight(run)
-                _checkpoint_safety_preflight(as_resume(run, additional=50))
+                _checkpoint_count_safety(run, trained_steps(run))
+                resumed = as_resume(run, additional=50)
+                _checkpoint_count_safety(resumed, trained_steps(resumed))
 
     def test_every_accelerate_trainer_names_its_outputs_through_one_rule(self) -> None:
         for module, build, command in (
