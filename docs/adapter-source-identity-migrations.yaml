@@ -12,8 +12,8 @@ records:
     backend: ai-toolkit
     reason: >-
       The expected checkpoint count, a run's displayed steps, and the displayed state cadence
-      are each read through one owner; the AI-Toolkit training-state contract declares that an
-      unset cadence is the trainer's default; trainer commands, inputs, and outputs are
+      are each read through one owner; AI-Toolkit declares that an unset cadence and an unset
+      retention are the trainer's own defaults; trainer commands, inputs, and outputs are
       unchanged.
     behavior_changed: false
     evidence_ids:
@@ -38,7 +38,37 @@ records:
     replacement:
       kind: source-tree-sha256
       scope: selected-adapter-v3
-      value: 5bc083cea09176f563a2820c08847eba390d360aae9129f30fc6e9a00d6fe096
+      value: 6cb657af63f0d6631e937e6d198237f965a130e9fd53c3a92eeb059299885b7b
+  - id: plan-monitor-checkpoint-and-steps-musubi-tuner-2026-10-08
+    backend: musubi-tuner
+    reason: >-
+      The expected checkpoint count, a run's displayed steps, and the displayed state cadence
+      are each read through one owner; AI-Toolkit declares that an unset cadence and an unset
+      retention are the trainer's own defaults; trainer commands, inputs, and outputs are
+      unchanged.
+    behavior_changed: false
+    evidence_ids:
+    - musubi-framepack-2026-09-30-0201
+    - musubi-kandinsky5-lite-2026-09-29
+    - musubi-hunyuan-video-2026-09-29
+    - musubi-hunyuan-video-1-5-2026-09-29
+    - musubi-flux-kontext-2026-09-29
+    - musubi-flux2-klein-4b-2026-09-29
+    - musubi-hidream-o1-2026-09-29
+    - musubi-ideogram4-2026-09-29
+    - musubi-krea2-2026-09-29
+    - musubi-qwen-image-2026-09-29
+    - musubi-zimage-2026-09-29
+    - musubi-minimax-h3-guidance-cache-runpod-2026-09-29
+    - musubi-wan-video-jsonl-docker-2026-09-29
+    previous:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: 50b58c2598c021e177febed8a4e36eec7573ad8b6072196b12fb9acda2a53e42
+    replacement:
+      kind: source-tree-sha256
+      scope: selected-adapter-v3
+      value: f59856807a7470969af5aadf9b378b571b581a52ba7b085997cca37d199edc2b
   - id: dataset-draft-writes-items-ai-toolkit-2026-10-08
     backend: ai-toolkit
     reason: >-
