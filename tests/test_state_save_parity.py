@@ -107,6 +107,26 @@ class ManagedStateCadenceTests(unittest.TestCase):
             script,
         )
 
+    def test_the_plan_shows_the_cadence_the_trainer_is_given(self) -> None:
+        displays = {"musubi-tuner": musubi_command.display_musubi_tuner, "sd-scripts": sd_scripts.display_sd_scripts}
+        for build in (musubi_run, sd_scripts_run):
+            run = build()
+            run["backend"]["config"]["save_every_n_steps"] = 500
+            run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
+            name = run["backend"]["name"]
+            with self.subTest(backend=name):
+                self.assertEqual(displays[name](run)["checkpoint"]["save_every_n_steps"], 500)
+                self.assertEqual(displays[name](as_resume(run, additional=200))["checkpoint"]["save_every_n_steps"], 200)
+
+    def test_every_accelerate_trainer_names_its_outputs_through_one_rule(self) -> None:
+        for module, build, command in (
+            (musubi_command, musubi_run, musubi_command.command_musubi_tuner),
+            (sd_scripts, sd_scripts_run, sd_scripts.command_sd_scripts),
+        ):
+            with self.subTest(module=module.__name__), patch.object(module, "run_output_name", wraps=run_output_name) as owner:
+                command(as_resume(build()))
+                owner.assert_called()
+
     def test_managed_state_cadence_changes_only_a_process_local_resume(self) -> None:
         self.assertIsNone(managed_state_cadence(sd_scripts_run(), None))
         self.assertEqual(managed_state_cadence(sd_scripts_run(), 100), 100)
@@ -136,8 +156,8 @@ class StatePublicationParityTests(unittest.TestCase):
         _write_state_marker(directory, "sd-scripts", step)
         return directory
 
-    def _run_dir(self, root: Path, *, resume: bool = False) -> Path:
-        run = sd_scripts_run()
+    def _run_dir(self, root: Path, *, resume: bool = False, build=sd_scripts_run) -> Path:
+        run = build()
         run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
         if resume:
             run = as_resume(run)
@@ -156,10 +176,39 @@ class StatePublicationParityTests(unittest.TestCase):
         logical = {"derived-step0200-state": 1200, "other-step0300-state": 1300, "derived-state": 1250}
         self.assertEqual(self._publish(resume=True, logical=logical), {"docker": [1200], "runpod": [1200]})
 
-    def test_runpod_reports_a_malformed_continuation_instead_of_pulling_nothing(self) -> None:
+    def test_docker_and_runpod_place_a_state_by_its_marker_when_its_name_counts_logical_steps(self) -> None:
+        # A multi-item sd-scripts Resume names its states by the logical step; the marker decides.
+        logical = {"derived-step1200-state": 1200, "other-step0300-state": 1300, "derived-state": 1250}
+        names = ("derived-step1200-state", "other-step0300-state", "derived-state")
+        self.assertEqual(self._publish(resume=True, logical=logical, names=names), {"docker": [1200], "runpod": [1200]})
+
+    def test_runpod_does_not_copy_a_state_already_published_at_its_marked_step(self) -> None:
+        import kura.run_commands.runpod_ssh as runpod_ssh
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = self._run_dir(root, resume=True)
+            self._write_state(run_dir / "outputs" / "derived-step1200-state", 1200)
+            self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [1200])
+            item = {
+                "path": "/workspace/runs/derived/outputs/derived-step1200-state",
+                "name": "derived-step1200-state",
+                "marked_step": 1200,
+                "files": [{"path": "model.safetensors", "size": 1, "mtime_ns": 1}],
+            }
+            with patch.object(runpod_ssh, "_run_bounded", side_effect=AssertionError("a published state must not be copied again")), \
+                    patch.object(runpod_ssh, "state_logical_step", wraps=training_artifacts.state_logical_step) as owner:
+                items = _pull_remote_training_state_items(
+                    run_dir, {"ip": "example", "port": 22, "key": root / "key"}, workspace="/workspace", items=[item],
+                )
+            self.assertEqual([entry["observed_step"] for entry in items], [1200])
+            owner.assert_called()
+
+    def test_runpod_reports_a_malformed_continuation_instead_of_pulling_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Musubi has no logical step marker, so its states are placed through the Resume steps.
+            run_dir = self._run_dir(root, resume=True, build=musubi_run)
             run = yaml.safe_load((run_dir / "resolved" / "manifest.lock.yaml").read_text(encoding="utf-8"))
             run["continuation"]["target_step"] = 1300
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
@@ -169,28 +218,31 @@ class StatePublicationParityTests(unittest.TestCase):
                     run_dir, {"ip": "example", "port": 22, "key": root / "key"}, workspace="/workspace", items=[item],
                 )
 
-    def _publish(self, *, resume: bool, logical: dict[str, int] | None = None) -> dict[str, list[int]]:
+    def _publish(self, *, resume: bool, logical: dict[str, int] | None = None, names: tuple[str, ...] | None = None) -> dict[str, list[int]]:
         import kura.run_commands.runpod_ssh as runpod_ssh
 
         logical = logical or self.STEPS
+        names = names or self.NAMES
         published: dict[str, list[int]] = {}
         for executor in ("docker", "runpod"):
             with tempfile.TemporaryDirectory() as directory, patch.object(
-                training_artifacts, "state_directory_step", wraps=state_directory_step,
-            ) as local_owner, patch.object(runpod_ssh, "state_directory_step", wraps=state_directory_step) as remote_owner:
+                training_artifacts, "state_logical_step", wraps=training_artifacts.state_logical_step,
+            ) as local_owner, patch.object(runpod_ssh, "state_logical_step", wraps=training_artifacts.state_logical_step) as remote_owner:
                 root = Path(directory)
                 run_dir = self._run_dir(root, resume=resume)
                 if executor == "docker":
-                    for name in self.NAMES:
+                    for name in names:
                         self._write_state(run_dir / "outputs" / name, logical[name])
                     items = publish_completed_training_states(root, run_dir)
                     local_owner.assert_called()
                 else:
-                    sources = {name: self._write_state(root / "remote" / name, logical[name]) for name in self.NAMES}
+                    sources = {name: self._write_state(root / "remote" / name, logical[name]) for name in names}
                     listing = [
                         {
                             "path": f"/workspace/runs/derived/outputs/{name}",
                             "name": name,
+                            # What the Pod reads from the marker the backend's contract names.
+                            "marked_step": logical[name],
                             "files": [
                                 {"path": path.name, "size": path.stat().st_size, "mtime_ns": 1}
                                 for path in sorted(source.iterdir())

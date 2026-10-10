@@ -909,6 +909,24 @@ def _published_run_context(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any
     return run, status, runtime_identity
 
 
+def state_logical_step(
+    run_dir: Path, run: dict[str, Any], contract: dict[str, Any], native_step: int | None, marked_step: int | None,
+) -> int | None:
+    """The logical step of one state directory, for every executor that places one.
+
+    A backend whose step marker counts logical steps is placed by the marker alone: whether
+    the native name counts process-local or logical steps depends on the dataset's shape. Any
+    other backend's native step is mapped through the run's Resume steps. None means the
+    directory cannot be placed yet.
+    """
+    marker = contract.get("state_step") if isinstance(contract.get("state_step"), dict) else None
+    if marker is not None and marker.get("space") == "logical":
+        return marked_step
+    if native_step is None:
+        return None
+    return logical_step(native_step, frozen_resume_steps(run_dir, run))
+
+
 def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: Path, observed_step: int) -> dict[str, Any] | None:
     """Publish one complete state directory at its logical step, or return None.
 
@@ -931,13 +949,8 @@ def publish_training_state_candidate(workspace: Path, run_dir: Path, candidate: 
     if marker is not None and marked_step is None:
         return None
     native_step = marked_step if observed_step == FINAL_STATE_STEP else observed_step
-    if native_step is None:
-        return None
-    if marker is not None and marker.get("space") == "logical":
-        step = marked_step
-    else:
-        step = logical_step(native_step, frozen_resume_steps(run_dir, run))
-    if not isinstance(step, int):
+    step = state_logical_step(run_dir, run, contract, native_step, marked_step)
+    if step is None:
         return None
     backend = run.get("backend") if isinstance(run.get("backend"), dict) else {}
     backend_name = str(backend.get("name"))

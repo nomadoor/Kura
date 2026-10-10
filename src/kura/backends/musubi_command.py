@@ -23,7 +23,7 @@ from kura.backends.musubi_native_selectors import musubi_native_task, wan_native
 from kura.fsio import atomic_write_yaml
 from kura.media_types import frozen_suffixes
 from kura.secrets import is_secret_name
-from kura.training_artifacts import managed_state_save_args, resume_steps, training_state_managed, training_state_payload
+from kura.training_artifacts import managed_state_cadence, managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import resume_intent, validated_recipe
 
 
@@ -415,7 +415,10 @@ def display_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
         "precision": native.get("save_precision"),
         "memory": memory,
         "checkpoint": {
-            "save_every_n_steps": native.get("save_every_n_steps"),
+            "save_every_n_steps": (
+                managed_state_cadence(run, native.get("save_every_n_steps"), contract=training_state_contract_musubi(run))
+                if training_state_managed(run, training_state_contract_musubi(run)) else native.get("save_every_n_steps")
+            ),
             "prune_before_step": native.get("prune_checkpoints_before_step"),
             "keep_last": native.get("save_last_n_steps") or _extra_arg_value(extra_args, "--save_last_n_epochs"),
         },
@@ -483,7 +486,7 @@ def command_musubi_tuner(run: dict[str, Any]) -> dict[str, Any]:
     download_commands, _ = _musubi_model_downloads(run)
     dataset_config = f"/workspace/runs/{run['id']}/resolved/musubi/dataset.toml"
     output_dir = f"/workspace/runs/{run['id']}/outputs"
-    output_name = run["id"]
+    output_name = run_output_name(run)
     common = [
         "accelerate", "launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
     ]

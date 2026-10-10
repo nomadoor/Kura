@@ -264,9 +264,9 @@ class ResumeExecutorParityTests(unittest.TestCase):
         statuses: dict[str, int] = {}
         for executor in ("docker", "runpod"):
             with tempfile.TemporaryDirectory() as directory, patch.object(
-                training_artifacts, "logical_step", wraps=training_artifacts.logical_step,
+                training_artifacts, "state_logical_step", wraps=training_artifacts.state_logical_step,
             ) as owner, patch.object(common, "logical_step", wraps=logical_step) as status_owner, patch.object(
-                runpod_ssh, "logical_step", wraps=logical_step,
+                runpod_ssh, "state_logical_step", wraps=training_artifacts.state_logical_step,
             ) as remote_owner:
                 root = Path(directory)
                 run_dir = self._derived(root)
@@ -282,7 +282,8 @@ class ResumeExecutorParityTests(unittest.TestCase):
                     item = {
                         "path": f"/workspace/runs/derived/outputs/{name}",
                         "name": name,
-                        "step": 150,
+                        # The Pod reports the step the state's marker records.
+                        "marked_step": 1150,
                         "files": [{"path": file, "size": len(_state_bytes(file)), "mtime_ns": 1} for file in STATE_FILES],
                     }
 
