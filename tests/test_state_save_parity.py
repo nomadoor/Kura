@@ -101,10 +101,9 @@ class ManagedStateCadenceTests(unittest.TestCase):
         # Musubi Tuner is given the recipe's steps, while AI-Toolkit is given `save: {}` and
         # saves at its own default. A set cadence, or a process-local Resume's cap, is shown as is.
         from kura.run_commands.plan import _training_state_cadence
-        from kura.run_envelope import backend_config
 
         def shown(run: dict[str, Any]) -> Any:
-            return _training_state_cadence(run, backend_config(run, run["backend"]["name"]))
+            return _training_state_cadence(run)
 
         unset = {"sd-scripts": 1000, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
         resumed = {"sd-scripts": 200, "musubi-tuner": 200, "ai-toolkit": "trainer default"}
