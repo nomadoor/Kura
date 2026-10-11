@@ -30,6 +30,11 @@ Use this reference only for `backend.name: sd-scripts`.
   patch once upstream counts logical steps. A one-item smoke dataset cannot show
   this (one step per epoch leaves no remainder); test with several items and a
   target that is not a multiple of the steps per epoch.
+- A run whose state Kura manages launches its trainer through the Accelerate
+  state runner shared with Musubi Tuner (`container_scripts/accelerate_state.py`),
+  which marks each complete save with its scheduler step in
+  `kura-state-info.json` and, for sd-scripts only, normalizes
+  `train_state.json`.
 
 Verification starts with:
 

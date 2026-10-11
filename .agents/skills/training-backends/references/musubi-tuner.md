@@ -28,5 +28,26 @@ When an adapter or image ref changes:
 5. require an actual optimizer update and validated output before promoting a
    path beyond image or entrypoint smoke.
 
+Resume and training state:
+
+- A run whose state Kura manages launches its trainer through the Accelerate
+  state runner (`container_scripts/accelerate_state.py`, shared with
+  sd-scripts, written to `resolved/musubi/state-runner.py`). After each
+  complete save it writes `kura-state-info.json` with the step the scheduler
+  counted, checked against the optimizer; the training-state contract requires
+  that marker and places every state, including the final `<name>-state`, by
+  it. Artifacts published before the marker carry none and still resume:
+  Resume reads only an artifact's own inventory.
+- Upstream `trainer_base.py` set `global_step = 0` after `--resume`. The image
+  applies `docker/musubi-tuner/patches/0001-resume-continues-the-logical-step.patch`,
+  which starts `global_step` and the progress bar at the restored scheduler's
+  step and runs only the epochs the remaining steps need, so names, cadence,
+  and the stop are logical; the contract declares `native_progress` and
+  `native_target` `logical`, the trainer gets the logical target as
+  `--max_train_steps`, and a Resume keeps its cadence. Locks compiled before
+  the patch froze `process_local` (with a cadence capped at the steps the run
+  adds) and are read that way. Data order is unchanged: the epoch restarts and
+  Kura does not skip samples. Re-check the hunk whenever the Musubi pin moves.
+
 Do not download weights merely to prove script presence. Plan real-smoke disk,
 memory, executor, and cost from the concrete run before launch.
