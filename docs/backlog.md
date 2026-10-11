@@ -31,9 +31,10 @@ why, so it is not raised again.
 - 2026-10-11 | images | Nothing checks at run time that a Musubi Tuner or sd-scripts image carries the step patch; an `images.*` override with an unpatched build trains a Resume to the logical target as extra steps. The state runner could compare the `-stepNNNNNNNN-state` directory step with the scheduler step | review of the step-labels pull request | P1
 - 2026-10-11 | AI-Toolkit | After an OOM-skipped iteration (upstream tolerates three), the next step save fails Kura's name check with a message that blames the missing patch rather than the skipped update | review of the step-labels pull request | P11
 - 2026-10-11 | AI-Toolkit patch | The patch header says sampling and logging skip the first step on a save; only sampling does (harmless; changing it changes the image build) | review of the step-labels pull request | -
-- 2026-10-11 | state marker | `kura-state-info.json` `logical_step` became `last_epoch // num_processes` under the same `schema_version: 1`; a multi-GPU state still pending from the old runner would publish at an inflated step | review of the step-labels pull request | P9
+- 2026-10-11 | state marker | `kura-state-info.json` `logical_step` became `last_epoch // num_processes` under the same `schema_version: 1`; a multi-GPU state still pending from the old runner would publish at an inflated step | review of the step-labels pull request; CodeRabbit on that pull request suggested a schema 2 marker and checking the marker on Resume | P9
 - 2026-10-11 | state runner | The Musubi Tuner runner path is written in three places (the contract, `musubi_command.py`, `registry.py`); a drift would make new runs read as compiled before the runner | review of the step-labels pull request | -
 - 2026-10-11 | images | `kura image build` builds from the editable install's checkout, not from the current worktree, so a worktree's Docker changes are silently left out | found while building the step-label images | -
+- 2026-10-11 | plan | For a Resume compiled before the logical-step change (`process_local` frozen in its lock), the plan and disk preflight show the configured cadence and count saves over the logical range, while its frozen command carries the cadence capped at the steps it adds | CodeRabbit on the step-labels pull request | P8
 
 ## Rejected
 
