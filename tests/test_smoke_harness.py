@@ -57,8 +57,8 @@ def _fake_video_dataset(root: Path, dataset_id: str) -> None:
     MODULE._write_manifest(root, dataset_id, [{"id": "0001", "files": [{"type": "file", "role": "target", "path": "0001.mp4"}], "caption": MODULE._caption("0001.txt")}])
 
 
-def _safetensors(path: Path, values: bytes) -> None:
-    header = json.dumps({"__metadata__": {"ss_output_name": path.parent.name}, "lora.weight": {"dtype": "F32", "shape": [len(values) // 4], "data_offsets": [0, len(values)]}}).encode()
+def _safetensors(path: Path, values: bytes, *, metadata: dict[str, str] | None = None) -> None:
+    header = json.dumps({"__metadata__": metadata or {"ss_output_name": path.parent.name}, "lora.weight": {"dtype": "F32", "shape": [len(values) // 4], "data_offsets": [0, len(values)]}}).encode()
     path.write_bytes(struct.pack("<Q", len(header)) + header + values)
 
 
@@ -234,20 +234,13 @@ class RealSmokeHarnessTests(unittest.TestCase):
                 MODULE.evidence(workspace, run_id, artifact="smoke-evidence/x.yaml")
 
 
-    def test_expected_saves_follow_each_trainers_cadence_and_names(self) -> None:
-        # sd-scripts and Musubi Tuner save after update m when m % cadence == 0 and name it m;
-        # AI-Toolkit saves after the update at index i (i + 1 updates), names it i, and never
-        # saves on the index it started at. Every trainer adds unnamed final weights.
-        for backend in ("sd-scripts", "musubi-tuner"):
-            with self.subTest(backend=backend):
-                self.assertEqual(MODULE.expected_saves(backend, 0, 7, 2), [(2, 2), (4, 4), (6, 6), (7, None)])
-                self.assertEqual(MODULE.expected_saves(backend, 4, 7, 2), [(6, 6), (7, None)])
-                self.assertEqual(MODULE.expected_saves(backend, 0, 4, 2), [(2, 2), (4, 4), (4, None)])
-        self.assertEqual(MODULE.expected_saves("ai-toolkit", 0, 7, 2), [(3, 2), (5, 4), (7, 6), (7, None)])
-        self.assertEqual(MODULE.expected_saves("ai-toolkit", 4, 7, 2), [(7, 6), (7, None)])
-        self.assertEqual(MODULE.expected_saves("ai-toolkit", 2, 4, 2), [(4, None)])
-        self.assertEqual(MODULE.expected_state_steps(MODULE.expected_saves("sd-scripts", 0, 7, 2)), [6, 7])
-        self.assertEqual(MODULE.expected_state_steps(MODULE.expected_saves("ai-toolkit", 2, 4, 2)), [4])
+    def test_expected_saves_follow_the_cadence_and_name_the_held_step(self) -> None:
+        # Every trainer saves after update m when m % cadence == 0, names it m, and adds
+        # unnamed final weights.
+        self.assertEqual(MODULE.expected_saves(0, 7, 2), [(2, 2), (4, 4), (6, 6), (7, None)])
+        self.assertEqual(MODULE.expected_saves(4, 7, 2), [(6, 6), (7, None)])
+        self.assertEqual(MODULE.expected_saves(0, 4, 2), [(2, 2), (4, 4), (4, None)])
+        self.assertEqual(MODULE.expected_state_steps(MODULE.expected_saves(0, 7, 2)), [6, 7])
 
     def test_the_scenario_crosses_epochs_and_starts_resumes_on_the_cadence(self) -> None:
         runs = {run.key: run for run in MODULE.SCENARIO}
@@ -268,7 +261,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
             workspace = Path(directory)
             run_id = "20260101-0000_conf-sd-multi-resume_abcd"
             _finished_run(workspace, run_id, weights=[f"{run_id}-step00000006.safetensors", f"{run_id}.safetensors"], states=[6, 7], last_step=7)
-            self.assertEqual(MODULE.check_run(workspace, run_id, "sd-scripts", 4, 7), {"P1": [], "P2": [], "P4": [], "P7": []})
+            self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7), {"P1": [], "P2": [], "P4": [], "P7": []})
 
     def test_check_run_reports_steps_names_and_records_that_break_a_promise(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -277,23 +270,35 @@ class RealSmokeHarnessTests(unittest.TestCase):
             # recorded a step it did not reach, and published no state at its target.
             run_id = "20260101-0000_conf-musubi-multi-resume_abcd"
             run_dir = _finished_run(workspace, run_id, weights=[f"{run_id}-step00000002.safetensors", f"{run_id}.safetensors"], states=[6], last_step=5)
-            problems = MODULE.check_run(workspace, run_id, "musubi-tuner", 4, 7)
+            problems = MODULE.check_run(workspace, run_id, 4, 7)
             self.assertEqual(len(problems["P1"]), 2)
             self.assertIn("weight file steps [None, 2], expected [None, 6]", problems["P2"][0])
             self.assertIn("published state steps [6], expected [6, 7]", problems["P2"][1])
             # A state whose own counters disagree with the step it is published at.
             payload = next((workspace / "artifacts" / "training-state").glob("*/payload"))
             (payload / "train_state.json").write_text(json.dumps({"current_step": 5}), encoding="utf-8")
-            self.assertIn("state at step 6 records train_state.json:current_step = 5", MODULE.check_run(workspace, run_id, "musubi-tuner", 4, 7)["P2"])
+            self.assertIn("state at step 6 records train_state.json:current_step = 5", MODULE.check_run(workspace, run_id, 4, 7)["P2"])
             # The image that ran is not the compiled one, and an output vanished.
             status = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
             (run_dir / "realizations" / "r1.json").write_text(json.dumps({"image_identity": {"reference": "other:dev"}}), encoding="utf-8")
             (run_dir / "outputs" / f"{run_id}.safetensors").unlink()
-            problems = MODULE.check_run(workspace, run_id, "musubi-tuner", 4, 7)
+            problems = MODULE.check_run(workspace, run_id, 4, 7)
             self.assertTrue(problems["P4"] and problems["P7"])
             self.assertNotIn("P6", problems)
             (run_dir / "status.json").write_text(json.dumps({**status, "host": "runpod"}), encoding="utf-8")
-            self.assertEqual(MODULE.check_run(workspace, run_id, "musubi-tuner", 4, 7)["P6"], ["no pod_stopped_at recorded"])
+            self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7)["P6"], ["no pod_stopped_at recorded"])
+
+    def test_check_run_holds_a_weight_to_the_update_count_its_trainer_recorded(self) -> None:
+        # AI-Toolkit writes training_info.step into each weight file: its own count of updates.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_id = "20260101-0000_conf-ai-multi-resume_abcd"
+            run_dir = _finished_run(workspace, run_id, weights=[f"{run_id}_000000006.safetensors", f"{run_id}.safetensors"], states=[6, 7], last_step=7)
+            for name, step in ((f"{run_id}_000000006.safetensors", 6), (f"{run_id}.safetensors", 7)):
+                _safetensors(run_dir / "outputs" / name, b"\0\0\0\0", metadata={"training_info": json.dumps({"step": step, "epoch": 0})})
+            self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7)["P2"], [])
+            _safetensors(run_dir / "outputs" / f"{run_id}.safetensors", b"\0\0\0\0", metadata={"training_info": json.dumps({"step": 9})})
+            self.assertEqual(MODULE.check_run(workspace, run_id, 4, 7)["P2"], [f"{run_id}.safetensors records training_info.step 9, holds step 7"])
 
     def test_check_run_compares_image_digests_not_reference_spellings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -311,7 +316,7 @@ class RealSmokeHarnessTests(unittest.TestCase):
             for used, ok in (("sha256:" + "a" * 64, True), (observed, True), ("sha256:" + "c" * 64, False), ("other:dev", False)):
                 with self.subTest(used=used):
                     realization.write_text(json.dumps({"image_identity": {"reference": used}}), encoding="utf-8")
-                    self.assertEqual(MODULE.check_run(workspace, run_id, "sd-scripts", 2, 4)["P4"] == [], ok)
+                    self.assertEqual(MODULE.check_run(workspace, run_id, 2, 4)["P4"] == [], ok)
 
     def test_compare_states_ignores_metadata_and_save_ids_but_not_counters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -44,7 +44,7 @@ AI_TOOLKIT_DATASET_OPTION_CAPABILITIES = {
     },
 }
 
-AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a"
+AI_TOOLKIT_PINNED_IMAGE = "nomadoor/kura-ai-toolkit@sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a"
 AI_TOOLKIT_PINNED_COMMIT = "31ddc709c35d3d3b820c636745397561f806b246"
 
 # Registry snapshot from AI_TOOLKIT_PINNED_IMAGE (AI-Toolkit 0.13.18,
@@ -1180,8 +1180,6 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
             "keep_last": native["save_last_n_steps"] if native.get("save_last_n_steps") is not None else _nested(config, "save", "max_step_saves_to_keep"),
             "unset_keep_last": "trainer_default",
-            # The trainer saves on steps below the last and writes the last step as its final file.
-            "last_step_save": "final_only",
         },
     }
 

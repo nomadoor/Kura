@@ -23,7 +23,6 @@ import kura.training_artifacts as training_artifacts
 from kura.run_commands.runpod_ssh import _pull_remote_training_state_items
 from kura.training_artifacts import (
     FINAL_STATE_STEP,
-    managed_state_cadence,
     managed_state_save_args,
     publish_completed_training_states,
     run_output_name,
@@ -43,8 +42,8 @@ def _cadence(run: dict[str, Any]) -> tuple[str | None, str]:
         window = re.findall(r"--save_last_n_steps_state (\d+)", script)
     else:
         script = sd_scripts.command_sd_scripts(run)["argv"][2]
-        every = re.findall(r'"--save_every_n_steps","(\d+)"', script)
-        window = re.findall(r'"--save_last_n_steps_state","(\d+)"', script)
+        every = re.findall(r"--save_every_n_steps (\d+)", script)
+        window = re.findall(r"--save_last_n_steps_state (\d+)", script)
     assert len(every) <= 1 and len(window) == 1, (every, window)
     return (every[0] if every else None), window[0]
 
@@ -67,17 +66,18 @@ class StateDirectoryNameTests(unittest.TestCase):
 
 
 class ManagedStateCadenceTests(unittest.TestCase):
-    def test_a_fresh_run_keeps_each_backends_cadence_and_a_resume_caps_it_at_the_added_steps(self) -> None:
-        # Fresh runs: each backend's own default (Musubi always names a cadence, sd-scripts only a
-        # configured one). Process-local Resume: both save within the steps the run adds.
+    def test_each_backend_keeps_its_cadence_on_a_fresh_run_and_on_a_resume(self) -> None:
+        # Each backend's own default (Musubi always names a cadence, sd-scripts only a configured
+        # one). Both count a Resume's steps logically, so a Resume keeps the cadence and saves
+        # its state at the end; nothing caps it at the steps the run adds.
         cases = {
             "fresh": ({}, None, 2, {"musubi-tuner": ("1000", "1000"), "sd-scripts": (None, "1000")}),
             "fresh-configured": ({"save_every_n_steps": 100}, None, 2, ("100", "100")),
             "fresh-one-generation": ({}, None, 1, {"musubi-tuner": ("1000", "1"), "sd-scripts": (None, "1")}),
-            "resume": ({}, 200, 2, ("200", "200")),
+            "resume": ({}, 200, 2, {"musubi-tuner": ("1000", "1000"), "sd-scripts": (None, "1000")}),
             "resume-configured-below": ({"save_every_n_steps": 50}, 200, 2, ("50", "50")),
-            "resume-configured-above": ({"save_every_n_steps": 500}, 200, 2, ("200", "200")),
-            "resume-one-generation": ({}, 200, 1, ("200", "1")),
+            "resume-configured-above": ({"save_every_n_steps": 500}, 200, 2, ("500", "500")),
+            "resume-one-generation": ({}, 200, 1, {"musubi-tuner": ("1000", "1"), "sd-scripts": (None, "1")}),
         }
         for build in (musubi_run, sd_scripts_run):
             for label, (config, additional, keep, expected) in cases.items():
@@ -99,14 +99,15 @@ class ManagedStateCadenceTests(unittest.TestCase):
     def test_the_plan_shows_the_cadence_each_trainer_saves_state_at(self) -> None:
         # A 1000-step recipe with no cadence set: sd-scripts saves state only at the end and
         # Musubi Tuner is given the recipe's steps, while AI-Toolkit is given `save: {}` and
-        # saves at its own default. A set cadence, or a process-local Resume's cap, is shown as is.
+        # saves at its own default. A set cadence is shown as is; an sd-scripts Resume with none
+        # saves at its end, after the steps it adds, and Musubi Tuner keeps the recipe's steps.
         from kura.run_commands.plan import _training_state_cadence
 
         def shown(run: dict[str, Any]) -> Any:
             return _training_state_cadence(run)
 
         unset = {"sd-scripts": 1000, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
-        resumed = {"sd-scripts": 200, "musubi-tuner": 200, "ai-toolkit": "trainer default"}
+        resumed = {"sd-scripts": 200, "musubi-tuner": 1000, "ai-toolkit": "trainer default"}
         for build in (sd_scripts_run, musubi_run, ai_toolkit_run):
             run = build()
             name = run["backend"]["name"]
@@ -127,14 +128,13 @@ class ManagedStateCadenceTests(unittest.TestCase):
         run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
         script = sd_scripts.command_sd_scripts(run)["argv"][2]
         self.assertIn(
-            '"--save_every_n_steps","50","--save_last_n_steps","100","--save_state","--save_state_on_train_end",'
-            '"--save_last_n_steps_state","50"',
+            "--save_every_n_steps 50 --save_last_n_steps 100 --save_state --save_state_on_train_end "
+            "--save_last_n_steps_state 50",
             script,
         )
 
-    def test_a_capped_resume_passes_the_checkpoint_count_guard_as_a_fresh_run_does(self) -> None:
-        # The guard counts checkpoints from the steps the run trains and the configured cadence;
-        # the cap on a Resume's state saves must not make it refuse the Resume.
+    def test_a_resume_passes_the_checkpoint_count_guard_as_a_fresh_run_does(self) -> None:
+        # The guard counts checkpoints from the steps the run trains and the configured cadence.
         from kura.run_commands.plan import _checkpoint_count_safety
         from kura.training_artifacts import trained_steps
 
@@ -155,16 +155,6 @@ class ManagedStateCadenceTests(unittest.TestCase):
             with self.subTest(module=module.__name__), patch.object(module, "run_output_name", wraps=run_output_name) as owner:
                 command(as_resume(build()))
                 owner.assert_called()
-
-    def test_managed_state_cadence_changes_only_a_process_local_resume(self) -> None:
-        self.assertIsNone(managed_state_cadence(sd_scripts_run(), None))
-        self.assertEqual(managed_state_cadence(sd_scripts_run(), 100), 100)
-        self.assertEqual(managed_state_cadence(as_resume(sd_scripts_run()), None), 200)
-        self.assertEqual(managed_state_cadence(as_resume(sd_scripts_run()), 500), 200)
-        no_steps = as_resume(sd_scripts_run())
-        del no_steps["recipe"]["steps"]
-        with self.assertRaisesRegex(ValueError, "recipe.steps"):
-            managed_state_cadence(no_steps, None)
 
     def test_epoch_save_flags_are_refused_by_the_shared_rule(self) -> None:
         with self.assertRaisesRegex(ValueError, "epoch.*training-state"):

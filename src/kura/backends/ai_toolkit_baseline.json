@@ -1644,7 +1644,7 @@
  "upstream": {
   "base_arch": "flex1",
   "commit": "31ddc709c35d3d3b820c636745397561f806b246",
-  "image": "nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a",
+  "image": "nomadoor/kura-ai-toolkit@sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a",
   "sources": {
    "extensions_built_in/audio_models/ui.tsx": "34bb12d8f876b9f9aca18a2e7f08e39f881ed07df27b9c300154d186250c0608",
    "extensions_built_in/diffusion_models/ui.tsx": "4c3da72ba6863b5c638a2823172a1e6ce770b3e1e5d2dc57bd52aff1837b43aa",

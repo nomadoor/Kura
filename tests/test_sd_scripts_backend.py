@@ -153,22 +153,22 @@ class SdScriptsBackendTests(unittest.TestCase):
         script = command_sd_scripts(run)["argv"][2]
         self.assertIn("--save_state", script)
         self.assertIn("--save_state_on_train_end", script)
-        # A Resume saves state at least once within the 50 steps it adds.
-        self.assertIn('"--save_every_n_steps","50"', script)
-        self.assertIn('"--save_last_n_steps_state","50"', script)
-        self.assertIn('"--resume","/workspace/artifacts/training-state/state-1/payload"', script)
+        # sd-scripts counts logical steps on Resume: with no cadence it saves state at the end.
+        self.assertNotIn("--save_every_n_steps", script)
+        self.assertIn("--save_last_n_steps_state 100", script)
+        self.assertIn("--resume /workspace/artifacts/training-state/state-1/payload", script)
         self.assertIn("--skip_until_initial_step", script)
-        self.assertIn('"--max_train_steps","150"', script)
+        self.assertIn("--max_train_steps 150", script)
         self.assertIn("state-runner.py", script)
         self.assertIn("training state verified", script)
         self.assertIn("/workspace/runs/derived-run/resolved/training-state-source.lock.json", script)
-        self.assertIn('"--output_name","derived-run"', script)
-        self.assertNotIn('"--output_name","source-run"', script)
+        self.assertIn("--output_name derived-run", script)
+        self.assertNotIn("--output_name source-run", script)
 
     def test_fresh_state_capture_keeps_the_trainer_default_cadence(self) -> None:
         script = command_sd_scripts(base_run("sd15", "lora"))["argv"][2]
         self.assertNotIn("--save_every_n_steps", script)
-        self.assertIn('"--save_last_n_steps_state","1"', script)
+        self.assertIn("--save_last_n_steps_state 1", script)
 
     def test_sd_scripts_resume_rejects_unsafe_initial_envelopes(self) -> None:
         for architecture, mode, change, message in (
@@ -396,9 +396,9 @@ class SdScriptsBackendTests(unittest.TestCase):
                     self.assertIn('"--mixed_precision", "bf16"', script)
                     self.assertIn('"--gradient_accumulation_steps", "1"', script)
                 elif selector[0] != "anima":
-                    self.assertIn('"--max_train_steps","1"', script)
-                    self.assertIn('"--mixed_precision","bf16"', script)
-                    self.assertIn('"--gradient_accumulation_steps","1"', script)
+                    self.assertIn("--max_train_steps 1", script)
+                    self.assertIn("--mixed_precision bf16", script)
+                    self.assertIn("--gradient_accumulation_steps 1", script)
                 else:
                     self.assertIn("--max_train_steps 1", script)
                     self.assertIn("--mixed_precision bf16", script)
@@ -656,7 +656,7 @@ class SdScriptsBackendTests(unittest.TestCase):
             }
         )
         command = command_sd_scripts(run)["argv"][2]
-        self.assertIn('"--blocks_to_swap","18"', command)
+        self.assertIn("--blocks_to_swap 18", command)
         self.assertIn("--cache_latents_to_disk", command)
         self.assertIn("--cache_text_encoder_outputs_to_disk", command)
         run["backend"]["config"]["cpu_offload_checkpointing"] = True
@@ -728,9 +728,9 @@ class SdScriptsBackendTests(unittest.TestCase):
     def test_flow_matching_defaults_are_explicit_and_visible_in_plan_data(self) -> None:
         flux = base_run("flux1")
         flux_command = command_sd_scripts(flux)["argv"][2]
-        self.assertIn('"--timestep_sampling","flux_shift"', flux_command)
-        self.assertIn('"--guidance_scale","1.0"', flux_command)
-        self.assertIn('"--model_prediction_type","raw"', flux_command)
+        self.assertIn("--timestep_sampling flux_shift", flux_command)
+        self.assertIn("--guidance_scale 1.0", flux_command)
+        self.assertIn("--model_prediction_type raw", flux_command)
         self.assertEqual(display_sd_scripts(flux)["flow_matching"]["timestep_sampling"], "flux_shift")
 
         lllite = base_run("anima", "controlnet_lllite")
@@ -789,8 +789,8 @@ class SdScriptsBackendTests(unittest.TestCase):
         run["backend"]["config"].update({"save_every_n_steps": 100, "save_last_n_steps": 1000})
         command = command_sd_scripts(run)["argv"][2]
         checkpoint = display_sd_scripts(run)["checkpoint"]
-        self.assertIn('"--save_every_n_steps","100"', command)
-        self.assertIn('"--save_last_n_steps","1000"', command)
+        self.assertIn("--save_every_n_steps 100", command)
+        self.assertIn("--save_last_n_steps 1000", command)
         self.assertEqual(checkpoint["retention_window_steps"], 1000)
         self.assertNotIn("keep_last", checkpoint)
 

@@ -4235,7 +4235,7 @@ class MusubiBackendTests(unittest.TestCase):
             },
         }
 
-    def test_musubi_state_capture_and_constant_scheduler_resume_use_process_local_steps(self) -> None:
+    def test_musubi_state_capture_and_constant_scheduler_resume_use_logical_steps(self) -> None:
         run = self._run()
         run["parent_run"] = "source"
         run["continuation"] = {
@@ -4248,11 +4248,13 @@ class MusubiBackendTests(unittest.TestCase):
         script = command_musubi_tuner(run)["argv"][2]
         self.assertIn("--save_state", script)
         self.assertIn("--save_state_on_train_end", script)
-        self.assertIn("--save_every_n_steps 10", script)
-        self.assertIn("--save_last_n_steps_state 10", script)
+        # The patched trainer continues the logical step: it is given the logical target and
+        # the recipe's cadence (no cap at the 10 steps the run adds).
+        self.assertIn("--save_every_n_steps 30", script)
+        self.assertIn("--save_last_n_steps_state 30", script)
         self.assertIn("--resume /workspace/artifacts/training-state/state-1/payload", script)
-        self.assertIn("--max_train_steps 10", script)
-        self.assertNotIn("--max_train_steps 40", script)
+        self.assertIn("--max_train_steps 40", script)
+        self.assertNotIn("--max_train_steps 10", script)
         self.assertIn("training state verified", script)
         self.assertIn("/workspace/runs/musubi-example/resolved/training-state-source.lock.json", script)
 

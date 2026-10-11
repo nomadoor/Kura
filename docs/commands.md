@@ -151,9 +151,18 @@ so later saves cannot change its input. A source run may be pruned without
 removing an artifact still referenced by a derived run.
 
 Backend completion sidecars are accepted only when their schema, backend name,
-logical step, and declared payload digests agree. For short Musubi and sd-scripts
-Resume runs, the derived checkpoint cadence is capped at the requested
-additional steps so the endpoint remains resumable. Only state directories named
+logical step, and declared payload digests agree. sd-scripts and Musubi Tuner
+continue the logical step on Resume (Kura's images patch upstream's counters:
+sd-scripts restarted at the step's position within its epoch, Musubi Tuner at
+zero), so their checkpoints and states are named, saved, and stopped at logical
+steps, and the endpoint state is saved at the end of training; a Resume keeps the
+configured cadence. Both trainers run through one Kura state runner that marks
+each complete state with the step it holds, so Musubi Tuner's final state is
+published too. Musubi Tuner restarts the epoch on Resume, so data order is not
+continued. AI-Toolkit saves when its completed optimizer updates are a multiple
+of the cadence and names and records each step save by them (Kura's image
+patches upstream, which used the 0-based iteration index, one below), and Kura
+checks the name against the saved optimizer state. Only state directories named
 for the run's own output name are published, on every executor. RunPod compile freezes the effective runtime
 image, and Resume launch does not accept `--image` overrides.
 
@@ -163,7 +172,7 @@ restoration contract:
 | Backend path | Initial Resume level | Restored | Known gap / restriction |
 | --- | --- | --- | --- |
 | AI-Toolkit standard LoRA | Partial | full-precision Resume weight, optimizer, step, epoch, and Kura RNG snapshot restored at the pre-iterator hook | scheduler is reconstructed; exact post-iterator RNG position and exact data position are not restored; AdamW/AdamW8bit, constant scheduler, and gradient accumulation 1 only |
-| Musubi built-ins | Best effort | Accelerate model, optimizer, scheduler, RNG and supported auxiliary state | application counters and exact data position are not restored; constant scheduler only |
+| Musubi built-ins | Best effort | Accelerate model, optimizer, scheduler, RNG and supported auxiliary state; the step counter continues from the scheduler | application epoch and exact data position are not restored (the epoch restarts); constant scheduler only |
 | sd-scripts SD 1.5 / SDXL / FLUX.1 LoRA | Best effort | Accelerate model, optimizer, scheduler, RNG and compatible scaler | Kura normalizes cumulative step metadata; application epoch and exact data position are not restored; constant scheduler and gradient accumulation 1 only |
 | sd-scripts Anima LoRA / LLLite | Unsupported | no state is saved | Kura refuses Resume rather than silently degrading to weight-only training |
 

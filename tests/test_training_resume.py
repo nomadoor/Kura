@@ -89,6 +89,15 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
             "scheduler_sha256": hashlib.sha256((candidate / "scheduler.bin").read_bytes()).hexdigest(),
         }
         name = "kura-state-info.json"
+    elif backend == "musubi-tuner":
+        document = {
+            "schema_version": 1,
+            "backend": backend,
+            "logical_step": logical_step,
+            "optimizer_sha256": hashlib.sha256((candidate / "optimizer.bin").read_bytes()).hexdigest(),
+            "scheduler_sha256": hashlib.sha256((candidate / "scheduler.bin").read_bytes()).hexdigest(),
+        }
+        name = "kura-state-info.json"
     else:
         raise AssertionError(backend)
     (candidate / name).write_text(json.dumps(document) + "\n", encoding="utf-8")
@@ -400,7 +409,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             root = Path(directory)
             save_root = root / "outputs" / "source"
             save_root.mkdir(parents=True)
-            for name in ("source_000000001.safetensors", "source.safetensors"):
+            for name in ("source_000000002.safetensors", "source.safetensors"):
                 (save_root / name).write_text("same-weight", encoding="utf-8")
             saves = 0
 
@@ -430,7 +439,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
 
             with patch.dict(sys.modules, {"torch": torch}):
                 namespace["publish_generation"](
-                    process, 1, {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
+                    process, 2, {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
                 )
                 namespace["publish_generation"](
                     process, None, {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
@@ -466,15 +475,18 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 self.assertFalse(namespace["saved_states_equivalent"](existing, staged))
 
     @posix_only(POSIX_PATHS)
-    def test_ai_toolkit_runner_uses_completed_optimizer_updates_instead_of_stale_process_step(self) -> None:
+    def test_ai_toolkit_runner_refuses_a_step_save_not_named_by_its_completed_updates(self) -> None:
+        # The pinned image's patch 0001 names a step save by the optimizer updates it holds;
+        # upstream named it by the 0-based iteration index, one below. A save named 1 that
+        # holds 2 updates means the patch is missing, and no state is published from it.
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("ai_toolkit_state.py"), namespace)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             save_root = root / "outputs" / "source"
             save_root.mkdir(parents=True)
-            weight = save_root / "source_000000001.safetensors"
-            weight.write_text("native-step-1", encoding="utf-8")
+            (save_root / "source_000000001.safetensors").write_text("native-step-1", encoding="utf-8")
+            (save_root / "source_000000002.safetensors").write_text("native-step-2", encoding="utf-8")
 
             torch = types.ModuleType("torch")
             torch.float32 = "torch.float32"
@@ -494,18 +506,86 @@ class TrainingStateArtifactTests(unittest.TestCase):
             namespace["safetensors_tensor_dtypes"] = lambda path: {"F32"}
             namespace["capture_rng_state"] = lambda torch: {"schema_version": 1}
             namespace["metadata_step"] = lambda path: int(Path(path).read_text(encoding="utf-8").rsplit("-", 1)[1])
+            spec = {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2}
 
             with patch.dict(sys.modules, {"torch": torch}):
-                namespace["publish_generation"](
-                    process,
-                    1,
-                    {"run_id": "source", "state_root": str(root / "outputs"), "keep_generations": 2},
-                )
+                with self.assertRaisesRegex(RuntimeError, "named for step 1 but holds 2 completed optimizer updates"):
+                    namespace["publish_generation"](process, 1, spec)
+                self.assertEqual(list((root / "outputs").glob("source-step*-state")), [])
+                namespace["publish_generation"](process, 2, spec)
 
             state = root / "outputs" / "source-step00000002-state"
             self.assertTrue(state.is_dir())
-            self.assertFalse((root / "outputs" / "source-step00000001-state").exists())
             self.assertEqual(json.loads((state / "state-info.json").read_text())["logical_step"], 2)
+
+    def test_ai_toolkit_runner_deletes_the_staged_resume_weight_once_it_is_loaded_and_verified(self) -> None:
+        # Kura stages the Resume weight as `<run>_<source step>` so AI-Toolkit loads it; once the
+        # trainer loaded it and Kura verified its weights and step, the copy is removed, so it is
+        # never collected as one of the run's checkpoints.
+        namespace: dict[str, object] = {"__name__": "container_test"}
+        exec(script_source("ai_toolkit_state.py"), namespace)
+
+        class Base:
+            def load_weights(self, path):
+                return path
+
+            def save(self, step=None):
+                return step
+
+        class Trainer(Base):
+            def hook_before_train_loop(self):
+                return "prepared"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root / "payload"
+            payload.mkdir()
+            (payload / "model.safetensors").write_bytes(b"resume-fp32")
+            (payload / "optimizer.pt").write_bytes(b"optimizer")
+            spec = {
+                "run_id": "derived",
+                "state_root": str(root / "outputs"),
+                "resume": {"payload": str(payload), "source_step": 50, "rng_required": False},
+            }
+            staged = namespace["materialize_resume_source"](spec)
+            self.assertEqual(staged, (root / "outputs" / "derived" / "derived_000000050.safetensors").resolve())
+            self.assertEqual(staged.read_bytes(), b"resume-fp32")
+
+            torch = types.ModuleType("torch")
+            torch.load = lambda path, **kwargs: {"state": {0: {"step": 50}}}
+            modules = {
+                "torch": torch,
+                "extensions_built_in": types.ModuleType("extensions_built_in"),
+                "extensions_built_in.sd_trainer": types.ModuleType("extensions_built_in.sd_trainer"),
+                "extensions_built_in.sd_trainer.SDTrainer": types.ModuleType("extensions_built_in.sd_trainer.SDTrainer"),
+                "jobs": types.ModuleType("jobs"),
+                "jobs.process": types.ModuleType("jobs.process"),
+                "jobs.process.BaseSDTrainProcess": types.ModuleType("jobs.process.BaseSDTrainProcess"),
+            }
+            modules["extensions_built_in.sd_trainer.SDTrainer"].SDTrainer = Trainer
+            modules["jobs.process.BaseSDTrainProcess"].BaseSDTrainProcess = Base
+            with patch.dict(sys.modules, modules):
+                namespace["install_hooks"](spec, staged)
+
+            def process(step: int) -> types.SimpleNamespace:
+                return types.SimpleNamespace(
+                    _kura_loaded_weight=staged,
+                    step_num=step,
+                    start_step=step,
+                    network=types.SimpleNamespace(did_change_weights=False),
+                    save_root=str(staged.parent),
+                    optimizer=types.SimpleNamespace(param_groups=[{"lr": 1.0e-4}], load_state_dict=lambda state: None),
+                )
+
+            with patch.dict(sys.modules, {"torch": torch}):
+                # A trainer that did not restore the step keeps the copy for diagnosis.
+                with self.assertRaisesRegex(RuntimeError, "did not restore the compiled Resume step"):
+                    Trainer.hook_before_train_loop(process(0))
+                self.assertTrue(staged.is_file())
+                self.assertEqual(Trainer.hook_before_train_loop(process(50)), "prepared")
+            self.assertFalse(staged.exists())
+            self.assertTrue((staged.parent / "optimizer.pt").is_file())
+            self.assertTrue((payload / "model.safetensors").is_file())
 
     def test_ai_toolkit_runner_hard_fails_optimizer_before_original_train_hook(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
@@ -701,9 +781,11 @@ class TrainingStateArtifactTests(unittest.TestCase):
     @posix_only(POSIX_PATHS)
     def test_sd_scripts_runner_normalizes_saved_application_step_from_persisted_training_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
-        exec(script_source("sd_scripts_state.py"), namespace)
+        exec(script_source("accelerate_state.py"), namespace)
 
         class Accelerator:
+            num_processes = 1
+
             def save_state(self, output_dir):
                 output = Path(output_dir)
                 output.mkdir(parents=True)
@@ -722,7 +804,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
         accelerate.Accelerator = Accelerator
 
         with patch.dict(sys.modules, {"torch": torch, "accelerate": accelerate}):
-            namespace["install_hooks"]()
+            namespace["install_hooks"]("sd-scripts")
             output = Path(tempfile.mkdtemp()) / "state"
             try:
                 self.assertEqual(Accelerator().save_state(output), "saved")
@@ -736,10 +818,12 @@ class TrainingStateArtifactTests(unittest.TestCase):
     @posix_only(POSIX_PATHS)
     def test_sd_scripts_save_wrapper_invalidates_a_stale_completion_marker_first(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
-        exec(script_source("sd_scripts_state.py"), namespace)
+        exec(script_source("accelerate_state.py"), namespace)
         observed: list[bool] = []
 
         class Accelerator:
+            num_processes = 1
+
             def save_state(self, output_dir):
                 output = Path(output_dir)
                 observed.append((output / "kura-state-info.json").exists())
@@ -751,7 +835,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             output = Path(directory) / "state"
             output.mkdir()
             (output / "kura-state-info.json").write_text('{"logical_step":2}\n', encoding="utf-8")
-            namespace["install_hooks"]()
+            namespace["install_hooks"]("sd-scripts")
             with self.assertRaisesRegex(RuntimeError, "interrupted native save"):
                 Accelerator().save_state(output)
             self.assertEqual(observed, [False])
@@ -900,10 +984,18 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 name: _safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode())
                 for name in names
             }
+            marker_source = root / "marker"
+            marker_source.mkdir()
+            for name in names:
+                (marker_source / name).write_bytes(contents[name])
+            _write_state_marker(marker_source, "musubi-tuner", 10)
+            names = (*names, "kura-state-info.json")
+            contents["kura-state-info.json"] = (marker_source / "kura-state-info.json").read_bytes()
             item = {
                 "path": "/workspace/runs/source/outputs/source-step00000010-state",
                 "name": "source-step00000010-state",
                 "step": 10,
+                "marked_step": 10,
                 "files": [{"path": name, "size": len(contents[name]), "mtime_ns": index} for index, name in enumerate(names, 1)],
             }
 
@@ -951,6 +1043,11 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 },
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            # Compiled by an older Kura: no state runner, and a frozen process-local lock.
+            (run_dir / "resolved" / "training-state-source.lock.json").write_text(json.dumps({
+                "source_step": 2, "target_step": 3, "additional_steps": 1,
+                "native_progress": "process_local", "native_target": "process_local",
+            }), encoding="utf-8")
             candidate = root / "candidate"
             candidate.mkdir()
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
@@ -965,6 +1062,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "path": "/workspace/runs/derived/outputs/derived-step00000001-state",
                 "name": "derived-step00000001-state",
                 "step": 1,
+                "marked_step": None,
                 "files": [{"path": "model.safetensors", "size": 1, "mtime_ns": 1}],
             }
 
@@ -1589,16 +1687,23 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "recovery": {"training_state": {"enabled": True, "keep_generations": 2}},
             }
             (run_dir / "resolved" / "manifest.lock.yaml").write_text(yaml.safe_dump(run), encoding="utf-8")
+            (run_dir / "resolved" / "musubi").mkdir()
+            (run_dir / "resolved" / "musubi" / "state-runner.py").write_text("runner\n", encoding="utf-8")
             state = run_dir / "outputs" / "source-step00000010-state"
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 (state / name).write_bytes(_safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode()))
+            # The native save is complete only once Kura's state runner wrote its step marker.
+            self.assertEqual(publish_completed_training_states(root, run_dir), [])
+            _write_state_marker(state, "musubi-tuner", 10)
             published = publish_completed_training_states(root, run_dir)
             self.assertEqual([item["observed_step"] for item in published], [10])
             self.assertEqual(published[0]["restoration_contract"]["level"], "best_effort_resume")
             (run_dir / "outputs" / "source-step00000020-state").mkdir()
             self.assertEqual([item["observed_step"] for item in publish_completed_training_states(root, run_dir)], [10])
 
-    def test_process_local_resume_state_is_published_at_its_logical_step(self) -> None:
+    def test_an_old_process_local_musubi_resume_state_is_published_at_its_logical_step(self) -> None:
+        # Compiled by an older Kura: no state runner, so no marker, and a frozen process-local
+        # lock; its state is placed by its name through the lock, as before.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run_dir = root / "runs" / "derived"
@@ -1635,6 +1740,10 @@ class TrainingStateArtifactTests(unittest.TestCase):
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 payload = _safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode())
                 (state / name).write_bytes(payload)
+            (run_dir / "resolved" / "training-state-source.lock.json").write_text(json.dumps({
+                "source_step": 2, "target_step": 3, "additional_steps": 1,
+                "native_progress": "process_local", "native_target": "process_local",
+            }), encoding="utf-8")
 
             published = publish_completed_training_states(root, run_dir)
 
@@ -2317,6 +2426,7 @@ class ResumeRunTests(unittest.TestCase):
             state.mkdir(parents=True)
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 (state / name).write_bytes(_safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode()))
+            _write_state_marker(state, "musubi-tuner", 10)
             run = {
                 "id": "source",
                 "type": "train",

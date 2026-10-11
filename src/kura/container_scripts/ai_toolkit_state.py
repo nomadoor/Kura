@@ -334,6 +334,10 @@ def publish_generation(process, step, spec):
         rng_state = capture_rng_state(torch)
     except Exception as exc:
         fail(f"cannot inspect paired optimizer/RNG state: {exc}")
+    # The image's patch names a step save by the optimizer updates it holds (upstream named it
+    # one below, by the 0-based iteration index); a mismatch means that patch is missing.
+    if step is not None and int(step) != logical_step:
+        fail(f"step save {weight.name} is named for step {int(step)} but holds {logical_step} completed optimizer updates")
     state_root = pathlib.Path(spec["state_root"])
     state_root.mkdir(parents=True, exist_ok=True)
     destination = state_root / f"{spec['run_id']}-step{logical_step:08d}-state"
@@ -464,6 +468,9 @@ def install_hooks(spec, expected_weight):
                 group["lr"] = lr
                 group["initial_lr"] = lr if initial_lr is None else initial_lr
             print(f"[kura] AI Toolkit optimizer Resume verified at step {source_step}", flush=True)
+            # The trainer loaded the staged copy of the Resume weight and Kura verified it; remove
+            # it so it is not collected as one of this run's checkpoints.
+            expected_weight.unlink(missing_ok=True)
         result = original_before_loop(process)
         if isinstance(resume, dict):
             rng_path = pathlib.Path(resume["payload"]) / "rng.pt"
