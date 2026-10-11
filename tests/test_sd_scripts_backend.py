@@ -784,13 +784,14 @@ class SdScriptsBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not contain secrets"):
             command_sd_scripts(secret)
 
-    def test_disk_cache_requires_a_declared_estimate_or_reviewed_exception(self) -> None:
+    def test_an_undeclared_disk_cache_is_reported_unknown_and_never_refused(self) -> None:
+        # Musubi Tuner and AI-Toolkit caches are not declared either; no backend refuses a run for it.
         run = base_run()
         run["backend"]["config"]["cache_latents_to_disk"] = True
         self.assertEqual(_sd_scripts_disk_cache_estimate(run)["status"], "unknown")
-        self.assertEqual(_sd_scripts_cache_preflight_report(run)[0]["severity"], "error")
-        run["safety"] = {"allow_unknown_disk_cache": True}
-        self.assertEqual(_sd_scripts_cache_preflight_report(run)[0]["severity"], "info")
+        report = _sd_scripts_cache_preflight_report(run)
+        self.assertEqual(report[0]["severity"], "info")
+        self.assertIn("not counted in the disk estimate", report[0]["fact"])
         run["backend"]["config"]["disk_cache_estimate_gb"] = 1.5
         estimate = _sd_scripts_disk_cache_estimate(run)
         self.assertEqual(estimate["status"], "declared-estimate")

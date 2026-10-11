@@ -261,20 +261,6 @@ def _disk_warnings(run: dict[str, Any], important_config: dict[str, Any]) -> lis
     return warnings
 
 
-def _checkpoint_count_safety(run: dict[str, Any], steps: int | None) -> None:
-    """Refuse a run whose `steps` would save many unpruned checkpoints, unless it allows that."""
-    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
-    if safety.get("allow_many_checkpoints") is True:
-        return
-    expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
-    if expected is not None and expected >= 10:
-        raise ValueError(
-            f"checkpoint policy may create about {expected} checkpoints without pruning{_trained_steps_basis(run, steps)}; "
-            f"set the backend's checkpoint retention (see `kura run capabilities {_run_adapter(run).name}`), reduce save frequency, "
-            "or set safety.allow_many_checkpoints: true if intentional"
-        )
-
-
 def _configured_gib(value: Any, *, default: int) -> float:
     """A GiB setting as written (a positive number); omitted is the default. It is never truncated.
 
@@ -560,19 +546,16 @@ def _disk_cache_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
     if not estimate["enabled"]:
         return []
     check = f"{_run_adapter(run).name}-disk-cache"
-    safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     if estimate["status"] == "unknown":
-        severity = "info" if safety.get("allow_unknown_disk_cache") is True else "error"
-        return [_preflight_record(check, severity, f"disk cache size is unknown; {estimate.get('detail')}", "run.yaml")]
+        # Information only, as for the backends that declare no cache estimate at all.
+        return [_preflight_record(check, "info", f"disk cache size is unknown and not counted in the disk estimate; {estimate.get('detail')}", "run.yaml")]
     return [_preflight_record(check, "info", f"declared run-scoped cache estimate is {_preflight_bytes(estimate['bytes'])}", "run.yaml")]
 
 
 def _checkpoint_preflight_report(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """How many checkpoints the run leaves, as information: a count is the user's decision, and
+    the launch disk gate (`_estimate_checkpoint_write_bytes`) budgets every one of them."""
     steps = trained_steps(run)
-    try:
-        _checkpoint_count_safety(run, steps)
-    except ValueError as exc:
-        return [_preflight_record("checkpoint-safety", "error", str(exc), "run.yaml")]
     expected = expected_checkpoints(run, _adapter_display(run).get("checkpoint") or {}, steps)
     if expected is not None:
         return [_preflight_record("checkpoint-safety", "info", f"checkpoint cadence implies about {expected} checkpoint(s){_trained_steps_basis(run, steps)}", "run.yaml")]
@@ -776,8 +759,7 @@ def enforce_preflight_errors(records: list[dict[str, Any]]) -> None:
 def _estimate_checkpoint_write_bytes(run: dict[str, Any]) -> dict[str, Any]:
     """The checkpoint bytes a training run writes for the launch disk preflights, counted at the
     peak the trainer's retention leaves on disk while it trains (`peak_checkpoints`), at
-    `safety.checkpoint_estimate_gb` (default 1) GiB each. `safety.allow_many_checkpoints` waives
-    only the checkpoint-count guard, never this estimate. A run without a known backend writes
+    `safety.checkpoint_estimate_gb` (default 1) GiB each. A run without a known backend writes
     no checkpoint estimate, as `_disk_cache_estimate` writes no cache estimate for it."""
     safety = run.get("safety") if isinstance(run.get("safety"), dict) else {}
     adapter = _run_adapter(run)

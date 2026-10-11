@@ -51,15 +51,11 @@ def _monitor_expected(run: dict[str, Any], save_every: int | dict[str, Any]) -> 
 
 
 def _estimates(run: dict[str, Any], save_every: int) -> dict[str, Any]:
-    """The run through all five places that count its checkpoints."""
-    allowed = {**run, "safety": {"allow_many_checkpoints": True}}
-    refusals = [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"]
-    refused = refusals[0] if refusals else None
+    """The run through all four places that count its checkpoints."""
     return {
         "disk_warnings": plan._disk_warnings(run, {"save_every_n_steps": save_every}),
-        "safety_refusal": refused,
-        "preflight": [record["fact"] for record in plan._checkpoint_preflight_report(allowed)],
-        "write_count": plan._estimate_checkpoint_write_bytes(allowed)["count"],
+        "preflight": [record["fact"] for record in plan._checkpoint_preflight_report(run)],
+        "write_count": plan._estimate_checkpoint_write_bytes(run)["count"],
         "monitor_expected": _monitor_expected(run, save_every),
     }
 
@@ -83,17 +79,15 @@ class ResumeEstimateTests(unittest.TestCase):
         # 1000-step recipe resumed +50 with a cadence of 10: 5 checkpoints, not 100.
         estimates = _estimates(_resume(save_every=10, additional=50), 10)
         self.assertEqual(estimates["disk_warnings"], [])
-        self.assertIsNone(estimates["safety_refusal"])
         self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 5 checkpoint(s) over the 50 steps this run trains"])
         self.assertEqual(estimates["write_count"], 6)
         self.assertEqual(estimates["monitor_expected"], 5)
 
-    def test_a_resume_longer_than_its_recipe_trips_the_checkpoint_guard(self) -> None:
+    def test_a_resume_longer_than_its_recipe_warns_about_its_checkpoints(self) -> None:
         # 1000-step recipe resumed +5000 with a cadence of 500: 10 checkpoints, not 2.
         estimates = _estimates(_resume(save_every=500, additional=5000), 500)
         self.assertEqual(len(estimates["disk_warnings"]), 1)
         self.assertIn("about 10 checkpoints over the 5000 steps this run trains;", estimates["disk_warnings"][0])
-        self.assertIn("about 10 checkpoints without pruning over the 5000 steps this run trains", estimates["safety_refusal"] or "")
         self.assertEqual(estimates["preflight"], ["checkpoint cadence implies about 10 checkpoint(s) over the 5000 steps this run trains"])
         self.assertEqual(estimates["write_count"], 11)
         self.assertEqual(estimates["monitor_expected"], 10)
@@ -106,16 +100,12 @@ class ResumeEstimateTests(unittest.TestCase):
     def test_the_plan_fails_on_an_invalid_continuation_as_every_estimate_does(self) -> None:
         broken = _resume(save_every=10, additional=50)
         broken["continuation"]["target_step"] = 1
-        for allowed in (False, True):
-            run = {**broken, "safety": {"allow_many_checkpoints": allowed}}
-            with self.subTest(allow_many_checkpoints=allowed), self.assertRaisesRegex(ValueError, "continuation.target_step does not match"):
-                plan._checkpoint_preflight_report(run)
+        with self.assertRaisesRegex(ValueError, "continuation.target_step does not match"):
+            plan._checkpoint_preflight_report(broken)
 
     def test_every_estimate_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
-        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         # The disk estimate counts saves over the trainer's native span instead (PeakCheckpointsTests).
-        del allowed
         cases = {
             "_disk_warnings": (plan, lambda: plan._disk_warnings(run, {"save_every_n_steps": 10})),
             "_checkpoint_expected": (monitor, lambda: _monitor_expected(run, 10)),
@@ -124,7 +114,7 @@ class ResumeEstimateTests(unittest.TestCase):
             with self.subTest(place=name), patch.object(module, "trained_steps", wraps=trained_steps) as owner:
                 call()
                 owner.assert_called()
-        # The preflight report reads the owner once, for its guard and its own line.
+        # The preflight report reads the owner once, for its line.
         with patch.object(plan, "trained_steps", wraps=trained_steps) as owner:
             plan._checkpoint_preflight_report(run)
             owner.assert_called_once()
@@ -134,7 +124,7 @@ class LaunchDiskPreflightTests(unittest.TestCase):
     def test_local_and_runpod_disk_preflights_count_the_resume_added_steps(self) -> None:
         # 1000-step source resumed +50 with a cadence of 10: 5 step saves and the final file of 1 GiB on both executors.
         run = _resume(save_every=10, additional=50)
-        run["safety"] = {"allow_many_checkpoints": True, "checkpoint_estimate_gb": 1, "allow_storage_risk": True}
+        run["safety"] = {"checkpoint_estimate_gb": 1, "allow_storage_risk": True}
         expected = {"bytes": 6 * 1024**3, "count": 6, "per_checkpoint_gib": 1}
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(plan, "_runpod_input_transfer_estimate", return_value=None), \
@@ -203,11 +193,9 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
 
     def test_every_count_reads_the_one_owner(self) -> None:
         run = _resume(save_every=10, additional=50)
-        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         cases = {
             "_disk_warnings": (plan, lambda: plan._disk_warnings(run, {"save_every_n_steps": 10})),
-            "_checkpoint_count_safety": (plan, lambda: plan._checkpoint_count_safety(run, trained_steps(run))),
-            "_checkpoint_preflight_report": (plan, lambda: plan._checkpoint_preflight_report(allowed)),
+            "_checkpoint_preflight_report": (plan, lambda: plan._checkpoint_preflight_report(run)),
             "_checkpoint_expected": (monitor, lambda: _monitor_expected(run, 10)),
         }
         # The disk estimate counts the peak instead (PeakCheckpointsTests).
@@ -224,32 +212,28 @@ class ExpectedCheckpointsOwnerTests(unittest.TestCase):
         run["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 0})
         checkpoint = plan._adapter_display(run)["checkpoint"]
         self.assertEqual(checkpoint, {"save_every_n_steps": 50, "keep_last": 0, "unset_keep_last": "trainer_default"})
-        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         self.assertIn("about 20 checkpoints", plan._disk_warnings(run, checkpoint)[0])
-        refusals = [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"]
-        self.assertIn("about 20 checkpoints without pruning", refusals[0])
+        self.assertEqual([record["fact"] for record in plan._checkpoint_preflight_report(run)], ["checkpoint cadence implies about 20 checkpoint(s)"])
         # The disk peak adds the final file to the 20 step saves.
-        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 21)
+        self.assertEqual(plan._estimate_checkpoint_write_bytes(run)["count"], 21)
         self.assertEqual(_monitor_expected(run, checkpoint), 20)
-        # A positive keep-last leaves fewer: no count, no warning, no refusal, in both; the disk
+        # A positive keep-last leaves fewer: no count and no warning, in both; the disk
         # estimate counts the peak (the kept saves plus the one written before the cleanup).
         run["backend"]["config"]["save_last_n_steps"] = 3
         checkpoint = plan._adapter_display(run)["checkpoint"]
         self.assertEqual(plan._disk_warnings(run, checkpoint), [])
-        self.assertEqual([record for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"], [])
-        self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 4)
+        self.assertEqual(plan._checkpoint_preflight_report(run), [])
+        self.assertEqual(plan._estimate_checkpoint_write_bytes(run)["count"], 4)
         self.assertIsNone(_monitor_expected(run, checkpoint))
 
 
 def _counts(run: dict[str, Any]) -> dict[str, Any]:
-    """A fresh run through the real backend display and all five places that count its checkpoints."""
+    """A fresh run through the real backend display and all four places that count its checkpoints."""
     checkpoint = plan._adapter_display(run)["checkpoint"]
-    allowed = {**run, "safety": {"allow_many_checkpoints": True}}
     return {
         "disk_warnings": plan._disk_warnings(run, checkpoint),
-        "refusals": [record["fact"] for record in plan._checkpoint_preflight_report(run) if record["severity"] == "error"],
-        "preflight": [record["fact"] for record in plan._checkpoint_preflight_report(allowed)],
-        "write_count": plan._estimate_checkpoint_write_bytes(allowed)["count"],
+        "preflight": [record["fact"] for record in plan._checkpoint_preflight_report(run)],
+        "write_count": plan._estimate_checkpoint_write_bytes(run)["count"],
         "monitor_expected": _monitor_expected(run, checkpoint),
     }
 
@@ -258,14 +242,13 @@ class CheckpointRetentionTests(unittest.TestCase):
     """Each backend's display says whether its trainer prunes step checkpoints, and every count agrees."""
 
     def _assert_pruned(self, run: dict[str, Any], peak: int) -> None:
-        """No kept count, so no warning, refusal, or monitor expectation; the disk estimate counts the peak."""
-        self.assertEqual(_counts(run), {"disk_warnings": [], "refusals": [], "preflight": [], "write_count": peak, "monitor_expected": None})
+        """No kept count, so no warning or monitor expectation; the disk estimate counts the peak."""
+        self.assertEqual(_counts(run), {"disk_warnings": [], "preflight": [], "write_count": peak, "monitor_expected": None})
 
     def _assert_counted(self, run: dict[str, Any], expected: int, peak: int) -> None:
         """The kept count drives every count but the disk estimate, which adds the final file."""
         counts = _counts(run)
         self.assertIn(f"about {expected} checkpoints", counts["disk_warnings"][0])
-        self.assertIn(f"about {expected} checkpoints without pruning", counts["refusals"][0])
         self.assertEqual(counts["preflight"], [f"checkpoint cadence implies about {expected} checkpoint(s)"])
         self.assertEqual(counts["write_count"], peak)
         self.assertEqual(counts["monitor_expected"], expected)
@@ -308,13 +291,12 @@ class CheckpointRetentionTests(unittest.TestCase):
             with self.subTest(backend=run["backend"]["name"]):
                 self._assert_pruned(run, peak)
 
-    def test_the_guard_points_to_each_backends_own_retention(self) -> None:
+    def test_the_warning_points_to_each_backends_own_retention(self) -> None:
         run = sd_scripts_run()
         run["backend"]["config"]["save_every_n_steps"] = 50
-        counts = _counts(run)
-        for text in (counts["refusals"][0], counts["disk_warnings"][0]):
-            self.assertNotIn("prune_checkpoints_before_step", text)
-            self.assertIn("kura run capabilities sd-scripts", text)
+        text = _counts(run)["disk_warnings"][0]
+        self.assertNotIn("prune_checkpoints_before_step", text)
+        self.assertIn("kura run capabilities sd-scripts", text)
 
 
 class PeakCheckpointsTests(unittest.TestCase):
@@ -419,31 +401,27 @@ class PeakCheckpointsTests(unittest.TestCase):
     def test_the_disk_estimate_reads_the_peak_and_the_counts_do_not(self) -> None:
         run = sd_scripts_run()
         run["backend"]["config"].update({"save_every_n_steps": 50, "save_last_n_steps": 100})
-        allowed = {**run, "safety": {"allow_many_checkpoints": True}}
         checkpoint = plan._adapter_display(run)["checkpoint"]
         with patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as owner:
-            self.assertEqual(plan._estimate_checkpoint_write_bytes(allowed)["count"], 4)
-            owner.assert_called_once_with(allowed, checkpoint)
+            self.assertEqual(plan._estimate_checkpoint_write_bytes(run)["count"], 4)
+            owner.assert_called_once_with(run, checkpoint)
         with patch.object(plan, "peak_checkpoints", wraps=training_artifacts.peak_checkpoints) as owner:
             self.assertEqual(plan._disk_warnings(run, checkpoint), [])
-            plan._checkpoint_count_safety(run, 1000)
             plan._checkpoint_preflight_report(run)
             self.assertIsNone(_monitor_expected(run, checkpoint))
             owner.assert_not_called()
 
-    def test_the_disk_estimate_does_not_wait_for_allow_many_checkpoints(self) -> None:
-        # A plain run with few checkpoints and a Musubi run whose prune passes the guard both
-        # write their peak; allowing many checkpoints changes the guard, not the estimate.
+    def test_the_disk_estimate_counts_the_peak_whatever_the_retention(self) -> None:
+        # A plain run with few checkpoints and a Musubi run that prunes after training both
+        # write their peak.
         plain = musubi_run()
         plain["backend"]["config"]["save_every_n_steps"] = 500
         pruned = musubi_run()
         pruned["backend"]["config"].update({"save_every_n_steps": 50, "prune_checkpoints_before_step": 1000})
         for name, run, peak in (("plain", plain, 3), ("musubi prune", pruned, 21)):
             with self.subTest(run=name):
-                plan._checkpoint_count_safety(run, trained_steps(run))
-                for safety in ({}, {"allow_many_checkpoints": True}):
-                    estimate = plan._estimate_checkpoint_write_bytes({**run, "safety": safety})
-                    self.assertEqual(estimate, {"bytes": peak * 1024**3, "count": peak, "per_checkpoint_gib": 1})
+                estimate = plan._estimate_checkpoint_write_bytes(run)
+                self.assertEqual(estimate, {"bytes": peak * 1024**3, "count": peak, "per_checkpoint_gib": 1})
                 sized = plan._estimate_checkpoint_write_bytes({**run, "safety": {"checkpoint_estimate_gb": 3}})
                 self.assertEqual(sized, {"bytes": 3 * peak * 1024**3, "count": peak, "per_checkpoint_gib": 3})
 
@@ -564,7 +542,6 @@ class FreshRunPlanTests(unittest.TestCase):
                 "datasets": [{"id": "tiny"}],
                 "recipe": {"steps": 1000, "seed": 1},
                 "compute": {"executor": "runpod"},
-                "safety": {"allow_many_checkpoints": True},
                 "sampling": {"cadence_steps": 10},
                 "backend": {"name": "musubi-tuner", "config": with_required("musubi-tuner", {
                     "architecture": "flux2", "model_version": "klein-base-4b", "save_every_n_steps": 50,

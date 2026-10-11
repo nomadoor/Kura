@@ -127,10 +127,10 @@ were selected.
 sd-scripts downloads and explicit paths are frozen in
 `resolved/sd-scripts/model-bundle.lock.yaml`. If
 `cache_latents_to_disk` or `cache_text_encoder_outputs_to_disk` is enabled,
-set `backend.config.disk_cache_estimate_gb` to a measured positive estimate.
-An unknown estimate blocks launch unless the reviewed run explicitly records
-`safety.allow_unknown_disk_cache: true`. Cache files stay below the individual
-run; the shared dataset remains unchanged.
+`backend.config.disk_cache_estimate_gb` adds a positive estimate of the cache
+to the disk check. Without it the plan shows the cache size as unknown and does
+not count it. Cache files stay below the individual run; the shared dataset
+remains unchanged.
 
 All registered training adapters reject unknown top-level `backend.config`
 keys. Use `uv run kura run capabilities <backend>` (or `--json`) to inspect the
