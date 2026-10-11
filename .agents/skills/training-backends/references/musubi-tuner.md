@@ -36,8 +36,9 @@ Resume and training state:
   complete save it writes `kura-state-info.json` with the step the scheduler
   counted, checked against the optimizer; the training-state contract requires
   that marker and places every state, including the final `<name>-state`, by
-  it. Artifacts published before the marker carry none and still resume:
-  Resume reads only an artifact's own inventory.
+  it. Artifacts published before the marker carry none and are read by their
+  own inventory, but a Resume from one is refused once its adapter or image
+  identity differs from the current ones.
 - Upstream `trainer_base.py` set `global_step = 0` after `--resume`. The image
   applies `docker/musubi-tuner/patches/0001-resume-continues-the-logical-step.patch`,
   which starts `global_step` and the progress bar at the restored scheduler's

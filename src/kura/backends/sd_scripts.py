@@ -52,8 +52,8 @@ def training_state_contract_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
             "capability": "best_effort_resume",
             "restoration_contract": {
                 "level": "best_effort_resume",
-                "restored": ["model", "optimizer", "scheduler", "rng", "scaler_when_present"],
-                "not_restored": ["application_global_step", "application_epoch_counter", "exact_dataloader_position"],
+                "restored": ["model", "optimizer", "scheduler", "rng", "scaler_when_present", "application_global_step"],
+                "not_restored": ["application_epoch_counter", "exact_dataloader_position"],
                 "limitations": ["Kura normalizes sd-scripts application step metadata from the persisted scheduler after each complete save"],
                 "scheduler_behavior": "restored; initial Resume execution limited to constant scheduler",
             },
