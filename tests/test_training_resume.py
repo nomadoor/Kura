@@ -784,6 +784,8 @@ class TrainingStateArtifactTests(unittest.TestCase):
         exec(script_source("accelerate_state.py"), namespace)
 
         class Accelerator:
+            num_processes = 1
+
             def save_state(self, output_dir):
                 output = Path(output_dir)
                 output.mkdir(parents=True)
@@ -820,6 +822,8 @@ class TrainingStateArtifactTests(unittest.TestCase):
         observed: list[bool] = []
 
         class Accelerator:
+            num_processes = 1
+
             def save_state(self, output_dir):
                 output = Path(output_dir)
                 observed.append((output / "kura-state-info.json").exists())
