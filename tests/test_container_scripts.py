@@ -73,14 +73,18 @@ class ContainerScriptTests(unittest.TestCase):
         self.assertIn(f"git apply /tmp/kura-musubi-tuner-patches/{name}", dockerfile)
         self.assertIn('io.kura.patch.resume-step="logical-global-step-v1"', dockerfile)
 
-    def test_ai_toolkit_image_names_step_saves_by_completed_updates(self) -> None:
+    def test_ai_toolkit_image_decides_names_and_records_step_saves_by_completed_updates(self) -> None:
         # The state runner refuses a step save whose name is not the updates it holds; the
         # image build applies the patch that names it so, and fails if it does not apply.
         root = Path(__file__).resolve().parents[1]
-        name = "0001-name-step-saves-by-completed-updates.patch"
+        name = "0001-save-by-completed-updates.patch"
         patch_text = (root / "docker/ai-toolkit/patches" / name).read_text(encoding="utf-8")
         self.assertIn("-                        self.save(self.step_num)\n", patch_text)
         self.assertIn("+                        self.save(self.step_num + 1)\n", patch_text)
+        # The save is decided on completed updates, kept on the first iteration, and records them.
+        self.assertIn("+                is_save_step = self.save_config.save_every and (self.step_num + 1) % self.save_config.save_every == 0\n", patch_text)
+        self.assertIn("+                if not is_first_step or is_save_step:\n", patch_text)
+        self.assertIn('+            self.meta["training_info"]["step"] = step\n', patch_text)
         dockerfile = (root / "docker/ai-toolkit/Dockerfile").read_text(encoding="utf-8")
         self.assertIn(f"git apply --check /tmp/kura-ai-toolkit-patches/{name}", dockerfile)
         self.assertIn(f"git apply /tmp/kura-ai-toolkit-patches/{name}", dockerfile)

@@ -1,0 +1,68 @@
+Kura: decide, name, and record a step save by the optimizer updates it holds.
+
+Upstream jobs/process/BaseSDTrainProcess.py (ostris/aitoolkit:0.13.18, commit
+31ddc709c35d3d3b820c636745397561f806b246) runs the loop over the 0-based iteration index
+`step` and sets `self.step_num = step` (lines 2528-2538). It decides a save on that index
+(`is_save_step = ... self.step_num % save_every == 0`, ~2549), skips it on the first
+iteration (`if self.step_num != self.start_step`, ~2701), and saves after the iteration's
+optimizer update with `self.save(self.step_num)` (~2711). `save` names the file
+`<name>_<step:09d>.safetensors` (~517-521) and records `training_info.step = self.step_num`
+(~387-415), so with save_every 100 `_100` held 101 updates and recorded step 100, while the
+final unstepped save after the loop (~2800, ~2814) holds and records `self.step_num`.
+This decides a save when the completed updates (`self.step_num + 1`) are a multiple of
+save_every, names the save and its log line by them, and records them as training_info.step;
+a save on the first iteration is kept (it holds an update the loaded state does not), while
+sampling and logging still skip it. Upstream's own resume from a step save (which starts the
+loop at training_info.step) then continues after the update the save holds.
+Kura's AI-Toolkit state runner checks that a step save's name equals the completed optimizer
+updates it captures, and Kura's plan counts saves on multiples of save_every; both depend on
+this patch.
+
+diff --git a/jobs/process/BaseSDTrainProcess.py b/jobs/process/BaseSDTrainProcess.py
+--- a/jobs/process/BaseSDTrainProcess.py
++++ b/jobs/process/BaseSDTrainProcess.py
+@@ -521,6 +521,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
+             step_num = f"_{str(step).zfill(9)}"
+ 
+         self.update_training_metadata()
++        if step is not None:
++            # Kura: a step save holds `step` completed updates; record that, not the iteration index.
++            self.meta["training_info"]["step"] = step
+         filename = f'{self.job.name}{step_num}.safetensors'
+         file_path = os.path.join(self.save_root, filename)
+ 
+@@ -2546,7 +2549,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
+                 # if is even step and we have a reg dataset, use that
+                 # todo improve this logic to send one of each through if we can buckets and batch size might be an issue
+                 is_reg_step = False
+-                is_save_step = self.save_config.save_every and self.step_num % self.save_config.save_every == 0
++                # Kura: save when the completed updates (this iteration's included) are a multiple.
++                is_save_step = self.save_config.save_every and (self.step_num + 1) % self.save_config.save_every == 0
+                 is_sample_step = (
+                     self.sample_config.sample_every
+                     and self.step_num >= self.sample_config.sample_start_step
+@@ -2698,7 +2702,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
+                         batch.cleanup()
+ 
+                 # don't do on first step
+-                if self.step_num != self.start_step:
++                # Kura: except a save, decided by completed updates, so it never repeats the loaded state.
++                is_first_step = self.step_num == self.start_step
++                if is_first_step:
++                    is_sample_step = False
++                if not is_first_step or is_save_step:
+                     if is_sample_step or is_save_step:
+                         self.accelerator.wait_for_everyone()
+                         
+@@ -2707,8 +2715,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
+                         # print above the progress bar
+                         if self.progress_bar is not None:
+                             self.progress_bar.pause()
+-                        print_acc(f"\nSaving at step {self.step_num}")
+-                        self.save(self.step_num)
++                        # Kura: name the save by the optimizer updates it holds; this iteration's update is done.
++                        print_acc(f"\nSaving at step {self.step_num + 1}")
++                        self.save(self.step_num + 1)
+                         self.ensure_params_requires_grad()
+                         # clear any grads
+                         optimizer.zero_grad()

@@ -1180,10 +1180,6 @@ def display_ai_toolkit(run: dict[str, Any]) -> dict[str, Any]:
             # 0 keeps every save; none set leaves the trainer's own max_step_saves_to_keep, which prunes.
             "keep_last": native["save_last_n_steps"] if native.get("save_last_n_steps") is not None else _nested(config, "save", "max_step_saves_to_keep"),
             "unset_keep_last": "trainer_default",
-            # The trainer decides a save on its 0-based iteration index, below the last step,
-            # and writes the last step as its final file; Kura's image names each step save by
-            # the updates it holds, one above that index (docker/ai-toolkit/patches/0001).
-            "last_step_save": "final_only",
         },
     }
 
