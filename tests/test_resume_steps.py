@@ -539,6 +539,15 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "is not a whole number of updates on 2 processes"):
             self._save("musubi-tuner", {"last_epoch": 2301, "_step_count": 2302}, 1150, processes=2)
 
+    def test_the_runner_reads_the_step_under_gradient_accumulation(self) -> None:
+        # Accelerate adds one to the scheduler's _step_count on every accumulating micro-batch
+        # but advances last_epoch only on updates, so at gradient_accumulation_steps 2 seven
+        # updates are last_epoch 7 and _step_count 15; the step is read from last_epoch.
+        for backend in ("musubi-tuner", "sd-scripts"):
+            with self.subTest(backend=backend):
+                _, info = self._save(backend, {"last_epoch": 7, "_step_count": 15}, 7)
+                self.assertEqual(info["logical_step"], 7)
+
     def test_the_runner_refuses_a_save_whose_optimizer_and_scheduler_disagree(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "optimizer step 1149 does not match scheduler step 1150"):
             self._save("musubi-tuner", {"last_epoch": 1150, "_step_count": 1151}, 1149)

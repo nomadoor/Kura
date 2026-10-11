@@ -31,8 +31,9 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     del run
     return {
         "native_format": "accelerate-state-directory",
-        # Kura's state runner writes kura-state-info.json after each complete save. Resume reads
-        # only an artifact's own inventory, so one published before the marker stays resumable.
+        # Kura's state runner writes kura-state-info.json after each complete save. An artifact
+        # published before the marker is still read by its own inventory, though a Resume from it
+        # is refused when its adapter or image identity no longer matches the current ones.
         "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl", "kura-state-info.json"),
         # The pinned image's patch 0001 continues the logical step on Resume, so the trainer's
         # step counter, progress, and target are logical; a lock compiled before it froze
@@ -52,8 +53,8 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
         "capability": "best_effort_resume",
         "restoration_contract": {
             "level": "best_effort_resume",
-            "restored": ["model", "optimizer", "scheduler", "rng", "scaler_when_present", "supported_sampler_state"],
-            "not_restored": ["application_global_step", "epoch", "exact_dataloader_position"],
+            "restored": ["model", "optimizer", "scheduler", "rng", "scaler_when_present", "supported_sampler_state", "application_global_step"],
+            "not_restored": ["epoch", "exact_dataloader_position"],
             "scheduler_behavior": "restored; Resume execution limited to constant scheduler",
         },
     }

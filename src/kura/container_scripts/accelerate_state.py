@@ -61,7 +61,8 @@ def normalize_saved_state(output_dir, backend, num_processes):
 
     Accelerate steps a prepared scheduler once per process for each optimizer update (both
     trainers scale its length by the process count), so the step is last_epoch // num_processes,
-    as the patched Musubi trainer reads it on Resume."""
+    as the patched Musubi trainer reads it on Resume. `_step_count` is not read: Accelerate also
+    adds to it on every accumulating micro-batch, so it is not a count of updates."""
     import torch
 
     output = pathlib.Path(output_dir)
@@ -75,9 +76,6 @@ def normalize_saved_state(output_dir, backend, num_processes):
     scheduler_step = scheduler.get("last_epoch") if isinstance(scheduler, dict) else None
     if isinstance(scheduler_step, bool) or not isinstance(scheduler_step, int) or scheduler_step <= 0:
         fail("scheduler state has no cumulative last_epoch")
-    scheduler_calls = scheduler.get("_step_count") if isinstance(scheduler, dict) else None
-    if isinstance(scheduler_calls, int) and not isinstance(scheduler_calls, bool) and scheduler_calls - 1 != scheduler_step:
-        fail(f"scheduler _step_count {scheduler_calls} does not match last_epoch {scheduler_step}")
     if scheduler_step % num_processes:
         fail(f"scheduler last_epoch {scheduler_step} is not a whole number of updates on {num_processes} processes")
     scheduler_step //= num_processes
