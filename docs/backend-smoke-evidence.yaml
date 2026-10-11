@@ -14,6 +14,60 @@ invalidations:
       recorded adapter identities, but do not establish the added save-state,
       publication, or recovery behavior of the current contract.
 records:
+  - id: sd-scripts-conformance-docker-2026-10-11
+    backend: sd-scripts
+    adapter_source:
+      kind: source-tree-sha256
+      value: 893088c0d1ef4480bb72bf37025c8a6d82b95260c0fbeebce10fd9cae69a813c
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06
+    native_path:
+      architecture: sd15
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-11'
+    artifact: smoke-evidence/2026-10-11-conformance.yaml
+  - id: musubi-tuner-conformance-docker-2026-10-11
+    backend: musubi-tuner
+    adapter_source:
+      kind: source-tree-sha256
+      value: 96f31bc7e8883886352572b5e422e9f223c1d29bbc93b15c6d145de515e15cf8
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472
+    native_path:
+      architecture: wan
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-11'
+    artifact: smoke-evidence/2026-10-11-conformance.yaml
+  - id: ai-toolkit-conformance-docker-2026-10-11
+    backend: ai-toolkit
+    adapter_source:
+      kind: source-tree-sha256
+      value: 4487b34c14664a45614039b8aab50445ceff0d8425a609cf0674a432b978b569
+    runtime_image:
+      kind: docker-image-digest
+      value: sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a
+    native_path:
+      architecture: sd1
+      executor: docker
+      scenario: conformance (fresh, split, and Resume runs on one item and on three items across epochs)
+      optimizer_steps: 7
+      training_state: enabled
+    evidence_kind: real-optimizer-step
+    outcome: passed
+    observed_at: '2026-10-11'
+    artifact: smoke-evidence/2026-10-11-conformance.yaml
   - id: sd-scripts-sdxl-docker-2026-10-07
     backend: sd-scripts
     adapter_source:
@@ -1289,6 +1343,7 @@ records:
       training_state: enabled
     evidence_kind: real-optimizer-step
     outcome: passed
+    superseded_by: sd-scripts-conformance-docker-2026-10-11
     observed_at: 2026-08-27
     artifact: smoke-evidence/2026-08-27-training-resume-equivalence-local.yaml
   - id: sd-scripts-sd15-resume-equivalence-docker-2026-10-10
@@ -1308,6 +1363,7 @@ records:
       training_state: enabled
     evidence_kind: real-optimizer-step
     outcome: passed
+    superseded_by: sd-scripts-conformance-docker-2026-10-11
     observed_at: 2026-10-10
     artifact: smoke-evidence/2026-10-10-sd-scripts-state-cadence-resume.yaml
   - id: sd-scripts-multiconcept-resume-docker-2026-10-10
@@ -1326,6 +1382,7 @@ records:
       optimizer_steps: 1
     evidence_kind: real-optimizer-step
     outcome: passed
+    superseded_by: sd-scripts-conformance-docker-2026-10-11
     observed_at: 2026-10-10
     artifact: smoke-evidence/2026-10-10-sd-scripts-state-cadence-resume.yaml
   - id: sd-scripts-anima-lllite-caption-dropout-docker-2026-08-26
