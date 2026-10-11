@@ -43,8 +43,8 @@ def _cadence(run: dict[str, Any]) -> tuple[str | None, str]:
         window = re.findall(r"--save_last_n_steps_state (\d+)", script)
     else:
         script = sd_scripts.command_sd_scripts(run)["argv"][2]
-        every = re.findall(r'"--save_every_n_steps","(\d+)"', script)
-        window = re.findall(r'"--save_last_n_steps_state","(\d+)"', script)
+        every = re.findall(r"--save_every_n_steps (\d+)", script)
+        window = re.findall(r"--save_last_n_steps_state (\d+)", script)
     assert len(every) <= 1 and len(window) == 1, (every, window)
     return (every[0] if every else None), window[0]
 
@@ -130,8 +130,8 @@ class ManagedStateCadenceTests(unittest.TestCase):
         run["recovery"] = {"training_state": {"enabled": True, "keep_generations": 2}}
         script = sd_scripts.command_sd_scripts(run)["argv"][2]
         self.assertIn(
-            '"--save_every_n_steps","50","--save_last_n_steps","100","--save_state","--save_state_on_train_end",'
-            '"--save_last_n_steps_state","50"',
+            "--save_every_n_steps 50 --save_last_n_steps 100 --save_state --save_state_on_train_end "
+            "--save_last_n_steps_state 50",
             script,
         )
 

@@ -9,7 +9,7 @@ from typing import Any
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
 from kura.backends.common import _musubi_architecture, _musubi_backend_override, _require_paths, musubi_native_dataset_architecture
-from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _reject_owned_extra_args, _script_command as _shared_script_command, _truthy
+from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _int_or_none, _reject_owned_extra_args, _script_command as _shared_script_command, _truthy, state_runner_argv, write_state_runner
 from kura.backends.musubi_datasets import (
     MUSUBI_AUDIO_SUFFIXES,
     FRAMEPACK_LATENT_WINDOW_SIZE,
@@ -31,9 +31,16 @@ def training_state_contract_musubi(run: dict[str, Any]) -> dict[str, Any]:
     del run
     return {
         "native_format": "accelerate-state-directory",
-        "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"),
+        # Kura's state runner writes kura-state-info.json after each complete save. Resume reads
+        # only an artifact's own inventory, so one published before the marker stays resumable.
+        "required_files": ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl", "kura-state-info.json"),
         "native_progress": "process_local",
         "native_target": "process_local",
+        "state_step": {
+            "path": "kura-state-info.json", "field": "logical_step", "space": "logical",
+            "schema_version": 1, "backend": "musubi-tuner",
+            "digests": {"optimizer_sha256": "optimizer.bin", "scheduler_sha256": "scheduler.bin"},
+        },
         # Every Musubi command names the recipe's steps as its cadence when the run sets none.
         "unset_save_cadence": "recipe_steps",
         "capability": "best_effort_resume",
@@ -192,6 +199,11 @@ def _script_command(commands: list[list[str]], override: dict[str, Any], run: di
             raise ValueError(f"Musubi backend.config.{key} duplicates backend.config.extra_args {flag}")
         train.append(flag)
     _reject_emitted_duplicates(train, _extra_args(override))
+    if training_state_managed(run, training_state_contract_musubi(run)):
+        entrypoint = next(index for index, argument in enumerate(train) if argument.endswith(".py"))
+        train[entrypoint:] = state_runner_argv(
+            "musubi-tuner", f"/workspace/runs/{run['id']}/resolved/musubi", train[entrypoint], train[entrypoint + 1:],
+        )
     return _shared_script_command(commands, step_name="musubi")
 
 
@@ -214,6 +226,8 @@ def compile_musubi_tuner(run: dict[str, Any], destination: Path) -> dict[str, An
         )
     if not explicit_command:
         atomic_write_yaml(destination / "model-bundle.lock.yaml", _musubi_model_lock(run))
+        if training_state_managed(run, training_state_contract_musubi(run)):
+            write_state_runner(destination)
     return command
 
 

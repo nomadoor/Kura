@@ -89,6 +89,15 @@ def _write_state_marker(candidate: Path, backend: str, logical_step: int) -> Non
             "scheduler_sha256": hashlib.sha256((candidate / "scheduler.bin").read_bytes()).hexdigest(),
         }
         name = "kura-state-info.json"
+    elif backend == "musubi-tuner":
+        document = {
+            "schema_version": 1,
+            "backend": backend,
+            "logical_step": logical_step,
+            "optimizer_sha256": hashlib.sha256((candidate / "optimizer.bin").read_bytes()).hexdigest(),
+            "scheduler_sha256": hashlib.sha256((candidate / "scheduler.bin").read_bytes()).hexdigest(),
+        }
+        name = "kura-state-info.json"
     else:
         raise AssertionError(backend)
     (candidate / name).write_text(json.dumps(document) + "\n", encoding="utf-8")
@@ -772,7 +781,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
     @posix_only(POSIX_PATHS)
     def test_sd_scripts_runner_normalizes_saved_application_step_from_persisted_training_state(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
-        exec(script_source("sd_scripts_state.py"), namespace)
+        exec(script_source("accelerate_state.py"), namespace)
 
         class Accelerator:
             def save_state(self, output_dir):
@@ -793,7 +802,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
         accelerate.Accelerator = Accelerator
 
         with patch.dict(sys.modules, {"torch": torch, "accelerate": accelerate}):
-            namespace["install_hooks"]()
+            namespace["install_hooks"]("sd-scripts")
             output = Path(tempfile.mkdtemp()) / "state"
             try:
                 self.assertEqual(Accelerator().save_state(output), "saved")
@@ -807,7 +816,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
     @posix_only(POSIX_PATHS)
     def test_sd_scripts_save_wrapper_invalidates_a_stale_completion_marker_first(self) -> None:
         namespace: dict[str, object] = {"__name__": "container_test"}
-        exec(script_source("sd_scripts_state.py"), namespace)
+        exec(script_source("accelerate_state.py"), namespace)
         observed: list[bool] = []
 
         class Accelerator:
@@ -822,7 +831,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
             output = Path(directory) / "state"
             output.mkdir()
             (output / "kura-state-info.json").write_text('{"logical_step":2}\n', encoding="utf-8")
-            namespace["install_hooks"]()
+            namespace["install_hooks"]("sd-scripts")
             with self.assertRaisesRegex(RuntimeError, "interrupted native save"):
                 Accelerator().save_state(output)
             self.assertEqual(observed, [False])
@@ -971,10 +980,18 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 name: _safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode())
                 for name in names
             }
+            marker_source = root / "marker"
+            marker_source.mkdir()
+            for name in names:
+                (marker_source / name).write_bytes(contents[name])
+            _write_state_marker(marker_source, "musubi-tuner", 10)
+            names = (*names, "kura-state-info.json")
+            contents["kura-state-info.json"] = (marker_source / "kura-state-info.json").read_bytes()
             item = {
                 "path": "/workspace/runs/source/outputs/source-step00000010-state",
                 "name": "source-step00000010-state",
                 "step": 10,
+                "marked_step": 10,
                 "files": [{"path": name, "size": len(contents[name]), "mtime_ns": index} for index, name in enumerate(names, 1)],
             }
 
@@ -1036,6 +1053,7 @@ class TrainingStateArtifactTests(unittest.TestCase):
                 "path": "/workspace/runs/derived/outputs/derived-step00000001-state",
                 "name": "derived-step00000001-state",
                 "step": 1,
+                "marked_step": 3,
                 "files": [{"path": "model.safetensors", "size": 1, "mtime_ns": 1}],
             }
 
@@ -1663,6 +1681,9 @@ class TrainingStateArtifactTests(unittest.TestCase):
             state = run_dir / "outputs" / "source-step00000010-state"
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 (state / name).write_bytes(_safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode()))
+            # The native save is complete only once Kura's state runner wrote its step marker.
+            self.assertEqual(publish_completed_training_states(root, run_dir), [])
+            _write_state_marker(state, "musubi-tuner", 10)
             published = publish_completed_training_states(root, run_dir)
             self.assertEqual([item["observed_step"] for item in published], [10])
             self.assertEqual(published[0]["restoration_contract"]["level"], "best_effort_resume")
@@ -1706,6 +1727,9 @@ class TrainingStateArtifactTests(unittest.TestCase):
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 payload = _safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode())
                 (state / name).write_bytes(payload)
+            # Named for the run's own step 1 under the old counter; its marker records the
+            # logical step the restored scheduler counted, which places it.
+            _write_state_marker(state, "musubi-tuner", 3)
 
             published = publish_completed_training_states(root, run_dir)
 
@@ -2388,6 +2412,7 @@ class ResumeRunTests(unittest.TestCase):
             state.mkdir(parents=True)
             for name in ("model.safetensors", "optimizer.bin", "scheduler.bin", "random_states_0.pkl"):
                 (state / name).write_bytes(_safetensors_bytes(name.encode()) if name == "model.safetensors" else _torch_archive_bytes(name.encode()))
+            _write_state_marker(state, "musubi-tuner", 10)
             run = {
                 "id": "source",
                 "type": "train",
