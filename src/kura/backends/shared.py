@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import shlex
+from pathlib import Path
 from typing import Any, Callable
+
+from kura.container_scripts import script_source
+from kura.fsio import atomic_write_text
 
 
 def _datasets(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -187,3 +191,21 @@ def download_specs_for(entries: list[dict[str, Any]], **extra: str) -> tuple[lis
 def recorded_model_source(entry: dict[str, Any]) -> dict[str, str]:
     """What a model lock records about a downloaded role."""
     return {key: entry[key] for key in ("repo_id", "filename", "revision") if key in entry}
+
+
+# The runner an Accelerate trainer (sd-scripts, Musubi Tuner) whose training state Kura manages
+# is launched through: after each complete save it records the step the state holds, from the
+# scheduler checked against the optimizer, in kura-state-info.json. Compile writes it next to
+# the backend's other resolved files.
+STATE_RUNNER = "state-runner.py"
+
+
+def write_state_runner(destination: Path) -> None:
+    """Write the Accelerate training-state runner into a backend's resolved directory."""
+    atomic_write_text(destination / STATE_RUNNER, script_source("accelerate_state.py") + "\n")
+
+
+def state_runner_argv(backend: str, resolved: str, entrypoint: str, argv: list[str]) -> list[str]:
+    """What `accelerate launch` runs in place of `entrypoint argv...`: the runner written to the
+    run's `resolved` backend directory (a container path), then the backend and the trainer."""
+    return [f"{resolved}/{STATE_RUNNER}", backend, entrypoint, *argv]

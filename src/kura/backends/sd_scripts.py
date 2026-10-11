@@ -13,10 +13,10 @@ from kura.backends.sd_scripts_datasets import (
     write_sd_scripts_dataset_config,
 )
 from kura.backends.sd_scripts_models import sd_scripts_architecture, sd_scripts_download_commands, sd_scripts_mode, sd_scripts_model_lock, sd_scripts_model_paths, sd_scripts_native
-from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _reject_owned_extra_args, _script_command, _truthy
+from kura.backends.shared import _append_flag, _extra_args as _shared_extra_args, _reject_owned_extra_args, _script_command, _truthy, state_runner_argv, write_state_runner
 from kura.container_scripts import script_source
 from kura.dataset_handoff import load_frozen_dataset_projection
-from kura.fsio import atomic_write_json, atomic_write_text, atomic_write_yaml
+from kura.fsio import atomic_write_json, atomic_write_yaml
 from kura.secrets import is_secret_name
 from kura.training_artifacts import managed_state_save_args, resume_steps, run_output_name, training_state_managed, training_state_payload
 from kura.run_envelope import backend_config, resume_intent, validated_recipe
@@ -437,12 +437,10 @@ def command_sd_scripts(run: dict[str, Any]) -> dict[str, Any]:
     training_argv = ["accelerate", "launch", "--num_cpu_threads_per_process", "1"]
     state_contract = training_state_contract_sd_scripts(run)
     if training_state_managed(run, state_contract):
-        runner_spec = {"entrypoint": native_training_argv[0], "argv": native_training_argv[1:]}
         training_argv.extend(
-            [
-                f"/workspace/runs/{run['id']}/resolved/sd-scripts/state-runner.py",
-                json.dumps(runner_spec, ensure_ascii=False, separators=(",", ":")),
-            ]
+            state_runner_argv(
+                "sd-scripts", f"/workspace/runs/{run['id']}/resolved/sd-scripts", native_training_argv[0], native_training_argv[1:],
+            )
         )
     else:
         training_argv.extend(native_training_argv)
@@ -510,7 +508,7 @@ def compile_sd_scripts(run: dict[str, Any], destination: Path) -> dict[str, Any]
     )
     atomic_write_yaml(destination / "model-bundle.lock.yaml", sd_scripts_model_lock(run))
     if training_state_managed(run, training_state_contract_sd_scripts(run)):
-        atomic_write_text(destination / "state-runner.py", script_source("sd_scripts_state.py") + "\n")
+        write_state_runner(destination)
     command = command_sd_scripts(run)
     atomic_write_json(destination / "command.json", command)
     return command
