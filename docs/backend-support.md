@@ -41,7 +41,7 @@ for every supported upstream mode. None of these establishes output quality.
 | --- | --- | --- |
 | AI-Toolkit | Docker `0.13.18` plus pinned MiniMax-H3 finite-gradient patch | Kura image `nomadoor/kura-ai-toolkit@sha256:9aa6861b0f54f24f0ebad07b6018b431e8c2403d27eed9233595951b466dbc3a`; base `ostris/aitoolkit:0.13.18@sha256:9bc99d51efc5b6c38a951b3bf8547bda0f9db58abeb75573548d449f82b34bcc`; embedded commit `31ddc709c35d3d3b820c636745397561f806b246`; upstream patch commit `d1985f9bf380b6ce1c409b7875e2d367df486e19`; both commits recorded in `/opt/kura-runtime.json` at build time |
 | Musubi Tuner | Git tag `v0.3.5` | commit `4e7c7149249e7715e9168920feb4c420423abba7` |
-| sd-scripts | Git commit on `main` | commit `37a1cbbc5725ed2a3575506e7bd2001c9908ac92`; the pinned image `nomadoor/kura-sd-scripts@sha256:66cb9a2fe9b1841db5b9fcd4de27528efb6f9a7223726b8b78a75f544d07da02` was built from it on torch 2.8 / CUDA 12.8 |
+| sd-scripts | Git commit on `main` | commit `37a1cbbc5725ed2a3575506e7bd2001c9908ac92`; the pinned image `nomadoor/kura-sd-scripts@sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06` was built from it on torch 2.8 / CUDA 12.8 with Kura's patches (`docker/sd-scripts/patches`) |
 
 Mutable `latest` is not a supported default.
 
