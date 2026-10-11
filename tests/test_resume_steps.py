@@ -486,13 +486,15 @@ class AccelerateStateRunnerTests(unittest.TestCase):
                 self.assertIn(f" {entrypoint} ", script)
                 self.assertFalse((unmanaged_resolved / directory_name / "state-runner.py").exists())
 
-    def _save(self, backend: str, scheduler: dict[str, Any], optimizer_step: int) -> tuple[Path, dict[str, Any]]:
+    def _save(self, backend: str, scheduler: dict[str, Any], optimizer_step: int, *, processes: int = 1) -> tuple[Path, dict[str, Any]]:
         from kura.container_scripts import script_source
 
         namespace: dict[str, object] = {"__name__": "container_test"}
         exec(script_source("accelerate_state.py"), namespace)
 
         class Accelerator:
+            num_processes = processes
+
             def save_state(self, output_dir):
                 output = Path(output_dir)
                 output.mkdir(parents=True)
@@ -525,6 +527,17 @@ class AccelerateStateRunnerTests(unittest.TestCase):
         _, info = self._save("sd-scripts", {"last_epoch": 7, "_step_count": 8}, 7)
         self.assertEqual((info["backend"], info["logical_step"]), ("sd-scripts", 7))
         self.assertIn("train_state_sha256", info)
+
+    def test_the_runner_counts_one_scheduler_step_per_process_per_update(self) -> None:
+        # Accelerate steps a prepared scheduler once per process for each optimizer update (and
+        # both trainers scale its length by the process count), so on two GPUs 1150 updates are
+        # last_epoch 2300; the patched Musubi trainer resumes at last_epoch // num_processes too.
+        _, info = self._save("musubi-tuner", {"last_epoch": 2300, "_step_count": 2301}, 1150, processes=2)
+        self.assertEqual(info["logical_step"], 1150)
+        _, info = self._save("sd-scripts", {"last_epoch": 14, "_step_count": 15}, 7, processes=2)
+        self.assertEqual(info["logical_step"], 7)
+        with self.assertRaisesRegex(RuntimeError, "is not a whole number of updates on 2 processes"):
+            self._save("musubi-tuner", {"last_epoch": 2301, "_step_count": 2302}, 1150, processes=2)
 
     def test_the_runner_refuses_a_save_whose_optimizer_and_scheduler_disagree(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "optimizer step 1149 does not match scheduler step 1150"):

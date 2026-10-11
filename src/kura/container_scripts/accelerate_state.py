@@ -55,9 +55,13 @@ def fsync_replace(temporary, target):
     os.replace(temporary, target)
 
 
-def normalize_saved_state(output_dir, backend):
+def normalize_saved_state(output_dir, backend, num_processes):
     """Record the step a complete Accelerate save holds, from its scheduler checked against its
-    optimizer, in kura-state-info.json, written last; for sd-scripts also set train_state.json."""
+    optimizer, in kura-state-info.json, written last; for sd-scripts also set train_state.json.
+
+    Accelerate steps a prepared scheduler once per process for each optimizer update (both
+    trainers scale its length by the process count), so the step is last_epoch // num_processes,
+    as the patched Musubi trainer reads it on Resume."""
     import torch
 
     output = pathlib.Path(output_dir)
@@ -74,6 +78,9 @@ def normalize_saved_state(output_dir, backend):
     scheduler_calls = scheduler.get("_step_count") if isinstance(scheduler, dict) else None
     if isinstance(scheduler_calls, int) and not isinstance(scheduler_calls, bool) and scheduler_calls - 1 != scheduler_step:
         fail(f"scheduler _step_count {scheduler_calls} does not match last_epoch {scheduler_step}")
+    if scheduler_step % num_processes:
+        fail(f"scheduler last_epoch {scheduler_step} is not a whole number of updates on {num_processes} processes")
+    scheduler_step //= num_processes
     optimizer_step = optimizer_completed_step(optimizer)
     if optimizer_step is not None and optimizer_step != scheduler_step:
         fail(f"optimizer step {optimizer_step} does not match scheduler step {scheduler_step}")
@@ -124,7 +131,7 @@ def install_hooks(backend):
             finally:
                 os.close(directory_fd)
         result = original_save_state(accelerator, *args, **kwargs)
-        normalize_saved_state(output_dir, backend)
+        normalize_saved_state(output_dir, backend, accelerator.num_processes)
         return result
 
     Accelerator.save_state = save_state
