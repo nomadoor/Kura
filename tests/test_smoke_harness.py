@@ -257,8 +257,11 @@ class RealSmokeHarnessTests(unittest.TestCase):
         for run in MODULE.SCENARIO:
             if run.resume_of:
                 self.assertEqual(runs[run.resume_of].steps % MODULE.CADENCE, 0)
-                compared, _ = MODULE.COMPARISONS[run.key]
-                self.assertEqual(runs[compared].steps, run.steps)
+                for control in MODULE.COMPARISONS[run.key]:
+                    self.assertEqual(runs[control].steps, run.steps)
+                    self.assertIsNone(runs[control].resume_of)
+        # The one-item Resume has two uninterrupted controls, so a nondeterministic trainer shows itself.
+        self.assertEqual(len(MODULE.COMPARISONS["one-resume"]), 2)
 
     def test_check_run_passes_a_run_that_kept_its_promises(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -292,19 +295,109 @@ class RealSmokeHarnessTests(unittest.TestCase):
             (run_dir / "status.json").write_text(json.dumps({**status, "host": "runpod"}), encoding="utf-8")
             self.assertEqual(MODULE.check_run(workspace, run_id, "musubi-tuner", 4, 7)["P6"], ["no pod_stopped_at recorded"])
 
-    def test_compare_states_ignores_metadata_and_save_ids_but_not_learned_values(self) -> None:
+    def test_check_run_compares_image_digests_not_reference_spellings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            run_id = "20260101-0000_conf-sd-one-resume_abcd"
+            run_dir = _finished_run(workspace, run_id, weights=[f"{run_id}.safetensors"], states=[4], last_step=4)
+            observed = "sha256:" + "b" * 64
+            (run_dir / "resolved" / "env.lock").write_text(yaml.safe_dump({
+                "selected_image": "nomadoor/kura-sd-scripts@sha256:" + "a" * 64,
+                "selected_image_identity": {"reference": "x", "pinning": {"strength": "content-hash", "value": observed}},
+            }), encoding="utf-8")
+            realization = run_dir / "realizations" / "r1.json"
+            # A Docker run records the bare digest it launched: the reference's, or (a local
+            # Resume) the image ID compile observed for it.
+            for used, ok in (("sha256:" + "a" * 64, True), (observed, True), ("sha256:" + "c" * 64, False), ("other:dev", False)):
+                with self.subTest(used=used):
+                    realization.write_text(json.dumps({"image_identity": {"reference": used}}), encoding="utf-8")
+                    self.assertEqual(MODULE.check_run(workspace, run_id, "sd-scripts", 2, 4)["P4"] == [], ok)
+
+    def test_compare_states_ignores_metadata_and_save_ids_but_not_counters(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _state(root / "control", 7)
             _state(root / "same", 7)
-            self.assertEqual(MODULE.compare_states(root / "same", root / "control", learned=True), [])
-            _state(root / "drifted", 7, weight=b"\0\0\0@")
-            self.assertEqual(MODULE.compare_states(root / "drifted", root / "control", learned=True), ["model.safetensors: 1 of 1 entries differ"])
-            self.assertEqual(MODULE.compare_states(root / "drifted", root / "control", learned=False), [])
+            with patch.object(MODULE.subprocess, "run") as run:
+                self.assertEqual(MODULE.compare_states(root / "same", root / "control"), [])
+                _state(root / "drifted", 7, weight=b"\0\0\0@")
+                self.assertEqual(MODULE.compare_states(root / "drifted", root / "control"), [])
+            run.assert_not_called()
             _state(root / "short", 6)
-            differences = MODULE.compare_states(root / "short", root / "control", learned=False)
+            differences = MODULE.compare_states(root / "short", root / "control")
             self.assertIn("scheduler.bin:last_epoch: 6 vs 7", differences)
             self.assertIn("scheduler.bin: 1 of 1 entries differ", differences)
+
+    def test_compare_states_compares_learned_values_in_the_trainer_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _state(root / "a", 7)
+            _state(root / "b", 7)
+            image = "nomadoor/kura-sd-scripts@sha256:" + "a" * 64
+            answer = subprocess.CompletedProcess([], 0, json.dumps({"model.safetensors": [0, 4], "optimizer.bin": [2, 9]}) + "\n", "")
+            with patch.object(MODULE.subprocess, "run", return_value=answer) as run:
+                self.assertEqual(MODULE.compare_states(root / "a", root / "b", image=image), ["optimizer.bin: 2 of 9 entries differ"])
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[:3], ["docker", "run", "--rm"])
+            self.assertIn("--network", argv)
+            self.assertEqual(argv[argv.index("--network") + 1], "none")
+            self.assertIn(f"{(root / 'a').resolve()}:/a:ro", argv)
+            self.assertIn(f"{(root / 'b').resolve()}:/b:ro", argv)
+            self.assertIn(f"{MODULE.COMPARE_VALUES.parent}:/c:ro", argv)
+            self.assertEqual(argv[argv.index(image) + 1:], ["-I", f"/c/{MODULE.COMPARE_VALUES.name}", "/a", "/b", "model.safetensors", "optimizer.bin"])
+            failed = subprocess.CompletedProcess([], 1, "", "no such image")
+            with patch.object(MODULE.subprocess, "run", return_value=failed):
+                self.assertEqual(MODULE.compare_states(root / "a", root / "b", image=image), ["cannot compare values in the trainer image: no such image"])
+
+    def test_resume_is_held_to_the_controls_only_when_they_agree(self) -> None:
+        resumed, first, second = Path("r"), Path("c1"), Path("c2")
+        image = "img@sha256:" + "a" * 64
+        calls = []
+
+        def compare(left: Path, right: Path, *, image: str | None = None) -> list[str]:
+            calls.append((left, right, image))
+            return outcomes[(left, image is not None)]
+
+        with patch.object(MODULE, "compare_states", side_effect=compare):
+            # Deterministic controls: the Resume must equal them in learned state.
+            outcomes = {(second, True): [], (resumed, True): ["optimizer.bin: 1 of 9 entries differ"]}
+            self.assertEqual(MODULE.resume_problems(resumed, [first, second], image), (["optimizer.bin: 1 of 9 entries differ"], []))
+            # Controls that differ: only step counts and the scheduler are checked, and that is said.
+            outcomes = {(second, True): ["model.safetensors: 3 of 4 entries differ"], (resumed, False): []}
+            self.assertEqual(MODULE.resume_problems(resumed, [first, second], image), ([], ["controls differ: exact Resume not checkable"]))
+            # One control (the multi-item dataset): step counts and the scheduler only.
+            calls.clear()
+            outcomes = {(resumed, False): ["scheduler.bin: 1 of 1 entries differ"]}
+            self.assertEqual(MODULE.resume_problems(resumed, [first], image), (["scheduler.bin: 1 of 1 entries differ"], []))
+            self.assertEqual(calls, [(resumed, first, None)])
+
+    def test_the_value_comparison_counts_differing_leaves(self) -> None:
+        spec = importlib.util.spec_from_file_location("compare_state_values", MODULE.COMPARE_VALUES)
+        assert spec is not None and spec.loader is not None
+        compare = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(compare)
+
+        class Tensor:
+            def __init__(self, values: list[float], dtype: str = "f32") -> None:
+                self.values, self.dtype, self.shape = values, dtype, (len(values),)
+
+        class FakeTorch:
+            @staticmethod
+            def is_tensor(value: object) -> bool:
+                return isinstance(value, Tensor)
+
+            @staticmethod
+            def equal(a: Tensor, b: Tensor) -> bool:
+                return a.values == b.values
+
+        state = {"state": {0: {"step": Tensor([7.0]), "exp_avg": Tensor([0.5, 0.25])}}, "param_groups": [{"lr": 1e-4, "params": [0]}]}
+        same = {"state": {0: {"step": Tensor([7.0]), "exp_avg": Tensor([0.5, 0.25])}}, "param_groups": [{"lr": 1e-4, "params": [0]}]}
+        self.assertEqual(compare.leaves(state, same, torch=FakeTorch), (0, 4))
+        drifted = {"state": {0: {"step": Tensor([7.0]), "exp_avg": Tensor([0.5, 0.75])}}, "param_groups": [{"lr": 1e-4, "params": [0]}]}
+        self.assertEqual(compare.leaves(state, drifted, torch=FakeTorch), (1, 4))
+        self.assertEqual(compare.leaves({"a": Tensor([1.0])}, {"a": Tensor([1.0], "bf16")}, torch=FakeTorch), (1, 1))
+        self.assertEqual(compare.leaves({"a": 1}, {"b": 1}), (2, 2))
+        self.assertEqual(compare.leaves([1, 2], [1, 2, 3]), (1, 1))
 
     def test_a_scheduler_holding_anything_but_plain_values_is_not_read(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

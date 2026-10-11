@@ -31,7 +31,7 @@ simplest mechanism) stays in `AGENTS.md`; it is not a promise to users.
 |---|---|---|
 | P1 | A run trains exactly the optimizer steps it declares (a fresh run its recipe steps; a Resume up to its target step). | conformance |
 | P2 | A published checkpoint or training state is recorded, and named where Kura names it, at the optimizer step it contains. | conformance |
-| P3 | A Resume continues the same training from the saved step: on the one-item conformance dataset its learned state equals an uninterrupted run's; on the multi-item dataset its step count and scheduler do. | conformance |
+| P3 | A Resume continues the same training from the saved step: its step count and scheduler equal an uninterrupted run's; on the one-item conformance dataset its learned state does too when two uninterrupted runs equal each other (when they differ, the trainer is nondeterministic and an exact Resume is reported as not checkable, not as a failure). | conformance |
 | P4 | A compiled run runs as its locks say: the trainer receives exactly the frozen dataset, models, image, and command. | py tests + conformance |
 | P5 | The same run behaves the same on every executor and every supported OS: same outputs, states, and final status recorded. | CI + conformance (RunPod pass) |
 | P6 | Billing stops: every RunPod Pod Kura creates has its maximum lease armed when it starts, and none is left billing after its run ends. | py tests + conformance (RunPod pass) |
@@ -55,9 +55,10 @@ table:
 - datasets: one item, and several items with buckets so that a run crosses
   epochs;
 - runs: a fresh run with a save cadence; a split run and its Resume to a target
-  that is not a multiple of the steps per epoch; an uninterrupted control;
+  that is not a multiple of the steps per epoch; uninterrupted controls (two on
+  the one-item dataset);
 - checks: steps trained, saved steps and names, published state steps,
-  Resume against the control, disk peak against the estimate.
+  Resume against the controls, disk peak against the estimate.
 
 It runs on local Docker without billing. A RunPod pass runs the same scenario
 on one backend, with the cost ceiling shown first, before a release.

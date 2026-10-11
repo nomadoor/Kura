@@ -44,6 +44,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from kura.paths import local_hf_cache  # noqa: E402
+from kura.provenance import image_reference_identity  # noqa: E402
 from kura.training_artifacts import checkpoint_files, checkpoint_step  # noqa: E402
 
 
@@ -607,15 +608,20 @@ class ScenarioRun:
 
 SCENARIO = (
     ScenarioRun("one-control", "one", 4),
+    ScenarioRun("one-control-2", "one", 4),
     ScenarioRun("one-split", "one", 2),
     ScenarioRun("one-resume", "one", 4, resume_of="one-split"),
     ScenarioRun("multi-fresh", "multi", 7),
     ScenarioRun("multi-split", "multi", 4),
     ScenarioRun("multi-resume", "multi", 7, resume_of="multi-split"),
 )
-# A Resume and the uninterrupted run it must match: the whole learned state on one item,
-# the step count and scheduler on several (P3).
-COMPARISONS = {"one-resume": ("one-control", True), "multi-resume": ("multi-fresh", False)}
+# A Resume and the uninterrupted runs it is checked against (P3, `resume_problems`): two
+# controls on one item, whose learned state the Resume must equal when they equal each
+# other; one on several, whose step count and scheduler it must equal.
+COMPARISONS = {"one-resume": ("one-control", "one-control-2"), "multi-resume": ("multi-fresh",)}
+# Compares weights and optimizers by value inside a run's trainer image; see its docstring.
+COMPARE_VALUES = Path(__file__).resolve().with_name("compare_state_values.py")
+LEARNED_FILES = ("model.safetensors", "optimizer.bin", "optimizer.pt")
 
 SD15 = _download("Comfy-Org/stable-diffusion-v1-5-archive", "v1-5-pruned-emaonly-fp16.safetensors", "ce8e3e3657a9b767b33fc0171ff91fb04aed1b2f")
 # Wan 2.1 T2V 1.3B is Musubi Tuner's smallest supported model (DiT 2.8 GB, VAE 0.25 GB, T5 11 GB).
@@ -704,18 +710,6 @@ def _plain_archive(path: Path) -> Any:
     return _PlainUnpickler(io.BytesIO(members["data.pkl"])).load()
 
 
-def _tensors(path: Path) -> dict[str, tuple[str, tuple[int, ...], bytes]]:
-    """A safetensors file's tensors (dtype, shape, bytes); its metadata, which names the run, is left out."""
-    data = path.read_bytes()
-    size = struct.unpack("<Q", data[:8])[0]
-    header = json.loads(data[8:8 + size])
-    base = 8 + size
-    return {
-        name: (info["dtype"], tuple(info["shape"]), data[base + info["data_offsets"][0]:base + info["data_offsets"][1]])
-        for name, info in header.items() if name != "__metadata__"
-    }
-
-
 def state_counters(payload: Path) -> dict[str, Any]:
     """The optimizer-step counts a training-state payload records: the trainer's state file,
     Kura's step marker, and the scheduler's step count; a counter it cannot read is a message."""
@@ -731,26 +725,61 @@ def state_counters(payload: Path) -> dict[str, Any]:
     return counters
 
 
-def compare_states(resumed: Path, control: Path, *, learned: bool) -> list[str]:
-    """How a Resume's final training state differs from the uninterrupted run's: its step
-    counts and scheduler, and with `learned` its weights and optimizer too. RNG state is not
-    compared: Kura does not claim its exact position."""
-    controls = state_counters(control)
-    differences = [f"{name}: {value} vs {controls.get(name)}" for name, value in state_counters(resumed).items() if value != controls.get(name)]
-    names = ["scheduler.bin"] + (["model.safetensors", "optimizer.bin", "optimizer.pt"] if learned else [])
-    for name in names:
-        left, right = resumed / name, control / name
+def compare_values(image: str, first: Path, second: Path, names: list[str]) -> dict[str, list[int]]:
+    """Each named file's [differing, total] value leaves in two payloads, compared by
+    `compare_state_values.py` in `image`, the run's pinned trainer image (it has torch),
+    with no network and everything mounted read-only."""
+    argv = [
+        "docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
+        "-v", f"{first.resolve()}:/a:ro", "-v", f"{second.resolve()}:/b:ro", "-v", f"{COMPARE_VALUES.parent}:/c:ro",
+        image, "-I", f"/c/{COMPARE_VALUES.name}", "/a", "/b", *names,
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise RuntimeError((result.stderr or result.stdout).strip()[-500:] or f"exit code {result.returncode}")
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def compare_states(first: Path, second: Path, *, image: str | None = None) -> list[str]:
+    """How two final training states differ: their step counts and scheduler, and with
+    `image` (the run's pinned trainer image) the values of their weights and optimizer
+    too. RNG state is not compared: Kura does not claim its exact position."""
+    counters = state_counters(second)
+    differences = [f"{name}: {value} vs {counters.get(name)}" for name, value in state_counters(first).items() if value != counters.get(name)]
+    by_value = []
+    for name in ["scheduler.bin", *(LEARNED_FILES if image else ())]:
+        left, right = first / name, second / name
         if not left.is_file() and not right.is_file():
             continue
         if not (left.is_file() and right.is_file()):
             differences.append(f"{name}: present in only one state")
-            continue
-        read = _tensors if name.endswith(".safetensors") else _archive_members
-        a, b = read(left), read(right)
-        changed = sorted(key for key in a.keys() | b.keys() if a.get(key) != b.get(key))
-        if changed:
-            differences.append(f"{name}: {len(changed)} of {len(a.keys() | b.keys())} entries differ")
+        elif name != "scheduler.bin":
+            by_value.append(name)
+        else:
+            # A scheduler holds plain values, so its pickle is the same when they are.
+            a, b = _archive_members(left), _archive_members(right)
+            changed = sorted(key for key in a.keys() | b.keys() if a.get(key) != b.get(key))
+            if changed:
+                differences.append(f"{name}: {len(changed)} of {len(a.keys() | b.keys())} entries differ")
+    if by_value and image:
+        try:
+            counts = compare_values(image, first, second, by_value)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return [*differences, f"cannot compare values in the trainer image: {exc}"]
+        differences += [f"{name}: {changed} of {total} entries differ" for name, (changed, total) in counts.items() if changed]
     return differences
+
+
+def resume_problems(resumed: Path, controls: list[Path], image: str) -> tuple[list[str], list[str]]:
+    """P3 for a Resume's final state against its uninterrupted controls' final states:
+    (failures, informational notes). The Resume must equal the first control in step
+    counts and scheduler; in learned state too when there are two controls and they equal
+    each other. Controls that differ (a nondeterministic trainer) leave exactness uncheckable."""
+    if len(controls) < 2:
+        return compare_states(resumed, controls[0]), []
+    if compare_states(controls[1], controls[0], image=image):
+        return compare_states(resumed, controls[0]), ["controls differ: exact Resume not checkable"]
+    return compare_states(resumed, controls[0], image=image), []
 
 
 def _run_states(workspace: Path, run_id: str) -> dict[int, tuple[dict[str, Any], Path]]:
@@ -768,6 +797,20 @@ def _weights(run_dir: Path, outputs: list[Any]) -> list[Path]:
     paths = [Path(str(item)) for item in outputs if str(item).endswith(".safetensors")]
     found = checkpoint_files([path.relative_to("outputs") for path in paths if path.parts[:1] == ("outputs",)], run_dir.name)
     return [*found.stepped, *found.final]
+
+
+def _env_lock(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "resolved" / "env.lock"
+    return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else {}
+
+
+def _image_digest(reference: Any) -> str | None:
+    """The content digest an image reference names: `name@sha256:<d>`, or a bare image ID."""
+    if not isinstance(reference, str):
+        return None
+    if reference.startswith("sha256:"):
+        return reference
+    return image_reference_identity(reference)["pinning"].get("value")
 
 
 def check_run(workspace: Path, run_id: str, backend: str, start: int, end: int, cadence: int = CADENCE) -> dict[str, list[str]]:
@@ -801,11 +844,15 @@ def check_run(workspace: Path, run_id: str, backend: str, start: int, end: int, 
     postflight = status.get("dataset_input_postflight") if isinstance(status.get("dataset_input_postflight"), dict) else {}
     if postflight.get("status") != "matched":
         problems["P4"].append(f"dataset input postflight {postflight.get('status')}")
-    env_lock = yaml.safe_load((run_dir / "resolved" / "env.lock").read_text(encoding="utf-8")) if (run_dir / "resolved" / "env.lock").is_file() else {}
+    env_lock = _env_lock(run_dir)
     realization_path = run_dir / str(status.get("last_realization"))
     realization = json.loads(realization_path.read_text(encoding="utf-8")) if realization_path.is_file() else {}
     used = (realization.get("image_identity") or {}).get("reference")
-    if used != env_lock.get("selected_image"):
+    # The compiled image is its reference's digest, or the image ID compile observed for it,
+    # which a local Resume launches by.
+    observed = (env_lock.get("selected_image_identity") or {}).get("pinning") or {}
+    compiled = {_image_digest(env_lock.get("selected_image")), observed.get("value") if observed.get("strength") == "content-hash" else None} - {None}
+    if _image_digest(used) not in compiled:
         problems["P4"].append(f"ran image {used}, compiled for {env_lock.get('selected_image')}")
 
     if status.get("publication_state") != "completed":
@@ -911,6 +958,7 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
         ensure_dataset(workspace, dataset)
         digests[dataset] = _tree_digest(workspace / "datasets" / dataset)
     table: dict[str, dict[str, list[str] | None]] = {}
+    notes: list[str] = []
     for backend in backends:
         results: dict[str, list[str] | None] = {promise: None for promise in PROMISES}
         def fail(promise: str, messages: list[str], key: str) -> None:
@@ -954,12 +1002,17 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
                 fail(promise, messages, run.key)
             if not runpod:
                 fail("P8", disk_problems(peak, _checkpoint_estimate(workspace / "runs" / run_id)), run.key)
-        for resumed, (control, learned) in COMPARISONS.items():
-            if resumed in ids and control in ids:
+        for resumed, controls in COMPARISONS.items():
+            if all(key in ids for key in (resumed, *controls)):
                 steps = next(item.steps for item in SCENARIO if item.key == resumed)
-                pair = [_run_states(workspace, ids[key]).get(steps) for key in (resumed, control)]
-                differences = ["final state missing"] if None in pair else compare_states(pair[0][1], pair[1][1], learned=learned)
-                fail("P3", differences, resumed)
+                states = [_run_states(workspace, ids[key]).get(steps) for key in (resumed, *controls)]
+                if None in states:
+                    fail("P3", ["final state missing"], resumed)
+                    continue
+                image = str(_env_lock(workspace / "runs" / ids[resumed]).get("selected_image"))
+                failures, informational = resume_problems(states[0][1], [state[1] for state in states[1:]], image)
+                fail("P3", failures, resumed)
+                notes += [f"{backend} P3 {resumed}: {note} (informational)" for note in informational]
         fail("P7", [f"dataset {dataset} changed" for dataset, digest in digests.items() if _tree_digest(workspace / "datasets" / dataset) != digest], "datasets")
         table[backend] = results
 
@@ -970,6 +1023,8 @@ def conformance(workspace: Path, backends: list[str], *, runpod: bool, gpu: str,
         for promise in PROMISES:
             for message in table[backend][promise] or []:
                 print(f"{backend} {promise} {message}")
+    for note in notes:
+        print(note)
     return 1 if any(table[b][p] for b in backends for p in PROMISES) else 0
 
 
