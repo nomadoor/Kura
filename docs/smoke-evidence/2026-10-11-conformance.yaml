@@ -1,0 +1,47 @@
+schema_version: 1
+kind: conformance
+observed_at: '2026-10-11'
+executor: docker
+kura_commit: ad078fb
+campaign: >-
+  The conformance scenario of docs/adr/promises-and-verification.md, section 2, on every
+  backend, with the images that continue each trainer's step counter from the resumed step
+  (sd-scripts, Musubi Tuner) and save and name AI-Toolkit step files by completed updates.
+command: uv run python scripts/real_smoke.py conformance --workspace <workspace> --yes
+hardware:
+  gpu: NVIDIA GeForce RTX 4070 Ti
+  vram_mb: 12282
+scenario: >-
+  Save cadence 2, two training-state generations. One item: two uninterrupted 4-step
+  controls, a 2-step source, and its Resume to 4. Three items in three buckets (256x256,
+  320x192, 192x320), so runs cross epochs: a fresh 7-step run, a 4-step source, and its
+  Resume to 7.
+backends:
+  sd-scripts:
+    model: Comfy-Org/stable-diffusion-v1-5-archive (sd15)
+    runtime_image_digest: sha256:4810a8ce5edf6959ae3d1fbd3a75e975ff3d3fdb330f8775fd33542bbc116f06
+    adapter_source: 893088c0d1ef4480bb72bf37025c8a6d82b95260c0fbeebce10fd9cae69a813c
+    runs: [20261011-1109_conf-sd-one-control_0acb, 20261011-1110_conf-sd-one-control-2_9545, 20261011-1110_conf-sd-one-split_3f13, 20261011-1111_conf-sd-one-resume_250c, 20261011-1112_conf-sd-multi-fresh_4316, 20261011-1112_conf-sd-multi-split_b338, 20261011-1113_conf-sd-multi-resume_5a91]
+    p3: the two controls are equal, and the one-item Resume equals them
+  musubi-tuner:
+    model: Comfy-Org/Wan_2.1_ComfyUI_repackaged (wan 2.1 t2v 1.3B, fp8 T5)
+    runtime_image_digest: sha256:439fbd1ae0fee9fe41ac8600ef7f18587c4c38d9663dcac07e9ff0fc8edfb472
+    adapter_source: 96f31bc7e8883886352572b5e422e9f223c1d29bbc93b15c6d145de515e15cf8
+    runs: [20261011-1117_conf-musubi-one-control_3ad4, 20261011-1121_conf-musubi-one-control-2_25d2, 20261011-1122_conf-musubi-one-split_119b, 20261011-1123_conf-musubi-one-resume_82f6, 20261011-1124_conf-musubi-multi-fresh_c99e, 20261011-1125_conf-musubi-multi-split_62b3, 20261011-1126_conf-musubi-multi-resume_31a5]
+    p3: step count and scheduler equal the controls; the two controls differ, so exact learned-state equality is not checkable
+  ai-toolkit:
+    model: hf-internal-testing/tiny-stable-diffusion-pipe (sd1)
+    runtime_image_digest: sha256:f2a66636633a6bf72405823442751097aa314581217080aecc5558aee680bf9a
+    adapter_source: 4487b34c14664a45614039b8aab50445ceff0d8425a609cf0674a432b978b569
+    runs: [20261011-1129_conf-ai-one-control_dbd1, 20261011-1129_conf-ai-one-control-2_d7fb, 20261011-1130_conf-ai-one-split_35e9, 20261011-1130_conf-ai-one-resume_cdd9, 20261011-1131_conf-ai-multi-fresh_2d8e, 20261011-1131_conf-ai-multi-split_7c94, 20261011-1132_conf-ai-multi-resume_3a5f]
+    p3: step count and scheduler equal the controls; the two controls differ, so exact learned-state equality is not checkable
+results:
+  P1: pass on every backend
+  P2: pass on every backend (weight file names, published state steps, and every recorded step counter)
+  P3: pass on every backend, as noted per backend
+  P4: pass on every backend
+  P6: not run (local Docker)
+  P7: pass on every backend
+  P8: pass on every backend
+not_covered: >-
+  The RunPod pass of the scenario was not run.
